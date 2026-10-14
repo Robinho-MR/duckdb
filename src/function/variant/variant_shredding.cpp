@@ -346,7 +346,8 @@ bool VariantShreddingState::ValueIsShredded(UnifiedVariantVectorData &variant, i
 		auto physical_type = type.InternalType();
 		auto decimal_data = VariantUtils::DecodeDecimalData(variant, row, values_index);
 		auto decimal_physical_type = decimal_data.GetPhysicalType();
-		return physical_type == decimal_physical_type;
+		return physical_type == decimal_physical_type && decimal_data.width == DecimalType::GetWidth(type) &&
+		       decimal_data.scale == DecimalType::GetScale(type);
 	}
 	return true;
 }

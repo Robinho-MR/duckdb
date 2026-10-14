@@ -1,0 +1,29 @@
+# name: test/sql/copy/parquet/variant_shredding_decimal_mismatch.test
+# description: Shredding a VARIANT to a DECIMAL type with a different width/scale
+# group: [parquet]
+
+require parquet
+
+statement ok
+COPY (SELECT (0.0001::DECIMAL(9,4))::VARIANT v) TO '{TEST_DIR}/d.parquet' (FORMAT parquet, SHREDDING {v: 'DECIMAL(9,1)'});
+
+query I
+SELECT v::DECIMAL(9,4) FROM '{TEST_DIR}/d.parquet';
+----
+0.0001
+
+statement ok
+COPY (SELECT (999999999::DECIMAL(9,0))::VARIANT v) TO '{TEST_DIR}/d2.parquet' (FORMAT parquet, SHREDDING {v: 'DECIMAL(5,0)'});
+
+query I
+SELECT v::DECIMAL(9,0) FROM '{TEST_DIR}/d2.parquet';
+----
+999999999
+
+statement ok
+COPY (SELECT (1.5::DECIMAL(4,1))::VARIANT v) TO '{TEST_DIR}/d3.parquet' (FORMAT parquet, SHREDDING {v: 'DECIMAL(4,1)'});
+
+query I
+SELECT v::DECIMAL(4,1) FROM '{TEST_DIR}/d3.parquet';
+----
+1.5
