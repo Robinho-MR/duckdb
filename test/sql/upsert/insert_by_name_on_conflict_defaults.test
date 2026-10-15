@@ -1,0 +1,51 @@
+# name: test/sql/upsert/insert_by_name_on_conflict_defaults.test
+# description: INSERT BY NAME ... ON CONFLICT fills in the columns that the source does not provide
+# group: [upsert]
+
+statement ok
+CREATE SEQUENCE sq;
+
+statement ok
+CREATE TABLE t(id INT PRIMARY KEY DEFAULT nextval('sq'), v INT, n INT DEFAULT 7);
+
+# the conflict column is not provided - it is generated from its default
+statement ok
+INSERT INTO t BY NAME SELECT 5 AS v ON CONFLICT DO NOTHING;
+
+query III
+SELECT * FROM t;
+----
+1	5	7
+
+# the update can refer to a column that the source does not provide
+statement ok
+INSERT INTO t BY NAME SELECT 1 AS id, 6 AS v ON CONFLICT DO UPDATE SET n = excluded.n;
+
+query III
+SELECT * FROM t;
+----
+1	5	7
+
+statement ok
+INSERT INTO t BY NAME SELECT 1 AS id, 9 AS v ON CONFLICT DO UPDATE SET v = excluded.v;
+
+# columns without a default are NULL
+statement ok
+INSERT INTO t BY NAME SELECT 2 AS id, 3 AS n ON CONFLICT DO NOTHING;
+
+query III
+SELECT * FROM t ORDER BY id;
+----
+1	9	7
+2	NULL	3
+
+# sources that provide all columns are unchanged
+statement ok
+INSERT INTO t BY NAME SELECT 3 AS id, 1 AS v, 2 AS n ON CONFLICT DO NOTHING;
+
+query III
+SELECT * FROM t ORDER BY id;
+----
+1	9	7
+2	NULL	3
+3	1	2
