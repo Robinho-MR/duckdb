@@ -33,3 +33,23 @@ query II
 SELECT json_merge_patch('{"a":{"b":[1,{"c":2}],"d":"x"},"e":3}', '{"a":{"d":null,"f":[4]},"e":{"g":true}}'), json_deep_merge('{"a":[1,2],"b":{"c":1}}', '{"b":{"d":[3,{"e":4}]}}')
 ----
 {"a":{"b":[1,{"c":2}],"f":[4]},"e":{"g":true}}	{"a":[1,2],"b":{"c":1,"d":[3,{"e":4}]}}
+
+query I
+SELECT json_merge_patch('{"a":{"x":1,"y":2},"b":[1,2]}', '{"a":{"y":9,"z":3},"c":5}');
+----
+{"b":[1,2],"a":{"x":1,"y":9,"z":3},"c":5}
+
+query I
+SELECT json_merge_patch('{"a":{"b":1}}', '{"a":{"b":null,"c":2}}');
+----
+{"a":{"c":2}}
+
+query I
+SELECT json_deep_merge('{"a":{"x":1}}', '{"a":{"y":2},"b":3}');
+----
+{"a":{"x":1,"y":2},"b":3}
+
+query I
+SELECT json_deep_merge('{"a":5}', '{"a":null,"b":2}');
+----
+{"a":5,"b":2}
