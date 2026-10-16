@@ -141,6 +141,24 @@ static void AppendIndexEntries(BoundIndex &index, DataChunk &chunk, Vector &row_
 	}
 }
 
+static void RevertIndexEntries(BoundIndex &index, DataChunk &chunk, Vector &row_ids) {
+	IndexAppendInfo append_info;
+	if (!index.Append(chunk, row_ids, append_info).HasError()) {
+		return;
+	}
+	// An index that was rebuilt after the removal already holds some of the entries: re-add the remaining ones
+	DataChunk row;
+	row.InitializeEmpty(chunk.GetTypes());
+	for (idx_t i = 0; i < chunk.size(); i++) {
+		row.Slice(chunk, i, i + 1);
+		Vector row_id(row_ids, i, i + 1);
+		const auto error = index.Append(row, row_id, append_info);
+		if (error.HasError() && error.Type() != ExceptionType::CONSTRAINT) {
+			throw InternalException("Failed to append to %s: %s", index.GetIndexName(), error.Message());
+		}
+	}
+}
+
 static bool TryDeleteAll(BoundIndex &index, DataChunk &chunk, Vector &row_ids) {
 	const auto delete_count = index.TryDelete(chunk, row_ids, nullptr, nullptr);
 	if (delete_count == 0) {
@@ -166,7 +184,7 @@ static void ApplyIndexRemoval(BoundIndex &index, IndexDeltas &deltas, DataChunk 
 		break;
 	case IndexRemovalType::REVERT_MAIN_INDEX_ONLY:
 		// Revert main index only append - just add back to the index.
-		AppendIndexEntries(index, chunk, row_ids);
+		RevertIndexEntries(index, chunk, row_ids);
 		break;
 	case IndexRemovalType::MAIN_INDEX:
 		// Regular removal from the main index - add rows to the delta index if required.
@@ -178,7 +196,7 @@ static void ApplyIndexRemoval(BoundIndex &index, IndexDeltas &deltas, DataChunk 
 		break;
 	case IndexRemovalType::REVERT_MAIN_INDEX:
 		// Revert regular append to the main index - remove from deleted_rows_in_use if we appended there before.
-		AppendIndexEntries(index, chunk, row_ids);
+		RevertIndexEntries(index, chunk, row_ids);
 		if (supports_delta_indexes) {
 			if (auto delta = deltas.Find(IndexDeltaType::DELETED_ROWS_IN_USE)) {
 				delta->Delete(chunk, row_ids);

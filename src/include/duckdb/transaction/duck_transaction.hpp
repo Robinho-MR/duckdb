@@ -108,6 +108,11 @@ public:
 	}
 
 private:
+	void AddModifiedTable(DuckTableEntry &table_entry);
+	//! Throws if another transaction has altered or dropped a table that this transaction modified
+	void CheckModifiedTables();
+
+private:
 	//! The undo buffer is used to store old versions of rows that are updated
 	//! or deleted
 	UndoBuffer undo_buffer;
@@ -129,6 +134,10 @@ private:
 	};
 	//! Active locks on tables
 	reference_map_t<DataTableInfo, unique_ptr<ActiveTableLock>> active_locks;
+	//! Lock for accessing modified_tables
+	mutex modified_tables_lock;
+	//! The tables that the appends, deletes and updates of this transaction modify
+	reference_set_t<DuckTableEntry> modified_tables;
 	//! Flag to prevent auto-checkpointing inside a checkpoint transaction.
 	bool is_checkpoint_transaction = false;
 };
