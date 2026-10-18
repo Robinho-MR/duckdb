@@ -79,31 +79,46 @@ public:
 	//! ----------------------------------- Double Cast ----------------------------------- //
 	DUCKDB_API static bool BignumToDouble(const bignum_t &blob, double &result, bool &strict);
 	template <class T>
-	static bool BignumToInt(const bignum_t &blob, T &result, bool &strict) {
+	static bool BignumToInt(const bignum_t &blob, T &result) {
 		auto data_byte_size = blob.data.GetSize() - BIGNUM_HEADER_SIZE;
 		auto data = blob.data.GetData();
 		bool is_negative = (data[0] & 0x80) == 0;
 
 		uhugeint_t abs_value = 0;
+		idx_t significant_bytes = 0;
 		for (idx_t i = 0; i < data_byte_size; ++i) {
 			uint8_t byte = static_cast<uint8_t>(data[Bignum::BIGNUM_HEADER_SIZE + i]);
 			if (is_negative) {
 				byte = static_cast<uint8_t>(~byte);
 			}
+			if (significant_bytes > 0 || byte != 0) {
+				if (++significant_bytes > sizeof(uhugeint_t)) {
+					return false;
+				}
+			}
 			abs_value = (abs_value << 8) | byte;
 		}
 
-		if (is_negative) {
-			if (abs_value > static_cast<uhugeint_t>(std::numeric_limits<T>::max()) + 1) {
-				throw OutOfRangeException("Negative bignum too small for type");
-			}
-			result = static_cast<T>(-static_cast<hugeint_t>(abs_value));
-		} else {
-			if (abs_value > static_cast<uhugeint_t>(std::numeric_limits<T>::max())) {
-				throw OutOfRangeException("Positive bignum too large for type");
+		if (!is_negative) {
+			if (abs_value > static_cast<uhugeint_t>(NumericLimits<T>::Maximum())) {
+				return false;
 			}
 			result = static_cast<T>(abs_value);
+			return true;
 		}
+		if (abs_value == 0) {
+			result = static_cast<T>(0);
+			return true;
+		}
+		if (!NumericLimits<T>::IsSigned()) {
+			return false;
+		}
+		auto min_magnitude = static_cast<uhugeint_t>(NumericLimits<T>::Maximum()) + 1;
+		if (abs_value > min_magnitude) {
+			return false;
+		}
+		result = abs_value == min_magnitude ? NumericLimits<T>::Minimum()
+		                                    : static_cast<T>(-static_cast<hugeint_t>(abs_value));
 		return true;
 	}
 };
@@ -154,13 +169,6 @@ struct BignumToDoubleCast {
 	template <class SRC, class DST>
 	DUCKDB_API static inline bool Operation(SRC input, DST &result, bool strict = false) {
 		return Bignum::BignumToDouble(input, result, strict);
-	}
-};
-
-struct BignumToIntCast {
-	template <class SRC, class DST>
-	DUCKDB_API static inline bool Operation(SRC input, DST &result, bool strict = false) {
-		return Bignum::BignumToInt(input, result, strict);
 	}
 };
 
