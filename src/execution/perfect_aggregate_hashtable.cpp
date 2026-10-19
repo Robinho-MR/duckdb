@@ -139,11 +139,8 @@ void PerfectAggregateHashTable::AddChunk(DataChunk &groups, DataChunk &payload) 
 		ComputeGroupLocation(groups.data[i], group_minima[i], address_data, current_shift);
 	}
 
-	if (AddChunkClustered(address_data, payload)) {
-		return;
-	}
-
-	// Non-clustered path: convert group ids to state pointers and update aggregates.
+	// Validate every group id before dispatching to either path below - the clustered path does not
+	// re-check ids against total_groups, so an out-of-range id must be rejected here.
 	for (idx_t i = 0; i < row_count; i++) {
 		const auto group = address_data[i];
 		if (group >= total_groups) {
@@ -152,6 +149,15 @@ void PerfectAggregateHashTable::AddChunk(DataChunk &groups, DataChunk &payload) 
 			                            "disable_optimizer to disable optimizations that rely on correct statistics",
 			                            group, total_groups);
 		}
+	}
+
+	if (AddChunkClustered(address_data, payload)) {
+		return;
+	}
+
+	// Non-clustered path: convert group ids to state pointers and update aggregates.
+	for (idx_t i = 0; i < row_count; i++) {
+		const auto group = address_data[i];
 		group_is_set[group] = true;
 		address_data[i] = uintptr_t(data) + group * tuple_size;
 	}
