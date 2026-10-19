@@ -752,7 +752,8 @@ bool LineError::HandleErrors(StringValueResult &result) {
 			// the file types are those of the projected columns
 			auto &file_types = result.csv_file_scan->file_types;
 			if (cur_error.chunk_idx < file_types.size() &&
-			    !StringValueScanner::CanDirectlyCast(file_types[cur_error.chunk_idx], result.icu_loaded)) {
+			    !StringValueScanner::CanDirectlyCast(file_types[cur_error.chunk_idx], result.icu_loaded) &&
+			    result.number_of_rows > 0) {
 				result.number_of_rows--;
 			}
 			break;
