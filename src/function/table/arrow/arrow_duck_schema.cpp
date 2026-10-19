@@ -217,6 +217,32 @@ unique_ptr<ArrowType> ArrowType::GetTypeFromFormat(string &format) {
 	return nullptr;
 }
 
+//! Rejects an ArrowSchema whose children array disagrees with the expected shape before anything reads it.
+static void ValidateArrowSchemaChildren(const ArrowSchema &schema, const char *type_name) {
+	if (schema.n_children > 0 && !schema.children) {
+		throw InvalidInputException("Arrow schema for type \"%s\" has a null children array", type_name);
+	}
+	for (idx_t i = 0; i < static_cast<idx_t>(schema.n_children); i++) {
+		if (!schema.children[i]) {
+			throw InvalidInputException("Arrow schema for type \"%s\" has a null child", type_name);
+		}
+		if (!schema.children[i]->format) {
+			throw InvalidInputException("Arrow schema for type \"%s\" has a child with a null format", type_name);
+		}
+		if (!schema.children[i]->name) {
+			throw InvalidInputException("Arrow schema for type \"%s\" has a child with a null name", type_name);
+		}
+	}
+}
+
+static void ValidateArrowSchemaChildCount(const ArrowSchema &schema, int64_t expected_count, const char *type_name) {
+	if (schema.n_children != expected_count) {
+		throw InvalidInputException("Arrow schema for type \"%s\" has %lld children, expected %lld", type_name,
+		                            schema.n_children, expected_count);
+	}
+	ValidateArrowSchemaChildren(schema, type_name);
+}
+
 unique_ptr<ArrowType> ArrowType::GetTypeFromFormat(ClientContext &context, ArrowSchema &schema, string &format) {
 	auto type = GetTypeFromFormat(format);
 
@@ -224,18 +250,23 @@ unique_ptr<ArrowType> ArrowType::GetTypeFromFormat(ClientContext &context, Arrow
 		return type;
 	}
 	if (format == "+l") {
+		ValidateArrowSchemaChildCount(schema, 1, "list");
 		return CreateListType(context, *schema.children[0], ArrowVariableSizeType::NORMAL, false);
 	} else if (format == "+L") {
+		ValidateArrowSchemaChildCount(schema, 1, "large list");
 		return CreateListType(context, *schema.children[0], ArrowVariableSizeType::SUPER_SIZE, false);
 	} else if (format == "+vl") {
+		ValidateArrowSchemaChildCount(schema, 1, "list view");
 		return CreateListType(context, *schema.children[0], ArrowVariableSizeType::NORMAL, true);
 	} else if (format == "+vL") {
+		ValidateArrowSchemaChildCount(schema, 1, "large list view");
 		return CreateListType(context, *schema.children[0], ArrowVariableSizeType::SUPER_SIZE, true);
 	} else if (format[0] == '+' && format[1] == 'w') {
 		// Arrow C Data Interface spec: fixed-size list is "+w:NN", colon always at position 2
 		if (format.size() <= 3 || format[2] != ':') {
 			throw InvalidInputException("Invalid Arrow fixed-size list format string: \"%s\"", format);
 		}
+		ValidateArrowSchemaChildCount(schema, 1, "fixed-size list");
 		std::string parameters = format.substr(3);
 		auto fixed_size = NumericCast<idx_t>(std::stoi(parameters));
 		auto child_type = GetArrowLogicalType(context, *schema.children[0]);
@@ -244,6 +275,7 @@ unique_ptr<ArrowType> ArrowType::GetTypeFromFormat(ClientContext &context, Arrow
 		auto type_info = make_uniq<ArrowArrayInfo>(std::move(child_type), fixed_size);
 		return make_uniq<ArrowType>(array_type, std::move(type_info));
 	} else if (format == "+s") {
+		ValidateArrowSchemaChildren(schema, "struct");
 		child_list_t<LogicalType> child_types;
 		vector<shared_ptr<ArrowType>> children;
 		for (idx_t type_idx = 0; type_idx < static_cast<idx_t>(schema.n_children); type_idx++) {
@@ -268,6 +300,7 @@ unique_ptr<ArrowType> ArrowType::GetTypeFromFormat(ClientContext &context, Arrow
 		if (schema.n_children == 0) {
 			throw InvalidInputException("Attempted to convert a UNION with no fields to DuckDB which is not supported");
 		}
+		ValidateArrowSchemaChildren(schema, "union");
 		for (idx_t type_idx = 0; type_idx < static_cast<idx_t>(schema.n_children); type_idx++) {
 			auto type = schema.children[type_idx];
 
@@ -279,10 +312,10 @@ unique_ptr<ArrowType> ArrowType::GetTypeFromFormat(ClientContext &context, Arrow
 		auto union_type = make_uniq<ArrowType>(LogicalType::UNION(members), std::move(type_info));
 		return union_type;
 	} else if (format == "+r") {
+		ValidateArrowSchemaChildCount(schema, 2, "run-end encoded");
 		child_list_t<LogicalType> members;
 		vector<shared_ptr<ArrowType>> children;
 		idx_t n_children = static_cast<idx_t>(schema.n_children);
-		D_ASSERT(n_children == 2);
 		D_ASSERT(string(schema.children[0]->name) == "run_ends");
 		D_ASSERT(string(schema.children[1]->name) == "values");
 		for (idx_t i = 0; i < n_children; i++) {
@@ -296,8 +329,9 @@ unique_ptr<ArrowType> ArrowType::GetTypeFromFormat(ClientContext &context, Arrow
 		struct_type->SetRunEndEncoded();
 		return struct_type;
 	} else if (format == "+m") {
+		ValidateArrowSchemaChildCount(schema, 1, "map");
 		auto &arrow_struct_type = *schema.children[0];
-		D_ASSERT(arrow_struct_type.n_children == 2);
+		ValidateArrowSchemaChildCount(arrow_struct_type, 2, "map entries");
 		auto key_type = GetArrowLogicalType(context, *arrow_struct_type.children[0]);
 		auto value_type = GetArrowLogicalType(context, *arrow_struct_type.children[1]);
 		child_list_t<LogicalType> key_value;
@@ -414,6 +448,9 @@ ArrowArrayPhysicalType ArrowType::GetPhysicalType() const {
 }
 
 unique_ptr<ArrowType> ArrowType::GetTypeFromSchema(ClientContext &context, ArrowSchema &schema) {
+	if (!schema.format) {
+		throw InvalidInputException("Arrow schema has a null format string");
+	}
 	auto format = string(schema.format);
 	// Let's first figure out if this type is an extension type
 	ArrowSchemaMetadata schema_metadata(schema.metadata);
