@@ -326,7 +326,11 @@ yyjson_val *JSONCommon::GetPathElements(yyjson_val *val, const vector<JSONPathEl
 	return val;
 }
 
-void GetWildcardPathInternal(yyjson_val *val, const char *ptr, const char *const end, vector<yyjson_val *> &vals) {
+void GetWildcardPathInternal(yyjson_val *val, const char *ptr, const char *const end, vector<yyjson_val *> &vals,
+                             idx_t depth) {
+	if (depth >= JSONCommon::MAX_RECURSION_DEPTH) {
+		throw InvalidInputException("JSON path exceeds maximum recursion depth of %d", JSONCommon::MAX_RECURSION_DEPTH);
+	}
 	while (val != nullptr && ptr != end) {
 		const auto &c = *ptr++;
 		D_ASSERT(ptr != end);
@@ -356,7 +360,7 @@ void GetWildcardPathInternal(yyjson_val *val, const char *ptr, const char *const
 						}
 					}
 					if (i > 0 || ptr != end) {
-						GetWildcardPathInternal(rec_val, ptr, end, vals);
+						GetWildcardPathInternal(rec_val, ptr, end, vals, depth + 1);
 					}
 				}
 				return;
@@ -369,7 +373,7 @@ void GetWildcardPathInternal(yyjson_val *val, const char *ptr, const char *const
 				size_t idx, max;
 				yyjson_val *key, *obj_val;
 				yyjson_obj_foreach(val, idx, max, key, obj_val) {
-					GetWildcardPathInternal(obj_val, ptr, end, vals);
+					GetWildcardPathInternal(obj_val, ptr, end, vals, depth + 1);
 				}
 				return;
 			}
@@ -393,7 +397,7 @@ void GetWildcardPathInternal(yyjson_val *val, const char *ptr, const char *const
 				size_t idx, max;
 				yyjson_val *arr_val;
 				yyjson_arr_foreach(val, idx, max, arr_val) {
-					GetWildcardPathInternal(arr_val, ptr, end, vals);
+					GetWildcardPathInternal(arr_val, ptr, end, vals, depth + 1);
 				}
 				return;
 			}
@@ -423,7 +427,7 @@ void JSONCommon::GetWildcardPath(yyjson_val *val, const char *ptr, const idx_t &
 	// Path has been validated at this point
 	const char *const end = ptr + len;
 	ptr++; // Skip past '$'
-	GetWildcardPathInternal(val, ptr, end, vals);
+	GetWildcardPathInternal(val, ptr, end, vals, 0);
 }
 
 //! Shallow copy of a mutable value - the children of containers are copied by MutValMutCopy
