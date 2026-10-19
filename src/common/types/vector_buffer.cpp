@@ -153,10 +153,10 @@ bool VectorBuffer::TrySerialize(Serializer &serializer, const LogicalType &type,
 }
 
 buffer_ptr<VectorBuffer> VectorBuffer::Deserialize(Deserializer &deserializer, VectorType vector_type,
-                                                   const LogicalType &type, idx_t count) {
+                                                   const LogicalType &type, idx_t count, idx_t depth) {
 	switch (vector_type) {
 	case VectorType::DICTIONARY_VECTOR:
-		return DictionaryBuffer::Deserialize(deserializer, type, count);
+		return DictionaryBuffer::Deserialize(deserializer, type, count, depth);
 	case VectorType::SEQUENCE_VECTOR:
 		return SequenceBuffer::Deserialize(deserializer, type, count);
 	case VectorType::SHREDDED_VECTOR:
