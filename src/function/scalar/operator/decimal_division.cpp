@@ -310,20 +310,16 @@ static unique_ptr<FunctionData> DecimalDivisionBind(BindScalarFunctionInput &inp
 //===--------------------------------------------------------------------===//
 // Serialization
 //
-// The argument types are cast to the width of the wider physical tier, which changes the result type formula if
-// the types are resolved again - so the resolved types are stored
+// The resolved argument types and return type are restored by the function serializer. The types must not be
+// resolved again, as the widened arguments change the result type.
 //===--------------------------------------------------------------------===//
 
-static void SerializeDecimalDivision(Serializer &serializer, const optional_ptr<FunctionData> bind_data_p,
-                                     const BoundScalarFunction &function) {
-	serializer.WriteProperty(100, "return_type", function.GetReturnType());
-	serializer.WriteProperty(101, "arguments", function.GetArguments());
+static void SerializeDecimalDivision(Serializer &, const optional_ptr<FunctionData>, const BoundScalarFunction &) {
 }
 
 static unique_ptr<FunctionData> DeserializeDecimalDivision(Deserializer &deserializer,
                                                            BoundScalarFunction &bound_function) {
-	bound_function.SetReturnType(deserializer.ReadProperty<LogicalType>(100, "return_type"));
-	bound_function.GetArguments() = deserializer.ReadProperty<vector<LogicalType>>(101, "arguments");
+	bound_function.SetReturnType(deserializer.Get<const LogicalType &>());
 	SelectDecimalDivFunction(bound_function);
 	return make_uniq<DecimalDivBindData>(GetScaleExp(bound_function));
 }
