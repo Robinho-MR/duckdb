@@ -166,7 +166,7 @@ public:
 	Resize(idx_t current_size, idx_t to_reserve);
 
 	DUCKDB_API void Serialize(Serializer &serializer, bool compressed_serialization = true);
-	DUCKDB_API void Deserialize(Deserializer &deserializer, idx_t count);
+	DUCKDB_API void Deserialize(Deserializer &deserializer, idx_t count, idx_t depth = 0);
 
 	//! Returns the uncompressed size of the data stored within this vector
 	idx_t GetDataSize() const;
