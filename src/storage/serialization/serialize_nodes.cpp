@@ -422,18 +422,6 @@ JoinCondition JoinCondition::Deserialize(Deserializer &deserializer) {
 	return result;
 }
 
-void Literal::Serialize(Serializer &serializer) const {
-	serializer.WriteProperty<LiteralKind>(100, "kind", kind);
-	serializer.WritePropertyWithDefault<string>(101, "text", text);
-}
-
-Literal Literal::Deserialize(Deserializer &deserializer) {
-	Literal result;
-	deserializer.ReadProperty<LiteralKind>(100, "kind", result.kind);
-	deserializer.ReadPropertyWithDefault<string>(101, "text", result.text);
-	return result;
-}
-
 void MultiFileColumnDefinition::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<Identifier>(100, "name", name);
 	serializer.WriteProperty<LogicalType>(101, "type", type);
