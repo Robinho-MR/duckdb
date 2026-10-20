@@ -1,0 +1,12 @@
+# name: test/sql/index/art/storage/art_corrupt_block_pointer_offset.test
+# description: An index buffer whose on-disk offset and size exceed the block size must be rejected
+# group: [storage]
+
+unzip data/storage/corrupt/art_index_corrupt_block_pointer_offset.db.gz {TEST_DIR}/art_index_corrupt_block_pointer_offset.db
+
+load {TEST_DIR}/art_index_corrupt_block_pointer_offset.db readonly
+
+statement error
+SELECT * FROM art_index_corrupt_block_pointer_offset.t WHERE i = 5;
+----
+Data Corruption Error: Corrupted index buffer
