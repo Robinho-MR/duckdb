@@ -111,6 +111,8 @@ public:
 	LogicalType target_type;
 
 	optional_ptr<DummyBinding> macro_binding;
+	//! Counter used to give renamed lambda parameters of macros unique names
+	idx_t macro_lambda_param_count = 0;
 	optional_ptr<vector<DummyBinding>> lambda_bindings;
 	//! The number of (outer) lambda bindings whose parameters can not be referenced, e.g. inside an aggregate
 	idx_t inaccessible_lambda_binding_count = 0;
