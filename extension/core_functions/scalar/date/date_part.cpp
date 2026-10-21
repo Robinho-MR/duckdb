@@ -161,8 +161,19 @@ struct DatePart {
 		if (!min.IsFinite() || !max.IsFinite()) {
 			return nullptr;
 		}
-		TR min_part = OP::template Operation<T, TR>(min);
-		TR max_part = OP::template Operation<T, TR>(max);
+		TR min_part;
+		TR max_part;
+		try {
+			min_part = OP::template Operation<T, TR>(min);
+			max_part = OP::template Operation<T, TR>(max);
+		} catch (std::exception &ex) {
+			// the bounds are not representable (e.g. epoch_ns overflow): leave the error to execution, where TRY sees
+			// it
+			if (!Exception::IsExecutionError(ErrorData(ex).Type())) {
+				throw;
+			}
+			return nullptr;
+		}
 		auto result = NumericStats::CreateEmpty(stats_type);
 		NumericStats::SetMin(result, Value(min_part));
 		NumericStats::SetMax(result, Value(max_part));
