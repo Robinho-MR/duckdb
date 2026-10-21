@@ -39,7 +39,23 @@ public:
 	//! directory that happens to contain the marker does not reserve the files inside it
 	bool IsDuckDBExtensionName(const string &path) {
 		auto name = FileSystem::ExtractName(path);
-		return StringUtil::EndsWith(name, ".duckdb_extension") || StringUtil::Contains(name, ".duckdb_extension.");
+		// An NTFS alternate data stream (name:stream) is a different stream of the same underlying
+		// file, so match on the base name only.
+		auto colon_pos = name.find(':');
+		if (colon_pos != string::npos) {
+			name = name.substr(0, colon_pos);
+		}
+		// Windows silently strips trailing dots and spaces when resolving a path to a file, so
+		// "name.duckdb_extension " and "name.duckdb_extension." both resolve to the same file as
+		// "name.duckdb_extension" - strip them here so the check can't be evaded that way.
+		while (!name.empty() && (name.back() == '.' || name.back() == ' ')) {
+			name.pop_back();
+		}
+		// Match case-insensitively: on the default case-insensitive filesystems (macOS APFS, Windows
+		// NTFS), a differently-cased name still refers to the same underlying file.
+		auto lower_name = StringUtil::Lower(name);
+		return StringUtil::EndsWith(lower_name, ".duckdb_extension") ||
+		       StringUtil::Contains(lower_name, ".duckdb_extension.");
 	}
 
 	void Read(FileHandle &handle, void *buffer, int64_t nr_bytes, idx_t location) override {
