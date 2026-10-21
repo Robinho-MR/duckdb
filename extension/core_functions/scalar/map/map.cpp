@@ -120,8 +120,12 @@ static void MapFunction(DataChunk &args, ExpressionState &, Vector &result) {
 		// set the selection vectors and perform a duplicate key check
 		value_set_t unique_keys;
 		for (idx_t child_idx = 0; child_idx < keys_entry.length; child_idx++) {
-			auto key_idx = keys_child_data.sel->get_index(keys_entry.offset + child_idx);
-			auto value_idx = values_child_data.sel->get_index(values_entry.offset + child_idx);
+			// logical indices into keys_child_vector/values_child_vector: used for GetValue and for the
+			// selection vectors handed to Slice below, both of which are logical-index APIs
+			auto logical_key_idx = keys_entry.offset + child_idx;
+			auto logical_value_idx = values_entry.offset + child_idx;
+			// physical indices: used only for validity checks against the unified format
+			auto key_idx = keys_child_data.sel->get_index(logical_key_idx);
 
 			// NULL check
 			if (!keys_child_data.validity.RowIsValid(key_idx)) {
@@ -129,15 +133,15 @@ static void MapFunction(DataChunk &args, ExpressionState &, Vector &result) {
 			}
 
 			// unique check
-			auto value = keys_child_vector.GetValue(key_idx);
+			auto value = keys_child_vector.GetValue(logical_key_idx);
 			auto unique = unique_keys.insert(value).second;
 			if (!unique) {
 				MapVector::EvalMapInvalidReason(MapInvalidReason::DUPLICATE_KEY);
 			}
 
 			// set selection vectors
-			sel_keys.set_index(offset + child_idx, key_idx);
-			sel_values.set_index(offset + child_idx, value_idx);
+			sel_keys.set_index(offset + child_idx, logical_key_idx);
+			sel_values.set_index(offset + child_idx, logical_value_idx);
 		}
 
 		// keys_entry and values_entry have the same length
