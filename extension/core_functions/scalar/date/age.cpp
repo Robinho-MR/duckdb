@@ -44,11 +44,13 @@ ScalarFunctionSet AgeFun::GetFunctions() {
 	ScalarFunctionSet age("age");
 	ScalarFunction standard_fun({}, LogicalType::INTERVAL, AgeFunctionStandard);
 	standard_fun.GetSignature().AddParameter("timestamp", LogicalType::TIMESTAMP);
+	standard_fun.SetFallible();
 	age.AddFunction(standard_fun);
 	ScalarFunction binary_fun({}, LogicalType::INTERVAL, AgeFunction);
 	binary_fun.GetSignature()
 	    .AddParameter("timestamp1", LogicalType::TIMESTAMP)
 	    .AddParameter("timestamp2", LogicalType::TIMESTAMP);
+	binary_fun.SetFallible();
 	age.AddFunction(binary_fun);
 	return age;
 }
