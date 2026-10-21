@@ -66,11 +66,10 @@ public:
 
 	static void Skip(ByteBuffer &src, bitpacking_width_t &bitpack_pos, idx_t count, const bitpacking_width_t width) {
 		CheckWidth(width);
-		src.available(count * width / BITPACK_DLEN); // check if buffer has enough space available once
 		if (bitpack_pos == 0 && count >= BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE) {
 			idx_t remainder = count % BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE;
 			idx_t aligned_count = count - remainder;
-			SkipAligned(src, aligned_count, width);
+			SkipAligned(src, aligned_count, width); // checks availability itself
 			count = remainder;
 		}
 		const idx_t total_bits = bitpack_pos + count * width;
@@ -78,6 +77,9 @@ public:
 			bitpack_pos = UnsafeNumericCast<bitpacking_width_t>(total_bits);
 		} else {
 			const idx_t bytes_to_advance = (total_bits - 1) / BITPACK_DLEN;
+			// check availability for exactly what we are about to advance by - the aligned branch above may
+			// already have consumed part of the buffer, and bitpack_pos shifts how many bytes count*width needs
+			src.available(bytes_to_advance);
 			src.unsafe_inc(bytes_to_advance);
 			bitpack_pos = UnsafeNumericCast<bitpacking_width_t>(total_bits - bytes_to_advance * BITPACK_DLEN);
 		}

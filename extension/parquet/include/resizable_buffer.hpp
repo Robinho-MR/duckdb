@@ -30,6 +30,9 @@ public:
 	}
 
 	void unsafe_inc(const uint64_t increment) {
+		// the caller must have validated availability already - len is unsigned, so an unchecked over-large
+		// increment would wrap around and silently disable every later availability check on this buffer
+		D_ASSERT(increment <= len);
 		len -= increment;
 		ptr += increment;
 	}
