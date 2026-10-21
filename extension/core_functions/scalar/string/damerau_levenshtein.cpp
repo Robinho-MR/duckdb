@@ -1,4 +1,5 @@
 #include "core_functions/scalar/string_functions.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/common/map.hpp"
 #include "duckdb/common/vector.hpp"
 
@@ -7,7 +8,7 @@ namespace duckdb {
 // Using Lowrance-Wagner (LW) algorithm: https://doi.org/10.1145%2F321879.321880
 // Can't calculate as trivial modification to levenshtein algorithm
 // as we need to potentially know about earlier in the string
-static idx_t DamerauLevenshteinDistance(const string_t &source, const string_t &target) {
+static idx_t DamerauLevenshteinDistance(ClientContext &context, const string_t &source, const string_t &target) {
 	// costs associated with each type of edit, to aid readability
 	constexpr uint8_t COST_SUBSTITUTION = 1;
 	constexpr uint8_t COST_INSERTION = 1;
@@ -48,6 +49,7 @@ static idx_t DamerauLevenshteinDistance(const string_t &source, const string_t &
 	}
 	// loop through string indices - these are offset by 2 from distance indices
 	for (idx_t source_idx = 0; source_idx < source_len; source_idx++) {
+		context.InterruptCheck();
 		// keeps track of the largest string indices of target string matching current source character
 		// same as DB in LW paper
 		idx_t largest_target_chr_matching;
@@ -83,17 +85,18 @@ static idx_t DamerauLevenshteinDistance(const string_t &source, const string_t &
 	return distance[source_len + 1][target_len + 1];
 }
 
-static int64_t DamerauLevenshteinScalarFunction(Vector &result, const string_t source, const string_t target) {
-	return (int64_t)DamerauLevenshteinDistance(source, target);
+static int64_t DamerauLevenshteinScalarFunction(ClientContext &context, const string_t source, const string_t target) {
+	return (int64_t)DamerauLevenshteinDistance(context, source, target);
 }
 
 static void DamerauLevenshteinFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	const auto &source_vec = args.data[0];
 	const auto &target_vec = args.data[1];
 
+	auto &context = state.GetContext();
 	BinaryExecutor::Execute<string_t, string_t, int64_t>(
 	    source_vec, target_vec, result,
-	    [&](string_t source, string_t target) { return DamerauLevenshteinScalarFunction(result, source, target); });
+	    [&](string_t source, string_t target) { return DamerauLevenshteinScalarFunction(context, source, target); });
 }
 
 ScalarFunction DamerauLevenshteinFun::GetFunction() {
