@@ -58,6 +58,10 @@ public:
 	}
 
 private:
+	//! Caps recursion into nested objects to avoid a stack overflow from a maliciously deep file.
+	static constexpr idx_t MAX_NESTING_LEVEL = 10000;
+
+private:
 	ReadStream &stream;
 	idx_t nesting_level = 0;
 
