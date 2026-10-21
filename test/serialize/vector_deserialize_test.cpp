@@ -121,6 +121,23 @@ TEST_CASE("Deserialize VARCHAR vectors with string lengths exceeding the string 
 	REQUIRE_THROWS_AS(DeserializeVector(LogicalType::VARCHAR, 2, write_strings(1000000)), SerializationException);
 }
 
+static void WriteNestedConstantVectors(Serializer &serializer, idx_t depth) {
+	for (idx_t i = 0; i < depth; i++) {
+		serializer.WriteProperty(90, "vector_type", VectorType::CONSTANT_VECTOR);
+	}
+	WriteFlatHeader(serializer);
+	int32_t value = 42;
+	serializer.WriteProperty(102, "data", const_data_ptr_cast(&value), sizeof(int32_t));
+}
+
+TEST_CASE("Deserialize vectors with excessively nested CONSTANT_VECTOR markers", "[serialization]") {
+	REQUIRE_NOTHROW(
+	    DeserializeVector(LogicalType::INTEGER, 2, [&](Serializer &s) { WriteNestedConstantVectors(s, 10); }));
+	REQUIRE_THROWS_AS(
+	    DeserializeVector(LogicalType::INTEGER, 2, [&](Serializer &s) { WriteNestedConstantVectors(s, 1000000); }),
+	    SerializationException);
+}
+
 TEST_CASE("Deserialize STRUCT vectors with too many children", "[serialization]") {
 	auto type = LogicalType::STRUCT({{"a", LogicalType::INTEGER}});
 	auto write_struct = [&](idx_t child_count) {

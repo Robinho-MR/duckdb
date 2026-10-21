@@ -703,7 +703,13 @@ static void CheckDeserializedListCount(idx_t list_count, idx_t count) {
 	}
 }
 
-void Vector::Deserialize(Deserializer &deserializer, idx_t count) {
+static constexpr idx_t MAX_VECTOR_DESERIALIZE_DEPTH = 256;
+
+void Vector::Deserialize(Deserializer &deserializer, idx_t count, idx_t depth) {
+	if (depth >= MAX_VECTOR_DESERIALIZE_DEPTH) {
+		throw SerializationException("Failed to deserialize vector: exceeded maximum nesting depth of %d",
+		                             MAX_VECTOR_DESERIALIZE_DEPTH);
+	}
 	auto &logical_type = GetType();
 
 	const auto vtype = // older versions that only supported flat vectors did not serialize vector_type,
@@ -711,11 +717,11 @@ void Vector::Deserialize(Deserializer &deserializer, idx_t count) {
 
 	// first handle deserialization of compressed vector types
 	if (vtype == VectorType::CONSTANT_VECTOR) {
-		Vector::Deserialize(deserializer, 1); // read a vector of size 1
+		Vector::Deserialize(deserializer, 1, depth + 1); // read a vector of size 1
 		Vector::SetVectorType(VectorType::CONSTANT_VECTOR);
 		return;
 	} else if (vtype != VectorType::FLAT_VECTOR) {
-		buffer = VectorBuffer::Deserialize(deserializer, vtype, logical_type, count);
+		buffer = VectorBuffer::Deserialize(deserializer, vtype, logical_type, count, depth + 1);
 		return;
 	}
 
