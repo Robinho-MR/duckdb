@@ -253,6 +253,7 @@ SinkResultType Sort::Sink(ExecutionContext &context, DataChunk &chunk, OperatorS
 
 	if (!lstate.sorted_run) {
 		lstate.InitializeSortedRun(*this, context.client);
+		const lock_guard<mutex> guard(gstate.lock); // external can be modified concurrently
 		gstate.UpdateLocalState(lstate);
 	}
 
