@@ -1,0 +1,18 @@
+# name: test/sql/function/date/test_age_fallible.test
+# description: age() reports a catchable error for extreme timestamps
+# group: [date]
+
+statement error
+SELECT age(make_timestamp(-9223372036854775806));
+----
+<REGEX>:Conversion Error.*
+
+statement error
+SELECT age(make_timestamp(-9223372036854775806), make_timestamp(9223372036854775806));
+----
+<REGEX>:Conversion Error.*
+
+query I
+SELECT TRY(age(make_timestamp(-9223372036854775806)));
+----
+NULL
