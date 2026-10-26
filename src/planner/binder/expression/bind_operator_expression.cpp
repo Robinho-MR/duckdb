@@ -4,6 +4,7 @@
 #include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_parameter_expression.hpp"
@@ -60,6 +61,45 @@ LogicalType ExpressionBinder::ResolveCoalesceType(OperatorExpression &op, vector
 		}
 	}
 	return max_type;
+}
+
+unique_ptr<Expression> ExpressionBinder::TryExpandInPairwise(OperatorExpression &op,
+                                                             vector<unique_ptr<Expression>> &children) {
+	if (children.size() < 2 || children[0]->GetExpressionType() != ExpressionType::BOUND_COLUMN_REF) {
+		return nullptr;
+	}
+	const auto is_in = op.GetExpressionType() == ExpressionType::COMPARE_IN;
+	auto common_type = ExpressionBinder::GetExpressionReturnType(*children[0]);
+	for (idx_t i = 1; i < children.size(); i++) {
+		auto child_type = ExpressionBinder::GetExpressionReturnType(*children[i]);
+		if (!BoundComparisonExpression::TryBindComparison(context, common_type, child_type, common_type,
+		                                                  op.GetExpressionType())) {
+			return nullptr;
+		}
+	}
+	bool may_overflow = false;
+	for (idx_t i = 0; i < children.size(); i++) {
+		auto child_type = ExpressionBinder::GetExpressionReturnType(*children[i]);
+		may_overflow = may_overflow || BoundComparisonExpression::CastToCommonTypeMayOverflow(child_type, common_type);
+	}
+	if (!may_overflow) {
+		return nullptr;
+	}
+	// compare against each value in its own common type: x IN (a, b) becomes x = a OR x = b
+	unique_ptr<Expression> result;
+	for (idx_t i = 1; i < children.size(); i++) {
+		auto comparison = BoundComparisonExpression::Bind(
+		    context, is_in ? ExpressionType::COMPARE_EQUAL : ExpressionType::COMPARE_NOTEQUAL, children[0]->Copy(),
+		    std::move(children[i]));
+		if (!result) {
+			result = std::move(comparison);
+			continue;
+		}
+		result = make_uniq<BoundConjunctionExpression>(is_in ? ExpressionType::CONJUNCTION_OR
+		                                                     : ExpressionType::CONJUNCTION_AND,
+		                                               std::move(result), std::move(comparison));
+	}
+	return result;
 }
 
 LogicalType ExpressionBinder::ResolveOperatorType(OperatorExpression &op, vector<unique_ptr<Expression>> &children) {
@@ -307,6 +347,14 @@ BindResult ExpressionBinder::BindExpression(OperatorExpression &op, idx_t depth)
 	}
 	if (!function_name.empty()) {
 		return BindOperatorAsFunction(op, Identifier(function_name), std::move(children));
+	}
+
+	if (op.GetExpressionType() == ExpressionType::COMPARE_IN ||
+	    op.GetExpressionType() == ExpressionType::COMPARE_NOT_IN) {
+		auto expanded = TryExpandInPairwise(op, children);
+		if (expanded) {
+			return BindResult(std::move(expanded));
+		}
 	}
 
 	// now resolve the types

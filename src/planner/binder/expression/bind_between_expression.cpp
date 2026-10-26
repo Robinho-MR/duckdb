@@ -38,6 +38,17 @@ BindResult ExpressionBinder::BindExpression(BetweenExpression &expr, idx_t depth
 		                      "Cannot mix values of type %s and %s in BETWEEN clause - an explicit cast is required",
 		                      input_type.ToString(), upper_sql_type.ToString());
 	}
+	if (input->GetExpressionType() == ExpressionType::BOUND_COLUMN_REF &&
+	    (BoundComparisonExpression::CastToCommonTypeMayOverflow(lower_sql_type, input_type) ||
+	     BoundComparisonExpression::CastToCommonTypeMayOverflow(upper_sql_type, input_type))) {
+		// casting a bound to the common type could overflow: compare against each bound in its own common type
+		auto left_compare = BoundComparisonExpression::Bind(context, ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+		                                                    input->Copy(), std::move(lower));
+		auto right_compare = BoundComparisonExpression::Bind(context, ExpressionType::COMPARE_LESSTHANOREQUALTO,
+		                                                     std::move(input), std::move(upper));
+		return BindResult(make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND,
+		                                                        std::move(left_compare), std::move(right_compare)));
+	}
 	// add casts (if necessary)
 	input = BoundCastExpression::AddCastToType(context, std::move(input), input_type);
 	lower = BoundCastExpression::AddCastToType(context, std::move(lower), input_type);

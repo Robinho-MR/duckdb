@@ -39,5 +39,7 @@ struct BoundComparisonExpression {
 	                                  const LogicalType &right_type, ExpressionType comparison_type);
 	static bool TryBindComparison(ClientContext &context, const LogicalType &left_type, const LogicalType &right_type,
 	                              LogicalType &result_type, ExpressionType comparison_type);
+	//! Whether casting a value of the type to the (DECIMAL) common comparison type can fail on overflow
+	static bool CastToCommonTypeMayOverflow(const LogicalType &type, const LogicalType &common_type);
 };
 } // namespace duckdb

@@ -2,6 +2,7 @@
 #include "duckdb/function/scalar/nested_functions.hpp"
 #include "duckdb/function/scalar/list/contains_or_position.hpp"
 #include "duckdb/optimizer/statistics_propagator.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/storage/statistics/list_stats.hpp"
 #include "duckdb/storage/statistics/numeric_stats.hpp"
@@ -91,12 +92,31 @@ static unique_ptr<BaseStatistics> ListPositionPropagateStats(ClientContext &, Fu
 	return stats.ToUnique();
 }
 
+//! Compare DECIMAL elements in their common comparison type rather than silently rounding the needle
+static void ListSearchResolveTypes(ResolveScalarFunctionTypesInput &input) {
+	auto &list_type = input.GetArgumentType(0);
+	auto &needle_type = input.GetArgumentType(1);
+	if (list_type.id() != LogicalTypeId::LIST || ListType::GetChildType(list_type).id() != LogicalTypeId::DECIMAL ||
+	    needle_type.id() != LogicalTypeId::DECIMAL) {
+		return;
+	}
+	LogicalType common_type;
+	if (!BoundComparisonExpression::TryBindComparison(input.GetClientContext(), ListType::GetChildType(list_type),
+	                                                  needle_type, common_type, ExpressionType::COMPARE_EQUAL)) {
+		return;
+	}
+	auto &arguments = input.GetBoundFunction().GetArguments();
+	arguments[0] = LogicalType::LIST(common_type);
+	arguments[1] = common_type;
+}
+
 ScalarFunction ListContainsFun::GetFunction() {
 	auto fun = ScalarFunction({}, LogicalType::BOOLEAN, ListSearchFunction<bool>);
 	fun.GetSignature()
 	    .AddParameter("list", LogicalType::LIST(LogicalType::TEMPLATE("T")))
 	    .AddParameter("element", LogicalType::TEMPLATE("T"));
 	fun.SetCollationHandling(FunctionCollationHandling::PUSH_COMBINABLE_COLLATIONS);
+	fun.SetResolveTypesCallback(ListSearchResolveTypes);
 	fun.SetFilterPruneCallback(ListContainsFilterPrune);
 	return fun;
 }
@@ -108,6 +128,7 @@ ScalarFunction ListPositionFun::GetFunction() {
 	    .AddParameter("element", LogicalType::TEMPLATE("T"));
 	fun.SetNullHandling(FunctionNullHandling::SPECIAL_HANDLING);
 	fun.SetCollationHandling(FunctionCollationHandling::PUSH_COMBINABLE_COLLATIONS);
+	fun.SetResolveTypesCallback(ListSearchResolveTypes);
 	fun.SetStatisticsCallback(ListPositionPropagateStats);
 	return fun;
 }

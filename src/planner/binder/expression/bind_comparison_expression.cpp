@@ -130,6 +130,14 @@ bool BoundComparisonExpression::TryBindComparison(ClientContext &context, const 
 	return true;
 }
 
+bool BoundComparisonExpression::CastToCommonTypeMayOverflow(const LogicalType &type, const LogicalType &common_type) {
+	uint8_t width, scale;
+	if (common_type.id() != LogicalTypeId::DECIMAL || !type.GetDecimalProperties(width, scale)) {
+		return false;
+	}
+	return width - scale > DecimalType::GetWidth(common_type) - DecimalType::GetScale(common_type);
+}
+
 LogicalType BoundComparisonExpression::BindComparison(ClientContext &context, const LogicalType &left_type,
                                                       const LogicalType &right_type, ExpressionType comparison_type) {
 	LogicalType result_type;

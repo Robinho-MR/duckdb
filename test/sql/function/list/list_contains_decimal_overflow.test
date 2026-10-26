@@ -1,0 +1,70 @@
+# name: test/sql/function/list/list_contains_decimal_overflow.test
+# description: contains, BETWEEN and IN agree with their expansions into = and <= for wide DECIMALs
+# group: [list]
+
+statement ok
+CREATE TABLE t AS SELECT
+	2.0::DECIMAL(2, 1) AS x,
+	123456789012345678901234567890123456.78::DECIMAL(38, 2) AS lo,
+	12345678901234567890123456789012345.678::DECIMAL(38, 3) AS hi,
+	[123456789012345678901234567890123456.78::DECIMAL(38, 2)] AS ds,
+	[100000000000000000000000000000000000.00::DECIMAL(38, 2)] AS es,
+	99999999999999999999999999999999999.999::DECIMAL(38, 3) AS m;
+
+# BETWEEN and IN compare against each value in its own common type
+query I
+SELECT lo <= x AND x <= hi FROM t
+----
+false
+
+query I
+SELECT x BETWEEN lo AND hi FROM t
+----
+false
+
+query I
+SELECT x = lo OR x = hi FROM t
+----
+false
+
+query I
+SELECT x IN (lo, hi) FROM t
+----
+false
+
+query I
+SELECT x NOT IN (lo, hi) FROM t
+----
+true
+
+# contains no longer rounds the needle to the scale of the list elements
+statement error
+SELECT contains(ds, hi) FROM t
+----
+Conversion Error
+
+statement error
+SELECT hi = ds[1] FROM t
+----
+Conversion Error
+
+statement error
+SELECT contains(es, m) FROM t
+----
+Conversion Error
+
+statement error
+SELECT m = es[1] FROM t
+----
+Conversion Error
+
+# values that fit still compare exactly
+query I
+SELECT contains([1.50::DECIMAL(38, 2)], 1.500::DECIMAL(38, 3))
+----
+true
+
+query I
+SELECT contains([1.55::DECIMAL(3, 2)], 1.5::DECIMAL(2, 1))
+----
+false
