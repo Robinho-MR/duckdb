@@ -47,21 +47,26 @@ void CompressedStringScanState::Initialize(bool initialize_dictionary) {
 	baseptr = handle->GetDataMutable() + segment.GetBlockOffset();
 
 	// Load header values
-	auto header_ptr = reinterpret_cast<dict_fsst_compression_header_t *>(baseptr);
-	mode = header_ptr->mode;
+	if (segment.GetBlockOffset() + sizeof(dict_fsst_compression_header_t) > segment.GetBlockSize()) {
+		throw IOException(
+		    "Failed to scan dictionary string - header was out of range. Database file appears to be corrupted.");
+	}
+	// the block offset is not guaranteed to be aligned, so copy the header out instead of accessing it in place
+	dict_fsst_compression_header_t header;
+	memcpy(&header, baseptr, sizeof(header));
+	mode = header.mode;
 	if (mode >= DictFSSTMode::COUNT) {
 		throw FatalException("This block was written with a mode that is not recognized by this version, highest "
 		                     "available mode %d, found mode: %d",
 		                     static_cast<uint8_t>(DictFSSTMode::COUNT), static_cast<uint8_t>(mode));
 	}
 
-	dict_count = header_ptr->dict_count;
-	auto symbol_table_size = header_ptr->symbol_table_size;
-	dictionary_size = header_ptr->dict_size;
+	dict_count = header.dict_count;
+	auto symbol_table_size = header.symbol_table_size;
+	dictionary_size = header.dict_size;
 
-	dictionary_indices_width =
-	    (bitpacking_width_t)(Load<uint8_t>(data_ptr_cast(&header_ptr->dictionary_indices_width)));
-	string_lengths_width = (bitpacking_width_t)(Load<uint8_t>(data_ptr_cast(&header_ptr->string_lengths_width)));
+	dictionary_indices_width = static_cast<bitpacking_width_t>(header.dictionary_indices_width);
+	string_lengths_width = static_cast<bitpacking_width_t>(header.string_lengths_width);
 	if (dictionary_indices_width > sizeof(uint32_t) * 8 || string_lengths_width > sizeof(uint32_t) * 8) {
 		throw IOException("Failed to scan dictionary string - bitpacking width was invalid. Database file appears to "
 		                  "be corrupted.");
