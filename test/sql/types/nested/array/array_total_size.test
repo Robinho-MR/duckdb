@@ -1,0 +1,47 @@
+# name: test/sql/types/nested/array/array_total_size.test
+# description: The total size of nested ARRAY types is bounded
+# group: [array]
+
+statement ok
+CREATE TABLE ok_nested(a INT[100][100][10]);
+
+statement ok
+SELECT * FROM ok_nested;
+
+statement error
+CREATE TABLE x(a INT[100000][100000][100]);
+----
+Binder Error: ARRAY type is too large
+
+statement error
+SELECT NULL::INT[100000][100000][100000][100000];
+----
+Binder Error: ARRAY type is too large
+
+# the database is still usable
+query I
+SELECT 42;
+----
+42
+
+# arrays nested through structs and unions count as well
+statement error
+SELECT NULL::STRUCT(x INT[100000][10000])[10];
+----
+Binder Error: ARRAY type is too large
+
+statement error
+SELECT NULL::STRUCT(x STRUCT(y INT[100000])[100000])[1000];
+----
+Binder Error: ARRAY type is too large
+
+statement error
+SELECT NULL::UNION(a INT, b INT[100000][10000])[10];
+----
+Binder Error: ARRAY type is too large
+
+statement ok
+SELECT NULL::STRUCT(x INT[1000])[1000][3];
+
+statement ok
+SELECT NULL::STRUCT(x INT[100])[100][10];

@@ -210,6 +210,36 @@ void RegisterListConstructors(TypeConstructorSet &set) {
 //----------------------------------------------------------------------------------------------------------------------
 // ARRAY Type
 //----------------------------------------------------------------------------------------------------------------------
+//! The vector allocation multiplies the dimensions of arrays nested in arrays, directly or through structs and unions
+static constexpr idx_t MAX_TOTAL_ARRAY_SIZE = 4294967296ULL;
+
+static idx_t SaturatingMultiply(idx_t left, idx_t right) {
+	if (right != 0 && left > (MAX_TOTAL_ARRAY_SIZE + 1) / right) {
+		return MAX_TOTAL_ARRAY_SIZE + 1;
+	}
+	return left * right;
+}
+
+//! The number of child values that are allocated per row for the arrays inside the type (saturating)
+static idx_t ArrayVectorExpansion(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::ARRAY:
+		return SaturatingMultiply(ArrayType::GetSize(type), ArrayVectorExpansion(ArrayType::GetChildType(type)));
+	case LogicalTypeId::STRUCT:
+	case LogicalTypeId::UNION: {
+		// every child is allocated separately
+		idx_t expansion = 1;
+		for (auto &child : StructType::GetChildTypes(type)) {
+			expansion = MaxValue(expansion, ArrayVectorExpansion(child.second));
+		}
+		return expansion;
+	}
+	default:
+		// LIST and MAP children are allocated independently of the row count
+		return 1;
+	}
+}
+
 LogicalType BindArrayType(BindLogicalTypeInput &input) {
 	auto child_type = TypeValue::GetType(input.modifiers[0].GetValue());
 	auto array_size = input.modifiers[1].GetValue().GetValue<int64_t>();
@@ -219,6 +249,13 @@ LogicalType BindArrayType(BindLogicalTypeInput &input) {
 	}
 	if (array_size > static_cast<int64_t>(ArrayType::MAX_ARRAY_SIZE)) {
 		throw BinderException(input.GetLocation(1), "ARRAY type size must be at most %d", ArrayType::MAX_ARRAY_SIZE);
+	}
+
+	auto total_size = SaturatingMultiply(UnsafeNumericCast<idx_t>(array_size), ArrayVectorExpansion(child_type));
+	if (total_size > MAX_TOTAL_ARRAY_SIZE) {
+		throw BinderException(input.GetLocation(1),
+		                      "ARRAY type is too large: the total size of nested arrays must be at most %llu",
+		                      MAX_TOTAL_ARRAY_SIZE);
 	}
 
 	return LogicalType::ARRAY(child_type, UnsafeNumericCast<idx_t>(array_size));
