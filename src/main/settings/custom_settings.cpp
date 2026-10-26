@@ -1330,6 +1330,21 @@ void OrderedAggregateThresholdSetting::OnSet(SettingCallbackInfo &info, Value &i
 }
 
 //===----------------------------------------------------------------------===//
+// Max Expression Depth
+//===----------------------------------------------------------------------===//
+void MaxExpressionDepthSetting::OnSet(SettingCallbackInfo &info, Value &input) {
+	// very small limits would reject even trivial statements, including the SET that raises the limit again
+	static constexpr idx_t MINIMUM_EXPRESSION_DEPTH = 10;
+	if (input.IsNull()) {
+		throw InvalidInputException("%s setting cannot be NULL", MaxExpressionDepthSetting::Name);
+	}
+	if (input.GetValue<uint64_t>() < MINIMUM_EXPRESSION_DEPTH) {
+		throw InvalidInputException("%s must be at least %llu", MaxExpressionDepthSetting::Name,
+		                            MINIMUM_EXPRESSION_DEPTH);
+	}
+}
+
+//===----------------------------------------------------------------------===//
 // Perfect Ht Threshold
 //===----------------------------------------------------------------------===//
 void PerfectHtThresholdSetting::OnSet(SettingCallbackInfo &info, Value &input) {

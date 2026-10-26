@@ -2000,6 +2000,7 @@ struct MaxExpressionDepthSetting {
 	static constexpr const char *DefaultValue = "1000";
 	static constexpr SettingScopeTarget Scope = SettingScopeTarget::LOCAL_DEFAULT;
 	static constexpr idx_t SettingIndex = NEXT_SETTING_INDEX();
+	static void OnSet(SettingCallbackInfo &info, Value &input);
 };
 
 struct MaxMemorySetting {

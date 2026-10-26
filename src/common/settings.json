@@ -1223,7 +1223,10 @@
         "description": "The maximum expression depth limit in the parser. WARNING: increasing this setting and using very deep expressions might lead to stack overflow errors.",
         "type": "UBIGINT",
         "default_scope": "local",
-        "default_value": "1000"
+        "default_value": "1000",
+        "on_callbacks": [
+            "set"
+        ]
     },
     {
         "name": "max_memory",
