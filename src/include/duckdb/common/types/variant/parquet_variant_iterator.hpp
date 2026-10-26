@@ -31,6 +31,9 @@ struct ShreddedGroupView {
 	//! 'value' (the binary-encoded fallback / overlay)
 	unique_ptr<VectorIterator<string_t>> value;
 
+	//! Stand-in for an absent 'value' column (allowed when 'typed_value' is present): all NULL
+	unique_ptr<Vector> missing_value;
+
 	//! Whether the group has a 'typed_value' (a shredded representation)
 	bool has_typed_value = false;
 	ParquetGroupKind kind = ParquetGroupKind::LEAF;
@@ -241,11 +244,15 @@ private:
 	mutable unique_ptr<VariantMetadata> current_metadata;
 };
 
-//! Convert a Parquet VARIANT (metadata + group) into DuckDB's SHREDDED VARIANT format: the Parquet
-//! typed_value columns are referenced directly where they map exactly, and leftover/binary 'value' data
-//! (including the entire value when there is no 'typed_value' at all) goes into the unshredded component.
+//! Conversions between the Parquet Variant layout and DuckDB's VARIANT (shared by Parquet and Arrow)
 class ParquetVariantConversion {
 public:
+	//! Convert a Parquet VARIANT (metadata + group) into DuckDB's SHREDDED VARIANT format: the typed_value
+	//! columns are referenced directly where they map exactly, and leftover/binary 'value' data (including
+	//! the entire value when there is no 'typed_value' at all) goes into the unshredded component.
+	//! A row whose 'value' and 'typed_value' are both NULL is a SQL NULL.
+	DUCKDB_API static void ConvertShredded(Vector &metadata, Vector &group, Vector &result, idx_t count);
+
 	//! Convert binary Variant values (each row being the metadata blob followed by the value blob) into the
 	//! canonical VARIANT 'result' in a single pass
 	DUCKDB_API static void ConvertBinary(Vector &metadata_and_value, Vector &result, idx_t count);

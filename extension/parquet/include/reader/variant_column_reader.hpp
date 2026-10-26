@@ -43,7 +43,6 @@ public:
 
 	void Skip(idx_t num_values) override;
 	idx_t GroupRowsAvailable() override;
-	void Convert(Vector &metadata, Vector &group, Vector &result, idx_t count);
 	void PrepareChunk(DataChunk &chunk, idx_t &capacity, const vector<LogicalType> &types, idx_t count);
 	void GatherColumnChunks(unordered_set<idx_t> &column_chunks) override;
 	void RegisterPrefetch(ThriftFileTransport &transport, bool allow_merge) override;
@@ -55,9 +54,6 @@ protected:
 
 	DataChunk intermediate_chunk;
 	idx_t intermediate_capacity = 0;
-
-	DataChunk shredded_chunk;
-	idx_t shredded_capacity = 0;
 };
 
 } // namespace duckdb
