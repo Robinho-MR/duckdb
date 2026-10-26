@@ -329,7 +329,12 @@ void ShreddedGroupView::Build(Vector &group) {
 		}
 	}
 	if (!value_vec) {
-		throw InvalidInputException("Required column 'value' not found in Variant group");
+		if (!typed_vec) {
+			throw InvalidInputException("Variant group must contain a 'value' or 'typed_value' column");
+		}
+		missing_value = make_uniq<Vector>(LogicalType::BLOB, group.size());
+		ConstantVector::SetNull(*missing_value, count_t(group.size()));
+		value_vec = missing_value.get();
 	}
 
 	value = make_uniq<VectorIterator<string_t>>(*value_vec);

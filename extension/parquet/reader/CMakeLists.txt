@@ -10,7 +10,6 @@ add_library_unity(
   struct_column_reader.cpp
   variant_column_reader.cpp)
 
-add_subdirectory(variant)
 
 set(PARQUET_EXTENSION_FILES
     ${PARQUET_EXTENSION_FILES} $<TARGET_OBJECTS:duckdb_parquet_readers>
