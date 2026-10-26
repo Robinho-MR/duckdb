@@ -5,6 +5,8 @@
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/exception/parser_exception.hpp"
+#include "duckdb/main/config.hpp"
+#include "duckdb/main/settings.hpp"
 
 namespace duckdb {
 
@@ -47,6 +49,11 @@ unique_ptr<FunctionData> CurrentSettingBind(BindScalarFunctionInput &input) {
 		auto extension_name = Catalog::AutoloadExtensionByConfigName(context, key);
 		// If autoloader didn't throw, the config is now available
 		context.TryGetCurrentSetting(key, val);
+	}
+
+	if (DBConfig::IsSensitiveSetting(key) && !val.IsNull() && !val.ToString().empty() &&
+	    !Settings::Get<AllowUnredactedSecretsSetting>(context)) {
+		val = Value("redacted");
 	}
 
 	bound_function.SetReturnType(val.type());

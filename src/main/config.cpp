@@ -1002,6 +1002,11 @@ bool DBConfig::IsOptimizerDisabled(OptimizerType type) const {
 	return options.disabled_optimizers.find(type) != options.disabled_optimizers.end();
 }
 
+bool DBConfig::IsSensitiveSetting(const Identifier &name) {
+	static const identifier_set_t SENSITIVE_SETTINGS {"password", "http_proxy_password"};
+	return SENSITIVE_SETTINGS.find(name) != SENSITIVE_SETTINGS.end();
+}
+
 set<OptimizerType> DBConfig::GetDisabledOptimizers() const {
 	lock_guard<mutex> guard(disabled_optimizers_lock);
 	return options.disabled_optimizers;

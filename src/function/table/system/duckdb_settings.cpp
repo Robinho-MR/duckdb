@@ -117,6 +117,10 @@ unique_ptr<GlobalTableFunctionState> DuckDBSettingsInit(ClientContext &context, 
 				value.value = option->default_value;
 			}
 		}
+		if (DBConfig::IsSensitiveSetting(option->name) && !value.value.IsNull() && !value.value.ToString().empty() &&
+		    !Settings::Get<AllowUnredactedSecretsSetting>(context)) {
+			value.value = Value("redacted");
+		}
 		value.description = option->description;
 		value.input_type = option->parameter_type;
 		value.scope = EnumUtil::ToString(scope);
