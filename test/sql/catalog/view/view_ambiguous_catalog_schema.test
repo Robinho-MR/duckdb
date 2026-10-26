@@ -56,3 +56,47 @@ query I
 SELECT y FROM db.main.w2
 ----
 2
+
+# views across catalogs that each have a schema named like the other catalog
+statement ok
+ATTACH ':memory:' AS db1;
+
+statement ok
+ATTACH ':memory:' AS db2;
+
+statement ok
+CREATE SCHEMA db1.db2;
+
+statement ok
+CREATE SCHEMA db2.db1;
+
+statement ok
+CREATE TABLE db1.db2.t AS SELECT 'db1.db2.t' AS src;
+
+statement ok
+CREATE TABLE db2.db1.t AS SELECT 'db2.db1.t' AS src;
+
+statement ok
+CREATE VIEW db2.main.v2 AS SELECT * FROM db1.t;
+
+statement ok
+CREATE VIEW db1.main.v1 AS SELECT * FROM db2.t UNION ALL SELECT * FROM db2.main.v2;
+
+statement ok
+CREATE VIEW db1.db2.v3 AS SELECT * FROM db2.main.v2;
+
+query I
+SELECT * FROM db2.main.v2
+----
+db2.db1.t
+
+query I
+SELECT * FROM db1.main.v1 ORDER BY src
+----
+db1.db2.t
+db2.db1.t
+
+query I
+SELECT * FROM db1.db2.v3
+----
+db2.db1.t
