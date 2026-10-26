@@ -30,7 +30,8 @@ class CatalogEntryRetriever {
 public:
 	explicit CatalogEntryRetriever(ClientContext &context) : context(context) {
 	}
-	CatalogEntryRetriever(const CatalogEntryRetriever &other) : callback(other.callback), context(other.context) {
+	CatalogEntryRetriever(const CatalogEntryRetriever &other)
+	    : callback(other.callback), context(other.context), preferred_schema_catalog(other.preferred_schema_catalog) {
 	}
 
 public:
@@ -72,6 +73,14 @@ public:
 	const CatalogSearchPath &GetSearchPath() const;
 	void SetSearchPath(vector<CatalogSearchEntry> entries);
 
+	//! Catalog in which a lone qualifier that names both a schema and a catalog resolves to the schema (views)
+	const Identifier &GetPreferredSchemaCatalog() const {
+		return preferred_schema_catalog;
+	}
+	void SetPreferredSchemaCatalog(Identifier catalog) {
+		preferred_schema_catalog = std::move(catalog);
+	}
+
 	void SetCallback(catalog_entry_callback_t callback);
 	catalog_entry_callback_t GetCallback();
 
@@ -87,6 +96,7 @@ private:
 	ClientContext &context;
 	shared_ptr<CatalogSearchPath> search_path;
 	optional_ptr<BoundAtClause> at_clause;
+	Identifier preferred_schema_catalog;
 };
 
 } // namespace duckdb
