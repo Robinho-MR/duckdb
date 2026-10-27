@@ -1,0 +1,23 @@
+--- a/src/include/storage/ducklake_transaction.hpp
++++ b/src/include/storage/ducklake_transaction.hpp
+@@ -184,6 +184,9 @@
+ 	friend class DuckLakeInitializer;
+ 
+ public:
++	//! The client context the transaction was started in
++	weak_ptr<ClientContext> context;
++
+ 	DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, TransactionManager &manager, ClientContext &context);
+ 	~DuckLakeTransaction() override;
+ 
+--- a/src/storage/ducklake_transaction.cpp
++++ b/src/storage/ducklake_transaction.cpp
+@@ -750,7 +750,7 @@
+ 
+ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, TransactionManager &manager,
+                                          ClientContext &context)
+-    : Transaction(manager, context), ducklake_catalog(ducklake_catalog), db(*context.db),
++    : Transaction(manager), context(context.shared_from_this()), ducklake_catalog(ducklake_catalog), db(*context.db),
+       local_catalog_id(DuckLakeConstants::TRANSACTION_LOCAL_ID_START), catalog_version(0) {
+ 	metadata_manager = DuckLakeMetadataManager::Create(*this);
+ 	schema_pins = make_uniq<DuckLakeSchemaPinState>();

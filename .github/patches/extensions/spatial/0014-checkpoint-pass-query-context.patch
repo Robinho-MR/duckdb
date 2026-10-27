@@ -1,0 +1,65 @@
+--- a/src/spatial/index/rtree/rtree.cpp
++++ b/src/spatial/index/rtree/rtree.cpp
+@@ -4,9 +4,9 @@
+ 
+ namespace duckdb {
+ 
+-void RTree::Persist(PartialBlockManager &partial_block_manager) {
+-	auto new_leaf_allocator = leaf_allocator->Persist(partial_block_manager);
+-	auto new_node_allocator = node_allocator->Persist(partial_block_manager);
++void RTree::Persist(QueryContext context, PartialBlockManager &partial_block_manager) {
++	auto new_leaf_allocator = leaf_allocator->Persist(context, partial_block_manager);
++	auto new_node_allocator = node_allocator->Persist(context, partial_block_manager);
+ 	leaf_allocator = std::move(new_leaf_allocator);
+ 	node_allocator = std::move(new_node_allocator);
+ }
+--- a/src/spatial/index/rtree/rtree.hpp
++++ b/src/spatial/index/rtree/rtree.hpp
+@@ -51,7 +51,7 @@
+ 		return *leaf_allocator;
+ 	}
+ 
+-	void Persist(PartialBlockManager &partial_block_manager);
++	void Persist(QueryContext context, PartialBlockManager &partial_block_manager);
+ 
+ 	const RTreeEntry &GetRoot() const {
+ 		return root;
+--- a/src/spatial/index/rtree/rtree_index.cpp
++++ b/src/spatial/index/rtree/rtree_index.cpp
+@@ -319,8 +319,9 @@
+ 	last_commit_before_delete = DuckTransactionManager::Get(db).GetLastCommit();
+ }
+ 
+-IndexCheckpointResult RTreeIndex::Checkpoint(PartialBlockManager &partial_block_manager, StorageVersion) {
+-	tree->Persist(partial_block_manager);
++IndexCheckpointResult RTreeIndex::Checkpoint(QueryContext context, PartialBlockManager &partial_block_manager,
++                                              StorageVersion) {
++	tree->Persist(context, partial_block_manager);
+ 
+ 	IndexStorageInfo info;
+ 	info.name = name;
+--- a/src/spatial/index/rtree/rtree_index.hpp
++++ b/src/spatial/index/rtree/rtree_index.hpp
+@@ -70,7 +70,8 @@
+ 	ErrorData Insert(IndexLock &lock, DataChunk &data, Vector &row_ids) override;
+ 
+ 	//! Serializes RTree memory to disk and returns the index storage information.
+-	IndexCheckpointResult Checkpoint(PartialBlockManager &partial_block_manager, StorageVersion) override;
++	IndexCheckpointResult Checkpoint(QueryContext context, PartialBlockManager &partial_block_manager,
++	                                 StorageVersion) override;
+ 	//! Serializes RTree memory to the WAL and returns the index storage information.
+ 	IndexStorageInfo SerializeToWAL(StorageVersion target_version) override;
+ 
+--- a/src/spatial/index/rtree/rtree_index_scan.cpp
++++ b/src/spatial/index/rtree/rtree_index_scan.cpp
+@@ -295,8 +295,8 @@
+ 	if (g_state.mode == RTreeIndexScanGlobalState::ScanMode::INDEX_SCAN) {
+ 		// Setup the scan state for the local storage
+ 		auto &local_storage = LocalStorage::Get(context.client, bind_data.table.catalog);
+-		local_storage.InitializeScan(bind_data.table.GetStorage(), result->local_storage_state.local_state,
+-		                             input.filters);
++		local_storage.InitializeScan(context.client, bind_data.table.GetStorage(),
++		                             result->local_storage_state.local_state, input.filters);
+ 	} else {
+ 		// Fallback table scan: grab the first range to scan (this also covers the transaction-local storage)
+ 		bind_data.table.GetStorage().NextParallelScan(context.client, g_state.table_scan_state,
