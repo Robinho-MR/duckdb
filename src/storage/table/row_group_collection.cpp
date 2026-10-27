@@ -1062,6 +1062,7 @@ void RowGroupCollection::RemoveFromIndexes(const QueryContext &context, TableInd
 	fetch_chunk.Initialize(GetAllocator(), column_types);
 
 	ColumnFetchState state;
+	state.context = context;
 	state.fetch_type = FetchType::FORCE_FETCH;
 	TransactionData commit_transaction(MAX_TRANSACTION_ID, VisibilityBound::Before(MAX_COMMIT_ID));
 	Fetch(commit_transaction, fetch_chunk, column_ids, row_identifiers, count, state);

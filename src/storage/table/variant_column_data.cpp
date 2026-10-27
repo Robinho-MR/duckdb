@@ -14,7 +14,6 @@
 #include "duckdb/storage/table/scan_state.hpp"
 #include "duckdb/storage/table/struct_column_data.hpp"
 #include "duckdb/transaction/duck_transaction.hpp"
-#include "duckdb/transaction/local_storage.hpp"
 #include "duckdb/main/config.hpp"
 
 namespace duckdb {
@@ -508,8 +507,8 @@ void VariantColumnData::FetchRows(TransactionData transaction, ColumnFetchState 
 		}
 
 		//! Need to perform the cast here as well
-		auto &context = transaction.transaction->GetLocalStorage().GetClientContext();
-		auto fetched_row = extracted_variant.GetValue(0).CastAs(context, result.GetType());
+		auto context = state.context.GetClientContext();
+		auto fetched_row = extracted_variant.GetValue(0).CastAs(*context, result.GetType());
 		result.SetValue(result_idx, fetched_row);
 	}
 }

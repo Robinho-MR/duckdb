@@ -34,18 +34,18 @@ enum class OptimisticWritePartialManagers { PER_COLUMN, GLOBAL };
 
 class OptimisticDataWriter {
 public:
-	OptimisticDataWriter(ClientContext &context, DataTable &table);
+	explicit OptimisticDataWriter(DataTable &table);
 	OptimisticDataWriter(DataTable &table, OptimisticDataWriter &parent);
 	~OptimisticDataWriter();
 
 	//! Creates a collection to write to
 	unique_ptr<OptimisticWriteCollection>
-	CreateCollection(DataTable &storage, const vector<LogicalType> &insert_types,
+	CreateCollection(ClientContext &context, DataTable &storage, const vector<LogicalType> &insert_types,
 	                 OptimisticWritePartialManagers type = OptimisticWritePartialManagers::PER_COLUMN);
 	//! Write a new row group to disk (if possible)
-	void WriteNewRowGroup(OptimisticWriteCollection &row_groups, idx_t flushed_row_group_idx);
+	void WriteNewRowGroup(ClientContext &context, OptimisticWriteCollection &row_groups, idx_t flushed_row_group_idx);
 	//! Write any unflushed row groups of a collection to disk
-	void WriteUnflushedRowGroups(OptimisticWriteCollection &row_groups);
+	void WriteUnflushedRowGroups(ClientContext &context, OptimisticWriteCollection &row_groups);
 	//! Final flush of the optimistic writer - fully flushes the partial block manager
 	void FinalFlush();
 	//! Merge the partially written blocks from one optimistic writer into another
@@ -57,21 +57,14 @@ public:
 	//! Whether this writer can write to disk at all (not temporary / in-memory / read-only)
 	bool CanWriteToDisk() const;
 
-	//! Return the client context.
-	ClientContext &GetClientContext() {
-		return context;
-	}
-
 private:
 	//! Prepare a write to disk
-	bool PrepareWrite();
+	bool PrepareWrite(ClientContext &context);
 	//! Flushes a specific row group to disk
 	void FlushToDisk(OptimisticWriteCollection &collection, const vector<const_reference<RowGroup>> &row_groups,
 	                 const vector<int64_t> &segment_indexes);
 
 private:
-	//! The client context in which we're writing the data.
-	ClientContext &context;
 	//! The table.
 	DataTable &table;
 	//! The partial block manager, if any.

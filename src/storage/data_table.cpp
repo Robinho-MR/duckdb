@@ -109,7 +109,7 @@ DataTable::DataTable(ClientContext &context, DataTable &parent, ColumnDefinition
 	this->row_groups = parent.row_groups->AddColumn(context, new_column, default_executor);
 
 	// also add this column to client local storage
-	local_storage.AddColumn(parent, *this, new_column, default_executor);
+	local_storage.AddColumn(context, parent, *this, new_column, default_executor);
 
 	// this table replaces the previous table, hence the parent is no longer the root DataTable
 	parent.version = DataTableVersion::ALTERED;
@@ -175,12 +175,12 @@ DataTable::DataTable(ClientContext &context, DataTable &parent, BoundConstraint 
 	}
 
 	if (constraint.type != ConstraintType::UNIQUE) {
-		VerifyNewConstraint(local_storage, parent, constraint);
+		VerifyNewConstraint(context, local_storage, parent, constraint);
 	} else if (constraint.Cast<BoundUniqueConstraint>().is_primary_key) {
 		// the key columns become NOT NULL: verify them under the append lock, including rows committed concurrently
 		for (auto &key : constraint.Cast<BoundUniqueConstraint>().keys) {
 			BoundNotNullConstraint not_null(key);
-			VerifyNewConstraint(local_storage, parent, not_null);
+			VerifyNewConstraint(context, local_storage, parent, not_null);
 		}
 	}
 	local_storage.MoveStorage(parent, *this);
@@ -227,11 +227,11 @@ DataTable::DataTable(ClientContext &context, DataTable &parent, idx_t changed_id
 		                                          rewrite_visibility);
 
 		// scan the original table, and fill the new column with the transformed value
-		local_storage.ChangeType(parent, *this, changed_idx, target_type, bound_columns, cast_expr);
+		local_storage.ChangeType(context, parent, *this, changed_idx, target_type, bound_columns, cast_expr);
 
 		// re-verify any column constraint that the rewrite could have violated (e.g. NOT NULL)
 		if (constraint_to_verify) {
-			VerifyNewConstraint(local_storage, *this, *constraint_to_verify);
+			VerifyNewConstraint(context, local_storage, *this, *constraint_to_verify);
 		}
 	} catch (...) {
 		// nothing reached the catalog, so no undo entry will restore the parent
@@ -277,7 +277,7 @@ void DataTable::InitializeScan(ClientContext &context, DuckTransaction &transact
 	auto &local_storage = LocalStorage::Get(transaction);
 	state.Initialize(column_ids, context, table_filters);
 	row_groups->InitializeScan(context, state.table_state, column_ids, table_filters);
-	local_storage.InitializeScan(*this, state.local_state, table_filters);
+	local_storage.InitializeScan(context, *this, state.local_state, table_filters);
 }
 
 void DataTable::InitializeScanWithOffset(DuckTransaction &transaction, TableScanState &state,
@@ -525,12 +525,13 @@ void DataTable::Fetch(DuckTransaction &transaction, DataChunk &result, const vec
 	D_ASSERT(result.size() == committed_count);
 
 	// Fetch local rows into a separate chunk.
-	auto &allocator = Allocator::Get(local_storage.GetClientContext());
+	auto &allocator = Allocator::Get(db);
 	DataChunk local_chunk;
 	local_chunk.Initialize(allocator, result.GetTypes());
 	Vector local_row_ids(row_identifiers, local_sel, local_count);
 	local_row_ids.Flatten();
 	ColumnFetchState local_fetch_state;
+	local_fetch_state.context = state.context;
 	local_storage.FetchChunk(*this, local_row_ids, local_count, column_ids, local_chunk, local_fetch_state);
 
 	// Append local rows after committed rows in the result.
@@ -801,14 +802,14 @@ void DataTable::VerifyDeleteForeignKeyConstraint(optional_ptr<LocalTableStorage>
 	VerifyForeignKeyConstraint(storage, bound_foreign_key, context, chunk, VerifyExistenceType::DELETE_FK);
 }
 
-void DataTable::VerifyNewConstraint(LocalStorage &local_storage, DataTable &parent, const BoundConstraint &constraint) {
+void DataTable::VerifyNewConstraint(ClientContext &context, LocalStorage &local_storage, DataTable &parent,
+                                    const BoundConstraint &constraint) {
 	if (constraint.type != ConstraintType::NOT_NULL) {
 		throw NotImplementedException("FIXME: ALTER COLUMN with such constraint is not supported yet");
 	}
 
-	parent.row_groups->VerifyNewConstraint(local_storage.GetClientContext(), local_storage.GetTransaction(), parent,
-	                                       constraint);
-	local_storage.VerifyNewConstraint(parent, constraint);
+	parent.row_groups->VerifyNewConstraint(context, local_storage.GetTransaction(), parent, constraint);
+	local_storage.VerifyNewConstraint(context, parent, constraint);
 }
 
 void DataTable::VerifyAppendConstraints(ConstraintState &constraint_state, ClientContext &context, DataChunk &chunk,
@@ -898,7 +899,7 @@ void DataTable::InitializeLocalAppend(LocalAppendState &state, DuckTableEntry &t
 		                           GetTableName(), TableModification());
 	}
 	auto &local_storage = LocalStorage::Get(context, db);
-	local_storage.InitializeAppend(state, *this, table);
+	local_storage.InitializeAppend(context, state, *this, table);
 	state.constraint_state = InitializeConstraintState(table, bound_constraints);
 }
 
@@ -913,7 +914,7 @@ void DataTable::InitializeLocalStorage(LocalAppendState &state, DuckTableEntry &
 	// The transaction-local indexes are created with the local storage, and only for indexes that are bound
 	info->BindIndexes(context);
 	auto &local_storage = LocalStorage::Get(context, db);
-	local_storage.InitializeStorage(state, *this, table);
+	local_storage.InitializeStorage(context, state, *this, table);
 	state.constraint_state = InitializeConstraintState(table, bound_constraints);
 }
 
@@ -937,7 +938,7 @@ void DataTable::LocalAppend(LocalAppendState &state, DuckTableEntry &table_entry
 	}
 
 	// Append to the transaction-local data.
-	LocalStorage::Append(state, table_entry, chunk);
+	LocalStorage::Append(context, state, table_entry, chunk);
 }
 
 void DataTable::LocalAppend(DuckTableEntry &table, ClientContext &context, DataChunk &chunk,
@@ -955,28 +956,28 @@ void DataTable::FinalizeLocalAppend(LocalAppendState &state) {
 PhysicalIndex DataTable::CreateOptimisticCollection(ClientContext &context,
                                                     unique_ptr<OptimisticWriteCollection> collection) {
 	auto &local_storage = LocalStorage::Get(context, db);
-	return local_storage.CreateOptimisticCollection(*this, std::move(collection));
+	return local_storage.CreateOptimisticCollection(context, *this, std::move(collection));
 }
 
 OptimisticWriteCollection &DataTable::GetOptimisticCollection(ClientContext &context,
                                                               const PhysicalIndex collection_index) {
 	auto &local_storage = LocalStorage::Get(context, db);
-	return local_storage.GetOptimisticCollection(*this, collection_index);
+	return local_storage.GetOptimisticCollection(context, *this, collection_index);
 }
 
 void DataTable::ResetOptimisticCollection(ClientContext &context, const PhysicalIndex collection_index) {
 	auto &local_storage = LocalStorage::Get(context, db);
-	local_storage.ResetOptimisticCollection(*this, collection_index);
+	local_storage.ResetOptimisticCollection(context, *this, collection_index);
 }
 
 OptimisticDataWriter &DataTable::GetOptimisticWriter(ClientContext &context) {
 	auto &local_storage = LocalStorage::Get(context, db);
-	return local_storage.GetOptimisticWriter(*this);
+	return local_storage.GetOptimisticWriter(context, *this);
 }
 
 void DataTable::LocalMerge(ClientContext &context, DuckTableEntry &table_entry, OptimisticWriteCollection &collection) {
 	auto &local_storage = LocalStorage::Get(context, db);
-	local_storage.LocalMerge(*this, table_entry, collection);
+	local_storage.LocalMerge(context, *this, table_entry, collection);
 }
 
 void DataTable::LocalWALAppend(DuckTableEntry &table, ClientContext &context, DataChunk &chunk,
@@ -1378,11 +1379,12 @@ idx_t DataTable::Delete(TableDeleteState &state, ClientContext &context, DuckTab
 			if (state.has_delete_constraints) {
 				// Verify any delete constraints.
 				ColumnFetchState fetch_state;
+				fetch_state.context = context;
 				local_storage.FetchChunk(*this, offset_ids, current_count, state.col_ids, state.verify_chunk,
 				                         fetch_state);
 				VerifyDeleteConstraints(storage, state, context, state.verify_chunk);
 			}
-			delete_count += local_storage.Delete(*this, table_entry, offset_ids, current_count);
+			delete_count += local_storage.Delete(context, *this, table_entry, offset_ids, current_count);
 			continue;
 		}
 
@@ -1390,6 +1392,7 @@ idx_t DataTable::Delete(TableDeleteState &state, ClientContext &context, DuckTab
 		if (state.has_delete_constraints) {
 			// Verify any delete constraints.
 			ColumnFetchState fetch_state;
+			fetch_state.context = context;
 			Fetch(transaction, state.verify_chunk, state.col_ids, offset_ids, current_count, fetch_state);
 			VerifyDeleteConstraints(storage, state, context, state.verify_chunk);
 		}

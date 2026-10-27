@@ -24,7 +24,6 @@
 #include "duckdb/transaction/update_info.hpp"
 #include "duckdb/transaction/duck_transaction.hpp"
 #include "duckdb/transaction/duck_transaction_manager.hpp"
-#include "duckdb/transaction/local_storage.hpp"
 #include "duckdb/storage/data_table.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 
@@ -135,11 +134,10 @@ void IndexDataRemover::Flush(DataTable &table, row_t *row_numbers, idx_t count) 
 //===--------------------------------------------------------------------===//
 // CommitState
 //===--------------------------------------------------------------------===//
-CommitState::CommitState(DuckTransaction &transaction_p, transaction_t commit_id,
+CommitState::CommitState(ClientContext &context, DuckTransaction &transaction_p, transaction_t commit_id,
                          ActiveTransactionState transaction_state, CommitMode commit_mode)
     : transaction(transaction_p), commit_id(commit_id),
-      index_data_remover(transaction, transaction.GetLocalStorage().GetClientContext(),
-                         GetIndexRemovalType(transaction_state, commit_mode)) {
+      index_data_remover(transaction, context, GetIndexRemovalType(transaction_state, commit_mode)) {
 	D_ASSERT(commit_mode != CommitMode::COMMIT || IsCommitted(commit_id));
 }
 

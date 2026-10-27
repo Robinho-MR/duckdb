@@ -35,10 +35,10 @@ TransactionData::TransactionData(transaction_t transaction_id_p, VisibilityBound
     : transaction(nullptr), view(transaction_id_p, visibility_bound_p) {
 }
 
-DuckTransaction::DuckTransaction(DuckTransactionManager &manager, ClientContext &context_p, transaction_t start_time,
-                                 SnapshotView view_p, idx_t catalog_version_p)
+DuckTransaction::DuckTransaction(DuckTransactionManager &manager, transaction_t start_time, SnapshotView view_p,
+                                 idx_t catalog_version_p)
     : Transaction(manager), start_time(start_time), view(view_p), commit_id(0), catalog_version(catalog_version_p),
-      awaiting_cleanup(false), undo_buffer(*this), storage(make_uniq<LocalStorage>(context_p, *this)) {
+      awaiting_cleanup(false), undo_buffer(*this), storage(make_uniq<LocalStorage>(*this)) {
 	D_ASSERT(IsCommitted(start_time) && !IsCommitted(view.transaction_id));
 }
 
@@ -211,13 +211,13 @@ bool DuckTransaction::ShouldWriteToWAL(AttachedDatabase &db) {
 	return true;
 }
 
-ErrorData DuckTransaction::PreFlushOptimisticBlocks(AttachedDatabase &db) noexcept {
+ErrorData DuckTransaction::PreFlushOptimisticBlocks(ClientContext &context, AttachedDatabase &db) noexcept {
 	ErrorData error;
 	if (!ShouldWriteToWAL(db)) {
 		return error;
 	}
 	try {
-		storage->FlushBulkAppendBlocksAndSync(db);
+		storage->FlushBulkAppendBlocksAndSync(context, db);
 	} catch (std::exception &ex) {
 		// fail the commit: the flush machinery cannot safely be re-run after an error, and a failed
 		// fsync must not be retried (the retry can succeed without the data being durable)
@@ -245,7 +245,7 @@ ErrorData DuckTransaction::AppendLocalStorage(ClientContext &context, AttachedDa
 		}
 		auto &profiler = *context.client_data->profiler;
 		auto commit_timer = profiler.StartTimer<MetricStorageCommitLocalStorageLatency>();
-		storage->Commit(commit_state.get());
+		storage->Commit(context, commit_state.get());
 		commit_timer.EndTimer();
 	} catch (std::exception &ex) {
 		// Call RevertCommit() outside this try-catch as it itself may throw
@@ -282,7 +282,7 @@ ErrorData DuckTransaction::WriteToWAL(ClientContext &context, AttachedDatabase &
 	return error_data;
 }
 
-ErrorData DuckTransaction::Commit(AttachedDatabase &db, CommitInfo &commit_info,
+ErrorData DuckTransaction::Commit(ClientContext &context, AttachedDatabase &db, CommitInfo &commit_info,
                                   unique_ptr<StorageCommitState> commit_state) noexcept {
 	this->commit_id = commit_info.commit_id;
 	if (!ChangesMade()) {
@@ -301,8 +301,8 @@ ErrorData DuckTransaction::Commit(AttachedDatabase &db, CommitInfo &commit_info,
 
 	ErrorData error_data;
 	try {
-		storage->Commit(commit_state.get());
-		undo_buffer.Commit(iterator_state, commit_info);
+		storage->Commit(context, commit_state.get());
+		undo_buffer.Commit(context, iterator_state, commit_info);
 		if (!db.IsSystem() && !db.IsTemporary() && Settings::Get<DebugForceCommitFailureSetting>(db.GetDatabase())) {
 			throw InvalidInputException("Forced commit failure (debug_force_commit_failure)");
 		}
@@ -323,7 +323,7 @@ ErrorData DuckTransaction::Commit(AttachedDatabase &db, CommitInfo &commit_info,
 	}
 
 	try {
-		undo_buffer.RevertCommit(iterator_state, GetTransactionId());
+		undo_buffer.RevertCommit(context, iterator_state, GetTransactionId());
 		if (!db.IsSystem() && !db.IsTemporary() &&
 		    Settings::Get<DebugForceCommitRevertFailureSetting>(db.GetDatabase())) {
 			throw IOException("Forced RevertCommit failure (debug_force_commit_revert_failure)");

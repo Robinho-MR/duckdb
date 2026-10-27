@@ -14,11 +14,10 @@ namespace duckdb {
 OptimisticWriteCollection::~OptimisticWriteCollection() {
 }
 
-OptimisticDataWriter::OptimisticDataWriter(ClientContext &context, DataTable &table) : context(context), table(table) {
+OptimisticDataWriter::OptimisticDataWriter(DataTable &table) : table(table) {
 }
 
-OptimisticDataWriter::OptimisticDataWriter(DataTable &table, OptimisticDataWriter &parent)
-    : context(parent.GetClientContext()), table(table) {
+OptimisticDataWriter::OptimisticDataWriter(DataTable &table, OptimisticDataWriter &parent) : table(table) {
 	if (parent.partial_manager) {
 		parent.partial_manager->ClearBlocks();
 	}
@@ -33,7 +32,7 @@ bool OptimisticDataWriter::CanWriteToDisk() const {
 	return !table.IsTemporary() && !storage_manager.InMemory() && !attached.IsReadOnly();
 }
 
-bool OptimisticDataWriter::PrepareWrite() {
+bool OptimisticDataWriter::PrepareWrite(ClientContext &context) {
 	// check if optimistic writing is enabled
 	if (!Settings::Get<EnableOptimisticWriteSetting>(context)) {
 		return false;
@@ -51,7 +50,7 @@ bool OptimisticDataWriter::PrepareWrite() {
 	return true;
 }
 
-unique_ptr<OptimisticWriteCollection> OptimisticDataWriter::CreateCollection(DataTable &storage,
+unique_ptr<OptimisticWriteCollection> OptimisticDataWriter::CreateCollection(ClientContext &context, DataTable &storage,
                                                                              const vector<LogicalType> &insert_types,
                                                                              OptimisticWritePartialManagers type) {
 	auto table_info = storage.GetDataTableInfo();
@@ -73,9 +72,10 @@ unique_ptr<OptimisticWriteCollection> OptimisticDataWriter::CreateCollection(Dat
 	return result;
 }
 
-void OptimisticDataWriter::WriteNewRowGroup(OptimisticWriteCollection &row_groups, idx_t flushed_row_group_idx) {
+void OptimisticDataWriter::WriteNewRowGroup(ClientContext &context, OptimisticWriteCollection &row_groups,
+                                            idx_t flushed_row_group_idx) {
 	// we finished writing a complete row group
-	if (!PrepareWrite()) {
+	if (!PrepareWrite(context)) {
 		return;
 	}
 
@@ -127,14 +127,14 @@ void OptimisticWriteCollection::ResetCollectionAccounting() {
 	flushed_row_groups.clear();
 }
 
-void OptimisticDataWriter::WriteUnflushedRowGroups(OptimisticWriteCollection &row_groups) {
+void OptimisticDataWriter::WriteUnflushedRowGroups(ClientContext &context, OptimisticWriteCollection &row_groups) {
 	auto total_row_groups = row_groups.collection->GetRowGroupCount();
 	if (row_groups.flushed_row_groups.size() == total_row_groups && row_groups.partial_block_managers.empty()) {
 		// everything is flushed already and there is nothing to merge - a repeated call ends up here
 		return;
 	}
 	// we finished writing a complete row group
-	if (!PrepareWrite()) {
+	if (!PrepareWrite(context)) {
 		return;
 	}
 	// add any incomplete row groups to the set of unflushed row groups
