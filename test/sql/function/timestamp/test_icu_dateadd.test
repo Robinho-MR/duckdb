@@ -399,12 +399,12 @@ Conversion Error: ICU date overflows timestamp range
 statement error
 SELECT ts + (INTERVAL (-1) microsecond) FROM limits WHERE label = 'tsmin';
 ----
-Conversion Error: Date out of range in timestamp conversion
+Conversion Error: ICU date overflows timestamp range
 
 statement error
 SELECT ts + (INTERVAL (-485) microsecond) FROM limits WHERE label = 'tsmin';
 ----
-Conversion Error: Date out of range in timestamp conversion
+Conversion Error: ICU date overflows timestamp range
 
 statement error
 SELECT ts + INTERVAL (-150) millisecond FROM limits WHERE label = 'tsmin';
@@ -414,7 +414,7 @@ Conversion Error: ICU date overflows timestamp range
 statement error
 SELECT ts + INTERVAL (-485) microsecond FROM limits WHERE label = 'tsmin';
 ----
-Conversion Error: Date out of range in timestamp conversion
+Conversion Error: ICU date overflows timestamp range
 
 # Backward from the maximum. These used to be off by a millisecond, because a double loses
 # millisecond accuracy at this end of the range.

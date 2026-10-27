@@ -376,7 +376,16 @@ dtime_ns_t Timestamp::GetTimeNs(timestamp_ns_t input) {
 
 bool Timestamp::TryFromDatetime(date_t date, dtime_t time, timestamp_t &result) {
 	if (!TryMultiplyOperator::Operation<int64_t, int64_t, int64_t>(date.days, Interval::MICROS_PER_DAY, result.value)) {
-		return false;
+		// the start of the first day can lie below the int64 minimum while the timestamp itself is in range
+		if (date.days >= 0 || !TryMultiplyOperator::Operation<int64_t, int64_t, int64_t>(
+		                          int64_t(date.days) + 1, Interval::MICROS_PER_DAY, result.value)) {
+			return false;
+		}
+		if (!TryAddOperator::Operation<int64_t, int64_t, int64_t>(result.value, time.value - Interval::MICROS_PER_DAY,
+		                                                          result.value)) {
+			return false;
+		}
+		return result.IsFinite();
 	}
 	if (!TryAddOperator::Operation<int64_t, int64_t, int64_t>(result.value, time.value, result.value)) {
 		return false;
@@ -406,12 +415,15 @@ timestamp_t Timestamp::FromDatetime(date_t date, dtime_t time) {
 
 void Timestamp::Convert(timestamp_t timestamp, date_t &out_date, dtime_t &out_time) {
 	out_date = GetDate(timestamp);
-	int64_t days_micros;
-	if (!TryMultiplyOperator::Operation<int64_t, int64_t, int64_t>(out_date.days, Interval::MICROS_PER_DAY,
-	                                                               days_micros)) {
+	if (!out_date.IsFinite()) {
 		throw ConversionException("Date out of range in timestamp conversion");
 	}
-	out_time = dtime_t(timestamp.value - days_micros);
+	// the start of the first day can lie below the int64 minimum, so take the time of day with a modulo
+	auto time_micros = timestamp.value % Interval::MICROS_PER_DAY;
+	if (time_micros < 0) {
+		time_micros += Interval::MICROS_PER_DAY;
+	}
+	out_time = dtime_t(time_micros);
 	D_ASSERT(timestamp == Timestamp::FromDatetime(out_date, out_time));
 }
 

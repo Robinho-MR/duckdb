@@ -1,0 +1,20 @@
+# name: test/sql/function/date/test_age_extreme_timestamp.test
+# description: age() works for the earliest finite timestamp
+# group: [date]
+
+statement ok
+SELECT age(make_timestamp(-9223372036854775806));
+
+statement ok
+SELECT age(make_timestamp(-9223372036854775806), make_timestamp(9223372036854775806));
+
+query I
+SELECT age(make_timestamp(9223372036854775806), make_timestamp(-9223372036854775806)) = -age(make_timestamp(-9223372036854775806), make_timestamp(9223372036854775806));
+----
+true
+
+# the date and time parts of the earliest finite timestamp are consistent
+query I
+SELECT make_timestamp(-9223372036854775806)::TIME;
+----
+19:59:05.224194
