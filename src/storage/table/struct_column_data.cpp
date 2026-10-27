@@ -8,6 +8,7 @@
 #include "duckdb/storage/table/scan_state.hpp"
 
 #include "duckdb/transaction/duck_transaction.hpp"
+#include "duckdb/transaction/local_storage.hpp"
 
 namespace duckdb {
 
@@ -349,13 +350,13 @@ void StructColumnData::FetchRows(TransactionData transaction, ColumnFetchState &
 		auto &child_type = StructType::GetChildTypes(type)[child_index].second;
 		if (!child_storage_index.HasChildren() && child_storage_index.HasType() &&
 		    child_storage_index.GetType() != child_type) {
-			auto context = transaction.transaction->context.lock();
+			auto &context = transaction.transaction->GetLocalStorage().GetClientContext();
 			for (idx_t idx = 0; idx < fetch_count; idx++) {
 				const idx_t offset = offsets[sel.get_index(idx)];
 				Vector intermediate(child_type, 1);
 				sub_column.FetchRows(transaction, state, child_storage_index, &offset,
 				                     *FlatVector::IncrementalSelectionVector(), /*count=*/1, intermediate, 0);
-				auto fetched_row = intermediate.GetValue(0).CastAs(*context, result.GetType());
+				auto fetched_row = intermediate.GetValue(0).CastAs(context, result.GetType());
 				result.SetValue(result_offset + idx, fetched_row);
 			}
 			return;

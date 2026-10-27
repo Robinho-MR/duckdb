@@ -46,7 +46,7 @@ public:
 	};
 
 public:
-	explicit UndoBuffer(DuckTransaction &transaction, ClientContext &context);
+	explicit UndoBuffer(DuckTransaction &transaction);
 
 	//! Write a specified entry to the undo buffer
 	UndoBufferReference CreateEntry(UndoFlags type, idx_t len);
