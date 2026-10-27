@@ -405,9 +405,8 @@ void ListColumnData::SetChildData(shared_ptr<ColumnData> child_column_p) {
 }
 
 struct ListColumnCheckpointState : public ColumnCheckpointState {
-	ListColumnCheckpointState(const RowGroup &row_group, ColumnData &column_data,
-	                          PartialBlockManager &partial_block_manager)
-	    : ColumnCheckpointState(row_group, column_data, partial_block_manager) {
+	ListColumnCheckpointState(const RowGroup &row_group, ColumnData &column_data, ColumnCheckpointInfo &checkpoint_info)
+	    : ColumnCheckpointState(row_group, column_data, checkpoint_info) {
 		global_stats = ListStats::CreateEmpty(column_data.type).ToUnique();
 	}
 
@@ -447,8 +446,8 @@ public:
 };
 
 unique_ptr<ColumnCheckpointState> ListColumnData::CreateCheckpointState(const RowGroup &row_group,
-                                                                        PartialBlockManager &partial_block_manager) {
-	return make_uniq<ListColumnCheckpointState>(row_group, *this, partial_block_manager);
+                                                                        ColumnCheckpointInfo &checkpoint_info) {
+	return make_uniq<ListColumnCheckpointState>(row_group, *this, checkpoint_info);
 }
 
 unique_ptr<ColumnCheckpointState> ListColumnData::Checkpoint(const RowGroup &row_group,

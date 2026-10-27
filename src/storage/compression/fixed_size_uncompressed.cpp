@@ -73,7 +73,8 @@ void UncompressedCompressState::CreateEmptySegment() {
 		if (!storage_manager.InMemory()) {
 			auto &partial_block_manager = checkpoint_data.GetCheckpointState().GetPartialBlockManager();
 			state.block_manager = partial_block_manager.GetBlockManager();
-			state.overflow_writer = make_uniq<WriteOverflowStringsToDisk>(partial_block_manager);
+			state.overflow_writer = make_uniq<WriteOverflowStringsToDisk>(
+			    checkpoint_data.GetCheckpointState().GetContext(), partial_block_manager);
 		}
 	}
 	current_segment = std::move(compressed_segment);

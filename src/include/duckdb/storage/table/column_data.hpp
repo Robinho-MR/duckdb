@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/common/query_context.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/storage/data_pointer.hpp"
 #include "duckdb/storage/table/persistent_table_data.hpp"
@@ -55,6 +56,7 @@ struct ColumnCheckpointInfo {
 
 public:
 	PartialBlockManager &GetPartialBlockManager();
+	QueryContext GetContext() const;
 	CompressionType GetCompressionType();
 
 private:
@@ -201,7 +203,7 @@ public:
 	virtual void VisitBlockIds(BlockIdVisitor &visitor) const;
 
 	virtual unique_ptr<ColumnCheckpointState> CreateCheckpointState(const RowGroup &row_group,
-	                                                                PartialBlockManager &partial_block_manager);
+	                                                                ColumnCheckpointInfo &checkpoint_info);
 	//! If this is a nested column, "stats" are the corresponding statistics from the parent column
 	//! Otherwise, "stats" == this->statistics->stats
 	unique_ptr<ColumnCheckpointState> Checkpoint(const RowGroup &row_group, ColumnCheckpointInfo &info);

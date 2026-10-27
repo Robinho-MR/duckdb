@@ -238,8 +238,8 @@ ValidityColumnData &StandardColumnData::GetValidityData() {
 
 struct StandardColumnCheckpointState : public ColumnCheckpointState {
 	StandardColumnCheckpointState(const RowGroup &row_group, ColumnData &column_data,
-	                              PartialBlockManager &partial_block_manager)
-	    : ColumnCheckpointState(row_group, column_data, partial_block_manager) {
+	                              ColumnCheckpointInfo &checkpoint_info)
+	    : ColumnCheckpointState(row_group, column_data, checkpoint_info) {
 	}
 
 	unique_ptr<ColumnCheckpointState> validity_state;
@@ -273,9 +273,9 @@ public:
 	}
 };
 
-unique_ptr<ColumnCheckpointState>
-StandardColumnData::CreateCheckpointState(const RowGroup &row_group, PartialBlockManager &partial_block_manager) {
-	return make_uniq<StandardColumnCheckpointState>(row_group, *this, partial_block_manager);
+unique_ptr<ColumnCheckpointState> StandardColumnData::CreateCheckpointState(const RowGroup &row_group,
+                                                                            ColumnCheckpointInfo &checkpoint_info) {
+	return make_uniq<StandardColumnCheckpointState>(row_group, *this, checkpoint_info);
 }
 
 unique_ptr<ColumnCheckpointState> StandardColumnData::Checkpoint(const RowGroup &row_group,
@@ -286,10 +286,9 @@ unique_ptr<ColumnCheckpointState> StandardColumnData::Checkpoint(const RowGroup 
 	// to prevent reading the validity data immediately after it is checkpointed we first checkpoint the main column
 	// this is necessary for concurrent checkpointing as due to the partial block manager checkpointed data might be
 	// flushed to disk by a different thread than the one that wrote it, causing a data race
-	auto &partial_block_manager = checkpoint_info.GetPartialBlockManager();
-	auto base_state = CreateCheckpointState(row_group, partial_block_manager);
+	auto base_state = CreateCheckpointState(row_group, checkpoint_info);
 	base_state->global_stats = BaseStatistics::CreateEmpty(type).ToUnique();
-	auto validity_state_p = validity->CreateCheckpointState(row_group, partial_block_manager);
+	auto validity_state_p = validity->CreateCheckpointState(row_group, checkpoint_info);
 	validity_state_p->global_stats = BaseStatistics::CreateEmpty(validity->type).ToUnique();
 
 	auto &validity_state = *validity_state_p;

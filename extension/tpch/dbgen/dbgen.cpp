@@ -160,7 +160,7 @@ struct tpch_append_information {
 			optimistic_writer->WriteUnflushedRowGroups(*optimistic_context, *optimistic_collection);
 			storage.LocalMerge(context, table, *optimistic_collection);
 			auto &storage_writer = storage.GetOptimisticWriter(context);
-			storage_writer.Merge(*optimistic_writer);
+			storage_writer.Merge(context, *optimistic_writer);
 			ResetOptimisticCollection(context);
 		}
 		optimistic_writer.reset();
@@ -197,7 +197,7 @@ struct tpch_append_information {
 		auto &row_collection = *optimistic_collection->collection;
 		if (row_collection.GetTotalRows() >= storage.GetRowGroupSize()) {
 			optimistic_writer->WriteUnflushedRowGroups(*optimistic_context, *optimistic_collection);
-			optimistic_writer->FinalFlush();
+			optimistic_writer->FinalFlush(*optimistic_context);
 		}
 	}
 };

@@ -150,7 +150,8 @@ public:
 	IndexCheckpointMode GetCheckpointMode() const override {
 		return IndexCheckpointMode::DEFERRED;
 	}
-	IndexCheckpointResult Checkpoint(PartialBlockManager &partial_block_manager, const StorageVersion version) override;
+	IndexCheckpointResult Checkpoint(QueryContext context, PartialBlockManager &partial_block_manager,
+	                                 const StorageVersion version) override;
 
 	//! Returns the in-memory usage of the ART.
 	idx_t GetInMemorySize(IndexLock &index_lock) const override DUCKDB_REQUIRES(index_lock);

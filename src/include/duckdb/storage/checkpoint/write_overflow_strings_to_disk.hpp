@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/common/query_context.hpp"
 #include "duckdb/storage/buffer/buffer_handle.hpp"
 #include "duckdb/storage/checkpoint/string_checkpoint_state.hpp"
 
@@ -17,9 +18,11 @@ class PartialBlockManager;
 
 class WriteOverflowStringsToDisk : public OverflowStringWriter {
 public:
-	explicit WriteOverflowStringsToDisk(PartialBlockManager &partial_block_manager);
+	WriteOverflowStringsToDisk(QueryContext context, PartialBlockManager &partial_block_manager);
 	~WriteOverflowStringsToDisk() override;
 
+	//! The context of the checkpoint
+	QueryContext context;
 	//! The block manager
 	PartialBlockManager &partial_block_manager;
 

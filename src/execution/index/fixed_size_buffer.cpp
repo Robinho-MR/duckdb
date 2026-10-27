@@ -82,7 +82,7 @@ void FixedSizeBuffer::Finalize(shared_ptr<BlockHandle> block_handle_p, uint32_t 
 	dirty = false;
 }
 
-shared_ptr<FixedSizeBuffer> FixedSizeBuffer::Persist(PartialBlockManager &partial_block_manager,
+shared_ptr<FixedSizeBuffer> FixedSizeBuffer::Persist(QueryContext context, PartialBlockManager &partial_block_manager,
                                                      const idx_t available_segments, const idx_t segment_size,
                                                      const idx_t bitmask_offset) {
 	D_ASSERT(readers == 0);
@@ -98,7 +98,7 @@ shared_ptr<FixedSizeBuffer> FixedSizeBuffer::Persist(PartialBlockManager &partia
 	const auto new_allocation_size = GetNewAllocationSize(available_segments, segment_size, bitmask_offset);
 	auto result = make_shared_ptr<FixedSizeBuffer>(block_manager, segment_count, new_allocation_size);
 	auto new_block_pointer =
-	    partial_block_manager.Write(*result, buffer_handle, NumericCast<uint32_t>(new_allocation_size));
+	    partial_block_manager.Write(context, *result, buffer_handle, NumericCast<uint32_t>(new_allocation_size));
 	D_ASSERT(new_block_pointer);
 	// Checkpoint metadata is collected before shared partial blocks are flushed.
 	result->block_pointer = *new_block_pointer;

@@ -996,8 +996,8 @@ void ColumnData::VisitBlockIds(BlockIdVisitor &visitor) const {
 }
 
 unique_ptr<ColumnCheckpointState> ColumnData::CreateCheckpointState(const RowGroup &row_group,
-                                                                    PartialBlockManager &partial_block_manager) {
-	return make_uniq<ColumnCheckpointState>(row_group, *this, partial_block_manager);
+                                                                    ColumnCheckpointInfo &checkpoint_info) {
+	return make_uniq<ColumnCheckpointState>(row_group, *this, checkpoint_info);
 }
 
 void ColumnData::CheckpointScan(ColumnSegment &segment, ColumnScanState &state, idx_t count,
@@ -1022,8 +1022,7 @@ unique_ptr<ColumnCheckpointState>
 ColumnData::Checkpoint(const RowGroup &row_group, ColumnCheckpointInfo &checkpoint_info, const BaseStatistics &stats) {
 	// scan the segments of the column data
 	// set up the checkpoint state
-	auto &partial_block_manager = checkpoint_info.GetPartialBlockManager();
-	auto checkpoint_state = CreateCheckpointState(row_group, partial_block_manager);
+	auto checkpoint_state = CreateCheckpointState(row_group, checkpoint_info);
 	checkpoint_state->global_stats = BaseStatistics::CreateEmpty(type).ToUnique();
 
 	if (!data.GetRootSegment()) {

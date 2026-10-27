@@ -139,7 +139,7 @@ void LocalTableStorage::FlushBlocks(ClientContext &context) {
 		// write any unflushed row groups
 		optimistic_writer.WriteUnflushedRowGroups(context, *row_groups);
 	}
-	optimistic_writer.FinalFlush();
+	optimistic_writer.FinalFlush(context);
 }
 
 bool LocalTableStorage::WritesToDisk() const {

@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/common/query_context.hpp"
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/shared_ptr.hpp"
 #include "duckdb/common/types/validity_mask.hpp"
@@ -138,7 +139,7 @@ public:
 	FixedSizeAllocatorInfo GetInfo() const;
 	//! Creates a checkpoint allocator, sharing clean buffers and independently persisting dirty ones.
 	//! The source must remain read-only until the checkpoint allocator is installed or discarded.
-	unsafe_unique_ptr<FixedSizeAllocator> Persist(PartialBlockManager &partial_block_manager);
+	unsafe_unique_ptr<FixedSizeAllocator> Persist(QueryContext context, PartialBlockManager &partial_block_manager);
 	//! Sets the allocation sizes and returns data to serialize each buffer
 	vector<IndexBufferInfo> InitSerializationToWAL();
 	//! Initialize a fixed-size allocator from allocator storage information

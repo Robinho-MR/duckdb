@@ -26,7 +26,11 @@ PartialBlockManager SingleFileTableIndexWriter::CreatePerIndexPartialBlockManage
 }
 
 void SingleFileTableIndexWriter::Flush() {
-	partial_block_manager.FlushPartialBlocks();
+	partial_block_manager.FlushPartialBlocks(GetContext());
+}
+
+QueryContext SingleFileTableIndexWriter::GetContext() const {
+	return QueryContext(checkpoint_manager.GetClientContext());
 }
 
 } // namespace duckdb

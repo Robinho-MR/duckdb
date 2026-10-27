@@ -97,7 +97,7 @@ unique_ptr<TableIndexWriter> SingleFileTableDataWriter::GetTableIndexWriter(Stor
 }
 
 void SingleFileTableDataWriter::FlushPartialBlocks() {
-	checkpoint_manager.partial_block_manager.FlushPartialBlocks();
+	checkpoint_manager.partial_block_manager.FlushPartialBlocks(QueryContext(checkpoint_manager.GetClientContext()));
 }
 
 void SingleFileTableDataWriter::FinalizeTable(const TableStatistics &global_stats, DataTableInfo &info,

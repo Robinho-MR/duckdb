@@ -185,9 +185,8 @@ unique_ptr<BaseStatistics> GeoColumnData::GetUpdateStatistics() {
 
 class GeoColumnCheckpointState final : public ColumnCheckpointState {
 public:
-	GeoColumnCheckpointState(const RowGroup &row_group, ColumnData &column_data,
-	                         PartialBlockManager &partial_block_manager)
-	    : ColumnCheckpointState(row_group, column_data, partial_block_manager) {
+	GeoColumnCheckpointState(const RowGroup &row_group, ColumnData &column_data, ColumnCheckpointInfo &checkpoint_info)
+	    : ColumnCheckpointState(row_group, column_data, checkpoint_info) {
 		// Make stats
 		global_stats = GeometryStats::CreateEmpty(column_data.type).ToUnique();
 
@@ -250,8 +249,8 @@ public:
 };
 
 unique_ptr<ColumnCheckpointState> GeoColumnData::CreateCheckpointState(const RowGroup &row_group,
-                                                                       PartialBlockManager &partial_block_manager) {
-	return make_uniq<GeoColumnCheckpointState>(row_group, *this, partial_block_manager);
+                                                                       ColumnCheckpointInfo &checkpoint_info) {
+	return make_uniq<GeoColumnCheckpointState>(row_group, *this, checkpoint_info);
 }
 
 static GeometryStorageType GetStorageType(GeometryType geom_type, VertexType vert_type) {
@@ -345,8 +344,7 @@ static GeometryStorageType GetStorageType(GeometryType geom_type, VertexType ver
 
 unique_ptr<ColumnCheckpointState> GeoColumnData::Checkpoint(const RowGroup &row_group, ColumnCheckpointInfo &info,
                                                             const BaseStatistics &old_stats) {
-	auto &partial_block_manager = info.GetPartialBlockManager();
-	auto checkpoint_state = make_uniq<GeoColumnCheckpointState>(row_group, *this, partial_block_manager);
+	auto checkpoint_state = make_uniq<GeoColumnCheckpointState>(row_group, *this, info);
 
 	// When the inner column is unshredded, the geometry old_stats are already correct.
 	// When the inner column is shredded, the base_column has no stats of its own (it is parented to us).

@@ -683,7 +683,7 @@ SinkCombineResultType PhysicalInsert::Combine(ExecutionContext &context, Operato
 	if (append_count >= row_group_size) {
 		// flush thread-local optimistic data
 		lstate.optimistic_writer->WriteUnflushedRowGroups(context.client, optimistic_collection);
-		lstate.optimistic_writer->FinalFlush();
+		lstate.optimistic_writer->FinalFlush(context.client);
 	}
 
 	lock_guard<mutex> lock(gstate.lock);
@@ -695,7 +695,7 @@ SinkCombineResultType PhysicalInsert::Combine(ExecutionContext &context, Operato
 		// we have written rows to disk optimistically - merge directly into the transaction-local storage
 		gstate.table.GetStorage().LocalMerge(context.client, gstate.table, optimistic_collection);
 		auto &optimistic_writer = gstate.table.GetStorage().GetOptimisticWriter(context.client);
-		optimistic_writer.Merge(*lstate.optimistic_writer);
+		optimistic_writer.Merge(context.client, *lstate.optimistic_writer);
 	}
 
 	return SinkCombineResultType::FINISHED;
@@ -752,9 +752,9 @@ public:
 			auto &collection = data_table.GetOptimisticCollection(context, merged_collections[i]);
 			data_table.LocalMerge(context, table, collection);
 			data_table.ResetOptimisticCollection(context, merged_collections[i]);
-			optimistic_writer.Merge(*writers[i]);
+			optimistic_writer.Merge(context, *writers[i]);
 		}
-		optimistic_writer.FinalFlush();
+		optimistic_writer.FinalFlush(context);
 	}
 
 private:

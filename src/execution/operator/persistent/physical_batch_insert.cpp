@@ -513,7 +513,7 @@ SinkCombineResultType PhysicalBatchInsert::Combine(ExecutionContext &context, Op
 	if (lstate.optimistic_writer) {
 		annotated_lock_guard<annotated_mutex> l(gstate.lock);
 		auto &optimistic_writer = gstate.table.GetStorage().GetOptimisticWriter(context.client);
-		optimistic_writer.Merge(*lstate.optimistic_writer);
+		optimistic_writer.Merge(context.client, *lstate.optimistic_writer);
 	}
 
 	// unblock any blocked tasks
@@ -583,8 +583,8 @@ SinkFinalizeType PhysicalBatchInsert::Finalize(Pipeline &pipeline, Event &event,
 		}
 
 		auto &optimistic_writer = data_table.GetOptimisticWriter(context);
-		optimistic_writer.Merge(*writer);
-		optimistic_writer.FinalFlush();
+		optimistic_writer.Merge(context, *writer);
+		optimistic_writer.FinalFlush(context);
 		memory_manager.FinalCheck();
 		return SinkFinalizeType::READY;
 	}

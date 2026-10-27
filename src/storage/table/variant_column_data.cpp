@@ -541,8 +541,8 @@ void VariantColumnData::SetChildData(vector<shared_ptr<ColumnData>> child_data) 
 
 struct VariantColumnCheckpointState : public ColumnCheckpointState {
 	VariantColumnCheckpointState(const RowGroup &row_group, ColumnData &column_data,
-	                             PartialBlockManager &partial_block_manager)
-	    : ColumnCheckpointState(row_group, column_data, partial_block_manager) {
+	                             ColumnCheckpointInfo &checkpoint_info)
+	    : ColumnCheckpointState(row_group, column_data, checkpoint_info) {
 		global_stats = VariantStats::CreateEmpty(column_data.type).ToUnique();
 	}
 
@@ -601,8 +601,8 @@ public:
 };
 
 unique_ptr<ColumnCheckpointState> VariantColumnData::CreateCheckpointState(const RowGroup &row_group,
-                                                                           PartialBlockManager &partial_block_manager) {
-	return make_uniq<VariantColumnCheckpointState>(row_group, *this, partial_block_manager);
+                                                                           ColumnCheckpointInfo &checkpoint_info) {
+	return make_uniq<VariantColumnCheckpointState>(row_group, *this, checkpoint_info);
 }
 
 static void AppendShredded(Vector &input, Vector &append_vector, idx_t count, VariantShreddedAppendInput &append_data) {
@@ -733,8 +733,7 @@ static bool EnableShredding(int64_t minimum_size, idx_t current_size) {
 unique_ptr<ColumnCheckpointState> VariantColumnData::Checkpoint(const RowGroup &row_group,
                                                                 ColumnCheckpointInfo &checkpoint_info,
                                                                 const BaseStatistics &old_stats) {
-	auto &partial_block_manager = checkpoint_info.GetPartialBlockManager();
-	auto checkpoint_state = make_uniq<VariantColumnCheckpointState>(row_group, *this, partial_block_manager);
+	auto checkpoint_state = make_uniq<VariantColumnCheckpointState>(row_group, *this, checkpoint_info);
 	checkpoint_state->validity_state = validity->Checkpoint(row_group, checkpoint_info, old_stats);
 
 	auto &table_info = row_group.GetTableInfo();

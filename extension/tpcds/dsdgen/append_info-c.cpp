@@ -174,7 +174,7 @@ void tpcds_append_information::PrepareOptimisticWriteToDisk() {
 	auto &row_collection = *optimistic_collection->collection;
 	if (row_collection.GetTotalRows() >= storage.GetRowGroupSize()) {
 		optimistic_writer->WriteUnflushedRowGroups(context, *optimistic_collection);
-		optimistic_writer->FinalFlush();
+		optimistic_writer->FinalFlush(context);
 	}
 }
 
@@ -210,7 +210,7 @@ void tpcds_append_information::FlushOptimistic() {
 		optimistic_writer->WriteUnflushedRowGroups(context, *optimistic_collection);
 		storage.LocalMerge(context, table, *optimistic_collection);
 		auto &storage_writer = storage.GetOptimisticWriter(context);
-		storage_writer.Merge(*optimistic_writer);
+		storage_writer.Merge(context, *optimistic_writer);
 		ResetOptimisticCollection();
 	}
 	optimistic_writer.reset();

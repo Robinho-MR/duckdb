@@ -47,10 +47,10 @@ public:
 	//! Write any unflushed row groups of a collection to disk
 	void WriteUnflushedRowGroups(ClientContext &context, OptimisticWriteCollection &row_groups);
 	//! Final flush of the optimistic writer - fully flushes the partial block manager
-	void FinalFlush();
+	void FinalFlush(QueryContext context);
 	//! Merge the partially written blocks from one optimistic writer into another
-	void Merge(OptimisticDataWriter &other);
-	void Merge(unique_ptr<PartialBlockManager> &other_manager);
+	void Merge(QueryContext context, OptimisticDataWriter &other);
+	void Merge(QueryContext context, unique_ptr<PartialBlockManager> &other_manager);
 	//! Rollback
 	void Rollback();
 
@@ -61,8 +61,8 @@ private:
 	//! Prepare a write to disk
 	bool PrepareWrite(ClientContext &context);
 	//! Flushes a specific row group to disk
-	void FlushToDisk(OptimisticWriteCollection &collection, const vector<const_reference<RowGroup>> &row_groups,
-	                 const vector<int64_t> &segment_indexes);
+	void FlushToDisk(ClientContext &context, OptimisticWriteCollection &collection,
+	                 const vector<const_reference<RowGroup>> &row_groups, const vector<int64_t> &segment_indexes);
 
 private:
 	//! The table.

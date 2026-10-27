@@ -163,7 +163,7 @@ void RowIdColumnData::VisitBlockIds(BlockIdVisitor &visitor) const {
 }
 
 unique_ptr<ColumnCheckpointState> RowIdColumnData::CreateCheckpointState(const RowGroup &row_group,
-                                                                         PartialBlockManager &partial_block_manager) {
+                                                                         ColumnCheckpointInfo &checkpoint_info) {
 	throw InternalException("RowIdColumnData cannot be checkpointed");
 }
 
