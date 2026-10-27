@@ -100,3 +100,34 @@ query I
 SELECT * FROM db1.db2.v3
 ----
 db2.db1.t
+
+# a qualified macro call in a DEFAULT expression binds to the attached catalog, not to the schema of the table
+statement ok
+CREATE MACRO s.main.g() AS 11;
+
+statement ok
+CREATE TABLE db.s.defaults(z INTEGER DEFAULT s.g());
+
+statement ok
+INSERT INTO db.s.defaults DEFAULT VALUES;
+
+query I
+SELECT z FROM db.s.defaults
+----
+11
+
+# the preference also applies to the aggregates of a USING KEY clause in a view
+statement ok
+CREATE MACRO db.s.h() AS 5;
+
+statement ok
+CREATE VIEW db.main.vk AS
+WITH RECURSIVE r(a, b) USING KEY (a, max(db.s.h()) AS b) AS (
+    SELECT 1, 1 UNION SELECT a, b + 1 FROM r WHERE b < 3
+)
+SELECT a, b FROM r;
+
+query II
+SELECT a, b FROM db.main.vk
+----
+1	5

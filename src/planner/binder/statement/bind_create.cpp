@@ -120,7 +120,10 @@ void Binder::BindSchemaOrCatalog(ClientContext &context, Identifier &catalog, Id
 }
 
 void Binder::BindSchemaOrCatalog(Identifier &catalog, Identifier &schema) {
-	BindSchemaOrCatalog(entry_retriever, catalog, schema);
+	// a fresh retriever keeps the default search path, only the view's preferred catalog is carried over
+	CatalogEntryRetriever retriever(context);
+	retriever.SetPreferredSchemaCatalog(entry_retriever.GetPreferredSchemaCatalog());
+	BindSchemaOrCatalog(retriever, catalog, schema);
 }
 
 void Binder::BindSchemaOrCatalog(CatalogEntryRetriever &retriever, QualifiedName &qualified_name) {
@@ -142,7 +145,9 @@ void Binder::BindSchemaOrCatalog(ClientContext &context, QualifiedName &qualifie
 }
 
 void Binder::BindSchemaOrCatalog(QualifiedName &qualified_name) {
-	BindSchemaOrCatalog(entry_retriever, qualified_name);
+	CatalogEntryRetriever retriever(context);
+	retriever.SetPreferredSchemaCatalog(entry_retriever.GetPreferredSchemaCatalog());
+	BindSchemaOrCatalog(retriever, qualified_name);
 }
 
 Identifier Binder::BindCatalog(const Identifier &catalog) {
@@ -277,7 +282,9 @@ QualifiedName Binder::BindTableName(CatalogEntryRetriever &retriever, const Qual
 }
 
 QualifiedName Binder::BindTableName(const QualifiedName &name) {
-	return BindTableName(entry_retriever, name);
+	CatalogEntryRetriever retriever(context);
+	retriever.SetPreferredSchemaCatalog(entry_retriever.GetPreferredSchemaCatalog());
+	return BindTableName(retriever, name);
 }
 
 void Binder::RegisterEntryRead(optional_ptr<Binder> binder, ClientContext &context, CatalogEntry &entry) {
