@@ -1,0 +1,23 @@
+--- a/src/include/storage/mysql_transaction.hpp
++++ b/src/include/storage/mysql_transaction.hpp
+@@ -23,6 +23,9 @@
+ 
+ class MySQLTransaction : public Transaction {
+ public:
++	//! The client context the transaction was started in
++	weak_ptr<ClientContext> context;
++
+ 	MySQLTransaction(MySQLCatalog &mysql_catalog, TransactionManager &manager, ClientContext &context);
+ 
+ 	void Start();
+--- a/src/storage/mysql_transaction.cpp
++++ b/src/storage/mysql_transaction.cpp
+@@ -5,7 +5,7 @@
+ namespace duckdb {
+ 
+ MySQLTransaction::MySQLTransaction(MySQLCatalog &mysql_catalog, TransactionManager &manager, ClientContext &context)
+-    : Transaction(manager, context), catalog(mysql_catalog), transactions_enabled(GetTransactionsEnabled(context)),
++    : Transaction(manager), context(context.shared_from_this()), catalog(mysql_catalog), transactions_enabled(GetTransactionsEnabled(context)),
+       access_mode(mysql_catalog.access_mode), conn_init_opts(GetConnectionInitOptions(context)) {
+ }
+ 
