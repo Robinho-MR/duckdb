@@ -1,4 +1,4 @@
-#include "duckdb/common/vector/array_vector.hpp"
+#include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/storage/statistics/array_stats.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -93,37 +93,25 @@ child_list_t<Value> ArrayStats::ToStruct(const BaseStatistics &stats) {
 
 void ArrayStats::Verify(const BaseStatistics &stats, const Vector &vector, const SelectionVector &sel, idx_t count) {
 	auto &child_stats = ArrayStats::GetChildStats(stats);
-	const auto &child_entry = ArrayVector::GetChild(vector);
-	auto array_size = ArrayType::GetSize(vector.GetType());
+	const auto &child_entry = ListVector::GetChild(vector);
+	auto entries = vector.Values<list_entry_t>();
 
-	UnifiedVectorFormat vdata;
-	vector.ToUnifiedFormat(vdata);
-
-	// Basically,
-	// 1. Count the number of valid arrays
-	// 2. Create a selection vector with the size of the number of valid arrays * array_size
-	// 3. Fill the selection vector with the offsets of all the elements in the child vector
-	//      that exist in each valid array
-	// 4. Use that selection vector to verify the child stats
-
-	idx_t valid_count = 0;
+	// verify the child stats for the elements of all valid arrays
+	idx_t total_element_count = 0;
 	for (idx_t i = 0; i < count; i++) {
-		auto idx = sel.get_index(i);
-		auto index = vdata.sel->get_index(idx);
-		if (vdata.validity.RowIsValid(index)) {
-			valid_count++;
+		auto entry = entries[sel.get_index(i)];
+		if (entry.IsValid()) {
+			total_element_count += entry.GetValue().length;
 		}
 	}
-
-	SelectionVector element_sel(valid_count * array_size);
+	SelectionVector element_sel(total_element_count);
 	idx_t element_count = 0;
 	for (idx_t i = 0; i < count; i++) {
-		auto idx = sel.get_index(i);
-		auto index = vdata.sel->get_index(idx);
-		auto offset = index * array_size;
-		if (vdata.validity.RowIsValid(index)) {
-			for (idx_t elem_idx = 0; elem_idx < array_size; elem_idx++) {
-				element_sel.set_index(element_count++, offset + elem_idx);
+		auto entry = entries[sel.get_index(i)];
+		if (entry.IsValid()) {
+			auto array = entry.GetValue();
+			for (idx_t elem_idx = 0; elem_idx < array.length; elem_idx++) {
+				element_sel.set_index(element_count++, array.offset + elem_idx);
 			}
 		}
 	}

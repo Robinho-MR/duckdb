@@ -318,7 +318,8 @@ static void ArrowToDuckDBArray(Vector &vector, ArrowArray &array, idx_t chunk_of
 
 	ArrowToDuckDBConversion::SetValidityMask(vector, array, chunk_offset, size, parent_offset, nested_offset);
 
-	auto &child_vector = ArrayVector::GetChildMutable(vector);
+	ArrayVector::SetConsecutiveEntries(vector, size);
+	auto &child_vector = ListVector::GetChildMutable(vector);
 	ArrowToDuckDBConversion::SetValidityMask(child_vector, *array.children[0], chunk_offset, child_count, array.offset,
 	                                         NumericCast<int64_t>(child_offset));
 
@@ -1480,7 +1481,7 @@ static bool CanContainNull(const ArrowArray &array, const ValidityMask *parent_m
 }
 
 // Arrow's null type converts to a constant vector, and FlatVector::SetNull needs flat vectors along its recursion
-// into STRUCT and ARRAY children, which never reaches LIST contents.
+// into STRUCT children, which never reaches LIST contents.
 static void FlattenForSetNull(Vector &vector) {
 	if (vector.GetVectorType() != VectorType::FLAT_VECTOR) {
 		vector.Flatten();
@@ -1491,9 +1492,6 @@ static void FlattenForSetNull(Vector &vector) {
 		for (auto &entry : StructVector::GetEntries(vector)) {
 			FlattenForSetNull(entry);
 		}
-		break;
-	case PhysicalType::ARRAY:
-		FlattenForSetNull(ArrayVector::GetChildMutable(vector));
 		break;
 	default:
 		break;

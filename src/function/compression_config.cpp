@@ -64,16 +64,14 @@ idx_t CompressionFunctionSet::GetCompressionIndex(PhysicalType physical_type) {
 		return 12;
 	case PhysicalType::STRUCT:
 		return 13;
-	case PhysicalType::ARRAY:
-		return 14;
 	case PhysicalType::VARCHAR:
-		return 15;
+		return 14;
 	case PhysicalType::UINT128:
-		return 16;
+		return 15;
 	case PhysicalType::INT128:
-		return 17;
+		return 16;
 	case PhysicalType::BIT:
-		return 18;
+		return 17;
 	default:
 		throw InternalException("Unsupported physical type for compression index");
 	}
@@ -88,10 +86,11 @@ CompressionFunctionSet::CompressionFunctionSet() {
 	functions.resize(PHYSICAL_TYPE_COUNT);
 
 	static PhysicalType physical_types[PHYSICAL_TYPE_COUNT] = {
-	    PhysicalType::BOOL,    PhysicalType::UINT8,    PhysicalType::INT8,   PhysicalType::UINT16, PhysicalType::INT16,
-	    PhysicalType::UINT32,  PhysicalType::INT32,    PhysicalType::UINT64, PhysicalType::INT64,  PhysicalType::FLOAT,
-	    PhysicalType::DOUBLE,  PhysicalType::INTERVAL, PhysicalType::LIST,   PhysicalType::STRUCT, PhysicalType::ARRAY,
-	    PhysicalType::VARCHAR, PhysicalType::UINT128,  PhysicalType::INT128, PhysicalType::BIT,
+	    PhysicalType::BOOL,   PhysicalType::UINT8,  PhysicalType::INT8,    PhysicalType::UINT16,
+	    PhysicalType::INT16,  PhysicalType::UINT32, PhysicalType::INT32,   PhysicalType::UINT64,
+	    PhysicalType::INT64,  PhysicalType::FLOAT,  PhysicalType::DOUBLE,  PhysicalType::INTERVAL,
+	    PhysicalType::LIST,   PhysicalType::STRUCT, PhysicalType::VARCHAR, PhysicalType::UINT128,
+	    PhysicalType::INT128, PhysicalType::BIT,
 	};
 	for (idx_t type_index = 0; type_index < PHYSICAL_TYPE_COUNT; type_index++) {
 		const auto physical_type = physical_types[type_index];

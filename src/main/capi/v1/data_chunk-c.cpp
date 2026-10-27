@@ -31,7 +31,7 @@ duckdb_data_chunk duckdb_create_data_chunk(duckdb_logical_type *column_types, id
 	try {
 		result->Initialize(duckdb::Allocator::DefaultAllocator(), types);
 		for (auto &vector : result->data) {
-			duckdb::PrepareCAPIVector(vector);
+			duckdb::PrepareCAPIVector(vector, true);
 		}
 	} catch (...) {
 		delete result;
@@ -241,7 +241,14 @@ duckdb_vector duckdb_array_vector_get_child(duckdb_vector vector) {
 		return nullptr;
 	}
 	auto v = reinterpret_cast<duckdb::Vector *>(vector);
-	return reinterpret_cast<duckdb_vector>(&duckdb::ArrayVector::GetChildMutable(*v));
+	// the C API exposes the elements of row i at [i * array_size, (i + 1) * array_size)
+	if (v->size() == 0 || !duckdb::FlatVector::GetData(*v)) {
+		// the vector is written to: provide entries for all rows
+		duckdb::ArrayVector::SetConsecutiveEntries(*v, duckdb::FlatVector::GetCapacity(*v));
+	} else {
+		duckdb::ArrayVector::MakeConsecutive(*v, v->size());
+	}
+	return reinterpret_cast<duckdb_vector>(&duckdb::ListVector::GetChildMutable(*v));
 }
 
 bool duckdb_validity_row_is_valid(uint64_t *validity, idx_t row) {

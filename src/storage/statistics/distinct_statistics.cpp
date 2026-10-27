@@ -172,7 +172,6 @@ bool DistinctStatistics::TypeIsSupported(const LogicalType &type) {
 	switch (type.InternalType()) {
 	case PhysicalType::LIST:
 	case PhysicalType::STRUCT:
-	case PhysicalType::ARRAY:
 		return false; // We don't support nested types
 	case PhysicalType::BIT:
 	case PhysicalType::BOOL:

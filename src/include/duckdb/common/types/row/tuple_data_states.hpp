@@ -113,9 +113,6 @@ struct TupleDataVectorFormat {
 	UnifiedVectorFormat unified;
 	vector<TupleDataVectorFormat> children;
 	unique_ptr<CombinedListData> combined_list_data;
-
-	// Optional: only used for ArrayVector to fake being a list vector
-	unsafe_unique_array<list_entry_t> array_list_entries;
 };
 
 struct TupleDataChunkState {
@@ -130,9 +127,6 @@ struct TupleDataChunkState {
 
 	SelectionVector utility = SelectionVector(STANDARD_VECTOR_SIZE);
 
-	vector<unique_ptr<Vector>> cached_cast_vectors;
-	vector<unique_ptr<VectorCache>> cached_cast_vector_cache;
-
 	//! Re-usable arrays used while building buffer space
 	unsafe_vector<reference<TupleDataChunkPart>> chunk_parts;
 	unsafe_vector<pair<idx_t, idx_t>> chunk_part_indices;
@@ -140,8 +134,6 @@ struct TupleDataChunkState {
 	void ResetForScan() {
 		column_ids.clear();
 		chunk_lock = nullptr;
-		cached_cast_vectors.clear();
-		cached_cast_vector_cache.clear();
 		chunk_parts.clear();
 		chunk_part_indices.clear();
 	}

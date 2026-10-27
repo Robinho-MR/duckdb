@@ -1,4 +1,5 @@
 #include "duckdb/common/vector/array_vector.hpp"
+#include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/storage/table/array_column_data.hpp"
 #include "duckdb/storage/statistics/array_stats.hpp"
 #include "duckdb/common/serializer/serializer.hpp"
@@ -12,7 +13,7 @@ namespace duckdb {
 ArrayColumnData::ArrayColumnData(BlockManager &block_manager, DataTableInfo &info, idx_t column_index,
                                  LogicalType type_p, ColumnDataType data_type, optional_ptr<ColumnData> parent)
     : ColumnData(block_manager, info, column_index, std::move(type_p), data_type, parent) {
-	D_ASSERT(type.InternalType() == PhysicalType::ARRAY);
+	D_ASSERT(type.id() == LogicalTypeId::ARRAY);
 	if (data_type != ColumnDataType::CHECKPOINT_TARGET) {
 		auto &child_type = ArrayType::GetChildType(type);
 		validity = make_shared_ptr<ValidityColumnData>(block_manager, info, 0, *this);
@@ -87,8 +88,10 @@ idx_t ArrayColumnData::ScanCount(ColumnScanState &state, Vector &result, idx_t c
 	auto scan_count = validity->ScanCount(state.child_states[0], result, count, result_offset);
 	auto array_size = ArrayType::GetSize(type);
 	// Scan child column
-	auto &child_vec = ArrayVector::GetChildMutable(result);
+	ListVector::Reserve(result, (result_offset + count) * array_size);
+	auto &child_vec = ListVector::GetChildMutable(result);
 	child_column->ScanCount(state.child_states[1], child_vec, count * array_size, result_offset * array_size);
+	ArrayVector::SetConsecutiveEntries(result, result_offset + count, result_offset);
 	return scan_count;
 }
 
@@ -137,7 +140,8 @@ void ArrayColumnData::Select(TransactionData transaction, idx_t vector_index, Co
 
 	idx_t current_offset = 0;
 	idx_t current_position = 0;
-	auto &child_vec = ArrayVector::GetChildMutable(result);
+	ListVector::Reserve(result, sel_count * array_size);
+	auto &child_vec = ListVector::GetChildMutable(result);
 	for (idx_t i = 0; i < sel_count; i++) {
 		idx_t start_idx = sel.get_index(i);
 		idx_t end_idx = start_idx + 1;
@@ -163,6 +167,7 @@ void ArrayColumnData::Select(TransactionData transaction, idx_t vector_index, Co
 		current_offset += scan_count;
 		current_position = end_idx;
 	}
+	ArrayVector::SetConsecutiveEntries(result, current_offset);
 	// if there is any remaining at the end - skip any trailing rows
 	if (current_position < target_count) {
 		idx_t skip_amount = target_count - current_position;
@@ -201,7 +206,7 @@ void ArrayColumnData::Append(ColumnAppendState &state, const Vector &vector, idx
 	validity->Append(state.child_appends[0], vector, count);
 	// Append child column
 	auto array_size = ArrayType::GetSize(type);
-	const auto &child_vec = ArrayVector::GetChild(vector);
+	auto child_vec = ArrayVector::GetOrderedChild(vector, count);
 	child_column->Append(state.child_appends[1], child_vec, count * array_size);
 
 	this->count += count;
@@ -256,9 +261,10 @@ void ArrayColumnData::FetchRows(TransactionData transaction, ColumnFetchState &s
 	                                  result_offset);
 
 	// Fetch child column
-	auto &child_vec = ArrayVector::GetChildMutable(result);
 	auto &child_type = ArrayType::GetChildType(type);
 	auto array_size = ArrayType::GetSize(type);
+	ListVector::Reserve(result, (result_offset + fetch_count) * array_size);
+	auto &child_vec = ListVector::GetChildMutable(result);
 
 	for (idx_t idx = 0; idx < fetch_count; idx++) {
 		// We need to fetch between [row_id * array_size, (row_id + 1) * array_size)
@@ -273,6 +279,7 @@ void ArrayColumnData::FetchRows(TransactionData transaction, ColumnFetchState &s
 		child_column->ScanCount(child_state, child_scan, array_size);
 		VectorOperations::Copy(child_scan, child_vec, array_size, 0, (result_offset + idx) * array_size);
 	}
+	ArrayVector::SetConsecutiveEntries(result, result_offset + fetch_count, result_offset);
 }
 
 void ArrayColumnData::VisitBlockIds(BlockIdVisitor &visitor) const {

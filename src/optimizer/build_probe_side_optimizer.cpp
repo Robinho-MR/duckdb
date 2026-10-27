@@ -200,7 +200,6 @@ double BuildProbeSideOptimizer::GetBuildSize(vector<LogicalType> types, const id
 				row_width += 8;
 				break;
 			case PhysicalType::LIST:
-			case PhysicalType::ARRAY:
 				row_width += 32;
 				break;
 			default:

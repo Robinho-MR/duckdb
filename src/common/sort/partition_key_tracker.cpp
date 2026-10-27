@@ -267,10 +267,8 @@ void RepartitionKeyTracker::RepartitionChunk(TupleDataCollection &source_partiti
 	}
 
 	keys.Reset();
-	TupleDataCollection::ResetCachedCastVectors(key_gather_state, partition_key_ids);
 	source_partition.Gather(source_chunk.row_locations, *FlatVector::IncrementalSelectionVector(), count,
-	                        partition_key_ids, keys, *FlatVector::IncrementalSelectionVector(),
-	                        key_gather_state.cached_cast_vectors);
+	                        partition_key_ids, keys, *FlatVector::IncrementalSelectionVector());
 	keys.SetChildCardinality(count);
 
 	D_ASSERT(target_append.utility_vector);

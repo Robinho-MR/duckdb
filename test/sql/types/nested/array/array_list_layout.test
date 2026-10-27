@@ -1,0 +1,88 @@
+# name: test/sql/types/nested/array/array_list_layout.test
+# description: Arrays are stored as lists - test operations on non-consecutive and NULL arrays
+# group: [array]
+
+statement ok
+CREATE TABLE t AS SELECT CASE WHEN i % 5 = 0 THEN NULL ELSE [i, i + 1, i + 2]::INT[3] END a, i FROM range(100) r(i);
+
+# selection (dictionary) over arrays
+query II
+SELECT a, i FROM t WHERE i IN (97, 98, 99, 7) ORDER BY i DESC
+----
+[99, 100, 101]	99
+[98, 99, 100]	98
+[97, 98, 99]	97
+[7, 8, 9]	7
+
+# group by / distinct / hash join on arrays
+query I
+SELECT count(DISTINCT a) FROM t
+----
+80
+
+query I
+SELECT count(*) FROM t t1 JOIN t t2 USING (a)
+----
+80
+
+# sorting with NULL arrays
+query I
+SELECT a FROM t ORDER BY a NULLS FIRST LIMIT 2
+----
+NULL
+NULL
+
+query I
+SELECT a[1] FROM (SELECT a FROM t ORDER BY a DESC NULLS LAST LIMIT 3)
+----
+99
+98
+97
+
+# arrays in lists and structs
+query I
+SELECT list_sum(list(a[2])) FROM t
+----
+4080
+
+query I
+SELECT count(*) FROM (SELECT {'x': a, 'y': [a, a]} s FROM t WHERE i > 90) WHERE s.y[2] = s.x
+----
+8
+
+# reversed order of the elements through unnest / collect
+query I
+SELECT sum(x) FROM (SELECT unnest(a::INT[]) x FROM t)
+----
+12240
+
+# storage round trip with NULL arrays
+statement ok
+CREATE TABLE persisted AS SELECT * FROM t WHERE i % 3 != 0;
+
+query II
+SELECT count(*), count(a) FROM persisted
+----
+66	53
+
+query I
+SELECT a FROM persisted WHERE i = 98
+----
+[98, 99, 100]
+
+# casts of NULL and non-NULL arrays
+query I
+SELECT count(*) FROM (SELECT a::VARCHAR s FROM t) WHERE s IS NULL
+----
+20
+
+query I
+SELECT hash(a) = hash([1, 2, 3]::INT[3]) FROM t WHERE i = 1
+----
+true
+
+# array functions on selected rows
+query I
+SELECT array_cosine_distance(a::FLOAT[3], [1, 2, 3]::FLOAT[3]) < 0.01 FROM t WHERE i = 1
+----
+true

@@ -85,6 +85,9 @@ struct TestVectorFlat {
 			break;
 		}
 		case PhysicalType::LIST: {
+			if (type.id() == LogicalTypeId::ARRAY) {
+				throw NotImplementedException("Unimplemented type for test_vector_types %s", type.ToString());
+			}
 			if (type.id() == LogicalTypeId::MAP) {
 				auto &child_type = ListType::GetChildType(type);
 				auto child_values = GenerateValues(info, child_type);
@@ -185,6 +188,9 @@ struct TestVectorSequence {
 			break;
 		}
 		case PhysicalType::LIST: {
+			if (type.id() == LogicalTypeId::ARRAY) {
+				throw NotImplementedException("Unimplemented type for test_vector_types %s", type.ToString());
+			}
 			D_ASSERT(type.id() != LogicalTypeId::MAP);
 			auto data = FlatVector::Writer<list_entry_t>(result, 3);
 			data.WriteValue(list_entry_t(0, 2));

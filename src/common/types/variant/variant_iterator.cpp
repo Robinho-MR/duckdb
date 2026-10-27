@@ -110,10 +110,6 @@ void ShreddedVariantIterator::Build(const Vector &vec) {
 		children.resize(1);
 		children[0].Build(ListVector::GetChild(vec));
 		break;
-	case PhysicalType::ARRAY:
-		children.resize(1);
-		children[0].Build(ArrayVector::GetChild(vec));
-		break;
 	case PhysicalType::STRUCT: {
 		auto &entries = StructVector::GetEntries(vec);
 		children.resize(entries.size());

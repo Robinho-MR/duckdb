@@ -51,6 +51,16 @@ struct LazyAllocationState : PrivateAllocatorData {
 	}
 };
 
+static void SetColumnSize(Vector &column, const LogicalType &type) {
+	if (type.id() == LogicalTypeId::ARRAY) {
+		// the array holds the two lists in its child
+		FlatVector::SetSize(column, 1);
+		ArrayVector::SetConsecutiveEntries(column, 1);
+		return;
+	}
+	FlatVector::SetSize(column, 2);
+}
+
 void RequireLazyNestedStorage(const Vector &vec, Allocator &allocator, idx_t capacity) {
 	REQUIRE(vec.size() == 0);
 	REQUIRE(vec.Buffer().Capacity() == capacity);
@@ -60,12 +70,12 @@ void RequireLazyNestedStorage(const Vector &vec, Allocator &allocator, idx_t cap
 			RequireLazyNestedStorage(child, allocator, capacity);
 		}
 		return;
-	case PhysicalType::ARRAY:
-		RequireLazyNestedStorage(ArrayVector::GetChild(vec), allocator, capacity * ArrayType::GetSize(vec.GetType()));
-		return;
-	case PhysicalType::LIST:
-		RequireLazyNestedStorage(ListVector::GetChild(vec), allocator, capacity);
+	case PhysicalType::LIST: {
+		auto child_capacity =
+		    vec.GetType().id() == LogicalTypeId::ARRAY ? capacity * ArrayType::GetSize(vec.GetType()) : capacity;
+		RequireLazyNestedStorage(ListVector::GetChild(vec), allocator, child_capacity);
 		break;
+	}
 	default:
 		break;
 	}
@@ -341,16 +351,16 @@ TEST_CASE("Recursive reset releases nested dictionary inputs", "[lazy_vector]") 
 		DataChunk chunk;
 		chunk.Initialize(allocator, {type}, 2);
 		auto &column = chunk.data[0];
-		auto &lists = type.InternalType() == PhysicalType::STRUCT  ? StructVector::GetEntries(column)[0]
-		              : type.InternalType() == PhysicalType::ARRAY ? ArrayVector::GetChildMutable(column)
-		                                                           : column;
+		auto &lists = type.InternalType() == PhysicalType::STRUCT ? StructVector::GetEntries(column)[0]
+		              : type.id() == LogicalTypeId::ARRAY         ? ListVector::GetChildMutable(column)
+		                                                          : column;
 		auto &elements = ListVector::GetChildMutable(lists);
 		auto capacity = FlatVector::GetCapacity(elements);
 		auto before = allocations.allocations;
 		elements.Slice(ListVector::GetChild(input), sel, 2);
 		lists.Slice(input, sel, 2);
 		for (idx_t iteration = 0; iteration < 3; iteration++) {
-			FlatVector::SetSize(column, type.InternalType() == PhysicalType::ARRAY ? 1 : 2);
+			SetColumnSize(column, type);
 			column.Buffer().Verify(type);
 			duckdb::weak_ptr<DictionaryEntry> entry = lists.BufferMutable().Cast<DictionaryBuffer>().GetEntryPtr();
 			duckdb::weak_ptr<DictionaryEntry> child_entry =
@@ -378,7 +388,7 @@ TEST_CASE("Recursive reset releases nested dictionary inputs", "[lazy_vector]") 
 		chunk.Reset();
 		lists.Append(value);
 		lists.Append(value);
-		FlatVector::SetSize(column, type.InternalType() == PhysicalType::ARRAY ? 1 : 2);
+		SetColumnSize(column, type);
 		column.Buffer().Verify(type);
 		REQUIRE(lists.GetValue(0) == value);
 		REQUIRE(lists.GetValue(1) == value);

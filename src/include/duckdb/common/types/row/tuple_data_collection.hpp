@@ -160,8 +160,6 @@ public:
 	static void ToUnifiedFormat(TupleDataChunkState &chunk_state, DataChunk &new_chunk);
 	//! Gets the UnifiedVectorFormat from the Chunk state as an array
 	static void GetVectorData(const TupleDataChunkState &chunk_state, UnifiedVectorFormat result[]);
-	//! Resets the cached cache vectors (used for ARRAY/LIST casts)
-	static void ResetCachedCastVectors(TupleDataChunkState &chunk_state, const vector<column_t> &column_ids);
 	//! Computes heap sizes for the columns selected in chunk_state
 	static void ComputeHeapSizes(TupleDataChunkState &chunk_state, const DataChunk &new_chunk,
 	                             const SelectionVector &append_sel, const idx_t append_count);
@@ -231,16 +229,15 @@ public:
 
 	//! Gathers a DataChunk from the TupleDataCollection, given the specific row locations (requires full pin)
 	void Gather(Vector &row_locations, const SelectionVector &scan_sel, const idx_t scan_count, DataChunk &result,
-	            const SelectionVector &target_sel, vector<unique_ptr<Vector>> &cached_cast_vectors) const;
+	            const SelectionVector &target_sel) const;
 	//! Gathers a DataChunk (only the columns given by column_ids) from the TupleDataCollection,
 	//! given the specific row locations (requires full pin)
 	void Gather(Vector &row_locations, const SelectionVector &scan_sel, const idx_t scan_count,
-	            const vector<column_t> &column_ids, DataChunk &result, const SelectionVector &target_sel,
-	            vector<unique_ptr<Vector>> &cached_cast_vectors) const;
+	            const vector<column_t> &column_ids, DataChunk &result, const SelectionVector &target_sel) const;
 	//! Gathers a Vector (from the given column id) from the TupleDataCollection
 	//! given the specific row locations (requires full pin)
 	void Gather(Vector &row_locations, const SelectionVector &sel, const idx_t scan_count, const column_t column_id,
-	            Vector &result, const SelectionVector &target_sel, optional_ptr<Vector> cached_cast_vector) const;
+	            Vector &result, const SelectionVector &target_sel) const;
 
 	//! Converts this TupleDataCollection to a string representation
 	string ToString();

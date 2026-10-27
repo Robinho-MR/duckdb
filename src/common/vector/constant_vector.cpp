@@ -1,5 +1,4 @@
 #include "duckdb/common/vector/constant_vector.hpp"
-#include "duckdb/common/vector/array_vector.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/vector/string_vector.hpp"
@@ -19,9 +18,9 @@ buffer_ptr<VectorBuffer> CreateConstantBuffer(const Value &value, count_t count)
 	if (internal_type == PhysicalType::STRUCT) {
 		result = make_buffer<VectorStructBuffer>(value.type(), capacity);
 	} else if (internal_type == PhysicalType::LIST) {
-		result = make_buffer<VectorListBuffer>(capacity, value.type());
-	} else if (internal_type == PhysicalType::ARRAY) {
-		result = make_buffer<VectorArrayBuffer>(value.type(), capacity);
+		auto child_capacity =
+		    type.id() == LogicalTypeId::ARRAY ? capacity_t(ArrayType::GetSize(type)) : capacity_t(STANDARD_VECTOR_SIZE);
+		result = make_buffer<VectorListBuffer>(capacity, value.type(), child_capacity);
 	} else if (internal_type == PhysicalType::VARCHAR) {
 		result = make_buffer<VectorStringBuffer>(capacity);
 	} else {
@@ -42,7 +41,6 @@ static bool IsReusableBufferType(VectorBufferType buffer_type) {
 	switch (buffer_type) {
 	case VectorBufferType::STANDARD_BUFFER:
 	case VectorBufferType::STRUCT_BUFFER:
-	case VectorBufferType::ARRAY_BUFFER:
 	case VectorBufferType::LIST_BUFFER:
 	case VectorBufferType::STRING_BUFFER:
 		return true;
@@ -70,10 +68,6 @@ static bool CanSetNullInPlace(const Vector &vector) {
 			}
 		}
 		return true;
-	case VectorBufferType::ARRAY_BUFFER: {
-		auto child_type = ArrayVector::GetChild(vector).GetVectorType();
-		return child_type == VectorType::FLAT_VECTOR || child_type == VectorType::CONSTANT_VECTOR;
-	}
 	default:
 		return false;
 	}
@@ -110,19 +104,6 @@ void ConstantVector::SetNull(Vector &vector, bool is_null) {
 			for (auto &entry : entries) {
 				entry.SetVectorType(VectorType::CONSTANT_VECTOR);
 				ConstantVector::SetNull(entry, is_null);
-			}
-		} else if (internal_type == PhysicalType::ARRAY) {
-			auto &child = ArrayVector::GetChildMutable(vector);
-			D_ASSERT(child.GetVectorType() == VectorType::CONSTANT_VECTOR ||
-			         child.GetVectorType() == VectorType::FLAT_VECTOR);
-			auto array_size = ArrayType::GetSize(type);
-			if (child.GetVectorType() == VectorType::CONSTANT_VECTOR) {
-				D_ASSERT(array_size == 1);
-				ConstantVector::SetNull(child, is_null);
-			} else {
-				for (idx_t i = 0; i < array_size; i++) {
-					FlatVector::SetNull(child, i, is_null);
-				}
 			}
 		}
 	}
@@ -166,36 +147,6 @@ void ConstantVector::Reference(Vector &vector, count_t count, const Vector &sour
 		child.Reference(ListVector::GetChild(source));
 
 		ListVector::SetListSize(vector, ListVector::GetListSize(source));
-		vector.SetVectorType(VectorType::CONSTANT_VECTOR);
-		auto &validity = vector.BufferMutable().GetValidityMask();
-		validity.Set(0, true);
-		FlatVector::SetSize(vector, count);
-		break;
-	}
-	case PhysicalType::ARRAY: {
-		UnifiedVectorFormat vdata;
-		source.ToUnifiedFormat(vdata);
-		auto source_idx = vdata.sel->get_index(position);
-		if (!vdata.validity.RowIsValid(source_idx)) {
-			// list is null: create null value
-			SetNull(vector, count);
-			break;
-		}
-
-		// Reference the child vector
-		auto &target_child = ArrayVector::GetChildMutable(vector);
-		auto &source_child = ArrayVector::GetChild(source);
-		target_child.Reference(source_child);
-
-		// Only take the element at the given position
-		auto array_size = ArrayType::GetSize(source_type);
-		SelectionVector sel(array_size);
-		for (idx_t i = 0; i < array_size; i++) {
-			sel.set_index(i, array_size * source_idx + i);
-		}
-		target_child.Slice(sel, array_size);
-		target_child.Flatten(); // since its constant we only have to flatten this much
-
 		vector.SetVectorType(VectorType::CONSTANT_VECTOR);
 		auto &validity = vector.BufferMutable().GetValidityMask();
 		validity.Set(0, true);

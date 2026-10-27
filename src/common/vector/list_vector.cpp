@@ -90,6 +90,7 @@ void VectorListBuffer::VerifyInternal(const LogicalType &type, const SelectionVe
 	StandardVectorBuffer::VerifyInternal(type, sel, count);
 
 	D_ASSERT(type.InternalType() == PhysicalType::LIST);
+	auto array_size = type.id() == LogicalTypeId::ARRAY ? ArrayType::GetSize(type) : 0;
 	if (type.id() == LogicalTypeId::MAP) {
 		// FIXME: verify map
 		// auto &child = ListType::GetChildType(vector_p.GetType());
@@ -113,6 +114,9 @@ void VectorListBuffer::VerifyInternal(const LogicalType &type, const SelectionVe
 			if (le.offset + le.length > child->size()) {
 				throw InternalException("List entry offset + length out of range (offset %d, size %d, child size %d)",
 				                        le.offset, le.length, child->size());
+			}
+			if (type.id() == LogicalTypeId::ARRAY && le.length != array_size) {
+				throw InternalException("Array entry has length %d, but the array size is %d", le.length, array_size);
 			}
 			total_size += le.length;
 		}
@@ -235,7 +239,22 @@ void VectorListBuffer::SetValue(const LogicalType &type, idx_t index, const Valu
 	EnsureDataAllocated();
 	validity.Set(index, !val.IsNull());
 	auto offset = GetChildSize();
-	if (val.IsNull()) {
+	if (type.id() == LogicalTypeId::ARRAY) {
+		auto array_size = ArrayType::GetSize(type);
+		if (val.IsNull()) {
+			for (idx_t i = 0; i < array_size; i++) {
+				PushBack(Value());
+			}
+		} else {
+			auto &val_children = ArrayValue::GetChildren(val);
+			for (idx_t i = 0; i < array_size; i++) {
+				PushBack(val_children[i]);
+			}
+		}
+		auto &entry = reinterpret_cast<list_entry_t *>(data_ptr)[index];
+		entry.length = array_size;
+		entry.offset = offset;
+	} else if (val.IsNull()) {
 		PushBack(Value());
 		auto &entry = reinterpret_cast<list_entry_t *>(data_ptr)[index];
 		entry.length = 1;
@@ -266,12 +285,15 @@ Value VectorListBuffer::GetValue(const LogicalType &type, idx_t index) const {
 	if (type.id() == LogicalTypeId::MAP) {
 		return Value::MAP(ListType::GetChildType(type), std::move(children));
 	}
+	if (type.id() == LogicalTypeId::ARRAY) {
+		return Value::ARRAY(ArrayType::GetChildType(type), std::move(children));
+	}
 	return Value::LIST(ListType::GetChildType(type), std::move(children));
 }
 
 template <class T>
 T &ListVector::GetEntryInternal(T &vector) {
-	D_ASSERT(vector.GetType().id() == LogicalTypeId::LIST || vector.GetType().id() == LogicalTypeId::MAP);
+	D_ASSERT(vector.GetType().InternalType() == PhysicalType::LIST);
 	if (vector.GetVectorType() == VectorType::DICTIONARY_VECTOR) {
 		auto &child = DictionaryVector::Child(vector);
 		return GetEntryInternal<T>(child);
@@ -300,7 +322,7 @@ Vector &ListVector::GetEntry(Vector &vector) {
 }
 
 void ListVector::Reserve(Vector &vector, idx_t required_capacity) {
-	D_ASSERT(vector.GetType().id() == LogicalTypeId::LIST || vector.GetType().id() == LogicalTypeId::MAP);
+	D_ASSERT(vector.GetType().InternalType() == PhysicalType::LIST);
 	D_ASSERT(vector.GetVectorType() == VectorType::FLAT_VECTOR ||
 	         vector.GetVectorType() == VectorType::CONSTANT_VECTOR);
 	D_ASSERT(vector.GetBufferRef());
