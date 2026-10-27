@@ -94,13 +94,10 @@ void Binder::BindSchemaOrCatalog(CatalogEntryRetriever &retriever, Identifier &c
 			catalog_names.emplace_back(std::move(default_database));
 		}
 	}
-	auto &preferred_catalog = retriever.GetPreferredSchemaCatalog();
-	if (!preferred_catalog.empty()) {
-		// inside a view, a lone qualifier that is also a schema of the view's catalog refers to that schema
-		auto preferred_ptr = Catalog::GetCatalogEntry(retriever, preferred_catalog);
-		if (preferred_ptr && preferred_ptr->CheckAmbiguousCatalogOrSchema(context, schema)) {
-			return;
-		}
+	auto preferred_catalog = retriever.GetPreferredSchemaCatalog();
+	// inside a view, a lone qualifier that is also a schema of the view's catalog refers to that schema
+	if (preferred_catalog && preferred_catalog->CheckAmbiguousCatalogOrSchema(context, schema)) {
+		return;
 	}
 	for (auto &catalog_name : catalog_names) {
 		auto catalog_ptr = Catalog::GetCatalogEntry(retriever, catalog_name);
@@ -362,7 +359,7 @@ void Binder::BindView(ClientContext &context, const SelectStatement &stmt, const
 
 	auto view_search_path = view_binder->GetSearchPath(catalog, schema_name, true);
 	view_binder->entry_retriever.SetSearchPath(std::move(view_search_path));
-	view_binder->entry_retriever.SetPreferredSchemaCatalog(catalog.GetName());
+	view_binder->entry_retriever.SetPreferredSchemaCatalog(catalog);
 
 	auto copy = stmt.Copy();
 	auto query_node = view_binder->Bind(*copy);

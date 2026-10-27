@@ -74,11 +74,11 @@ public:
 	void SetSearchPath(vector<CatalogSearchEntry> entries);
 
 	//! Catalog in which a lone qualifier that names both a schema and a catalog resolves to the schema (views)
-	const Identifier &GetPreferredSchemaCatalog() const {
+	optional_ptr<Catalog> GetPreferredSchemaCatalog() const {
 		return preferred_schema_catalog;
 	}
-	void SetPreferredSchemaCatalog(Identifier catalog) {
-		preferred_schema_catalog = std::move(catalog);
+	void SetPreferredSchemaCatalog(optional_ptr<Catalog> catalog) {
+		preferred_schema_catalog = catalog;
 	}
 
 	void SetCallback(catalog_entry_callback_t callback);
@@ -96,7 +96,7 @@ private:
 	ClientContext &context;
 	shared_ptr<CatalogSearchPath> search_path;
 	optional_ptr<BoundAtClause> at_clause;
-	Identifier preferred_schema_catalog;
+	optional_ptr<Catalog> preferred_schema_catalog;
 };
 
 } // namespace duckdb
