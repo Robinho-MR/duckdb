@@ -168,6 +168,9 @@ bool BoundCastExpression::CastIsInvertible(const LogicalType &source_type, const
 	if (source_type.IsNested() || target_type.IsNested()) {
 		return NestedCastIsInvertible(source_type, target_type);
 	}
+	if (source_type.id() == LogicalTypeId::ENUM && target_type.id() == LogicalTypeId::ENUM) {
+		return false;
+	}
 	if (source_type.id() == LogicalTypeId::DECIMAL || target_type.id() == LogicalTypeId::DECIMAL) {
 		uint8_t source_width, target_width;
 		uint8_t source_scale, target_scale;
@@ -337,6 +340,10 @@ static bool NestedCastCanThrow(const LogicalType &source_type, const LogicalType
 bool BoundCastExpression::CastCanThrow(const LogicalType &source_type, const LogicalType &target_type, bool try_cast) {
 	if (source_type == target_type) {
 		return false;
+	}
+	// Converting VARIANT can hit its traversal depth limit, regardless of the target type or TRY_CAST.
+	if (source_type.id() == LogicalTypeId::VARIANT) {
+		return true;
 	}
 	// Casts involving custom types are implemented by extensions, so we cannot reason about them - they can throw
 	// even for a try_cast, e.g. casting JSON into a MAP throws when a key fails to cast, since map keys cannot be NULL
