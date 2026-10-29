@@ -18,6 +18,7 @@
 #include "duckdb/common/unordered_map.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/parser/column_definition.hpp"
+#include "duckdb/parser/tableref/match_recognize_ref.hpp"
 #include "duckdb/parser/query_node.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "duckdb/parser/result_modifier.hpp"
@@ -88,6 +89,25 @@ struct BoundCTEData;
 enum class CopyToType : uint8_t;
 template <class T, class INDEX_TYPE>
 class IndexVector;
+
+//! Table indexes of the top select node of a TRY subquery, recorded while planning that node, so that
+//! TRY can be lowered onto exactly that node's projection without crossing into other query levels
+struct TrySubqueryPlanIndexes {
+	bool recorded = false;
+	//! The select list projection
+	TableIndex projection_index;
+	//! The prune projection above the result modifiers, only set when pruning is needed
+	TableIndex prune_index;
+	//! The aggregate node of the select node
+	TableIndex aggregate_index;
+	//! The window node of the select node
+	TableIndex window_index;
+	//! The unnest nodes of the select node
+	vector<TableIndex> unnest_indexes;
+	//! Whether the select item contains a nested scalar subquery lowered with an exposed error flag;
+	//! its re-raise at the use site relies on this node's lowering to consume it
+	bool nested_transport = false;
+};
 
 enum class BindingMode : uint8_t {
 	STANDARD_BINDING,
@@ -277,6 +297,7 @@ public:
 	                                           const ColumnList &columns);
 	unique_ptr<BoundConstraint> BindUniqueConstraint(const Constraint &constraint, const Identifier &table,
 	                                                 const ColumnList &columns);
+	static void VerifyConstraintCheckModeStorageVersion(const Constraint &constraint, Catalog &catalog, bool temporary);
 
 	BoundStatement BindAlterAddIndex(BoundStatement &result, CatalogEntry &entry, unique_ptr<AlterInfo> alter_info);
 
@@ -401,6 +422,10 @@ public:
 	void SetAlwaysRequireRebind();
 	void SetInsideSubquery();
 	bool IsInsideSubquery() const;
+	void SetBindingTrySubquery();
+	bool IsBindingTrySubquery() const;
+	const TrySubqueryPlanIndexes &GetTrySubqueryPlanIndexes() const;
+	TrySubqueryPlanIndexes &GetTrySubqueryPlanIndexesMutable();
 
 	StatementProperties &GetStatementProperties();
 	static void ReplaceStarExpression(unique_ptr<ParsedExpression> &expr, unique_ptr<ParsedExpression> &replacement);
@@ -432,6 +457,10 @@ private:
 	bool legacy_can_contain_nulls = false;
 	//! Whether this binder is inside a subquery boundary
 	bool inside_subquery = false;
+	//! Whether this binder binds a TRY subquery, which lowers TRY onto the bound plan after binding
+	bool binding_try_subquery = false;
+	//! The plan indexes of the TRY subquery's top select node, recorded while planning it
+	TrySubqueryPlanIndexes try_subquery_plan_indexes;
 	//! The set of bound views
 	reference_set_t<ViewCatalogEntry> bound_views;
 	//! The table macros that are being expanded by this binder
@@ -575,6 +604,7 @@ private:
 	BoundStatement Bind(BaseTableRef &ref);
 	BoundStatement Bind(BoundRefWrapper &ref);
 	BoundStatement Bind(JoinRef &ref);
+	BoundStatement Bind(MatchRecognizeRef &ref);
 	//! Rewrites a NEAREST BY join into a lateral join over a top-k subquery and binds the result
 	BoundStatement BindNearestJoin(JoinRef &ref);
 	BoundStatement Bind(SubqueryRef &ref);
