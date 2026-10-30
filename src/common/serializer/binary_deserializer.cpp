@@ -29,6 +29,9 @@ void BinaryDeserializer::OnOptionalPropertyEnd(bool present) {
 }
 
 void BinaryDeserializer::OnObjectBegin() {
+	if (nesting_level >= MAX_NESTING_LEVEL) {
+		throw SerializationException("Failed to deserialize: exceeded maximum nesting level of %d", MAX_NESTING_LEVEL);
+	}
 	nesting_level++;
 }
 
