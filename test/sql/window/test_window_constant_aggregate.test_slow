@@ -19,9 +19,10 @@ CREATE TABLE w AS
     FROM (SELECT t.*, t.id AS grp FROM t)
     WINDOW win AS (PARTITION BY grp ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING);
 
-query I
+query II
 SELECT 
 	count(*) FILTER (abs(w.sum_x - t.x) > 1e-3) AS wrong_sum, 
+	count(*) FILTER (w.sum_x IS NULL) AS null_sum,
 FROM w JOIN t USING (id);
 ----
-0
+0	0

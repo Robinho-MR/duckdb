@@ -547,9 +547,10 @@ struct SortedAggregateFunction {
 	                     const idx_t offset) {
 		//	Internally we can only handle 2^16 rows, so chunk them up
 		const idx_t group_limit = NumericLimits<uint16_t>::Maximum();
-		for (auto group_offset = offset; group_offset < count; group_offset += group_limit) {
-			const auto group_count = MinValue<idx_t>(group_limit, count - group_offset);
-			FinalizeGroups(states, finalize_input_data, result, group_count, group_offset);
+		for (idx_t group_start = 0; group_start < count; group_start += group_limit) {
+			const auto group_count = MinValue<idx_t>(group_limit, count - group_start);
+			Vector group_states(states, group_start, group_start + group_count);
+			FinalizeGroups(group_states, finalize_input_data, result, group_count, offset + group_start);
 		}
 	}
 };
