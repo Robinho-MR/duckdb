@@ -91,8 +91,8 @@ public:
 
 	DUCKDB_API SettingLookupResult TryGetCurrentSetting(const Identifier &key, Value &result) const;
 
-	//! Returns the services (settings, logging, metrics, file system) backed by this database instance
-	DUCKDB_API ExecutionServices Services();
+	//! Creates database-wide services (settings, logging, metrics, file system)
+	DUCKDB_API shared_ptr<ExecutionServices> Services();
 
 	DUCKDB_API shared_ptr<EncryptionUtil> GetEncryptionUtil(bool read_only = false);
 	shared_ptr<EncryptionUtil> GetMbedTLSUtil(bool force_mbedtls) const;

@@ -1,69 +1,158 @@
 #include "duckdb/main/execution_services.hpp"
 
-#include "duckdb/common/file_system.hpp"
+#include "duckdb/common/opener_file_system.hpp"
+#include "duckdb/logging/log_manager.hpp"
 #include "duckdb/logging/logger.hpp"
+#include "duckdb/main/client_config.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/main/client_context_file_opener.hpp"
+#include "duckdb/main/config.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/profiler/metrics_manager.hpp"
 #include "duckdb/main/query_profiler.hpp"
+#include "duckdb/parallel/task_scheduler.hpp"
 
 namespace duckdb {
 
-ExecutionServices::ExecutionServices(ClientContext &context_p)
-    : db(DatabaseInstance::GetDatabase(context_p)), context(&context_p) {
+//! The file system of a client: the database file system with the client file opener
+class ClientFileSystem : public OpenerFileSystem {
+public:
+	explicit ClientFileSystem(ClientContext &context_p) : context(context_p) {
+	}
+
+	FileSystem &GetFileSystem() const override {
+		auto &config = DBConfig::GetConfig(context);
+		return *config.file_system;
+	}
+
+	optional_ptr<FileOpener> GetOpener() const override {
+		return context.Services()->TryGetFileOpener();
+	}
+
+private:
+	ClientContext &context;
+};
+
+ExecutionServices::ExecutionServices(shared_ptr<DatabaseInstance> db_p) : db(std::move(db_p)) {
 }
 
-ExecutionServices::ExecutionServices(DatabaseInstance &db_p) : db(db_p) {
+ExecutionServices::~ExecutionServices() {
+}
+
+void ExecutionServices::InitializeClient(ClientContext &context_p) {
+	D_ASSERT(!context);
+	context = &context_p;
+	config = make_uniq<ClientConfig>();
+	LoggingContext logging_context(LogContextScope::CONNECTION);
+	logger = db->GetLogManager().CreateLogger(logging_context, true);
+	file_opener = make_uniq<ClientContextFileOpener>(context_p);
+	client_file_system = make_uniq<ClientFileSystem>(context_p);
+	profiler = make_shared_ptr<QueryProfiler>(context_p);
 }
 
 DatabaseInstance &ExecutionServices::GetDatabase() const {
-	return db.get();
+	return *db;
+}
+
+const shared_ptr<DatabaseInstance> &ExecutionServices::GetDatabasePtr() const {
+	return db;
 }
 
 optional_ptr<ClientContext> ExecutionServices::TryGetClientContext() const {
 	return context;
 }
 
+optional_ptr<ClientContext> ExecutionServices::TryGetClientContext(optional_ptr<ExecutionServices> services) {
+	if (!services) {
+		return nullptr;
+	}
+	return services->TryGetClientContext();
+}
+
+optional_ptr<QueryProfiler> ExecutionServices::TryGetQueryProfiler(optional_ptr<ExecutionServices> services) {
+	if (!services) {
+		return nullptr;
+	}
+	return services->TryGetQueryProfiler();
+}
+
+bool ExecutionServices::IsClient() const {
+	return context != nullptr;
+}
+
+optional_ptr<ClientConfig> ExecutionServices::TryGetClientConfig() const {
+	return config.get();
+}
+
+ClientConfig &ExecutionServices::GetClientConfig() const {
+	D_ASSERT(config);
+	return *config;
+}
+
 SettingLookupResult ExecutionServices::TryGetCurrentSetting(const Identifier &key, Value &result) const {
 	if (context) {
 		return context->TryGetCurrentSetting(key, result);
 	}
-	return db.get().TryGetCurrentSetting(key, result);
+	return db->TryGetCurrentSetting(key, result);
+}
+
+SettingLookupResult ExecutionServices::TryGetCurrentUserSetting(idx_t setting_index, Value &result) const {
+	auto &db_config = DBConfig::GetConfig(*db);
+	if (config) {
+		return config->user_settings.TryGetSetting(db_config.user_settings, setting_index, result);
+	}
+	return db_config.TryGetCurrentUserSetting(setting_index, result);
 }
 
 Logger &ExecutionServices::GetLogger() const {
-	if (context) {
-		return Logger::Get(*context);
+	if (logger) {
+		return *logger;
 	}
-	return Logger::Get(db.get());
+	return Logger::Get(*db);
+}
+
+void ExecutionServices::SetLogger(shared_ptr<Logger> new_logger) {
+	logger = std::move(new_logger);
+}
+
+const shared_ptr<Logger> &ExecutionServices::GetLoggerPtr() const {
+	return logger;
 }
 
 FileSystem &ExecutionServices::GetFileSystem() const {
-	auto client_context = context;
-	if (client_context) {
-		return FileSystem::GetFileSystem(*client_context);
+	if (client_file_system) {
+		return *client_file_system;
 	}
-	return FileSystem::GetFileSystem(db.get());
+	return FileSystem::GetFileSystem(*db);
+}
+
+optional_ptr<FileOpener> ExecutionServices::TryGetFileOpener() const {
+	return file_opener.get();
+}
+
+TaskScheduler &ExecutionServices::GetTaskScheduler() const {
+	return db->GetScheduler();
 }
 
 MetricsManager &ExecutionServices::GetMetricsManager() const {
-	return db.get().GetMetricsManager();
+	return db->GetMetricsManager();
 }
 
 optional_ptr<QueryProfiler> ExecutionServices::TryGetQueryProfiler() const {
-	auto client_context = context;
-	if (!client_context) {
-		return nullptr;
-	}
-	return &QueryProfiler::Get(*client_context);
+	return profiler.get();
 }
 
-ExecutionServices ClientContext::Services() {
-	return ExecutionServices(*this);
+QueryProfiler &ExecutionServices::GetQueryProfiler() const {
+	D_ASSERT(profiler);
+	return *profiler;
 }
 
-ExecutionServices DatabaseInstance::Services() {
-	return ExecutionServices(*this);
+const shared_ptr<QueryProfiler> &ExecutionServices::GetQueryProfilerPtr() const {
+	return profiler;
+}
+
+shared_ptr<ExecutionServices> DatabaseInstance::Services() {
+	return make_shared_ptr<ExecutionServices>(shared_from_this());
 }
 
 } // namespace duckdb

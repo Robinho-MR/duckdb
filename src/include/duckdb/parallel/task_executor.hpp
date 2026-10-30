@@ -17,6 +17,7 @@
 
 namespace duckdb {
 
+class ExecutionServices;
 class TaskExecutor;
 class TaskExecutorTask;
 
@@ -64,6 +65,7 @@ protected:
 class TaskExecutor {
 public:
 	explicit TaskExecutor(ClientContext &context, TaskSchedulerType type = TaskSchedulerType::REGULAR);
+	explicit TaskExecutor(ExecutionServices &services, TaskSchedulerType type = TaskSchedulerType::REGULAR);
 	explicit TaskExecutor(TaskScheduler &scheduler, TaskSchedulerType type = TaskSchedulerType::REGULAR);
 	~TaskExecutor();
 

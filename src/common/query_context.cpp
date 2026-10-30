@@ -4,16 +4,19 @@
 
 namespace duckdb {
 
-QueryContext::QueryContext() : context(nullptr) {
+QueryContext::QueryContext() {
 }
 
-QueryContext::QueryContext(optional_ptr<ClientContext> context_p) : context(context_p) {
+QueryContext::QueryContext(optional_ptr<ClientContext> context) {
 	if (context) {
 		services = context->Services();
 	}
 }
 
-QueryContext::QueryContext(ClientContext &context_p) : context(&context_p), services(context_p.Services()) {
+QueryContext::QueryContext(ClientContext &context) : services(context.Services()) {
+}
+
+QueryContext::QueryContext(shared_ptr<ExecutionServices> services_p) : services(std::move(services_p)) {
 }
 
 } // namespace duckdb

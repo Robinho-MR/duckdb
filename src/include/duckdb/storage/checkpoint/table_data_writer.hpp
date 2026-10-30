@@ -86,6 +86,7 @@ public:
 
 protected:
 	DuckTableEntry &table;
+	QueryContext query_context;
 	optional_ptr<ClientContext> context;
 	//! Pointers to the start of each row group.
 	vector<RowGroupPointer> row_group_pointers;

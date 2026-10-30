@@ -8,37 +8,34 @@
 
 #pragma once
 
-#include "duckdb/common/optional.hpp"
 #include "duckdb/common/optional_ptr.hpp"
+#include "duckdb/common/shared_ptr.hpp"
 #include "duckdb/main/execution_services.hpp"
 
 namespace duckdb {
 
 class ClientContext;
 
-//! The QueryContext wraps an optional client context.
+//! The QueryContext wraps optional execution services.
 //! It makes query-related information available to operations.
 class QueryContext {
 public:
 	QueryContext();
-	QueryContext(optional_ptr<ClientContext> context); // NOLINT: allow implicit construction
-	QueryContext(ClientContext &context);              // NOLINT: allow implicit construction
+	QueryContext(optional_ptr<ClientContext> context);      // NOLINT: allow implicit construction
+	QueryContext(ClientContext &context);                   // NOLINT: allow implicit construction
+	QueryContext(shared_ptr<ExecutionServices> services_p); // NOLINT: allow implicit construction
 
 public:
 	bool Valid() const {
-		return context != nullptr;
+		return services != nullptr;
 	}
-	optional_ptr<ClientContext> GetClientContext() const {
-		return context;
-	}
-	//! The execution services backing this context (null if the context is not valid)
-	optional_ptr<const ExecutionServices> GetServices() const {
-		return services ? &*services : nullptr;
+	//! The execution services (null if the context is not valid)
+	optional_ptr<ExecutionServices> GetServices() const {
+		return services.get();
 	}
 
 private:
-	optional_ptr<ClientContext> context;
-	optional<ExecutionServices> services;
+	shared_ptr<ExecutionServices> services;
 };
 
 } // namespace duckdb

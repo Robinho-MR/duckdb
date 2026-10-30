@@ -1000,7 +1000,7 @@ static bool FinalizeSingleThreaded(const HashJoinGlobalSinkState &sink, const bo
 	}
 
 	// if we want to verify parallelism, finalize parallel
-	if (sink.context.config.verify_parallelism) {
+	if (ClientConfig::GetConfig(sink.context).verify_parallelism) {
 		return false;
 	}
 
@@ -2485,7 +2485,7 @@ private:
 		probe_chunk_done = 0;
 		external_progress.Reset();
 		probe_count = op.children[0].get().estimated_cardinality;
-		parallel_scan_chunk_count = context.config.verify_parallelism ? 1 : 120;
+		parallel_scan_chunk_count = ClientConfig::GetConfig(context).verify_parallelism ? 1 : 120;
 		full_outer_chunk_idx = DConstants::INVALID_INDEX;
 		full_outer_chunk_count = 0;
 		full_outer_chunk_done = 0;
@@ -2667,7 +2667,7 @@ void HashJoinGlobalSourceState::PrepareBuild(HashJoinGlobalSinkState &sink) {
 	build_chunk_count = data_collection.ChunkCount();
 	build_chunk_done = 0;
 
-	if (sink.context.config.verify_parallelism) {
+	if (ClientConfig::GetConfig(sink.context).verify_parallelism) {
 		build_chunks_per_thread = 1;
 	} else {
 		if (KeysAreSkewed(sink)) {

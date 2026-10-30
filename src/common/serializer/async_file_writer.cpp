@@ -43,7 +43,7 @@ private:
 };
 
 static ClientContext &RequireClientContext(QueryContext context) {
-	auto client_context = context.GetClientContext();
+	auto client_context = ExecutionServices::TryGetClientContext(context.GetServices());
 	if (!client_context) {
 		throw InvalidInputException("AsyncFileWriter requires a ClientContext");
 	}

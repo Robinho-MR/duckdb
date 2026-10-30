@@ -115,7 +115,7 @@ string QueryProfiler::GetSaveLocation() const {
 }
 
 QueryProfiler &QueryProfiler::Get(ClientContext &context) {
-	return *ClientData::Get(context).profiler;
+	return context.services->GetQueryProfiler();
 }
 
 void QueryProfiler::Start(const string &query) {

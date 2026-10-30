@@ -139,14 +139,13 @@ struct DebugClientContextState : public ClientContextState {
 #endif
 
 ClientContext::ClientContext(shared_ptr<DatabaseInstance> database)
-    : db(std::move(database)), interrupt_state(ClientInterruptState::NOT_INTERRUPTED), transaction(*this),
-      connection_id(DConstants::INVALID_INDEX) {
+    : db(std::move(database)), interrupt_state(ClientInterruptState::NOT_INTERRUPTED),
+      services(make_shared_ptr<ExecutionServices>(db)), transaction(*this), connection_id(DConstants::INVALID_INDEX) {
+	services->InitializeClient(*this);
 	registered_state = make_uniq<RegisteredStateManager>();
 #ifdef DEBUG
 	registered_state->GetOrCreate<DebugClientContextState>("debug_client_context_state");
 #endif
-	LoggingContext context(LogContextScope::CONNECTION);
-	logger = db->GetLogManager().CreateLogger(context, true);
 	client_data = make_uniq<ClientData>(*this);
 
 #ifdef __APPLE__
@@ -287,7 +286,7 @@ void ClientContext::VerifyNoOpenResult() {
 }
 
 Logger &ClientContext::GetLogger() const {
-	return *logger;
+	return services->GetLogger();
 }
 
 connection_t ClientContext::GetConnectionId() const {
@@ -1517,8 +1516,8 @@ SettingLookupResult ClientContext::TryGetCurrentSetting(const Identifier &key, V
 	auto setting_index = db_config.TryGetSettingIndex(key, option);
 	if (setting_index.IsValid()) {
 		// generic setting - try to fetch it
-		auto lookup_result =
-		    config.user_settings.TryGetSetting(db_config.user_settings, setting_index.GetIndex(), result);
+		auto lookup_result = ClientConfig::GetConfig(*this).user_settings.TryGetSetting(
+		    db_config.user_settings, setting_index.GetIndex(), result);
 		if (lookup_result) {
 			return lookup_result;
 		}
@@ -1534,7 +1533,7 @@ SettingLookupResult ClientContext::TryGetCurrentSetting(const Identifier &key, V
 
 SettingLookupResult ClientContext::TryGetCurrentUserSetting(idx_t setting_index, Value &result) const {
 	auto &db_config = DBConfig::GetConfig(*this);
-	return config.user_settings.TryGetSetting(db_config.user_settings, setting_index, result);
+	return ClientConfig::GetConfig(*this).user_settings.TryGetSetting(db_config.user_settings, setting_index, result);
 }
 
 ParserOptions ClientContext::GetParserOptions() {
