@@ -2442,6 +2442,19 @@ struct SecretDirectorySetting {
 	static Value GetSetting(const ClientContext &context);
 };
 
+struct SecureViewIsolationSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "secure_view_isolation";
+	static constexpr const char *Description = "Execute secure views in a separate connection, so that the caller can "
+	                                           "only observe the rows that the view returns.";
+	static constexpr const char *InputType = "BOOLEAN";
+	static constexpr bool IsDebug = false;
+	static constexpr bool IsDeprecated = false;
+	static constexpr const char *DefaultValue = "false";
+	static constexpr SettingScopeTarget Scope = SettingScopeTarget::GLOBAL_ONLY;
+	static constexpr idx_t SettingIndex = NEXT_SETTING_INDEX();
+};
+
 struct ShowBehaviorSetting {
 	using RETURN_TYPE = ShowBehaviorType;
 	static constexpr const char *Name = "show_behavior";
