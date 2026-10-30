@@ -250,6 +250,7 @@ static const ConfigurationOption internal_options[] = {
     DUCKDB_LOCAL(SchemaSetting),
     DUCKDB_LOCAL(SearchPathSetting),
     DUCKDB_GLOBAL(SecretDirectorySetting),
+    DUCKDB_SETTING(SecureViewIsolationSetting),
     DUCKDB_SETTING_CALLBACK(ShowBehaviorSetting),
     DUCKDB_GLOBAL(StandardVectorSizeSetting),
     DUCKDB_SETTING_CALLBACK(StorageBlockPrefetchSetting),

@@ -53,4 +53,9 @@ struct QueryTableFunction {
 	static void RegisterFunction(BuiltinFunctions &set);
 };
 
+//! Scans a secure view by evaluating it in a separate secure context, see SecureContext
+struct SecureViewScanTableFunction {
+	static void RegisterFunction(BuiltinFunctions &set);
+};
+
 } // namespace duckdb

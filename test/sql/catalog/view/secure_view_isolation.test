@@ -1,0 +1,215 @@
+# name: test/sql/catalog/view/secure_view_isolation.test
+# description: Test secure views that are executed in a separate secure connection
+# group: [view]
+
+statement ok
+CREATE TABLE integers(i INTEGER, j INTEGER, s VARCHAR);
+
+statement ok
+INSERT INTO integers VALUES (1, 10, 'a'), (2, 20, 'b'), (3, 30, 'c'), (NULL, NULL, NULL);
+
+statement ok
+CREATE SECURE VIEW v1 AS SELECT * FROM integers WHERE i > 1;
+
+statement ok
+CREATE SECURE VIEW leaky AS SELECT CASE WHEN i = 2 THEN error('hidden-value') ELSE i END AS i FROM integers;
+
+# without isolation the secure view is part of the plan of the query
+query II
+EXPLAIN SELECT j FROM v1
+----
+physical_plan	<REGEX>:[\s\S]*Secure View[\s\S]*
+
+statement error
+SELECT * FROM leaky
+----
+hidden-value
+
+statement ok
+SET secure_view_isolation=true;
+
+# the contents of the view are evaluated by a scan in a secure context
+query II
+EXPLAIN SELECT j FROM v1
+----
+physical_plan	<REGEX>:[\s\S]*Secure View Scan[\s\S]*
+
+query III
+SELECT * FROM v1 ORDER BY i
+----
+2	20	b
+3	30	c
+
+query I
+SELECT j FROM v1 ORDER BY j
+----
+20
+30
+
+query I
+SELECT count(*) FROM v1
+----
+2
+
+query I
+SELECT s FROM v1 WHERE j = 30
+----
+c
+
+# predicates that cannot fail are handed to the secure context
+query II
+EXPLAIN SELECT s FROM v1 WHERE j = 30
+----
+physical_plan	<REGEX>:[\s\S]*Filters:[\s\S]*j = [\s\S]*30[\s\S]*
+
+# predicates that can fail are evaluated on the rows that the view returns
+query II
+EXPLAIN SELECT s FROM v1 WHERE 10 / (j - 20) > 0
+----
+physical_plan	<REGEX>:[\s\S]*Filter[\s\S]*Secure View Scan[\s\S]*
+
+# the plan does not contain anything of the view except its name
+statement ok
+CREATE TABLE hidden_table AS SELECT i, ('hidden' || i) AS h FROM range(100) t(i);
+
+statement ok
+CREATE SECURE VIEW hidden_view AS SELECT i, h FROM hidden_table WHERE i < 50;
+
+statement ok
+SET explain_output='all'
+
+query II
+EXPLAIN SELECT h FROM hidden_view WHERE i = 3
+----
+logical_plan	<!REGEX>:[\s\S]*(hidden_table|SEQ_SCAN|Seq Scan)[\s\S]*
+logical_opt	<!REGEX>:[\s\S]*(hidden_table|SEQ_SCAN|Seq Scan)[\s\S]*
+physical_plan	<!REGEX>:[\s\S]*(hidden_table|SEQ_SCAN|Seq Scan)[\s\S]*
+
+statement ok
+SET explain_output='physical_only'
+
+query I
+SELECT h FROM hidden_view WHERE i = 3
+----
+hidden3
+
+# joins, aggregates and nested secure views
+query II
+SELECT a.i, b.i FROM v1 a, v1 b WHERE a.i < b.i
+----
+2	3
+
+query II
+SELECT s, sum(j) FROM v1 GROUP BY s ORDER BY s
+----
+b	20
+c	30
+
+statement ok
+CREATE SECURE VIEW v2 AS SELECT i, j FROM v1 WHERE j > 20;
+
+query II
+SELECT * FROM v2
+----
+3	30
+
+# prepared statements
+statement ok
+PREPARE p1 AS SELECT s FROM v1 WHERE i = $1
+
+query I
+EXECUTE p1(2)
+----
+b
+
+query I
+EXECUTE p1(3)
+----
+c
+
+# the view is evaluated at the time it is read
+statement ok
+INSERT INTO integers VALUES (4, 40, 'd');
+
+query I
+SELECT count(*) FROM v1
+----
+3
+
+# temporary tables are visible to the secure context
+statement ok
+CREATE TEMPORARY TABLE tmp(i INTEGER);
+
+statement ok
+INSERT INTO tmp VALUES (7), (8);
+
+statement ok
+CREATE SECURE VIEW tmp_view AS SELECT * FROM tmp WHERE i > 7;
+
+query I
+SELECT * FROM tmp_view
+----
+8
+
+# errors that occur inside the secure context are not disclosed
+statement error
+SELECT * FROM leaky
+----
+<REGEX>:.*Failed to read from a secure view.*
+
+statement error
+SELECT * FROM leaky
+----
+<!REGEX>:.*hidden-value.*
+
+# the secure context does not log into the logs of the caller
+statement ok
+CREATE SECURE VIEW logged_view AS SELECT i FROM integers;
+
+statement ok
+CALL enable_logging('QueryLog');
+
+statement ok
+SELECT * FROM logged_view;
+
+statement ok
+CALL disable_logging();
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('QueryLog') WHERE message ILIKE '%FROM logged_view%'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('QueryLog') WHERE message ILIKE '%FROM integers%'
+----
+0
+
+# restrictions of the caller are inherited by the secure context
+statement ok
+COPY (SELECT 1 AS i) TO '{TEMP_DIR}/secure_view_isolation.csv'
+
+statement ok
+CREATE SECURE VIEW csv_view AS SELECT * FROM read_csv('{TEMP_DIR}/secure_view_isolation.csv')
+
+query I
+SELECT * FROM csv_view
+----
+1
+
+statement ok
+SET enable_external_access=false;
+
+statement error
+SELECT * FROM csv_view
+----
+<REGEX>:.*Failed to read from a secure view.*
+
+# views that do not exist anymore
+statement ok
+DROP TABLE integers CASCADE
+
+statement error
+SELECT * FROM leaky
+----
+<REGEX>:.*Failed to read from a secure view.*
