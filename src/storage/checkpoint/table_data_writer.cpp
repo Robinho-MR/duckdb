@@ -22,7 +22,8 @@
 namespace duckdb {
 
 TableDataWriter::TableDataWriter(TableCatalogEntry &table_p, QueryContext context)
-    : table(table_p.Cast<DuckTableEntry>()), context(context.GetClientContext()) {
+    : table(table_p.Cast<DuckTableEntry>()), query_context(context),
+      context(ExecutionServices::TryGetClientContext(context.GetServices())) {
 	D_ASSERT(table_p.IsDuckTable());
 
 	auto storage_compatibility = StorageCompatibility::FromDatabase(table_p.ParentCatalog().GetAttached());
@@ -54,8 +55,8 @@ DatabaseInstance &TableDataWriter::GetDatabase() {
 }
 
 unique_ptr<TaskExecutor> TableDataWriter::CreateTaskExecutor() {
-	if (context) {
-		return make_uniq<TaskExecutor>(*context);
+	if (query_context.Valid()) {
+		return make_uniq<TaskExecutor>(*query_context.GetServices());
 	}
 	return make_uniq<TaskExecutor>(TaskScheduler::GetScheduler(GetDatabase()));
 }

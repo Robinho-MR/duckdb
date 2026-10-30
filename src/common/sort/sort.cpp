@@ -382,14 +382,14 @@ SinkFinalizeType Sort::Finalize(ClientContext &context, OperatorSinkFinalizeInpu
 		gstate.total_count += sorted_run->Count();
 		maximum_run_count = MaxValue(maximum_run_count, sorted_run->Count());
 	}
-	if (context.config.verify_parallelism) {
+	if (ClientConfig::GetConfig(context).verify_parallelism) {
 		gstate.partition_size = STANDARD_VECTOR_SIZE;
 	} else {
 		gstate.partition_size = MinValue<idx_t>(gstate.total_count, DEFAULT_ROW_GROUP_SIZE);
 	}
 
 	// Amortize external boundary searches while keeping enough parallel work and estimated memory headroom.
-	if (gstate.external && !is_index_sort && !context.config.verify_parallelism) {
+	if (gstate.external && !is_index_sort && !ClientConfig::GetConfig(context).verify_parallelism) {
 		const auto partition_size = gstate.partition_size * 4;
 		if (gstate.total_count / gstate.num_threads >= partition_size &&
 		    CanUseLargerPartitions(gstate, partition_size)) {

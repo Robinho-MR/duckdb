@@ -43,6 +43,7 @@ class CatalogSearchPath;
 class ColumnDataCollection;
 class DatabaseInstance;
 class FileOpener;
+class ExecutionServices;
 class LogicalOperator;
 class PreparedStatement;
 class PreparedStatementData;
@@ -130,10 +131,8 @@ public:
 	idx_t internal_depth = 0;
 	//! Set of optional states (e.g. Caches) that can be held by the ClientContext
 	unique_ptr<RegisteredStateManager> registered_state;
-	//! The logger to be used by this ClientContext
-	shared_ptr<Logger> logger;
-	//! The client configuration
-	ClientConfig config;
+	//! The services of this ClientContext: owns the client configuration, logger, query profiler, file system, ...
+	shared_ptr<ExecutionServices> services;
 	//! The set of client-specific data
 	unique_ptr<ClientData> client_data;
 	//! Data for the currently running transaction
@@ -303,6 +302,11 @@ public:
 
 	//! Return the current logger
 	Logger &GetLogger() const;
+
+	//! Returns the services (client configuration, logging, metrics, file system) owned by this context
+	const shared_ptr<ExecutionServices> &Services() const {
+		return services;
+	}
 
 	//! Returns the current query string (if any)
 	const string &GetCurrentQuery();
