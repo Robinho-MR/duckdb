@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/common/query_context.hpp"
 #include "duckdb/storage/table/chunk_info.hpp"
 #include "duckdb/storage/statistics/segment_statistics.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
@@ -63,12 +64,15 @@ enum class ColumnDataType;
 class ClientContext;
 
 struct RowGroupWriteInfo {
-	RowGroupWriteInfo(PartialBlockManager &manager, const vector<CompressionType> &compression_types,
+	RowGroupWriteInfo(QueryContext context, PartialBlockManager &manager,
+	                  const vector<CompressionType> &compression_types,
 	                  CheckpointOptions options = CheckpointOptions());
-	RowGroupWriteInfo(PartialBlockManager &manager, const vector<CompressionType> &compression_types,
+	RowGroupWriteInfo(QueryContext context, PartialBlockManager &manager,
+	                  const vector<CompressionType> &compression_types,
 	                  vector<unique_ptr<PartialBlockManager>> &column_partial_block_managers_p);
 
 private:
+	QueryContext context;
 	PartialBlockManager &manager;
 
 public:
@@ -77,6 +81,9 @@ public:
 
 public:
 	PartialBlockManager &GetPartialBlockManager(idx_t column_idx);
+	QueryContext GetContext() const {
+		return context;
+	}
 
 private:
 	optional_ptr<vector<unique_ptr<PartialBlockManager>>> column_partial_block_managers;

@@ -349,7 +349,7 @@ void StructColumnData::FetchRows(TransactionData transaction, ColumnFetchState &
 		auto &child_type = StructType::GetChildTypes(type)[child_index].second;
 		if (!child_storage_index.HasChildren() && child_storage_index.HasType() &&
 		    child_storage_index.GetType() != child_type) {
-			auto context = transaction.transaction->context.lock();
+			auto context = state.context.GetClientContext();
 			for (idx_t idx = 0; idx < fetch_count; idx++) {
 				const idx_t offset = offsets[sel.get_index(idx)];
 				Vector intermediate(child_type, 1);
@@ -422,8 +422,8 @@ const BaseStatistics &StructColumnData::GetChildStats(const ColumnData &child) c
 
 struct StructColumnCheckpointState : public ColumnCheckpointState {
 	StructColumnCheckpointState(const RowGroup &row_group, ColumnData &column_data,
-	                            PartialBlockManager &partial_block_manager)
-	    : ColumnCheckpointState(row_group, column_data, partial_block_manager) {
+	                            ColumnCheckpointInfo &checkpoint_info)
+	    : ColumnCheckpointState(row_group, column_data, checkpoint_info) {
 		global_stats = StructStats::CreateEmpty(column_data.type).ToUnique();
 	}
 
@@ -469,15 +469,14 @@ public:
 };
 
 unique_ptr<ColumnCheckpointState> StructColumnData::CreateCheckpointState(const RowGroup &row_group,
-                                                                          PartialBlockManager &partial_block_manager) {
-	return make_uniq<StructColumnCheckpointState>(row_group, *this, partial_block_manager);
+                                                                          ColumnCheckpointInfo &checkpoint_info) {
+	return make_uniq<StructColumnCheckpointState>(row_group, *this, checkpoint_info);
 }
 
 unique_ptr<ColumnCheckpointState> StructColumnData::Checkpoint(const RowGroup &row_group,
                                                                ColumnCheckpointInfo &checkpoint_info,
                                                                const BaseStatistics &old_stats) {
-	auto &partial_block_manager = checkpoint_info.GetPartialBlockManager();
-	auto checkpoint_state = make_uniq<StructColumnCheckpointState>(row_group, *this, partial_block_manager);
+	auto checkpoint_state = make_uniq<StructColumnCheckpointState>(row_group, *this, checkpoint_info);
 	checkpoint_state->validity_state = validity->Checkpoint(row_group, checkpoint_info, old_stats);
 
 	for (idx_t col_idx = 0; col_idx < sub_columns.size(); col_idx++) {

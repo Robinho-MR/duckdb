@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/common/query_context.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/storage/data_pointer.hpp"
@@ -19,11 +20,12 @@ class ColumnData;
 class DatabaseInstance;
 class RowGroup;
 class PartialBlockManager;
+struct ColumnCheckpointInfo;
 class TableDataWriter;
 
 struct ColumnCheckpointState {
 	ColumnCheckpointState(const RowGroup &row_group, ColumnData &original_column,
-	                      PartialBlockManager &partial_block_manager);
+	                      ColumnCheckpointInfo &checkpoint_info);
 	virtual ~ColumnCheckpointState();
 
 	const RowGroup &row_group;
@@ -33,6 +35,7 @@ struct ColumnCheckpointState {
 
 protected:
 	PartialBlockManager &partial_block_manager;
+	QueryContext context;
 	shared_ptr<ColumnData> result_column;
 
 private:
@@ -51,6 +54,9 @@ public:
 
 	PartialBlockManager &GetPartialBlockManager() {
 		return partial_block_manager;
+	}
+	QueryContext GetContext() const {
+		return context;
 	}
 
 public:

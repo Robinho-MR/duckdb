@@ -57,7 +57,7 @@ public:
 	unique_ptr<BaseStatistics> GetUpdateStatistics() override;
 
 	unique_ptr<ColumnCheckpointState> CreateCheckpointState(const RowGroup &row_group,
-	                                                        PartialBlockManager &partial_block_manager) override;
+	                                                        ColumnCheckpointInfo &checkpoint_info) override;
 	unique_ptr<ColumnCheckpointState> Checkpoint(const RowGroup &row_group, ColumnCheckpointInfo &info,
 	                                             const BaseStatistics &old_stats) override;
 

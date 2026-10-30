@@ -35,8 +35,8 @@ struct CommitInfo {
 
 class DuckTransaction : public Transaction {
 public:
-	DuckTransaction(DuckTransactionManager &manager, ClientContext &context, transaction_t start_time,
-	                SnapshotView view, idx_t catalog_version);
+	DuckTransaction(DuckTransactionManager &manager, transaction_t start_time, SnapshotView view,
+	                idx_t catalog_version);
 	~DuckTransaction() override;
 
 	//! The start timestamp of this transaction
@@ -69,7 +69,7 @@ public:
 	void SetModifications(DatabaseModificationType type) override;
 
 	bool ShouldWriteToWAL(AttachedDatabase &db);
-	ErrorData PreFlushOptimisticBlocks(AttachedDatabase &db) noexcept;
+	ErrorData PreFlushOptimisticBlocks(ClientContext &context, AttachedDatabase &db) noexcept;
 	//! Appends the local storage to the tables; with a WAL, the commit state records the optimistically written blocks
 	ErrorData AppendLocalStorage(ClientContext &context, AttachedDatabase &db,
 	                             unique_ptr<StorageCommitState> &commit_state) noexcept;
@@ -78,7 +78,7 @@ public:
 	                     unique_ptr<StorageCommitState> &commit_state) noexcept;
 	//! Commit the current transaction with the given commit identifier. Returns an error message if the transaction
 	//! commit failed, or an empty string if the commit was successful
-	ErrorData Commit(AttachedDatabase &db, CommitInfo &commit_info,
+	ErrorData Commit(ClientContext &context, AttachedDatabase &db, CommitInfo &commit_info,
 	                 unique_ptr<StorageCommitState> commit_state) noexcept;
 	//! Returns whether or not a commit of this transaction should trigger an automatic checkpoint
 	bool AutomaticCheckpoint(AttachedDatabase &db, const UndoBufferProperties &properties);

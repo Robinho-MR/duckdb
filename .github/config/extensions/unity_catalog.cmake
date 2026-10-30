@@ -3,5 +3,6 @@ if(NOT MINGW AND NOT ${WASM_ENABLED} AND NOT ${MUSL_ENABLED})
             GIT_URL https://github.com/duckdb/unity_catalog
             GIT_TAG cc59382f5292997293a57c2ab336c9aa97c05f2d
             LOAD_TESTS
+            APPLY_PATCHES
   )
 endif()

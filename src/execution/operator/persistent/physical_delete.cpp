@@ -176,6 +176,7 @@ SinkResultType PhysicalDelete::Sink(ExecutionContext &context, DataChunk &chunk,
 		delete_row_ids.Flatten();
 		fetch_chunk.Initialize(Allocator::Get(context.client), column_types, delete_count);
 		ColumnFetchState fetch_state;
+		fetch_state.context = context.client;
 		table.Fetch(DuckTransaction::Get(context.client, table.db), fetch_chunk, column_ids, delete_row_ids,
 		            delete_count, fetch_state);
 		delete_count = fetch_chunk.size();

@@ -1,0 +1,23 @@
+--- a/src/include/storage/sqlite_transaction.hpp
++++ b/src/include/storage/sqlite_transaction.hpp
+@@ -21,6 +21,9 @@
+ 
+ class SQLiteTransaction : public Transaction {
+ public:
++	//! The client context the transaction was started in
++	weak_ptr<ClientContext> context;
++
+ 	SQLiteTransaction(SQLiteCatalog &sqlite_catalog, TransactionManager &manager, ClientContext &context);
+ 	~SQLiteTransaction() override;
+ 
+--- a/src/storage/sqlite_transaction.cpp
++++ b/src/storage/sqlite_transaction.cpp
+@@ -54,7 +54,7 @@
+ }
+ 
+ SQLiteTransaction::SQLiteTransaction(SQLiteCatalog &sqlite_catalog, TransactionManager &manager, ClientContext &context)
+-    : Transaction(manager, context), sqlite_catalog(sqlite_catalog), db(nullptr) {
++    : Transaction(manager), context(context.shared_from_this()), sqlite_catalog(sqlite_catalog), db(nullptr) {
+ 	if (sqlite_catalog.InMemory()) {
+ 		db = sqlite_catalog.GetInMemoryDatabase();
+ 		initialized.store(true, std::memory_order_release);

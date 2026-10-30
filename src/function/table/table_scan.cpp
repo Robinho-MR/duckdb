@@ -211,6 +211,7 @@ public:
 			l_state->all_columns.Initialize(context.client, scanned_types);
 		}
 		l_state->scan_state.options.force_fetch_row = Settings::Get<DebugForceFetchRowSetting>(context.client);
+		l_state->fetch_state.context = context.client;
 
 		// Initialize the local storage scan.
 		auto &bind_data = input.bind_data->Cast<TableScanBindData>();
@@ -222,7 +223,7 @@ public:
 			l_state->column_ids.push_back(bind_data.table.GetStorageIndex(col_idx));
 		}
 		l_state->scan_state.Initialize(l_state->column_ids, context.client, input.filters.get());
-		local_storage.InitializeScan(storage, l_state->scan_state.local_state, input.filters);
+		local_storage.InitializeScan(context.client, storage, l_state->scan_state.local_state, input.filters);
 		return std::move(l_state);
 	}
 

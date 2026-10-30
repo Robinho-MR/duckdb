@@ -508,12 +508,13 @@ IndexCheckpointResult IndexEntry::Checkpoint(TableIndexWriter &index_writer) {
 		if (owned_index->IsBound() && !owned_index->Cast<BoundIndex>().SupportsDeltaIndexes()) {
 			throw InternalException("Deferred index checkpointing requires delta index support");
 		}
-		return owned_index->Checkpoint(index_writer.GetSharedPartialBlockManager(), storage_version);
+		return owned_index->Checkpoint(index_writer.GetContext(), index_writer.GetSharedPartialBlockManager(),
+		                               storage_version);
 	}
 
 	auto partial_block_manager = index_writer.CreatePerIndexPartialBlockManager();
-	auto checkpoint = owned_index->Checkpoint(partial_block_manager, storage_version);
-	partial_block_manager.FlushPartialBlocks();
+	auto checkpoint = owned_index->Checkpoint(index_writer.GetContext(), partial_block_manager, storage_version);
+	partial_block_manager.FlushPartialBlocks(index_writer.GetContext());
 
 	InstallShadowInternal(std::move(checkpoint.shadow_index));
 	return checkpoint;

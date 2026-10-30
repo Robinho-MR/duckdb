@@ -36,7 +36,7 @@ public:
 
 public:
 	//! Use the default packing threshold unless supplied; it must not exceed the block size.
-	PartialBlockManager(QueryContext context, BlockManager &block_manager, PartialBlockType partial_block_type,
+	PartialBlockManager(BlockManager &block_manager, PartialBlockType partial_block_type,
 	                    optional_idx max_partial_block_size = optional_idx(),
 	                    uint32_t max_use_count = DEFAULT_MAX_USE_COUNT);
 	//! Discard pending blocks without flushing or finalizing their packables.
@@ -49,27 +49,27 @@ public:
 	//! Absorb other's pending blocks, leaving it empty on success; may flush and finalize packables.
 	//! Managers must be distinct, exclusively accessed, and share the block manager and mode.
 	//! Coalescing blocks requires unassigned persistent block IDs.
-	void Merge(PartialBlockManager &other);
+	void Merge(QueryContext context, PartialBlockManager &other);
 
 	//! Flush and finalize all pending blocks, leaving the map empty on success; in-memory mode skips disk IO.
-	void FlushPartialBlocks();
+	void FlushPartialBlocks(QueryContext context);
 
 	//! Consume a valid source pin and pack its first byte_size bytes; 0 < byte_size <= block size.
 	//! Returns a fixed destination only in FULL_CHECKPOINT mode, otherwise nullopt; may flush before returning.
 	//! The packable must outlive its pending allocation, until flushed or discarded.
 	//! The caller must permit adoption and modification of the source's backing storage.
-	optional<BlockPointer> Write(BlockPackable &packable, BufferHandle &&source, uint32_t byte_size);
+	optional<BlockPointer> Write(QueryContext context, BlockPackable &packable, BufferHandle &&source,
+	                             uint32_t byte_size);
 	//! Borrow a valid source pin and copy its first byte_size bytes synchronously without adopting its storage.
 	//! The source is neither modified nor retained; destination and packable lifetime rules are as above.
-	optional<BlockPointer> Write(BlockPackable &packable, const BufferHandle &source, uint32_t byte_size);
+	optional<BlockPointer> Write(QueryContext context, BlockPackable &packable, const BufferHandle &source,
+	                             uint32_t byte_size);
 
 	//! Reserve a disk block ID, using checkpoint accounting in FULL_CHECKPOINT mode; not for in-memory storage.
 	block_id_t GetFreeBlockId();
 
 	//! Returns a reference to the underlying block manager.
 	BlockManager &GetBlockManager() const;
-	//! Returns the optional client context.
-	optional_ptr<ClientContext> GetClientContext() const;
 
 private:
 	//! Remove the smallest fitting block from the map, or return nullptr if none fits.
@@ -81,14 +81,9 @@ private:
 	//! Remove the block with least free space if the map limit is exceeded; otherwise return nullptr.
 	unique_ptr<PartialBlock> PruneFreeList();
 	//! Consume the block, retaining it if reusable or flushing it otherwise; also flush any pruned map entry.
-	void RetainOrFlush(unique_ptr<PartialBlock> partial_block);
+	void RetainOrFlush(QueryContext context, unique_ptr<PartialBlock> partial_block);
 
 private:
-	//! The optional client context in which we use the partial block manager.
-	//! The SingleFileCheckpointWriter contains a partial block manager, and the destructor of
-	//! AttachedDatabase invokes CreateCheckpoint with that checkpoint writer.
-	//! Thus, we're using the optional client context instead of a reference.
-	optional_ptr<ClientContext> context;
 	BlockManager &block_manager;
 	PartialBlockType partial_block_type;
 	mutex partial_block_lock;

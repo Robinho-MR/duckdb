@@ -22,8 +22,8 @@ namespace duckdb {
 InMemoryCheckpointer::InMemoryCheckpointer(QueryContext context, AttachedDatabase &db, BlockManager &block_manager,
                                            StorageManager &storage_manager, CheckpointOptions options_p)
     : CheckpointWriter(db), context(context.GetClientContext()),
-      partial_block_manager(context, block_manager, PartialBlockType::IN_MEMORY_CHECKPOINT),
-      storage_manager(storage_manager), options(options_p) {
+      partial_block_manager(block_manager, PartialBlockType::IN_MEMORY_CHECKPOINT), storage_manager(storage_manager),
+      options(options_p) {
 }
 
 void InMemoryCheckpointer::CreateCheckpoint() {
@@ -144,7 +144,7 @@ unique_ptr<TableIndexWriter> InMemoryTableDataWriter::GetTableIndexWriter(Storag
 
 void InMemoryTableDataWriter::FlushPartialBlocks() {
 	// Finalize packed buffers before the checkpoint row groups become visible.
-	checkpoint_manager.GetPartialBlockManager().FlushPartialBlocks();
+	checkpoint_manager.GetPartialBlockManager().FlushPartialBlocks(QueryContext(checkpoint_manager.GetClientContext()));
 }
 
 CheckpointOptions InMemoryTableDataWriter::GetCheckpointOptions() const {

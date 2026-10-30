@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/common/query_context.hpp"
 #include "duckdb/common/shared_ptr_ipp.hpp"
 #include "duckdb/common/unique_ptr.hpp"
 #include "duckdb/storage/index_storage_info.hpp"
@@ -40,6 +41,8 @@ public:
 	virtual PartialBlockManager CreatePerIndexPartialBlockManager() = 0;
 	//! Writes the index buffers to disk
 	virtual void Flush() = 0;
+	//! The context of the checkpoint, if any
+	virtual QueryContext GetContext() const = 0;
 	//! Get the targeted storage version for the current writer
 	StorageVersion GetStorageVersion() const;
 
@@ -56,6 +59,7 @@ public:
 private:
 	PartialBlockManager CreatePerIndexPartialBlockManager() override;
 	void Flush() override;
+	QueryContext GetContext() const override;
 
 private:
 	SingleFileCheckpointWriter &checkpoint_manager;

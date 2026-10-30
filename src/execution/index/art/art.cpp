@@ -1186,7 +1186,8 @@ ARTSerializationFormat ART::GetSerializationFormat(const StorageVersion storage_
 	return ARTSerializationFormat::CURRENT;
 }
 
-IndexCheckpointResult ART::Checkpoint(PartialBlockManager &partial_block_manager, const StorageVersion version) {
+IndexCheckpointResult ART::Checkpoint(QueryContext context, PartialBlockManager &partial_block_manager,
+                                      const StorageVersion version) {
 	const auto target_format = GetSerializationFormat(version);
 	// This may mutate the live ART into a deprecated representation, but we accept this to prevent double copying.
 	auto storage_info = PrepareSerialize(target_format);
@@ -1198,7 +1199,7 @@ IndexCheckpointResult ART::Checkpoint(PartialBlockManager &partial_block_manager
 	for (idx_t i = 0; i < ALLOCATOR_COUNT; i++) {
 		auto &new_allocator = (*new_allocators)[i];
 
-		new_allocator = (*allocators)[i]->Persist(partial_block_manager);
+		new_allocator = (*allocators)[i]->Persist(context, partial_block_manager);
 
 		if (i < allocator_count) {
 			storage_info.allocator_infos.push_back(new_allocator->GetInfo());

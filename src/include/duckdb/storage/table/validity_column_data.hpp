@@ -24,7 +24,7 @@ public:
 public:
 	void AppendData(ColumnAppendState &state, UnifiedVectorFormat &vdata, idx_t count) override;
 	unique_ptr<ColumnCheckpointState> CreateCheckpointState(const RowGroup &row_group,
-	                                                        PartialBlockManager &partial_block_manager) override;
+	                                                        ColumnCheckpointInfo &checkpoint_info) override;
 
 	void Verify(RowGroup &parent) override;
 	void UpdateWithBase(TransactionData transaction, DuckTableEntry &table_entry, idx_t column_index,

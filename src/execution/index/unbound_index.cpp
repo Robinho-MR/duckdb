@@ -55,7 +55,7 @@ void UnboundIndex::ResetStorage() {
 	}
 }
 
-IndexCheckpointResult UnboundIndex::Checkpoint(PartialBlockManager &, StorageVersion) {
+IndexCheckpointResult UnboundIndex::Checkpoint(QueryContext, PartialBlockManager &, StorageVersion) {
 	return {storage_info, nullptr};
 }
 

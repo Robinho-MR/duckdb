@@ -86,7 +86,7 @@ private:
 
 class CommitState {
 public:
-	explicit CommitState(DuckTransaction &transaction, transaction_t commit_id,
+	explicit CommitState(ClientContext &context, DuckTransaction &transaction, transaction_t commit_id,
 	                     ActiveTransactionState transaction_state, CommitMode commit_mode);
 
 public:

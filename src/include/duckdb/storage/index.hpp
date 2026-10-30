@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/common/query_context.hpp"
 #include "duckdb/common/enums/index_constraint_type.hpp"
 #include "duckdb/common/helper.hpp"
 #include "duckdb/common/string.hpp"
@@ -75,7 +76,8 @@ public:
 	}
 
 	//! Checkpoint an index, based on the mode supported by the index flushing may be deferred.
-	virtual IndexCheckpointResult Checkpoint(PartialBlockManager &partial_block_manager, const StorageVersion version);
+	virtual IndexCheckpointResult Checkpoint(QueryContext context, PartialBlockManager &partial_block_manager,
+	                                         const StorageVersion version);
 
 	//! Returns unique flag
 	bool IsUnique() const {

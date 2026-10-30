@@ -1439,14 +1439,15 @@ ColumnCheckpointInfo::ColumnCheckpointInfo(RowGroupWriteInfo &info, idx_t column
     : column_idx(column_idx), info(info) {
 }
 
-RowGroupWriteInfo::RowGroupWriteInfo(PartialBlockManager &manager, const vector<CompressionType> &compression_types,
-                                     CheckpointOptions options_p)
-    : manager(manager), compression_types(compression_types), options(options_p) {
+RowGroupWriteInfo::RowGroupWriteInfo(QueryContext context, PartialBlockManager &manager,
+                                     const vector<CompressionType> &compression_types, CheckpointOptions options_p)
+    : context(context), manager(manager), compression_types(compression_types), options(options_p) {
 }
 
-RowGroupWriteInfo::RowGroupWriteInfo(PartialBlockManager &manager, const vector<CompressionType> &compression_types,
+RowGroupWriteInfo::RowGroupWriteInfo(QueryContext context, PartialBlockManager &manager,
+                                     const vector<CompressionType> &compression_types,
                                      vector<unique_ptr<PartialBlockManager>> &column_partial_block_managers_p)
-    : manager(manager), compression_types(compression_types), options(),
+    : context(context), manager(manager), compression_types(compression_types), options(),
       column_partial_block_managers(column_partial_block_managers_p) {
 }
 
@@ -1459,6 +1460,10 @@ PartialBlockManager &RowGroupWriteInfo::GetPartialBlockManager(idx_t column_idx)
 
 PartialBlockManager &ColumnCheckpointInfo::GetPartialBlockManager() {
 	return info.GetPartialBlockManager(column_idx);
+}
+
+QueryContext ColumnCheckpointInfo::GetContext() const {
+	return info.GetContext();
 }
 
 CompressionType ColumnCheckpointInfo::GetCompressionType() {
@@ -1700,7 +1705,8 @@ RowGroupWriteData RowGroup::WriteToDisk(RowGroupWriter &writer) {
 		}
 	}
 
-	RowGroupWriteInfo info(writer.GetPartialBlockManager(), compression_types, writer.GetCheckpointOptions());
+	RowGroupWriteInfo info(QueryContext(writer.GetTableWriter().TryGetClientContext()), writer.GetPartialBlockManager(),
+	                       compression_types, writer.GetCheckpointOptions());
 
 	vector<idx_t> reused_columns;
 	for (idx_t column_idx = 0; column_idx < GetColumnCount(); column_idx++) {
