@@ -1068,3 +1068,76 @@ TEST_CASE("Test C-API Arrow round trip of timestamps below the first midnight of
 	duckdb_destroy_data_chunk(&chunk);
 	duckdb_destroy_result(&result);
 }
+
+// A list/struct/map schema whose children disagree with its format must be rejected, instead of
+// dereferencing a null or missing children array.
+TEST_CASE("Test C-API Arrow schema shape validation", "[capi][arrow]") {
+	CAPITester tester;
+	REQUIRE(tester.OpenDatabase(nullptr));
+
+	SECTION("list column with no children") {
+		ArrowSchema list_schema = {};
+		list_schema.format = "+l";
+		list_schema.name = "a";
+		list_schema.n_children = 0;
+		list_schema.children = nullptr;
+		list_schema.release = ReleaseUnalignedSchema;
+		ArrowSchema *children[] = {&list_schema};
+		ArrowSchema schema = {};
+		schema.format = "+s";
+		schema.n_children = 1;
+		schema.children = children;
+		schema.release = ReleaseUnalignedSchema;
+
+		duckdb_arrow_converted_schema converted = nullptr;
+		auto err = duckdb_schema_from_arrow(tester.connection, &schema, &converted);
+		REQUIRE(err != nullptr);
+		duckdb_destroy_error_data(&err);
+	}
+
+	SECTION("struct schema with null children array but non-zero child count") {
+		ArrowSchema schema = {};
+		schema.format = "+s";
+		schema.name = "a";
+		schema.n_children = 2;
+		schema.children = nullptr;
+		schema.release = ReleaseUnalignedSchema;
+
+		duckdb_arrow_converted_schema converted = nullptr;
+		auto err = duckdb_schema_from_arrow(tester.connection, &schema, &converted);
+		REQUIRE(err != nullptr);
+		duckdb_destroy_error_data(&err);
+	}
+
+	SECTION("map schema whose inner struct has one child instead of two") {
+		ArrowSchema key_schema = {};
+		key_schema.format = "i";
+		key_schema.name = "key";
+		key_schema.release = ReleaseUnalignedSchema;
+		ArrowSchema *entry_children[] = {&key_schema};
+		ArrowSchema entries_schema = {};
+		entries_schema.format = "+s";
+		entries_schema.name = "entries";
+		entries_schema.n_children = 1;
+		entries_schema.children = entry_children;
+		entries_schema.release = ReleaseUnalignedSchema;
+		ArrowSchema *map_children[] = {&entries_schema};
+		ArrowSchema map_schema = {};
+		map_schema.format = "+m";
+		map_schema.name = "a";
+		map_schema.n_children = 1;
+		map_schema.children = map_children;
+		map_schema.release = ReleaseUnalignedSchema;
+		ArrowSchema *children[] = {&map_schema};
+		ArrowSchema schema = {};
+		schema.format = "+s";
+		schema.n_children = 1;
+		schema.children = children;
+		schema.release = ReleaseUnalignedSchema;
+
+		duckdb_arrow_converted_schema converted = nullptr;
+		auto err = duckdb_schema_from_arrow(tester.connection, &schema, &converted);
+		REQUIRE(err != nullptr);
+		duckdb_destroy_error_data(&err);
+	}
+}
