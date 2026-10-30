@@ -509,6 +509,8 @@ SinkCombineResultType PhysicalBatchInsert::Combine(ExecutionContext &context, Op
 			lstate.collection_index = PhysicalIndex(DConstants::INVALID_INDEX);
 		}
 	}
+	// all merge tasks must have run before Finalize, as it relies on the merged collections
+	ExecuteTasks(context.client, gstate, lstate);
 	if (lstate.optimistic_writer) {
 		annotated_lock_guard<annotated_mutex> l(gstate.lock);
 		auto &optimistic_writer = gstate.table.GetStorage().GetOptimisticWriter(context.client);
@@ -532,6 +534,9 @@ SinkFinalizeType PhysicalBatchInsert::Finalize(Pipeline &pipeline, Event &event,
 	auto &data_table = g_state.table.GetStorage();
 	auto &memory_manager = g_state.memory_manager;
 
+	if (g_state.task_manager.TaskCount() != 0) {
+		throw InternalException("Unexecuted merge tasks are remaining in PhysicalBatchInsert::Finalize");
+	}
 	if (g_state.optimistically_written || g_state.insert_count >= g_state.row_group_size) {
 		// we have written data to disk optimistically or are inserting a large amount of data
 		// perform a final pass over all of the row groups and merge them together
