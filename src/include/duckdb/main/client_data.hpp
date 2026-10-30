@@ -30,6 +30,9 @@ public:
 	~ClientData();
 
 public:
+	//! Whether this client evaluates the contents of a secure view on behalf of another client, see SecureContext
+	bool is_secure_context = false;
+
 	//! The set of temporary objects belonging to this client.
 	shared_ptr<AttachedDatabase> temporary_objects;
 	//! The set of bound prepared statements belonging to this client.

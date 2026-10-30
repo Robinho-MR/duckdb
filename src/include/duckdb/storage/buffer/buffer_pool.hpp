@@ -69,14 +69,11 @@ public:
 
 	vector<EvictionQueueInformation> GetEvictionQueueInfo() const;
 
-	//! Take per-database ObjectCache under buffer pool's memory management.
-	//! Notice, object cache should be registered for at most once, otherwise InvalidInput exception is thrown.
-	void SetObjectCache(ObjectCache *object_cache_p) {
-		if (object_cache != nullptr) {
-			throw InvalidInputException("Object cache has already been registered in buffer pool, cannot re-register!");
-		}
-		object_cache = object_cache_p;
-	}
+	//! Take per-database ObjectCache under buffer pool's memory management. A buffer pool that is shared between
+	//! database instances manages the object cache of each of them
+	void AddObjectCache(ObjectCache &object_cache);
+	//! Release an ObjectCache from the management of the buffer pool, must be called before it is destroyed
+	void RemoveObjectCache(ObjectCache &object_cache);
 
 protected:
 	//! Evict blocks until the currently used memory + extra_memory fit, returns false if this was not possible
@@ -193,7 +190,8 @@ protected:
 	//! The block allocator
 	BlockAllocator &block_allocator;
 	//! Per-database singleton object cache managed by buffer pool.
-	optional_ptr<ObjectCache> object_cache = nullptr;
+	mutex object_cache_lock;
+	vector<reference<ObjectCache>> object_caches;
 };
 
 } // namespace duckdb
