@@ -330,7 +330,22 @@ yyjson_val *JSONCommon::GetPathElements(yyjson_val *val, const vector<JSONPathEl
 	return val;
 }
 
-void GetWildcardPathInternal(yyjson_val *val, const char *ptr, const char *const end, vector<yyjson_val *> &vals) {
+//! Recursive descent ('..') re-enumerates the descendants for every component, so the work can grow exponentially
+//! with the number of such components - bound it rather than run (practically) forever
+static constexpr idx_t MAX_WILDCARD_PATH_STEPS = idx_t(1) << 27;
+
+static void CountWildcardPathStep(idx_t &steps) {
+	if (++steps > MAX_WILDCARD_PATH_STEPS) {
+		throw InvalidInputException(
+		    "JSON path evaluation exceeds the maximum of %llu steps - the path contains too many "
+		    "recursive descent ('..') or wildcard components for this document",
+		    MAX_WILDCARD_PATH_STEPS);
+	}
+}
+
+void GetWildcardPathInternal(yyjson_val *val, const char *ptr, const char *const end, vector<yyjson_val *> &vals,
+                             idx_t &steps) {
+	CountWildcardPathStep(steps);
 	while (val != nullptr && ptr != end) {
 		const auto &c = *ptr++;
 		D_ASSERT(ptr != end);
@@ -345,6 +360,7 @@ void GetWildcardPathInternal(yyjson_val *val, const char *ptr, const char *const
 				vector<yyjson_val *> rec_vals;
 				rec_vals.emplace_back(val);
 				for (idx_t i = 0; i < rec_vals.size(); i++) {
+					CountWildcardPathStep(steps);
 					yyjson_val *rec_val = rec_vals[i];
 					if (yyjson_is_arr(rec_val)) {
 						size_t idx, max;
@@ -360,7 +376,7 @@ void GetWildcardPathInternal(yyjson_val *val, const char *ptr, const char *const
 						}
 					}
 					if (i > 0 || ptr != end) {
-						GetWildcardPathInternal(rec_val, ptr, end, vals);
+						GetWildcardPathInternal(rec_val, ptr, end, vals, steps);
 					}
 				}
 				return;
@@ -373,7 +389,7 @@ void GetWildcardPathInternal(yyjson_val *val, const char *ptr, const char *const
 				size_t idx, max;
 				yyjson_val *key, *obj_val;
 				yyjson_obj_foreach(val, idx, max, key, obj_val) {
-					GetWildcardPathInternal(obj_val, ptr, end, vals);
+					GetWildcardPathInternal(obj_val, ptr, end, vals, steps);
 				}
 				return;
 			}
@@ -397,7 +413,7 @@ void GetWildcardPathInternal(yyjson_val *val, const char *ptr, const char *const
 				size_t idx, max;
 				yyjson_val *arr_val;
 				yyjson_arr_foreach(val, idx, max, arr_val) {
-					GetWildcardPathInternal(arr_val, ptr, end, vals);
+					GetWildcardPathInternal(arr_val, ptr, end, vals, steps);
 				}
 				return;
 			}
@@ -427,7 +443,8 @@ void JSONCommon::GetWildcardPath(yyjson_val *val, const char *ptr, const idx_t &
 	// Path has been validated at this point
 	const char *const end = ptr + len;
 	ptr++; // Skip past '$'
-	GetWildcardPathInternal(val, ptr, end, vals);
+	idx_t steps = 0;
+	GetWildcardPathInternal(val, ptr, end, vals, steps);
 }
 
 //! Shallow copy of a mutable value - the children of containers are copied by MutValMutCopy
