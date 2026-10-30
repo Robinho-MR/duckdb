@@ -1,4 +1,3 @@
-#include "duckdb/common/vector/array_vector.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/vector/map_vector.hpp"
@@ -798,35 +797,6 @@ static void CreateValuesList(const StructNames &names, yyjson_mut_doc *doc, yyjs
 	}
 }
 
-static void CreateValuesArray(const StructNames &names, yyjson_mut_doc *doc, yyjson_mut_val *vals[], Vector &value_v,
-                              idx_t count, const JSONCopyFormatOptions &options) {
-	value_v.Flatten();
-
-	// Initialize array for the nested values
-	auto &child_v = ArrayVector::GetChildMutable(value_v);
-	auto array_size = ArrayType::GetSize(value_v.GetType());
-	auto child_count = count * array_size;
-
-	auto nested_vals = JSONCommon::AllocateArray<yyjson_mut_val *>(doc, child_count);
-	// Fill nested_vals with list values
-	CreateValues(names, doc, nested_vals, child_v, child_count, options);
-	// Now we add the values to the appropriate JSON arrays
-	UnifiedVectorFormat list_data;
-	value_v.ToUnifiedFormat(list_data);
-	for (idx_t i = 0; i < count; i++) {
-		idx_t idx = list_data.sel->get_index(i);
-		if (!list_data.validity.RowIsValid(idx)) {
-			vals[i] = yyjson_mut_null(doc);
-		} else {
-			vals[i] = yyjson_mut_arr(doc);
-			auto offset = idx * array_size;
-			for (idx_t child_i = offset; child_i < offset + array_size; child_i++) {
-				yyjson_mut_arr_append(vals[i], nested_vals[child_i]);
-			}
-		}
-	}
-}
-
 static void CreateValuesFromDefaultCast(yyjson_mut_doc *doc, yyjson_mut_val *vals[], Vector &value_v, idx_t count) {
 	Vector string_vector(LogicalTypeId::VARCHAR, count);
 	VectorOperations::DefaultCast(value_v, string_vector, count);
@@ -998,13 +968,11 @@ static void CreateValues(const StructNames &names, yyjson_mut_doc *doc, yyjson_m
 		CreateValuesMap(names, doc, vals, value_v, count, options);
 		break;
 	case LogicalTypeId::LIST:
+	case LogicalTypeId::ARRAY:
 		CreateValuesList(names, doc, vals, value_v, count, options);
 		break;
 	case LogicalTypeId::UNION:
 		CreateValuesUnion(names, doc, vals, value_v, count, options);
-		break;
-	case LogicalTypeId::ARRAY:
-		CreateValuesArray(names, doc, vals, value_v, count, options);
 		break;
 	case LogicalTypeId::DATE:
 		CreateValuesDate(doc, vals, value_v, count, options);

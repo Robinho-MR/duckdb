@@ -1124,7 +1124,6 @@ void PersistentColumnData::Serialize(Serializer &serializer) const {
 	case PhysicalType::BIT: {
 		serializer.WritePropertyWithDefault(100, "data_pointers", pointers);
 	} break;
-	case PhysicalType::ARRAY:
 	case PhysicalType::LIST: {
 		D_ASSERT(child_columns.size() == 2);
 		serializer.WritePropertyWithDefault(100, "data_pointers", pointers);
@@ -1218,11 +1217,6 @@ PersistentColumnData PersistentColumnData::Deserialize(Deserializer &deserialize
 		case PhysicalType::BIT: {
 			deserializer.ReadPropertyWithDefault(100, "data_pointers", result.pointers);
 		} break;
-		case PhysicalType::ARRAY: {
-			deserializer.ReadPropertyWithDefault(100, "data_pointers", result.pointers);
-			result.DeserializeField(deserializer, 101, "validity", LogicalTypeId::VALIDITY);
-			result.DeserializeField(deserializer, 102, "child_column", ArrayType::GetChildType(type));
-		} break;
 		case PhysicalType::LIST: {
 			deserializer.ReadPropertyWithDefault(100, "data_pointers", result.pointers);
 			result.DeserializeField(deserializer, 101, "validity", LogicalTypeId::VALIDITY);
@@ -1252,11 +1246,6 @@ PersistentColumnData PersistentColumnData::Deserialize(Deserializer &deserialize
 	switch (type.InternalType()) {
 	case PhysicalType::BIT: {
 		deserializer.ReadPropertyWithDefault(100, "data_pointers", result.pointers);
-	} break;
-	case PhysicalType::ARRAY: {
-		deserializer.ReadPropertyWithDefault(100, "data_pointers", result.pointers);
-		result.DeserializeField(deserializer, 101, "validity", LogicalTypeId::VALIDITY);
-		result.DeserializeField(deserializer, 102, "child_column", ArrayType::GetChildType(type));
 	} break;
 	case PhysicalType::LIST: {
 		deserializer.ReadPropertyWithDefault(100, "data_pointers", result.pointers);
@@ -1530,7 +1519,7 @@ void ColumnData::Verify(RowGroup &parent) {
 		is_geometry_child_column = true;
 	}
 
-	if (type.InternalType() == PhysicalType::STRUCT || type.InternalType() == PhysicalType::ARRAY ||
+	if (type.InternalType() == PhysicalType::STRUCT || type.id() == LogicalTypeId::ARRAY ||
 	    (type.id() == LogicalTypeId::GEOMETRY && !is_geometry_child_column)) {
 		// structs and fixed size lists don't have segments
 		D_ASSERT(!data.GetRootSegment());
@@ -1563,11 +1552,11 @@ shared_ptr<ColumnData> ColumnData::CreateColumn(BlockManager &block_manager, Dat
 	if (type.InternalType() == PhysicalType::STRUCT) {
 		return make_shared_ptr<StructColumnData>(block_manager, info, column_index, type, data_type, parent);
 	}
+	if (type.id() == LogicalTypeId::ARRAY) {
+		return make_shared_ptr<ArrayColumnData>(block_manager, info, column_index, type, data_type, parent);
+	}
 	if (type.InternalType() == PhysicalType::LIST) {
 		return make_shared_ptr<ListColumnData>(block_manager, info, column_index, type, data_type, parent);
-	}
-	if (type.InternalType() == PhysicalType::ARRAY) {
-		return make_shared_ptr<ArrayColumnData>(block_manager, info, column_index, type, data_type, parent);
 	}
 	if (type.id() == LogicalTypeId::VALIDITY) {
 		return make_shared_ptr<ValidityColumnData>(block_manager, info, column_index, data_type, parent);

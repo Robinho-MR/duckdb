@@ -1,4 +1,3 @@
-#include "duckdb/common/vector/array_vector.hpp"
 #include "duckdb/common/vector/constant_vector.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/list_vector.hpp"
@@ -262,12 +261,20 @@ static bool ConvertVariantToList(FromVariantConversionData &conversion_data, Vec
 		                       EnumUtil::ToString(collection_result.wrong_type));
 		return false;
 	}
+	const auto is_array = result.GetType().id() == LogicalTypeId::ARRAY;
+	const auto array_size = is_array ? ArrayType::GetSize(result.GetType()) : 0;
 	idx_t total_children = 0;
 	idx_t max_children = 0;
 	for (idx_t i = 0; i < count; i++) {
 		auto &child_data_entry = child_data[i];
 		if (!validity.RowIsValid(i)) {
 			continue;
+		}
+		if (is_array && child_data_entry.child_count != array_size) {
+			conversion_data.error =
+			    StringUtil::Format("Array size '%d' was expected, found '%d', can't convert VARIANT", array_size,
+			                       child_data_entry.child_count);
+			return false;
 		}
 		if (child_data_entry.child_count > max_children) {
 			max_children = child_data_entry.child_count;
@@ -309,68 +316,6 @@ static bool ConvertVariantToList(FromVariantConversionData &conversion_data, Vec
 		}
 	}
 	ListVector::SetListSize(result, total_offset);
-	return true;
-}
-
-static bool ConvertVariantToArray(FromVariantConversionData &conversion_data, Vector &result,
-                                  const SelectionVector &sel, idx_t offset, idx_t count, optional_idx row) {
-	const auto owned_child_data = make_unsafe_uniq_array_uninitialized<VariantNestedData>(count);
-	const array_ptr child_data(owned_child_data.get(), count);
-
-	//! Initialize the validity with that of the result (in case some rows are already set to invalid, we need to
-	//! respect that)
-	auto &result_validity = FlatVector::ValidityMutable(result);
-	ValidityMask validity(count);
-	for (idx_t i = 0; i < count; i++) {
-		if (!result_validity.RowIsValid(offset + i)) {
-			validity.SetInvalid(i);
-		}
-	}
-
-	auto collection_result = VariantUtils::CollectNestedData(conversion_data.variant, VariantLogicalType::ARRAY, sel,
-	                                                         count, row, offset, child_data, validity);
-	if (!collection_result.success) {
-		conversion_data.error =
-		    StringUtil::Format("Expected to find VARIANT(ARRAY), found VARIANT(%s) instead, can't convert",
-		                       EnumUtil::ToString(collection_result.wrong_type));
-		return false;
-	}
-
-	const auto array_size = ArrayType::GetSize(result.GetType());
-	for (idx_t i = 0; i < count; i++) {
-		auto &child_data_entry = child_data[i];
-		if (!validity.RowIsValid(i)) {
-			continue;
-		}
-		if (child_data_entry.child_count != array_size) {
-			conversion_data.error =
-			    StringUtil::Format("Array size '%d' was expected, found '%d', can't convert VARIANT", array_size,
-			                       child_data_entry.child_count);
-			return false;
-		}
-	}
-
-	SelectionVector new_sel;
-	new_sel.Initialize(array_size);
-
-	auto &child = ArrayVector::GetChildMutable(result);
-	idx_t total_offset = offset * array_size;
-	for (idx_t i = 0; i < count; i++) {
-		auto row_index = row.IsValid() ? row.GetIndex() : i;
-		auto &child_data_entry = child_data[i];
-
-		if (!validity.RowIsValid(i)) {
-			FlatVector::SetNull(result, offset + i, true);
-			total_offset += array_size;
-			continue;
-		}
-
-		FindValues(conversion_data.variant, row_index, new_sel, child_data_entry);
-		if (!CastVariant(conversion_data, child, new_sel, total_offset, array_size, row_index)) {
-			return false;
-		}
-		total_offset += array_size;
-	}
 	return true;
 }
 
@@ -640,10 +585,6 @@ static bool CastVariant(FromVariantConversionData &conversion_data, Vector &resu
 			break;
 		}
 		case LogicalTypeId::ARRAY:
-			if (ConvertVariantToArray(conversion_data, result, sel, offset, count, row)) {
-				return true;
-			}
-			break;
 		case LogicalTypeId::LIST:
 			if (ConvertVariantToList(conversion_data, result, sel, offset, count, row)) {
 				return true;

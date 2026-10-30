@@ -1,4 +1,3 @@
-#include "duckdb/common/vector/array_vector.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/vector/map_vector.hpp"
@@ -83,28 +82,6 @@ static const LinkedList *GetListChildData(const ListSegment *segment) {
 static LinkedList *GetListChildData(ListSegment *segment) {
 	return reinterpret_cast<LinkedList *>(data_ptr_cast(segment) + sizeof(ListSegment) +
 	                                      segment->capacity * (sizeof(bool) + sizeof(uint64_t)));
-}
-
-//===--------------------------------------------------------------------===//
-// Array
-//===--------------------------------------------------------------------===//
-static idx_t GetAllocationSizeArray(uint16_t capacity) {
-	// Only store the null mask for the array segment, length is fixed so we don't need to store it
-	return AlignValue(sizeof(ListSegment) + capacity * (sizeof(bool)) + sizeof(LinkedList));
-}
-
-static data_ptr_t AllocateArrayData(ArenaAllocator &allocator, uint16_t capacity) {
-	return allocator.Allocate(GetAllocationSizeArray(capacity));
-}
-
-static const LinkedList *GetArrayChildData(const ListSegment *segment) {
-	return reinterpret_cast<const LinkedList *>(const_data_ptr_cast(segment) + sizeof(ListSegment) +
-	                                            segment->capacity * sizeof(bool));
-}
-
-static LinkedList *GetArrayChildData(ListSegment *segment) {
-	return reinterpret_cast<LinkedList *>(data_ptr_cast(segment) + sizeof(ListSegment) +
-	                                      segment->capacity * sizeof(bool));
 }
 
 //===--------------------------------------------------------------------===//
@@ -198,22 +175,6 @@ static ListSegment *CreateStructSegment(const ListSegmentFunctions &functions, A
 		auto child_segment = child_function.create_segment(child_function, allocator, capacity);
 		Store<ListSegment *>(child_segment, data_ptr_cast(child_segments + i));
 	}
-
-	return segment;
-}
-
-static ListSegment *CreateArraySegment(const ListSegmentFunctions &, ArenaAllocator &allocator, uint16_t capacity) {
-	// allocate data and set header
-	auto segment = reinterpret_cast<ListSegment *>(AllocateArrayData(allocator, capacity));
-
-	segment->capacity = capacity;
-	segment->count = 0;
-	segment->next = nullptr;
-
-	// create an empty linked list for the child vector
-	auto linked_child_list = GetArrayChildData(segment);
-	LinkedList linked_list(0, nullptr, nullptr);
-	Store<LinkedList>(linked_list, data_ptr_cast(linked_child_list));
 
 	return segment;
 }
@@ -371,31 +332,6 @@ static void WriteDataToStructSegment(const ListSegmentFunctions &functions, Aren
 		child_function.write_data(child_function, allocator, child_list_segment, input_data.children[i], offset, count);
 		child_list_segment->count += count;
 	}
-}
-
-static void WriteDataToArraySegment(const ListSegmentFunctions &functions, ArenaAllocator &allocator,
-                                    ListSegment *segment, RecursiveUnifiedVectorFormat &input_data, idx_t offset,
-                                    idx_t count) {
-	auto null_mask = GetNullMask(segment);
-	auto array_size = ArrayType::GetSize(input_data.logical_type);
-
-	D_ASSERT(functions.child_functions.size() == 1);
-	// load the linked list of child segments once, and store it back after writing all arrays
-	auto child_segments = Load<LinkedList>(data_ptr_cast(GetArrayChildData(segment)));
-	for (idx_t i = 0; i < count; i++) {
-		auto sel_entry_idx = input_data.unified.sel->get_index(offset + i);
-
-		// write null validity
-		auto valid = input_data.unified.validity.RowIsValid(sel_entry_idx);
-		null_mask[segment->count + i] = !valid;
-
-		// Arrays require there to be values in the child even when the entry is NULL.
-		auto array_offset = sel_entry_idx * array_size;
-		functions.child_functions[0].AppendRows(allocator, child_segments, input_data.children.back(), array_offset,
-		                                        array_size);
-	}
-	// store the updated linked list
-	Store<LinkedList>(child_segments, data_ptr_cast(GetArrayChildData(segment)));
 }
 
 void ListSegmentFunctions::AppendRows(ArenaAllocator &allocator, LinkedList &linked_list,
@@ -642,46 +578,6 @@ static idx_t ScanStructData(const ListSegmentFunctions &functions, ListSegmentSc
 	return total_read;
 }
 
-static idx_t ScanArrayData(const ListSegmentFunctions &functions, ListSegmentScanState &state, idx_t count,
-                           Vector &result, idx_t result_offset) {
-	auto &aggr_vector_validity = FlatVector::ValidityMutable(result);
-	auto &child_vector = ArrayVector::GetChildMutable(result);
-	auto array_size = ArrayType::GetSize(result.GetType());
-
-	D_ASSERT(functions.child_functions.size() == 1);
-	auto &child_function = functions.child_functions[0];
-
-	idx_t total_read = 0;
-	while (total_read < count && state.segment) {
-		auto segment = state.segment;
-		if (state.children.empty()) {
-			// entering this segment - point the child state at the start of the segment's child values
-			auto linked_child_list = Load<LinkedList>(const_data_ptr_cast(GetArrayChildData(segment)));
-			state.children.emplace_back();
-			state.children.back().segment = linked_child_list.first_segment;
-		}
-		auto &child_state = state.children.back();
-		auto read_count = MinValue<idx_t>(count - total_read, segment->count - state.offset);
-		auto null_mask = GetNullMask(segment);
-		for (idx_t i = 0; i < read_count; i++) {
-			if (null_mask[state.offset + i]) {
-				aggr_vector_validity.SetInvalid(result_offset + total_read + i);
-			}
-		}
-
-		// recurse into the linked list of child values
-		child_function.scan_data(child_function, child_state, read_count * array_size, child_vector,
-		                         (result_offset + total_read) * array_size);
-
-		total_read += read_count;
-		state.offset += read_count;
-		if (state.offset == segment->count) {
-			MoveToNextSegment(state);
-		}
-	}
-	return total_read;
-}
-
 void ListSegmentFunctions::InitializeScan(const LinkedList &linked_list, ListSegmentScanState &state) const {
 	state.segment = linked_list.first_segment;
 	state.offset = 0;
@@ -833,16 +729,6 @@ void GetSegmentDataFunctions(ListSegmentFunctions &functions, const LogicalType 
 			functions.child_functions.emplace_back();
 			GetSegmentDataFunctions(functions.child_functions.back(), child_types[i].second);
 		}
-		break;
-	}
-	case PhysicalType::ARRAY: {
-		functions.create_segment = CreateArraySegment;
-		functions.write_data = WriteDataToArraySegment;
-		functions.scan_data = ScanArrayData;
-
-		// recurse
-		functions.child_functions.emplace_back();
-		GetSegmentDataFunctions(functions.child_functions.back(), ArrayType::GetChildType(type));
 		break;
 	}
 	default:

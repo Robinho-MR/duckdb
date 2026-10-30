@@ -337,19 +337,12 @@ void ColumnScanState::Initialize(const QueryContext &context_p, const LogicalTyp
 		}
 		child_states[0].scan_options = options;
 	} else if (type.InternalType() == PhysicalType::LIST) {
-		// validity + list child
+		// validity + list / array child
 		for (idx_t i = 0; i < 2; i++) {
 			child_states.emplace_back(parent);
 		}
 		child_states[1].Initialize(context, ListType::GetChildType(type), options);
 		child_states[0].scan_options = options;
-	} else if (type.InternalType() == PhysicalType::ARRAY) {
-		// validity + array child
-		for (idx_t i = 0; i < 2; i++) {
-			child_states.emplace_back(parent);
-		}
-		child_states[0].scan_options = options;
-		child_states[1].Initialize(context, ArrayType::GetChildType(type), options);
 	} else {
 		// validity
 		child_states.emplace_back(parent);

@@ -194,7 +194,7 @@ static bool ListToVarcharCast(Vector &source, Vector &result, idx_t count, CastP
 	return true;
 }
 
-static bool ListToArrayCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+static bool ListToArrayCastInternal(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
 	auto &cast_data = parameters.cast_data->Cast<ListBoundCastData>();
 	auto array_size = ArrayType::GetSize(result.GetType());
 
@@ -217,7 +217,8 @@ static bool ListToArrayCast(Vector &source, Vector &result, idx_t count, CastPar
 		}
 
 		auto &source_cc = ListVector::GetChildMutable(source);
-		auto &result_cc = ArrayVector::GetChildMutable(result);
+		ListVector::Reserve(result, array_size);
+		auto &result_cc = ListVector::GetChildMutable(result);
 
 		CastParameters child_parameters(parameters, cast_data.child_cast_info.GetCastData(), parameters.local_state);
 
@@ -242,7 +243,8 @@ static bool ListToArrayCast(Vector &source, Vector &result, idx_t count, CastPar
 
 		auto child_type = ArrayType::GetChildType(result.GetType());
 		auto &source_cc = ListVector::GetChildMutable(source);
-		auto &result_cc = ArrayVector::GetChildMutable(result);
+		ListVector::Reserve(result, array_size * count);
+		auto &result_cc = ListVector::GetChildMutable(result);
 		auto ldata = FlatVector::GetData<list_entry_t>(source);
 
 		auto child_count = array_size * count;
@@ -330,6 +332,12 @@ static bool ListToArrayCast(Vector &source, Vector &result, idx_t count, CastPar
 
 		return all_ok;
 	}
+}
+
+static bool ListToArrayCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	auto all_ok = ListToArrayCastInternal(source, result, count, parameters);
+	ArrayVector::SetConsecutiveEntries(result, result.GetVectorType() == VectorType::CONSTANT_VECTOR ? 1 : count);
+	return all_ok;
 }
 
 BoundCastInfo DefaultCasts::ListCastSwitch(BindCastInput &input, const LogicalType &source, const LogicalType &target) {

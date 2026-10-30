@@ -2,7 +2,6 @@
 
 #include "duckdb/common/allocator.hpp"
 #include "duckdb/common/types/vector.hpp"
-#include "duckdb/common/vector/array_vector.hpp"
 #include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/vector/string_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
@@ -18,17 +17,10 @@ public:
 		case PhysicalType::LIST: {
 			// child data of the list
 			auto &child_type = ListType::GetChildType(type);
-			child_caches.push_back(make_uniq<VectorCacheEntry>(allocator, child_type, capacity));
+			auto child_capacity = type.id() == LogicalTypeId::ARRAY ? ArrayType::GetSize(type) * capacity : capacity;
+			child_caches.push_back(make_uniq<VectorCacheEntry>(allocator, child_type, child_capacity));
 			auto child_vector = make_uniq<Vector>(child_type, nullptr);
 			buffer = make_buffer<VectorListBuffer>(AllocatedData(allocator), capacity, std::move(child_vector));
-			break;
-		}
-		case PhysicalType::ARRAY: {
-			auto &child_type = ArrayType::GetChildType(type);
-			auto array_size = ArrayType::GetSize(type);
-			child_caches.push_back(make_uniq<VectorCacheEntry>(allocator, child_type, array_size * capacity));
-			auto child_vector = make_uniq<Vector>(child_type, nullptr);
-			buffer = make_shared_ptr<VectorArrayBuffer>(std::move(child_vector), array_size, capacity);
 			break;
 		}
 		case PhysicalType::STRUCT: {
@@ -61,10 +53,6 @@ public:
 		switch (internal_type) {
 		case PhysicalType::LIST: {
 			child_caches[0]->ResetFromCache(buffer->Cast<VectorListBuffer>().GetChild());
-			break;
-		}
-		case PhysicalType::ARRAY: {
-			child_caches[0]->ResetFromCache(buffer->Cast<VectorArrayBuffer>().GetChild());
 			break;
 		}
 		case PhysicalType::STRUCT: {

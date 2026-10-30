@@ -121,16 +121,13 @@ void SortedRunScanState::TemplatedScan(const SortedRun &sorted_run, const Vector
 		if (payload_state.pin_state.properties == TupleDataPinProperties::INVALID) {
 			payload_data.InitializeScan(payload_state, TupleDataPinProperties::ALREADY_PINNED);
 		}
-		TupleDataCollection::ResetCachedCastVectors(payload_state.chunk_state, payload_state.chunk_state.column_ids);
-
 		// Now gather from payload
 		for (; opc_idx < output_projection_columns.size(); opc_idx++) {
 			const auto &opc = output_projection_columns[opc_idx];
 			D_ASSERT(opc.is_payload);
 			payload_data.Gather(payload_state.chunk_state.row_locations, *FlatVector::IncrementalSelectionVector(),
 			                    count, opc.layout_col_idx, chunk.data[opc.output_col_idx],
-			                    *FlatVector::IncrementalSelectionVector(),
-			                    payload_state.chunk_state.cached_cast_vectors[opc.layout_col_idx]);
+			                    *FlatVector::IncrementalSelectionVector());
 		}
 	}
 

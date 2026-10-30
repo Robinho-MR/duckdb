@@ -1,4 +1,5 @@
 #include "duckdb/common/vector/array_vector.hpp"
+#include "duckdb/common/vector/list_vector.hpp"
 #include "core_functions/scalar/array_functions.hpp"
 #include "core_functions/array_kernels.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
@@ -105,15 +106,18 @@ static void ArrayFixedCombine(DataChunk &args, ExpressionState &state, Vector &r
 	const auto &func_name = expr.Function().GetName();
 
 	const auto count = args.size();
-	auto lhs_values = ArrayVector::GetChild(args.data[0]).Values<TYPE>();
-	auto rhs_values = ArrayVector::GetChild(args.data[1]).Values<TYPE>();
-	auto &res_child = ArrayVector::GetChildMutable(result);
+	auto lhs_values = ListVector::GetChild(args.data[0]).Values<TYPE>();
+	auto rhs_values = ListVector::GetChild(args.data[1]).Values<TYPE>();
+	ListVector::Reserve(result, count * N);
+	auto &res_child = ListVector::GetChildMutable(result);
 
 	UnifiedVectorFormat lhs_format;
 	UnifiedVectorFormat rhs_format;
 
 	args.data[0].ToUnifiedFormat(lhs_format);
 	args.data[1].ToUnifiedFormat(rhs_format);
+	const auto lhs_entries = UnifiedVectorFormat::GetData<list_entry_t>(lhs_format);
+	const auto rhs_entries = UnifiedVectorFormat::GetData<list_entry_t>(rhs_format);
 
 	auto res_data = FlatVector::GetDataMutable<TYPE>(res_child);
 	TYPE lhs_data[N];
@@ -128,10 +132,11 @@ static void ArrayFixedCombine(DataChunk &args, ExpressionState &state, Vector &r
 			continue;
 		}
 
-		ReadArrayElements(lhs_values, lhs_idx * N, N, lhs_data, "left", func_name);
-		ReadArrayElements(rhs_values, rhs_idx * N, N, rhs_data, "right", func_name);
+		ReadArrayElements(lhs_values, lhs_entries[lhs_idx].offset, N, lhs_data, "left", func_name);
+		ReadArrayElements(rhs_values, rhs_entries[rhs_idx].offset, N, rhs_data, "right", func_name);
 		OP::Operation(lhs_data, rhs_data, res_data + i * N, N);
 	}
+	ArrayVector::SetConsecutiveEntries(result, count);
 
 	if (count == 1) {
 		result.SetVectorType(VectorType::CONSTANT_VECTOR);
@@ -150,14 +155,16 @@ static void ArrayGenericFold(DataChunk &args, ExpressionState &state, Vector &re
 	const auto &func_name = expr.Function().GetName();
 
 	const auto count = args.size();
-	auto lhs_values = ArrayVector::GetChild(args.data[0]).Values<TYPE>();
-	auto rhs_values = ArrayVector::GetChild(args.data[1]).Values<TYPE>();
+	auto lhs_values = ListVector::GetChild(args.data[0]).Values<TYPE>();
+	auto rhs_values = ListVector::GetChild(args.data[1]).Values<TYPE>();
 
 	UnifiedVectorFormat lhs_format;
 	UnifiedVectorFormat rhs_format;
 
 	args.data[0].ToUnifiedFormat(lhs_format);
 	args.data[1].ToUnifiedFormat(rhs_format);
+	const auto lhs_entries = UnifiedVectorFormat::GetData<list_entry_t>(lhs_format);
+	const auto rhs_entries = UnifiedVectorFormat::GetData<list_entry_t>(rhs_format);
 
 	auto res_data = FlatVector::GetDataMutable<TYPE>(result);
 
@@ -175,8 +182,8 @@ static void ArrayGenericFold(DataChunk &args, ExpressionState &state, Vector &re
 			continue;
 		}
 
-		ReadArrayElements(lhs_values, lhs_idx * array_size, array_size, lhs_data.data(), "left", func_name);
-		ReadArrayElements(rhs_values, rhs_idx * array_size, array_size, rhs_data.data(), "right", func_name);
+		ReadArrayElements(lhs_values, lhs_entries[lhs_idx].offset, array_size, lhs_data.data(), "left", func_name);
+		ReadArrayElements(rhs_values, rhs_entries[rhs_idx].offset, array_size, rhs_data.data(), "right", func_name);
 		res_data[i] = OP::Operation(lhs_data.data(), rhs_data.data(), array_size);
 	}
 

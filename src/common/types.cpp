@@ -111,10 +111,8 @@ static bool TryGetBuiltinPhysicalType(LogicalTypeId id, PhysicalType &result) no
 		return true;
 	case LogicalTypeId::LIST:
 	case LogicalTypeId::MAP:
-		result = PhysicalType::LIST;
-		return true;
 	case LogicalTypeId::ARRAY:
-		result = PhysicalType::ARRAY;
+		result = PhysicalType::LIST;
 		return true;
 	case LogicalTypeId::POINTER:
 		static_assert(sizeof(uintptr_t) == sizeof(uint32_t) || sizeof(uintptr_t) == sizeof(uint64_t),
@@ -439,8 +437,6 @@ string TypeIdToString(PhysicalType type) {
 		return "STRUCT";
 	case PhysicalType::LIST:
 		return "LIST";
-	case PhysicalType::ARRAY:
-		return "ARRAY";
 	case PhysicalType::INVALID:
 		return "INVALID";
 	case PhysicalType::BIT:
@@ -487,7 +483,6 @@ idx_t GetTypeIdSize(PhysicalType type) {
 		return sizeof(interval_t);
 	case PhysicalType::STRUCT:
 	case PhysicalType::UNKNOWN:
-	case PhysicalType::ARRAY:
 		return 0; // no own payload
 	case PhysicalType::LIST:
 		return sizeof(list_entry_t); // offset + len
@@ -1588,6 +1583,10 @@ LogicalType LogicalType::VARCHAR_COLLATION(string collation) { // NOLINT
 // List Type
 //===--------------------------------------------------------------------===//
 const LogicalType &ListType::GetChildType(const LogicalType &type) {
+	if (type.id() == LogicalTypeId::ARRAY) {
+		// arrays are stored as lists, the child type is shared
+		return ArrayType::GetChildType(type);
+	}
 	if (type.id() != LogicalTypeId::LIST && type.id() != LogicalTypeId::MAP) {
 		throw InternalException("ListType::GetChildType called on a non-LIST type: %s", type.ToString());
 	}

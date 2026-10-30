@@ -1,4 +1,5 @@
 #include "duckdb/common/vector/array_vector.hpp"
+#include "duckdb/common/vector/list_vector.hpp"
 #include "core_functions/scalar/array_functions.hpp"
 #include "duckdb/function/scalar/nested_functions.hpp"
 #include "duckdb/storage/statistics/array_stats.hpp"
@@ -23,10 +24,11 @@ void ArrayValueFunction(DataChunk &args, ExpressionState &state, Vector &result)
 		}
 	}
 
-	auto num_rows = args.size();
+	auto num_rows = result.GetVectorType() == VectorType::CONSTANT_VECTOR ? 1 : args.size();
 	auto num_columns = args.ColumnCount();
 
-	auto &child = ArrayVector::GetChildMutable(result);
+	ListVector::Reserve(result, num_rows * num_columns);
+	auto &child = ListVector::GetChildMutable(result);
 
 	if (num_columns > 1) {
 		// Ensure that the child has a validity mask of the correct size
@@ -42,6 +44,7 @@ void ArrayValueFunction(DataChunk &args, ExpressionState &state, Vector &result)
 		}
 	}
 
+	ArrayVector::SetConsecutiveEntries(result, num_rows);
 	result.Verify();
 }
 

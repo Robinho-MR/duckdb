@@ -8,7 +8,6 @@
 
 #include "duckdb/common/uhugeint.hpp"
 #include "duckdb/common/types/variant.hpp"
-#include "duckdb/common/vector/array_vector.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
@@ -461,34 +460,14 @@ struct ListEntryAccessor {
 	}
 };
 
-struct ArrayEntryAccessor {
-	explicit ArrayEntryAccessor(idx_t array_size) : array_size(array_size) {
-	}
-	static const Vector &GetChild(const Vector &vector) {
-		return ArrayVector::GetChild(vector);
-	}
-	static void FlattenChild(const Vector &) {
-		// no-op: ToUnifiedFormat handles all vector types without needing to flatten first
-	}
-	idx_t GetOffset(UnifiedVectorFormat &format, idx_t sel_idx) {
-		return format.sel->get_index(sel_idx) * array_size;
-	}
-	idx_t GetLength(UnifiedVectorFormat &, idx_t) {
-		return array_size;
-	}
-	idx_t array_size;
-};
-
-template <class ACCESSOR>
-static idx_t ListOrArrayExhausted(UnifiedVectorFormat &left_format, UnifiedVectorFormat &right_format,
-                                  SelectionVector &left_child_sel, SelectionVector &right_child_sel,
-                                  const idx_t index_in_list, int8_t *result_data, idx_t remaining_count,
-                                  SelectionVector &remaining_lhs_sel, SelectionVector &remaining_rhs_sel,
-                                  SelectionVector &remaining_result_sel, ACCESSOR accessor) {
+static idx_t ListExhausted(UnifiedVectorFormat &left_format, UnifiedVectorFormat &right_format,
+                           SelectionVector &left_child_sel, SelectionVector &right_child_sel, const idx_t index_in_list,
+                           int8_t *result_data, idx_t remaining_count, SelectionVector &remaining_lhs_sel,
+                           SelectionVector &remaining_rhs_sel, SelectionVector &remaining_result_sel) {
 	idx_t active_count = 0;
 	for (idx_t i = 0; i < remaining_count; i++) {
-		auto left_length = accessor.GetLength(left_format, remaining_lhs_sel.get_index(i));
-		auto right_length = accessor.GetLength(right_format, remaining_rhs_sel.get_index(i));
+		auto left_length = ListEntryAccessor::GetLength(left_format, remaining_lhs_sel.get_index(i));
+		auto right_length = ListEntryAccessor::GetLength(right_format, remaining_rhs_sel.get_index(i));
 		bool left_exhausted = index_in_list >= left_length;
 		bool right_exhausted = index_in_list >= right_length;
 		if (left_exhausted || right_exhausted) {
@@ -500,8 +479,8 @@ static idx_t ListOrArrayExhausted(UnifiedVectorFormat &left_format, UnifiedVecto
 			}
 			// else: same length, all elements matched - result stays 0
 		} else {
-			auto left_offset = accessor.GetOffset(left_format, remaining_lhs_sel.get_index(i));
-			auto right_offset = accessor.GetOffset(right_format, remaining_rhs_sel.get_index(i));
+			auto left_offset = ListEntryAccessor::GetOffset(left_format, remaining_lhs_sel.get_index(i));
+			auto right_offset = ListEntryAccessor::GetOffset(right_format, remaining_rhs_sel.get_index(i));
 			left_child_sel.set_index(active_count, left_offset + index_in_list);
 			right_child_sel.set_index(active_count, right_offset + index_in_list);
 			remaining_lhs_sel.set_index(active_count, remaining_lhs_sel.get_index(i));
@@ -514,18 +493,12 @@ static idx_t ListOrArrayExhausted(UnifiedVectorFormat &left_format, UnifiedVecto
 	return active_count;
 }
 
-template <class ACCESSOR>
-static void ListOrArrayComparator(const Vector &left, const Vector &right, int8_t *result_data,
-                                  const SelectionVector &lhs_sel, const SelectionVector &rhs_sel, idx_t sel_count,
-                                  ACCESSOR accessor, const ExpressionType comp,
-                                  optional_ptr<ValidityMask> result_validity = nullptr) {
+static void ListComparator(const Vector &left, const Vector &right, int8_t *result_data, const SelectionVector &lhs_sel,
+                           const SelectionVector &rhs_sel, idx_t sel_count, const ExpressionType comp,
+                           optional_ptr<ValidityMask> result_validity = nullptr) {
 	if (sel_count == 0) {
 		return;
 	}
-	// FlattenChild is a no-op; ToUnifiedFormat handles all vector types in the recursive comparators
-	accessor.FlattenChild(left);
-	accessor.FlattenChild(right);
-
 	// step 1: handle top-level validity
 	auto left_validity = left.Validity();
 	auto right_validity = right.Validity();
@@ -544,8 +517,8 @@ static void ListOrArrayComparator(const Vector &left, const Vector &right, int8_
 	UnifiedVectorFormat left_format, right_format;
 	left.ToUnifiedFormat(left_format);
 	right.ToUnifiedFormat(right_format);
-	auto &left_child = accessor.GetChild(left);
-	auto &right_child = accessor.GetChild(right);
+	auto &left_child = ListVector::GetChild(left);
+	auto &right_child = ListVector::GetChild(right);
 
 	// step 3: iterate position-by-position through child elements of the list / array
 	SelectionVector left_child_sel(remaining_count);
@@ -556,8 +529,8 @@ static void ListOrArrayComparator(const Vector &left, const Vector &right, int8_
 	for (idx_t index_in_list = 0; remaining_count > 0; index_in_list++) {
 		// resolve the rows whose list ran out of elements, and compact the selections to the rest
 		remaining_count =
-		    ListOrArrayExhausted(left_format, right_format, left_child_sel, right_child_sel, index_in_list, result_data,
-		                         remaining_count, remaining_lhs_sel, remaining_rhs_sel, remaining_result_sel, accessor);
+		    ListExhausted(left_format, right_format, left_child_sel, right_child_sel, index_in_list, result_data,
+		                  remaining_count, remaining_lhs_sel, remaining_rhs_sel, remaining_result_sel);
 		if (remaining_count == 0) {
 			break;
 		}
@@ -586,20 +559,6 @@ static void ListOrArrayComparator(const Vector &left, const Vector &right, int8_
 			throw InternalException("Invalid LIST Comparison");
 		}
 	}
-}
-
-static void ListComparator(const Vector &left, const Vector &right, int8_t *result_data, const SelectionVector &lhs_sel,
-                           const SelectionVector &rhs_sel, idx_t sel_count, const ExpressionType comp,
-                           optional_ptr<ValidityMask> result_validity = nullptr) {
-	ListEntryAccessor accessor;
-	ListOrArrayComparator(left, right, result_data, lhs_sel, rhs_sel, sel_count, accessor, comp, result_validity);
-}
-
-static void ArrayComparator(const Vector &left, const Vector &right, int8_t *result_data,
-                            const SelectionVector &lhs_sel, const SelectionVector &rhs_sel, idx_t sel_count,
-                            const ExpressionType comp, optional_ptr<ValidityMask> result_validity = nullptr) {
-	ArrayEntryAccessor accessor(ArrayType::GetSize(left.GetType()));
-	ListOrArrayComparator(left, right, result_data, lhs_sel, rhs_sel, sel_count, accessor, comp, result_validity);
 }
 
 static void DistinctComparatorTypeSwitch(const Vector &left, const Vector &right, int8_t *result_data,
@@ -660,9 +619,6 @@ static void DistinctComparatorTypeSwitch(const Vector &left, const Vector &right
 		break;
 	case PhysicalType::LIST:
 		ListComparator(left, right, result_data, lhs_sel, rhs_sel, sel_count, comp);
-		break;
-	case PhysicalType::ARRAY:
-		ArrayComparator(left, right, result_data, lhs_sel, rhs_sel, sel_count, comp);
 		break;
 	default:
 		throw InternalException("Invalid type for comparator");
@@ -726,9 +682,6 @@ static void ComparatorTypeSwitch(const Vector &left, const Vector &right, int8_t
 		break;
 	case PhysicalType::LIST:
 		ListComparator(left, right, result_data, lhs_sel, rhs_sel, sel_count, comp, validity);
-		break;
-	case PhysicalType::ARRAY:
-		ArrayComparator(left, right, result_data, lhs_sel, rhs_sel, sel_count, comp, validity);
 		break;
 	default:
 		throw InternalException("Invalid type for comparator");

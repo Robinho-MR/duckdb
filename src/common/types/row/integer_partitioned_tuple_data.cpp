@@ -192,7 +192,7 @@ void IntegerPartitionedTupleData::ComputePartitionIndices(Vector &row_locations,
 	auto &keys = *utility_vector;
 	keys.SetVectorType(VectorType::FLAT_VECTOR);
 	partitions[0]->Gather(row_locations, append_sel, count, key_col_idx, keys,
-	                      *FlatVector::IncrementalSelectionVector(), nullptr);
+	                      *FlatVector::IncrementalSelectionVector());
 	FlatVector::SetSize(keys, count);
 	ComputePartitionIndices(keys, *FlatVector::IncrementalSelectionVector(), count, partition_indices);
 }
