@@ -55,6 +55,12 @@ public:
 	//! Attach a new database
 	shared_ptr<AttachedDatabase> AttachDatabase(ClientContext &context, AttachInfo &info, AttachOptions &options);
 
+	//! Make a database that is attached to another instance available in this one, without taking ownership of it:
+	//! it is not closed or checkpointed when this instance goes away. Used by the secure context of a database
+	void ShareDatabase(shared_ptr<AttachedDatabase> database);
+	//! Remove the databases that were shared with ShareDatabase
+	void ReleaseSharedDatabases();
+
 	//! Detach an existing database. SQL DETACH refuses the connection's default database, which would leave it
 	//! without one; a host closing a database it opened passes `allow_default_database` to detach it regardless.
 	void DetachDatabase(ClientContext &context, const Identifier &name, OnEntryNotFound if_not_found,
@@ -149,6 +155,8 @@ private:
 	mutex databases_lock;
 	//! The set of attached databases
 	identifier_map_t<shared_ptr<AttachedDatabase>> databases;
+	//! The names of the databases that are owned by another instance, see ShareDatabase (guarded by databases_lock)
+	vector<Identifier> shared_database_names;
 	//! The default database for new connections; empty when none is set (guarded by databases_lock)
 	Identifier default_database;
 	//! The next object id handed out by the NextOid method

@@ -1476,6 +1476,13 @@
         "custom_implementation": true
     },
     {
+        "name": "secure_view_isolation",
+        "description": "Execute secure views in a separate, isolated database instance that shares nothing with the calling query except the task scheduler, the buffer pool and an explicit set of settings.",
+        "type": "BOOLEAN",
+        "scope": "global",
+        "default_value": "false"
+    },
+    {
         "name": "show_behavior",
         "description": "Configures how SHOW resolves a bare identifier. 'auto' describes a table if one exists, else it describes a setting (deprecated). 'table' always describes a table, and 'setting' always describes a setting.",
         "type": "ENUM<ShowBehaviorType>",

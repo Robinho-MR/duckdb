@@ -96,11 +96,16 @@ ParserCache &DatabaseInstance::GetParserCache() {
 DatabaseInstance::~DatabaseInstance() {
 	// destroy all attached databases
 	if (db_manager) {
+		// the databases of the parent are closed by the parent
+		db_manager->ReleaseSharedDatabases();
 		db_manager->ResetDatabases();
 	}
 	config.http_transport_manager->Close();
 	// destroy child elements
 	connection_manager.reset();
+	if (object_cache) {
+		config.buffer_pool->RemoveObjectCache(*object_cache);
+	}
 	object_cache.reset();
 	scheduler.reset();
 	db_manager.reset();
@@ -115,7 +120,10 @@ DatabaseInstance::~DatabaseInstance() {
 
 	// Flush allocations and disable the background thread.
 	config.block_allocator->FlushOnShutdown();
-	Allocator::SetBackgroundThreads(false);
+	if (!secure_parent) {
+		// the allocator threads are process-wide: the parent keeps using them
+		Allocator::SetBackgroundThreads(false);
+	}
 	// after all destruction is complete clear the cache entry
 	config.db_cache_entry.reset();
 }
@@ -326,13 +334,18 @@ void DatabaseInstance::InitializeEmpty(DBConfig *user_config) {
 	StartScheduler();
 }
 
+void DatabaseInstance::InitializeSecure(DatabaseInstance &parent, DBConfig *user_config) {
+	InitializeInstance(nullptr, user_config, parent);
+}
+
 void DatabaseInstance::StartScheduler() {
 	scheduler->SetThreads(config.options.maximum_threads, Settings::Get<ExternalThreadsSetting>(config));
 	scheduler->SetAsyncThreads(config.options.async_threads);
 	scheduler->RelaunchThreads();
 }
 
-void DatabaseInstance::InitializeInstance(const char *database_path, DBConfig *user_config) {
+void DatabaseInstance::InitializeInstance(const char *database_path, DBConfig *user_config,
+                                          optional_ptr<DatabaseInstance> parent) {
 	DBConfig default_config;
 	DBConfig *config_ptr = &default_config;
 	if (user_config) {
@@ -371,9 +384,15 @@ void DatabaseInstance::InitializeInstance(const char *database_path, DBConfig *u
 	external_file_cache = make_uniq<ExternalFileCache>(*this, enable_external_file_cache);
 	result_set_manager = make_uniq<ResultSetManager>(*this);
 
-	scheduler = make_uniq<TaskScheduler>(*this);
+	if (parent) {
+		// the scheduler is shared with the parent, which outlives it
+		secure_parent = parent->shared_from_this();
+		scheduler = parent->scheduler;
+	} else {
+		scheduler = make_shared_ptr<TaskScheduler>(*this);
+	}
 	object_cache = make_uniq<ObjectCache>(*config.buffer_pool);
-	config.buffer_pool->SetObjectCache(object_cache.get());
+	config.buffer_pool->AddObjectCache(*object_cache);
 	connection_manager = make_uniq<ConnectionManager>();
 	extension_manager = make_uniq<ExtensionManager>(*this);
 

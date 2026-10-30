@@ -35,6 +35,7 @@ add_library_unity(
   database_file_path_manager.cpp
   database_path_and_type.cpp
   database_manager.cpp
+  secure_context.cpp
   db_instance_cache.cpp
   error_manager.cpp
   external_resource_type_registry.cpp
