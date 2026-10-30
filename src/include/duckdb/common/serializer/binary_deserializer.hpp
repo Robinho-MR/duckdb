@@ -58,6 +58,10 @@ public:
 	}
 
 private:
+	//! Maximum object nesting depth, bounds native recursion on untrusted input
+	static constexpr idx_t MAX_NESTING_LEVEL = 4096;
+
+private:
 	ReadStream &stream;
 	idx_t nesting_level = 0;
 
