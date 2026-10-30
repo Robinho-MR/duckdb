@@ -43,6 +43,7 @@ class CatalogSearchPath;
 class ColumnDataCollection;
 class DatabaseInstance;
 class FileOpener;
+class ExecutionServices;
 class LogicalOperator;
 class PreparedStatement;
 class PreparedStatementData;
@@ -303,6 +304,9 @@ public:
 
 	//! Return the current logger
 	Logger &GetLogger() const;
+
+	//! Returns the services (settings, logging, metrics, file system) backed by this context
+	DUCKDB_API ExecutionServices Services();
 
 	//! Returns the current query string (if any)
 	const string &GetCurrentQuery();

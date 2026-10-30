@@ -8,7 +8,9 @@
 
 #pragma once
 
+#include "duckdb/common/optional.hpp"
 #include "duckdb/common/optional_ptr.hpp"
+#include "duckdb/main/execution_services.hpp"
 
 namespace duckdb {
 
@@ -18,12 +20,9 @@ class ClientContext;
 //! It makes query-related information available to operations.
 class QueryContext {
 public:
-	QueryContext() : context(nullptr) {
-	}
-	QueryContext(optional_ptr<ClientContext> context) : context(context) { // NOLINT: allow implicit construction
-	}
-	QueryContext(ClientContext &context) : context(&context) { // NOLINT: allow implicit construction
-	}
+	QueryContext();
+	QueryContext(optional_ptr<ClientContext> context); // NOLINT: allow implicit construction
+	QueryContext(ClientContext &context);              // NOLINT: allow implicit construction
 
 public:
 	bool Valid() const {
@@ -32,9 +31,14 @@ public:
 	optional_ptr<ClientContext> GetClientContext() const {
 		return context;
 	}
+	//! The execution services backing this context (null if the context is not valid)
+	optional_ptr<const ExecutionServices> GetServices() const {
+		return services ? &*services : nullptr;
+	}
 
 private:
 	optional_ptr<ClientContext> context;
+	optional<ExecutionServices> services;
 };
 
 } // namespace duckdb
