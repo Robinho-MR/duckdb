@@ -2,6 +2,7 @@
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/main/client_data.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/main/extension_helper.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
@@ -19,8 +20,38 @@
 #include "duckdb/parser/query_node/cte_node.hpp"
 #include "duckdb/planner/operator/logical_dummy_scan.hpp"
 #include "duckdb/planner/operator/logical_secure_view.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/expression/star_expression.hpp"
 
 namespace duckdb {
+
+//! Replace the query of a secure view with a scan that evaluates the view in a secure context. The query of the view
+//! is never bound in the context of the caller: it can only observe the rows that the view returns
+static unique_ptr<SelectStatement> CreateSecureViewScan(const ViewCatalogEntry &view,
+                                                        optional_ptr<BoundAtClause> at_clause) {
+	vector<unique_ptr<ParsedExpression>> children;
+	auto &schema = view.ParentSchema();
+	children.push_back(ConstantExpression::FromValue(Value(schema.ParentCatalog().GetName().GetIdentifierName())));
+	children.push_back(ConstantExpression::FromValue(Value(schema.name.GetIdentifierName())));
+	children.push_back(ConstantExpression::FromValue(Value(view.name.GetIdentifierName())));
+	if (at_clause) {
+		auto unit = ConstantExpression::FromValue(Value(at_clause->Unit().GetIdentifierName()));
+		unit->SetAlias("at_unit");
+		children.push_back(std::move(unit));
+		auto value = ConstantExpression::FromValue(at_clause->GetValue());
+		value->SetAlias("at_value");
+		children.push_back(std::move(value));
+	}
+	auto function = make_uniq<TableFunctionRef>();
+	function->function = make_uniq<FunctionExpression>("__secure_view_scan", std::move(children));
+	auto node = make_uniq<SelectNode>();
+	node->select_list.push_back(make_uniq<StarExpression>());
+	node->from_table = std::move(function);
+	auto statement = make_uniq<SelectStatement>();
+	statement->node = std::move(node);
+	return statement;
+}
 
 static bool TryLoadExtensionForReplacementScan(ClientContext &context, const string &table_name) {
 	auto lower_name = StringUtil::Lower(table_name);
@@ -320,7 +351,15 @@ BoundStatement Binder::Bind(BaseTableRef &ref) {
 		view_binder->SetCanContainNulls(true);
 
 		// The view may contain CTEs, but maybe only in the cte_map, so we need create CTE nodes for them
-		auto query = view_catalog_entry.GetQuery().Copy();
+		bool isolate_view = view_catalog_entry.security_type == ViewSecurityType::SECURE_VIEW &&
+		                    !ClientData::Get(context).is_secure_context &&
+		                    Settings::Get<SecureViewIsolationSetting>(context);
+		unique_ptr<SQLStatement> query;
+		if (isolate_view) {
+			query = CreateSecureViewScan(view_catalog_entry, entry_at_clause);
+		} else {
+			query = view_catalog_entry.GetQuery().Copy();
+		}
 		SubqueryRef subquery(unique_ptr_cast<SQLStatement, SelectStatement>(std::move(query)));
 
 		subquery.alias = ref.alias;
@@ -352,7 +391,7 @@ BoundStatement Binder::Bind(BaseTableRef &ref) {
 		// update the view binding with the bound view information
 		view_catalog_entry.UpdateBinding(bound_child.types, bound_child.names);
 		auto root_index = bound_child.plan->GetRootIndex();
-		if (view_catalog_entry.security_type == ViewSecurityType::SECURE_VIEW) {
+		if (view_catalog_entry.security_type == ViewSecurityType::SECURE_VIEW && !isolate_view) {
 			// wrap the plan of a secure view - this prevents the optimizer from pushing into the view
 			bound_child.plan = make_uniq<LogicalSecureView>(
 			    view_catalog_entry.name.GetIdentifierName(),

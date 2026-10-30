@@ -583,6 +583,22 @@ vector<shared_ptr<AttachedDatabase>> DatabaseManager::GetDatabases(ClientContext
 	return result;
 }
 
+void DatabaseManager::ShareDatabase(shared_ptr<AttachedDatabase> database) {
+	D_ASSERT(!database->IsSystem() && !database->IsTemporary());
+	auto name = database->GetName();
+	lock_guard<mutex> guard(databases_lock);
+	databases[name] = std::move(database);
+	shared_database_names.push_back(name);
+}
+
+void DatabaseManager::ReleaseSharedDatabases() {
+	lock_guard<mutex> guard(databases_lock);
+	for (auto &name : shared_database_names) {
+		databases.erase(name);
+	}
+	shared_database_names.clear();
+}
+
 vector<shared_ptr<AttachedDatabase>> DatabaseManager::GetDatabases() {
 	vector<shared_ptr<AttachedDatabase>> result;
 

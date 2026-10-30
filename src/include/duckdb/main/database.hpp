@@ -46,6 +46,7 @@ struct ParserCache;
 
 class DatabaseInstance : public enable_shared_from_this<DatabaseInstance> {
 	friend class DuckDB;
+	friend class SecureContext;
 
 public:
 	DUCKDB_API DatabaseInstance();
@@ -102,8 +103,11 @@ private:
 	//! Initializes the instance without attaching a database: the system catalog is the only catalog until one is
 	//! attached (ATTACH, or DatabaseManager::AttachDatabase).
 	void InitializeEmpty(DBConfig *config);
+	//! Initializes this instance as the isolated secure context of `parent`: it has its own catalog, secrets, logs,
+	//! caches and extensions, and shares only the task scheduler and the buffer pool (through `config`) with `parent`.
+	void InitializeSecure(DatabaseInstance &parent, DBConfig *config);
 	//! The part of initialization shared by both, up to the main database.
-	void InitializeInstance(const char *path, DBConfig *config);
+	void InitializeInstance(const char *path, DBConfig *config, optional_ptr<DatabaseInstance> secure_parent = nullptr);
 	//! Launches the scheduler threads; last, since storage init races on the catalog otherwise.
 	void StartScheduler();
 	void LoadExtensionSettings();
@@ -116,7 +120,9 @@ private:
 	unique_ptr<DatabaseManager> db_manager;
 	unique_ptr<ExternalResourceTypeRegistry> external_resource_type_registry;
 	unique_ptr<ExternalResourcesManager> external_resources_manager;
-	unique_ptr<TaskScheduler> scheduler;
+	shared_ptr<TaskScheduler> scheduler;
+	//! The instance this instance is the secure context of (keeps the shared scheduler alive); null otherwise
+	shared_ptr<DatabaseInstance> secure_parent;
 	unique_ptr<ObjectCache> object_cache;
 	unique_ptr<ConnectionManager> connection_manager;
 	unique_ptr<ExtensionManager> extension_manager;
