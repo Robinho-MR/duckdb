@@ -3,6 +3,8 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
@@ -25,6 +27,49 @@ static void GetColumnIndex(const unique_ptr<Expression> &expr, idx_t &index, Ide
 	                                      [&](unique_ptr<Expression> &child) { GetColumnIndex(child, index, alias); });
 }
 
+//! Whether the expression can never be NULL given the (non-NULL) input statistics
+static bool NeverNull(ClientContext &context, Expression &expr, const BaseStatistics &stats) {
+	auto expr_stats =
+	    ExpressionFilter::TryGetExpressionStatistics(context, expr, array_ptr<const BaseStatistics>(stats));
+	if (expr_stats && !expr_stats->CanHaveNull()) {
+		return true;
+	}
+	if (ExpressionFilter::CheckExpressionStatistics(&context, expr, stats) ==
+	    FilterPropagateResult::FILTER_ALWAYS_TRUE) {
+		return true;
+	}
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return false;
+	}
+	// constant_or_null is NULL exactly when one of its arguments is NULL
+	auto &func = expr.Cast<BoundFunctionExpression>();
+	if (!ConstantOrNull::IsConstantOrNull(func, Value::BOOLEAN(true))) {
+		return false;
+	}
+	for (idx_t i = 1; i < func.GetChildren().size(); i++) {
+		if (!NeverNull(context, *func.GetChildren()[i], stats)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+//! Whether the filter is NULL exactly when the filter column is NULL
+static bool IsNullIffColumnIsNull(ClientContext &context, Expression &expr, const BaseStatistics &stats) {
+	// without NULLs in the column, the filter must never be NULL
+	auto not_null_stats = stats.Copy();
+	not_null_stats.Set(StatsInfo::CANNOT_HAVE_NULL_VALUES);
+	if (!NeverNull(context, expr, not_null_stats)) {
+		return false;
+	}
+	// a NULL column must make the filter NULL
+	auto null_expr = expr.Copy();
+	BoundConstantExpression null_constant((Value(stats.GetType())));
+	ExpressionFilter::ReplaceExpressionRecursive(null_expr, null_constant);
+	Value result;
+	return ExpressionExecutor::TryEvaluateScalar(context, *null_expr, result) && result.IsNull();
+}
+
 FilterPropagateResult StatisticsPropagator::PropagateTableFilter(ColumnBinding stats_binding, BaseStatistics &stats,
                                                                  TableFilter &filter) {
 	auto &expr_filter = ExpressionFilter::GetExpressionFilter(filter, "StatisticsPropagator::PropagateTableFilter");
@@ -35,6 +80,9 @@ FilterPropagateResult StatisticsPropagator::PropagateTableFilter(ColumnBinding s
 	Identifier column_alias;
 	GetColumnIndex(expr_filter.expr, physical_index, column_alias);
 	D_ASSERT(physical_index != DConstants::INVALID_INDEX);
+
+	// Keep the pre-update stats to verify the NULL behavior of the filter
+	auto original_stats = stats.Copy();
 
 	// Check statistics BEFORE HandleFilter (CheckStatistics needs pre-update stats)
 	auto check_result = filter.Cast<ExpressionFilter>().CheckStatistics(stats);
@@ -51,13 +99,18 @@ FilterPropagateResult StatisticsPropagator::PropagateTableFilter(ColumnBinding s
 	ExpressionFilter::ReplaceExpressionRecursive(filter_expr, *colref, ExpressionType::BOUND_COLUMN_REF);
 	expr_filter.expr = std::move(filter_expr);
 
+	auto result = propagate_result != FilterPropagateResult::NO_PRUNING_POSSIBLE ? propagate_result : check_result;
+	if (result == FilterPropagateResult::FILTER_TRUE_OR_NULL &&
+	    !IsNullIffColumnIsNull(context, *original_expr, original_stats)) {
+		// the filter can be NULL for other reasons than a NULL column, so it cannot become IS NOT NULL
+		result = FilterPropagateResult::NO_PRUNING_POSSIBLE;
+	}
 	if (propagate_result != FilterPropagateResult::NO_PRUNING_POSSIBLE) {
 		// Update stats here because the caller won't call UpdateFilterStatistics for non-default cases
 		UpdateExpressionFilterStatistics(stats, *original_expr);
-		return propagate_result;
 	}
 	// For NO_PRUNING_POSSIBLE, the caller calls UpdateFilterStatistics which handles stats update
-	return check_result;
+	return result;
 }
 
 void StatisticsPropagator::UpdateFilterStatistics(BaseStatistics &input, const TableFilter &filter) {
@@ -106,37 +159,6 @@ void StatisticsPropagator::UpdateExpressionFilterStatistics(BaseStatistics &inpu
 	default:
 		break;
 	}
-}
-
-static bool IsConstantOrNullFilter(const TableFilter &table_filter) {
-	auto &expr_filter = ExpressionFilter::GetExpressionFilter(table_filter, "IsConstantOrNullFilter");
-	if (expr_filter.expr->GetExpressionType() != ExpressionType::BOUND_FUNCTION) {
-		return false;
-	}
-	auto &func = expr_filter.expr->Cast<BoundFunctionExpression>();
-	return ConstantOrNull::IsConstantOrNull(func, Value::BOOLEAN(true));
-}
-
-static bool CanReplaceConstantOrNull(const TableFilter &table_filter) {
-	if (!IsConstantOrNullFilter(table_filter)) {
-		throw InternalException("CanReplaceConstantOrNull() called on unexpected Table Filter");
-	}
-	auto &expr_filter = ExpressionFilter::GetExpressionFilter(table_filter, "CanReplaceConstantOrNull");
-	auto &func = expr_filter.expr->Cast<BoundFunctionExpression>();
-	if (ConstantOrNull::IsConstantOrNull(func, Value::BOOLEAN(true))) {
-		for (auto child = ++func.GetChildren().begin(); child != func.GetChildren().end(); child++) {
-			switch (child->get()->GetExpressionType()) {
-			case ExpressionType::BOUND_REF:
-			case ExpressionType::VALUE_CONSTANT:
-				continue;
-			default:
-				// expression type could be a function like Coalesce
-				return false;
-			}
-		}
-	}
-	// all children of constant or null are bound refs to the table filter column
-	return true;
 }
 
 unique_ptr<NodeStatistics> StatisticsPropagator::PropagateStatistics(LogicalGet &get,
@@ -191,9 +213,6 @@ unique_ptr<NodeStatistics> StatisticsPropagator::PropagateStatistics(LogicalGet 
 			removed_expressions = true;
 			break;
 		case FilterPropagateResult::FILTER_TRUE_OR_NULL: {
-			if (IsConstantOrNullFilter(filter) && !CanReplaceConstantOrNull(filter)) {
-				break;
-			}
 			// filter is true or null; we can replace this with a not null filter
 			auto not_null = ExpressionFilter::CreateNullCheckExpression(
 			    make_uniq<BoundReferenceExpression>(stats.GetType(), 0ULL), ExpressionType::OPERATOR_IS_NOT_NULL);
