@@ -509,6 +509,17 @@ unique_ptr<MergeIntoStatement> Binder::GenerateMergeInto(InsertQueryNode &node, 
 	}
 	// set up the data source
 	unique_ptr<TableRef> source;
+	// for INSERT BY NAME the names of the columns that the source provides
+	identifier_set_t by_name_source_columns;
+	bool by_name_source = node.column_order == InsertColumnOrder::INSERT_BY_NAME && node.select_statement;
+	if (by_name_source) {
+		auto select_copy = node.select_statement->Copy();
+		auto select_binder = Binder::CreateBinder(context, this);
+		auto bound_select = select_binder->Bind(select_copy->Cast<SelectStatement>());
+		for (auto &name : bound_select.names) {
+			by_name_source_columns.insert(name);
+		}
+	}
 	if (node.select_statement && node.column_order == InsertColumnOrder::INSERT_BY_POSITION && !values_list) {
 		// bind the SELECT once, to check its columns and keep its bind time effects single
 		auto select_binder = Binder::CreateBinder(context, this);
@@ -527,6 +538,35 @@ unique_ptr<MergeIntoStatement> Binder::GenerateMergeInto(InsertQueryNode &node, 
 		source = make_uniq<SubqueryRef>(std::move(node.select_statement), "excluded");
 	} else {
 		source = make_uniq<EmptyTableRef>();
+	}
+	if (by_name_source) {
+		// columns that the source does not provide are filled in from their default value
+		bool has_missing_columns = false;
+		for (auto &column : columns.Physical()) {
+			if (by_name_source_columns.find(column.Name()) == by_name_source_columns.end()) {
+				has_missing_columns = true;
+				break;
+			}
+		}
+		if (has_missing_columns) {
+			auto select_stmt = make_uniq<SelectStatement>();
+			auto select_node = make_uniq<SelectNode>();
+			for (auto &column : columns.Physical()) {
+				unique_ptr<ParsedExpression> expr;
+				if (by_name_source_columns.find(column.Name()) != by_name_source_columns.end()) {
+					expr = make_uniq<ColumnRefExpression>(column.Name());
+				} else if (column.HasDefaultValue()) {
+					expr = column.DefaultValue().Copy();
+				} else {
+					expr = ConstantExpression::FromValue(Value(column.Type()));
+				}
+				expr->SetAlias(column.Name());
+				select_node->select_list.push_back(std::move(expr));
+			}
+			select_node->from_table = std::move(source);
+			select_stmt->node = std::move(select_node);
+			source = make_uniq<SubqueryRef>(std::move(select_stmt), "excluded");
+		}
 	}
 	if (node.column_order == InsertColumnOrder::INSERT_BY_POSITION) {
 		// if we are inserting by position add the columns of the target table as an alias to the source
