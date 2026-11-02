@@ -21,12 +21,21 @@ namespace duckdb {
 
 void ArrowTableFunction::PopulateArrowTableSchema(ClientContext &context, ArrowTableSchema &arrow_table,
                                                   const ArrowSchema &arrow_schema) {
+	if (arrow_schema.n_children > 0 && !arrow_schema.children) {
+		throw InvalidInputException("arrow_scan: schema has a null children array");
+	}
 	vector<string> names;
 	// We first gather the column names and deduplicate them
 	for (idx_t col_idx = 0; col_idx < static_cast<idx_t>(arrow_schema.n_children); col_idx++) {
+		if (!arrow_schema.children[col_idx]) {
+			throw InvalidInputException("arrow_scan: schema has a null child");
+		}
 		const auto &schema = *arrow_schema.children[col_idx];
 		if (!schema.release) {
 			throw InvalidInputException("arrow_scan: released schema passed");
+		}
+		if (!schema.name) {
+			throw InvalidInputException("arrow_scan: schema has a null column name");
 		}
 		auto name = string(schema.name);
 		if (name.empty()) {
