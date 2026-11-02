@@ -234,8 +234,8 @@ bool DictionaryBuffer::TrySerialize(Serializer &serializer, const LogicalType &t
 	return true;
 }
 
-buffer_ptr<VectorBuffer> DictionaryBuffer::Deserialize(Deserializer &deserializer, const LogicalType &type,
-                                                       idx_t count) {
+buffer_ptr<VectorBuffer> DictionaryBuffer::Deserialize(Deserializer &deserializer, const LogicalType &type, idx_t count,
+                                                       idx_t depth) {
 	SelectionVector sel(count);
 	deserializer.ReadProperty(91, "sel_vector", reinterpret_cast<data_ptr_t>(sel.data()), sizeof(sel_t) * count);
 	const auto dict_count = deserializer.ReadProperty<idx_t>(92, "dict_count");
@@ -247,7 +247,7 @@ buffer_ptr<VectorBuffer> DictionaryBuffer::Deserialize(Deserializer &deserialize
 		}
 	}
 	Vector dict(type, MaxValue<idx_t>(dict_count, STANDARD_VECTOR_SIZE));
-	dict.Deserialize(deserializer, dict_count);
+	dict.Deserialize(deserializer, dict_count, depth);
 	FlatVector::SetSize(dict, dict_count);
 	dict.Slice(sel, count);
 	return dict.GetBufferRef();

@@ -199,7 +199,7 @@ public:
 	virtual bool TrySerialize(Serializer &serializer, const LogicalType &type, bool compressed_serialization) const;
 	//! Deserialize a buffer written by TrySerialize
 	static buffer_ptr<VectorBuffer> Deserialize(Deserializer &deserializer, VectorType vector_type,
-	                                            const LogicalType &type, idx_t count);
+	                                            const LogicalType &type, idx_t count, idx_t depth = 0);
 
 protected:
 	//! Slice a constant vector with a specific count
