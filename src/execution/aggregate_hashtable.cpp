@@ -632,6 +632,8 @@ optional_idx GroupedAggregateHashTable::TryAddConstantGroups(DataChunk &groups, 
 	auto result_addresses = FlatVector::Writer<uintptr_t>(state.addresses, row_count);
 	uintptr_t aggregate_address = new_dict_addresses[0] + layout_ptr->GetAggrOffset();
 	static constexpr uint64_t GID_HIGH_MASK = ~(ClusteredAggr::MAX_GID_COUNT - 1);
+	// Invalidate cached dictionary addresses before overwriting the shared high-bits tracking below.
+	dict_state.dictionary_id = string();
 	dict_state.address_high_bits_uniform = (sizeof(uintptr_t) == sizeof(uint64_t));
 	dict_state.address_high_bits = static_cast<uint64_t>(aggregate_address) & GID_HIGH_MASK;
 	for (idx_t i = 0; i < row_count; i++) {
