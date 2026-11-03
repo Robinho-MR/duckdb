@@ -256,10 +256,17 @@ void RowGroup::InitializeEmpty(const vector<LogicalType> &types, ColumnDataType 
 	}
 }
 
+optional_ptr<ClientContext> ColumnScanState::GetClientContext() const {
+	return parent ? parent->GetClientContext() : nullptr;
+}
+
 void ColumnScanState::PushDownCast(const LogicalType &original_type, const LogicalType &cast_type) {
-	D_ASSERT(context.Valid());
 	D_ASSERT(!expression_state);
-	auto &client_context = *RuntimeServices::TryGetClientContext(context.GetServices());
+	auto scan_context = GetClientContext();
+	if (!scan_context) {
+		throw InternalException("A pushed down cast requires the scan to have a client context");
+	}
+	auto &client_context = *scan_context;
 
 	auto input = make_uniq<BoundReferenceExpression>(original_type, 0ULL);
 	auto cast_expression = BoundCastExpression::AddCastToType(client_context, std::move(input), cast_type);
@@ -384,7 +391,7 @@ void CollectionScanState::Initialize(const QueryContext &context_p, const vector
 
 bool RowGroup::InitializeScanInternal(CollectionScanState &state, SegmentNode<RowGroup> &node, idx_t vector_offset) {
 	auto &filters = state.GetFilterInfo();
-	if (!CheckZonemap(RuntimeServices::TryGetClientContext(state.context.GetServices()), filters, node.GetRowStart())) {
+	if (!CheckZonemap(state.GetClientContext(), filters, node.GetRowStart())) {
 		return false;
 	}
 	if (!RefersToSameObject(node.GetNode(), *this)) {
@@ -893,7 +900,7 @@ vector<unique_ptr<AsyncTask>> RowGroup::CollectScanIOTasks(CollectionScanState &
 idx_t RowGroup::PrefetchRowCount(CollectionScanState &state) {
 	const idx_t start_row = state.vector_index * STANDARD_VECTOR_SIZE;
 	idx_t end_row = state.max_row_group_row;
-	auto context = RuntimeServices::TryGetClientContext(state.context.GetServices());
+	auto context = state.GetClientContext();
 	for (auto &entry : state.GetFilterInfo().GetFilterList()) {
 		if (entry.IsAlwaysTrue() || entry.table_column_index.IsPushdownExtract()) {
 			continue;

@@ -6,16 +6,14 @@
 namespace duckdb {
 
 TaskNotifier::TaskNotifier(optional_ptr<RuntimeServices> services_p) : services(services_p) {
-	auto context = RuntimeServices::TryGetClientContext(services);
-	if (context) {
-		services->GetRegisteredState().ForEachState([&](ClientContextState &state) { state.OnTaskStart(*context); });
+	if (services && services->IsClient()) {
+		services->GetRegisteredState().ForEachState([&](ClientContextState &state) { state.OnTaskStart(*services); });
 	}
 }
 
 TaskNotifier::~TaskNotifier() {
-	auto context = RuntimeServices::TryGetClientContext(services);
-	if (context) {
-		services->GetRegisteredState().ForEachState([&](ClientContextState &state) { state.OnTaskStop(*context); });
+	if (services && services->IsClient()) {
+		services->GetRegisteredState().ForEachState([&](ClientContextState &state) { state.OnTaskStop(*services); });
 	}
 }
 

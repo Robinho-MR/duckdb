@@ -136,6 +136,8 @@ struct ColumnScanState {
 	StringScanType string_scan_type = StringScanType::STANDARD;
 
 public:
+	//! The client context of the scan - null for scans that do not have one
+	optional_ptr<ClientContext> GetClientContext() const;
 	void PushDownCast(const LogicalType &original_type, const LogicalType &cast_type);
 
 public:
@@ -265,6 +267,8 @@ struct PreparedScanVector {
 class CollectionScanState {
 public:
 	explicit CollectionScanState(TableScanState &parent_p);
+	//! The client context of the scan - null for scans that do not have one
+	optional_ptr<ClientContext> GetClientContext() const;
 	//! The query context for this scan
 	QueryContext context;
 	//! The vector index within the row_group
@@ -368,6 +372,8 @@ public:
 	CollectionScanState local_state;
 	//! Options for scanning
 	TableScanOptions options;
+	//! The client context of the scan
+	optional_ptr<ClientContext> client_context;
 	//! Filter info
 	ScanFilterInfo filters;
 	//! Sampling info
@@ -377,6 +383,11 @@ public:
 	void Initialize(vector<StorageIndex> column_ids, optional_ptr<ClientContext> context = nullptr,
 	                optional_ptr<TableFilterSet> table_filters = nullptr,
 	                optional_ptr<SampleOptions> table_sampling = nullptr, idx_t estimated_table_row_count = 0);
+
+	//! The client context of the scan - null for scans that do not have one
+	optional_ptr<ClientContext> GetClientContext() const {
+		return client_context;
+	}
 
 	const vector<StorageIndex> &GetColumnIds();
 

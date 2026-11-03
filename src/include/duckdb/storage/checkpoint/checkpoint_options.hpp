@@ -30,6 +30,9 @@ struct CheckpointOptions {
 	VisibilityBound visibility_bound;
 	//! The commit lock, when the committing transaction holds it for the whole checkpoint (checkpoint instead of WAL)
 	optional_ptr<unique_lock<mutex>> commit_lock;
+	//! Bind the indexes before serializing them, so that buffered index operations are replayed and not lost
+	//! (set when the caller has an active transaction, i.e. for explicit checkpoints)
+	bool bind_indexes = false;
 };
 
 } // namespace duckdb

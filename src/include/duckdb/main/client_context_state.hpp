@@ -23,6 +23,7 @@ class MetaTransaction;
 class PreparedStatementData;
 class SQLStatement;
 class RegisteredStateManager;
+class RuntimeServices;
 
 enum class RebindQueryInfo { DO_NOT_REBIND, ATTEMPT_TO_REBIND };
 
@@ -72,9 +73,10 @@ public:
 	}
 	virtual void WriteProfilingInformation(std::ostream &ss) {
 	}
-	virtual void OnTaskStart(ClientContext &context) {
+	//! Called when a task of the connection starts / stops on a thread - several connections can share the services
+	virtual void OnTaskStart(RuntimeServices &services) {
 	}
-	virtual void OnTaskStop(ClientContext &context) {
+	virtual void OnTaskStop(RuntimeServices &services) {
 	}
 
 public:
@@ -93,7 +95,7 @@ public:
 class RegisteredStateManager {
 public:
 	template <class T, typename... ARGS>
-	shared_ptr<T> GetOrCreate(const string &key, ARGS &&... args) {
+	shared_ptr<T> GetOrCreate(const string &key, ARGS &&...args) {
 		lock_guard<mutex> l(lock);
 		auto lookup = registered_state.find(key);
 		if (lookup != registered_state.end()) {

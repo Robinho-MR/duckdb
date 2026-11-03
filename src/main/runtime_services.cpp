@@ -4,6 +4,7 @@
 #include "duckdb/logging/log_manager.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/main/client_config.hpp"
+#include "duckdb/main/client_buffer_manager.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/client_context_file_opener.hpp"
 #include "duckdb/main/client_context_state.hpp"
@@ -19,20 +20,20 @@ namespace duckdb {
 //! The file system of a client: the database file system with the client file opener
 class ClientFileSystem : public OpenerFileSystem {
 public:
-	explicit ClientFileSystem(ClientContext &context_p) : context(context_p) {
+	explicit ClientFileSystem(RuntimeServices &services_p) : services(services_p) {
 	}
 
 	FileSystem &GetFileSystem() const override {
-		auto &config = DBConfig::GetConfig(context);
+		auto &config = DBConfig::GetConfig(services.GetDatabase());
 		return *config.file_system;
 	}
 
 	optional_ptr<FileOpener> GetOpener() const override {
-		return context.Services().TryGetFileOpener();
+		return services.TryGetFileOpener();
 	}
 
 private:
-	ClientContext &context;
+	RuntimeServices &services;
 };
 
 RuntimeServices::RuntimeServices(DatabaseInstance &db_p) : db(db_p) {
@@ -42,30 +43,19 @@ RuntimeServices::~RuntimeServices() {
 }
 
 void RuntimeServices::InitializeClient(ClientContext &context_p) {
-	D_ASSERT(!context);
-	context = &context_p;
+	D_ASSERT(!config);
 	config = make_uniq<ClientConfig>();
 	LoggingContext logging_context(LogContextScope::CONNECTION);
 	logger = db.GetLogManager().CreateLogger(logging_context, true);
 	file_opener = make_uniq<ClientContextFileOpener>(context_p);
-	client_file_system = make_uniq<ClientFileSystem>(context_p);
+	client_file_system = make_uniq<ClientFileSystem>(*this);
 	profiler = make_shared_ptr<QueryProfiler>(context_p);
 	registered_state = make_uniq<RegisteredStateManager>();
+	client_buffer_manager = CreateClientBufferManager(*this, db.GetBufferManager());
 }
 
 DatabaseInstance &RuntimeServices::GetDatabase() const {
 	return db;
-}
-
-optional_ptr<ClientContext> RuntimeServices::TryGetClientContext() const {
-	return context;
-}
-
-optional_ptr<ClientContext> RuntimeServices::TryGetClientContext(optional_ptr<RuntimeServices> services) {
-	if (!services) {
-		return nullptr;
-	}
-	return services->TryGetClientContext();
 }
 
 optional_ptr<QueryProfiler> RuntimeServices::TryGetQueryProfiler(optional_ptr<RuntimeServices> services) {
@@ -76,7 +66,7 @@ optional_ptr<QueryProfiler> RuntimeServices::TryGetQueryProfiler(optional_ptr<Ru
 }
 
 bool RuntimeServices::IsClient() const {
-	return context != nullptr;
+	return config != nullptr;
 }
 
 optional_ptr<ClientConfig> RuntimeServices::TryGetClientConfig() const {
@@ -89,10 +79,19 @@ ClientConfig &RuntimeServices::GetClientConfig() const {
 }
 
 SettingLookupResult RuntimeServices::TryGetCurrentSetting(const Identifier &key, Value &result) const {
-	if (context) {
-		return context->TryGetCurrentSetting(key, result);
+	if (!config) {
+		return db.TryGetCurrentSetting(key, result);
 	}
-	return db.TryGetCurrentSetting(key, result);
+	optional_ptr<const ConfigurationOption> option;
+	auto &db_config = DBConfig::GetConfig(db);
+	auto setting_index = db_config.TryGetSettingIndex(key, option);
+	if (setting_index.IsValid()) {
+		auto lookup_result = TryGetCurrentUserSetting(setting_index.GetIndex(), result);
+		if (lookup_result) {
+			return lookup_result;
+		}
+	}
+	return DBConfig::TryGetDefaultValue(option, result);
 }
 
 SettingLookupResult RuntimeServices::TryGetCurrentUserSetting(idx_t setting_index, Value &result) const {
@@ -130,9 +129,8 @@ optional_ptr<FileOpener> RuntimeServices::TryGetFileOpener() const {
 }
 
 BufferManager &RuntimeServices::GetBufferManager() const {
-	auto client_context = context;
-	if (client_context) {
-		return BufferManager::GetBufferManager(*client_context);
+	if (client_buffer_manager) {
+		return *client_buffer_manager;
 	}
 	return BufferManager::GetBufferManager(db);
 }

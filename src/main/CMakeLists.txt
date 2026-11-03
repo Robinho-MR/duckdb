@@ -23,6 +23,7 @@ add_library_unity(
   client_context.cpp
   client_context_execution.cpp
   client_context_wrapper.cpp
+  client_buffer_manager.cpp
   client_data.cpp
   client_verify.cpp
   connection_manager.cpp

@@ -22,6 +22,7 @@ void TableScanState::Initialize(vector<StorageIndex> column_ids_p, optional_ptr<
                                 optional_ptr<TableFilterSet> table_filters, optional_ptr<SampleOptions> table_sampling,
                                 idx_t estimated_table_row_count) {
 	this->column_ids = std::move(column_ids_p);
+	client_context = context;
 	if (table_filters) {
 		filters.Initialize(*context, *table_filters, column_ids);
 	}
@@ -249,6 +250,10 @@ CollectionScanState::CollectionScanState(TableScanState &parent_p)
       valid_sel(STANDARD_VECTOR_SIZE), row_group(nullptr), parent(parent_p) {
 }
 
+optional_ptr<ClientContext> CollectionScanState::GetClientContext() const {
+	return parent.GetClientContext();
+}
+
 RandomEngine &CollectionScanState::GetRandomEngine() {
 	if (!random) {
 		random = make_uniq<RandomEngine>();
@@ -416,8 +421,7 @@ bool CollectionScanState::RecheckPreparedRowGroup() {
 	if (!row_group || prepared_vector.prepare_state == VectorPrepareState::NONE) {
 		return true;
 	}
-	if (pinned_row_group->CheckZonemap(RuntimeServices::TryGetClientContext(context.GetServices()), GetFilterInfo(),
-	                                   row_group->GetRowStart())) {
+	if (pinned_row_group->CheckZonemap(GetClientContext(), GetFilterInfo(), row_group->GetRowStart())) {
 		return true;
 	}
 	// the prepared vector was counted as scanned when it was prepared, it is never decoded

@@ -190,13 +190,13 @@ struct TaskHookState : ClientContextState {
 		counts.destroyed++;
 	}
 
-	void OnTaskStart(ClientContext &) override {
+	void OnTaskStart(RuntimeServices &) override {
 		counts.starts++;
 		if (on_start) {
 			on_start();
 		}
 	}
-	void OnTaskStop(ClientContext &) override {
+	void OnTaskStop(RuntimeServices &) override {
 		counts.stops++;
 		if (on_stop) {
 			on_stop();

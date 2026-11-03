@@ -255,6 +255,7 @@ void DuckTransactionManager::Checkpoint(ClientContext &context, bool force) {
 		}
 	}
 	CheckpointOptions options;
+	options.bind_indexes = context.transaction.HasActiveTransaction();
 	if (GetLastCommit() >= LowestVisibilityBound()) {
 		// we cannot do a full checkpoint if any transaction needs to read old data
 		options.type = CheckpointType::CONCURRENT_CHECKPOINT;
@@ -572,6 +573,7 @@ ErrorData DuckTransactionManager::CommitTransaction(ClientContext &context, Tran
 		options.action = CheckpointAction::ALWAYS_CHECKPOINT;
 		options.type = checkpoint_decision.type;
 		options.commit_lock = held_commit_lock.owns_lock() ? &held_commit_lock : nullptr;
+		options.bind_indexes = context.transaction.HasActiveTransaction();
 		auto &storage_manager = db.GetStorageManager();
 		try {
 			storage_manager.CreateCheckpoint(context, options);

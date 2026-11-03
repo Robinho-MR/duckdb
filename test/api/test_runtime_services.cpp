@@ -15,12 +15,11 @@ using namespace duckdb;
 TEST_CASE("Test RuntimeServices", "[api]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	con.Query("SET threads=2");
+	con.Query("SET max_execution_time=12345");
 
 	SECTION("services owned by a ClientContext") {
 		auto &services = con.context->Services();
 		REQUIRE(services.IsClient());
-		REQUIRE(services.TryGetClientContext().get() == con.context.get());
 		REQUIRE(&services.GetDatabase() == db.instance.get());
 		REQUIRE(services.TryGetQueryProfiler());
 		REQUIRE(services.TryGetFileOpener());
@@ -28,15 +27,14 @@ TEST_CASE("Test RuntimeServices", "[api]") {
 		REQUIRE(&services.GetLogger() == &con.context->GetLogger());
 		(void)services.GetTaskScheduler();
 		Value result;
-		auto lookup = services.TryGetCurrentSetting(Identifier("threads"), result);
+		auto lookup = services.TryGetCurrentSetting(Identifier("max_execution_time"), result);
 		bool found = lookup;
 		REQUIRE(found);
-		REQUIRE(result.GetValue<int64_t>() == 2);
+		REQUIRE(result.GetValue<int64_t>() == 12345);
 	}
 	SECTION("services created from a DatabaseInstance") {
 		auto services = db.instance->Services();
 		REQUIRE(!services->IsClient());
-		REQUIRE(!services->TryGetClientContext());
 		REQUIRE(!services->TryGetQueryProfiler());
 		REQUIRE(!services->TryGetClientConfig());
 		REQUIRE(&services->GetDatabase() == db.instance.get());
@@ -81,7 +79,7 @@ TEST_CASE("Test RuntimeServices shared with child connections", "[api]") {
 		REQUIRE(&child_context.Services() == &parent_context.Services());
 		REQUIRE(child_context.UsesInheritedServices());
 		REQUIRE(!parent_context.UsesInheritedServices());
-		REQUIRE(child_context.Services().TryGetClientContext().get() == parent.context.get());
+		REQUIRE(child_context.services_home.get() == parent.context.get());
 		REQUIRE(&ClientConfig::GetConfig(child_context) == &ClientConfig::GetConfig(parent_context));
 		REQUIRE(&child_context.GetLogger() == &parent_context.GetLogger());
 		REQUIRE(&child_context.Services().GetRegisteredState() == &parent_context.Services().GetRegisteredState());
@@ -89,7 +87,7 @@ TEST_CASE("Test RuntimeServices shared with child connections", "[api]") {
 		// the services of a grandchild are the services of the original context
 		auto grandchild = Connection::CreateChild(child);
 		REQUIRE(&grandchild.context->Services() == &parent_context.Services());
-		REQUIRE(grandchild.context->Services().TryGetClientContext().get() == parent.context.get());
+		REQUIRE(grandchild.context->services_home.get() == parent.context.get());
 	}
 	SECTION("a plain connection does not share services") {
 		Connection other(db);
@@ -131,6 +129,16 @@ TEST_CASE("Test RuntimeServices shared with child connections", "[api]") {
 		result = parent.Query("SELECT * FROM shared_test_table");
 		REQUIRE(result->HasError());
 	}
+	SECTION("a child scans with its own context") {
+		REQUIRE_NO_FAIL(parent.Query("CREATE TABLE shared_scan(i INTEGER, s STRUCT(a BIGINT, b VARCHAR))"));
+		REQUIRE_NO_FAIL(parent.Query("INSERT INTO shared_scan SELECT i, {'a': i, 'b': 'x'} FROM range(10000) t(i)"));
+		auto child = Connection::CreateChild(parent);
+		// a filter on a function and a pushed down cast of a struct field are evaluated with the scan's context
+		auto result = child.Query("SELECT count(*) FROM shared_scan WHERE abs(i) > 9990");
+		REQUIRE(CHECK_COLUMN(result, 0, {9}));
+		result = child.Query("SELECT sum(s.a::INTEGER) FROM shared_scan WHERE s.a > 9995");
+		REQUIRE(CHECK_COLUMN(result, 0, {39990}));
+	}
 	SECTION("each context has its own query profiler") {
 		auto child = Connection::CreateChild(parent);
 		parent.EnableProfiling();
@@ -158,7 +166,7 @@ TEST_CASE("Test RuntimeServices shared with child connections", "[api]") {
 		}();
 		auto result = child.Query("SELECT current_setting('max_execution_time')::VARCHAR");
 		REQUIRE(CHECK_COLUMN(result, 0, {"12345"}));
-		REQUIRE(child.context->Services().TryGetClientContext());
-		REQUIRE(child.context->Services().TryGetClientContext().get() != child.context.get());
+		REQUIRE(child.context->services_home);
+		REQUIRE(child.context->services_home.get() != child.context.get());
 	}
 }

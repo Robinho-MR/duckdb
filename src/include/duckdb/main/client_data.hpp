@@ -45,9 +45,6 @@ public:
 	//! calls only affect new clients. Empty when there was none.
 	Identifier default_database;
 
-	//! The clients' buffer manager wrapper.
-	unique_ptr<BufferManager> client_buffer_manager;
-
 	//! The writer used to log queries, if logging is enabled.
 	//! DEPRECATED: Now, queries are written to the generic log.
 	unique_ptr<BufferedFileWriter> log_query_writer;

@@ -33,9 +33,11 @@ class Value;
 //! metrics and accessing the file system.
 //! A ClientContext owns one (see ClientContext::Services) that holds all of its connection-specific services.
 //! The services can be shared by related contexts (see Connection::CreateChild): they then use the same client
-//! config, logger, registered states and file system. The context that created the services (the home context) is
-//! kept alive by the contexts sharing them. Query profilers are per context: the services hold the profiler of the
-//! home context, which also receives the metrics reported through the services (e.g. by I/O).
+//! config, logger, registered states, file system and client buffer manager. The services do not refer to one
+//! context: operations that need a ClientContext get it from the context that runs them. The context that created
+//! the services (the home context) is kept alive by the contexts sharing them, as the file opener and the profiler
+//! of the services refer to it. Query profilers are per context: the services hold the profiler of the home context,
+//! which also receives the metrics reported through the services (e.g. by I/O and memory allocations).
 //! A DatabaseInstance can create one (see DatabaseInstance::Services) that only provides database-wide services.
 class RuntimeServices {
 public:
@@ -45,17 +47,14 @@ public:
 	DUCKDB_API ~RuntimeServices();
 
 	//! Turns these into the services of the given client context: creates the client config, the connection logger,
-	//! the query profiler, the file opener and the client file system.
-	//! The context must own these services - it is kept as a back reference.
+	//! the query profiler, the file opener, the client file system and the client buffer manager.
+	//! The file opener and the query profiler refer to the context, which must outlive the services.
 	void InitializeClient(ClientContext &context);
 
 public:
 	//! The database instance the services belong to
 	DUCKDB_API DatabaseInstance &GetDatabase() const;
-	//! The client context that created the services (if any) - only present for the services of a ClientContext
-	DUCKDB_API optional_ptr<ClientContext> TryGetClientContext() const;
-	//! Null-safe variants for optional services
-	DUCKDB_API static optional_ptr<ClientContext> TryGetClientContext(optional_ptr<RuntimeServices> services);
+	//! Null-safe variant for optional services
 	DUCKDB_API static optional_ptr<QueryProfiler> TryGetQueryProfiler(optional_ptr<RuntimeServices> services);
 	//! Whether or not these are the services of a client
 	DUCKDB_API bool IsClient() const;
@@ -64,7 +63,9 @@ public:
 	DUCKDB_API optional_ptr<ClientConfig> TryGetClientConfig() const;
 	DUCKDB_API ClientConfig &GetClientConfig() const;
 
-	//! Equivalent to CURRENT_SETTING(key) SQL function.
+	//! Looks up the current value of a setting: the client's value if the services belong to a client, otherwise the
+	//! database's value. Settings that are computed from the state of a client (e.g. the search path) are not
+	//! available from the services: their default value is returned.
 	DUCKDB_API SettingLookupResult TryGetCurrentSetting(const Identifier &key, Value &result) const;
 	//! Typed variant, leaves result untouched if not found
 	template <class TYPE>
@@ -103,14 +104,13 @@ public:
 
 private:
 	DatabaseInstance &db;
-	//! Back reference to the owning client context
-	optional_ptr<ClientContext> context;
 	unique_ptr<ClientConfig> config;
 	shared_ptr<Logger> logger;
 	shared_ptr<QueryProfiler> profiler;
 	unique_ptr<RegisteredStateManager> registered_state;
 	unique_ptr<FileOpener> file_opener;
 	unique_ptr<FileSystem> client_file_system;
+	unique_ptr<BufferManager> client_buffer_manager;
 };
 
 } // namespace duckdb
