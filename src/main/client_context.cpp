@@ -156,6 +156,23 @@ ClientContext::ClientContext(shared_ptr<DatabaseInstance> database)
 #endif
 }
 
+ClientContext::ClientContext(shared_ptr<DatabaseInstance> database, shared_ptr<ClientContext> parent)
+    : db(std::move(database)), interrupt_state(ClientInterruptState::NOT_INTERRUPTED), services(parent->services),
+      services_home(parent->services_home ? parent->services_home : parent), transaction(*this),
+      connection_id(DConstants::INVALID_INDEX) {
+	D_ASSERT(&services->GetDatabase() == db.get());
+	own_profiler = make_shared_ptr<QueryProfiler>(*this);
+	client_data = make_uniq<ClientData>(*this);
+}
+
+QueryProfiler &ClientContext::GetQueryProfiler() const {
+	return *GetQueryProfilerPtr();
+}
+
+const shared_ptr<QueryProfiler> &ClientContext::GetQueryProfilerPtr() const {
+	return own_profiler ? own_profiler : services->GetQueryProfilerPtr();
+}
+
 ClientContext::~ClientContext() {
 	if (Exception::UncaughtException()) {
 		return;

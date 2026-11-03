@@ -45,6 +45,12 @@ public:
 	//! Creates an internal connection that runs on behalf of `caller`: it follows the interrupts and the query
 	//! deadline of caller's base client
 	DUCKDB_API static Connection CreateInternal(ClientContext &caller);
+	//! Creates a connection that shares the runtime services of the parent: the client configuration (settings), the
+	//! logger, the registered states (e.g. connection-scoped secrets) and the file system. The child has its own
+	//! transaction, catalog search path, temporary objects and query profiler, and keeps the parent's context alive.
+	//! Settings are not synchronized: do not change a setting in one connection while the other runs a statement.
+	DUCKDB_API static Connection CreateChild(Connection &parent);
+	DUCKDB_API static Connection CreateChild(ClientContext &parent);
 	// disable copy constructors
 	Connection(const Connection &other) = delete;
 	Connection &operator=(const Connection &) = delete;
@@ -56,7 +62,7 @@ public:
 	shared_ptr<ClientContext> context;
 
 private:
-	Connection(DatabaseInstance &database, ConnectionType connection_type);
+	Connection(DatabaseInstance &database, ConnectionType connection_type, shared_ptr<ClientContext> parent = nullptr);
 
 public:
 	//! Returns query profiling information for the current query, formatted according to the given ProfilerPrintFormat

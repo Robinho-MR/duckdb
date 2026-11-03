@@ -23,8 +23,9 @@ namespace duckdb {
 Connection::Connection(DatabaseInstance &database) : Connection(database, ConnectionType::USER) {
 }
 
-Connection::Connection(DatabaseInstance &database, ConnectionType connection_type)
-    : context(make_shared_ptr<ClientContext>(database.shared_from_this())) {
+Connection::Connection(DatabaseInstance &database, ConnectionType connection_type, shared_ptr<ClientContext> parent)
+    : context(parent ? make_shared_ptr<ClientContext>(database.shared_from_this(), std::move(parent))
+                     : make_shared_ptr<ClientContext>(database.shared_from_this())) {
 	context->connection_type = connection_type;
 	auto &connection_manager = ConnectionManager::Get(database);
 	connection_manager.AssignConnectionId(*this);
@@ -44,6 +45,14 @@ Connection Connection::CreateInternal(ClientContext &caller) {
 	context.base_context = caller.base_context ? caller.base_context : caller.shared_from_this();
 	context.internal_depth = caller.internal_depth + 1;
 	return con;
+}
+
+Connection Connection::CreateChild(Connection &parent) {
+	return CreateChild(*parent.context);
+}
+
+Connection Connection::CreateChild(ClientContext &parent) {
+	return Connection(*parent.db, parent.connection_type, parent.shared_from_this());
 }
 
 Connection::Connection(Connection &&other) noexcept {

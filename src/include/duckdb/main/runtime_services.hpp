@@ -32,6 +32,10 @@ class Value;
 //! RuntimeServices owns the services that operations need to do their work: reading settings, logging, recording
 //! metrics and accessing the file system.
 //! A ClientContext owns one (see ClientContext::Services) that holds all of its connection-specific services.
+//! The services can be shared by related contexts (see Connection::CreateChild): they then use the same client
+//! config, logger, registered states and file system. The context that created the services (the home context) is
+//! kept alive by the contexts sharing them. Query profilers are per context: the services hold the profiler of the
+//! home context, which also receives the metrics reported through the services (e.g. by I/O).
 //! A DatabaseInstance can create one (see DatabaseInstance::Services) that only provides database-wide services.
 class RuntimeServices {
 public:
@@ -48,7 +52,7 @@ public:
 public:
 	//! The database instance the services belong to
 	DUCKDB_API DatabaseInstance &GetDatabase() const;
-	//! The client context owning the services (if any) - only present for the services of a ClientContext
+	//! The client context that created the services (if any) - only present for the services of a ClientContext
 	DUCKDB_API optional_ptr<ClientContext> TryGetClientContext() const;
 	//! Null-safe variants for optional services
 	DUCKDB_API static optional_ptr<ClientContext> TryGetClientContext(optional_ptr<RuntimeServices> services);

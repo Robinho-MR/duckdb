@@ -116,6 +116,9 @@ public:
 
 public:
 	DUCKDB_API explicit ClientContext(shared_ptr<DatabaseInstance> db);
+	//! Creates a context that shares the services of the parent context (see RuntimeServices). The new context keeps
+	//! the context owning the services alive, but has its own transaction, client data and query profiler.
+	DUCKDB_API ClientContext(shared_ptr<DatabaseInstance> db, shared_ptr<ClientContext> parent);
 	DUCKDB_API ~ClientContext();
 
 	//! The database that this client is connected to
@@ -130,7 +133,12 @@ public:
 	//! The number of internal connections between this client and its base client (0 for a base client)
 	idx_t internal_depth = 0;
 	//! The services of this ClientContext: owns the client configuration, logger, query profiler, file system, ...
+	//! Shared with the contexts created from this one (and with the context this one was created from)
 	shared_ptr<RuntimeServices> services;
+	//! For a context sharing the services of another context: the context that created the services
+	shared_ptr<ClientContext> services_home;
+	//! The query profiler of a context sharing services (a profiler tracks one query at a time)
+	shared_ptr<QueryProfiler> own_profiler;
 	//! The set of client-specific data
 	unique_ptr<ClientData> client_data;
 	//! Data for the currently running transaction
@@ -305,6 +313,13 @@ public:
 	RuntimeServices &Services() const {
 		return *services;
 	}
+	//! Whether this context uses the services of the context it was created from
+	bool UsesInheritedServices() const {
+		return services_home != nullptr;
+	}
+	//! The query profiler of this context
+	DUCKDB_API QueryProfiler &GetQueryProfiler() const;
+	DUCKDB_API const shared_ptr<QueryProfiler> &GetQueryProfilerPtr() const;
 
 	//! Returns the current query string (if any)
 	const string &GetCurrentQuery();

@@ -155,7 +155,7 @@ ErrorData ClientContext::EndQueryInternal(ClientContextLock &lock, bool success,
 void ClientContext::EndQueryProfiling(ErrorData &error) {
 	// this also runs while a connection with an open result is destroyed, so it must not throw
 	try {
-		QueryProfiler::Get(*services).EndQuery();
+		QueryProfiler::Get(*this).EndQuery();
 	} catch (std::exception &ex) {
 		if (!error.HasError()) {
 			error = ErrorData(ex);
@@ -472,7 +472,7 @@ void ClientContext::AbandonActiveQuery(ClientContextLock &lock) {
 		AbortInternal(lock);
 	}
 	interrupt_state = ClientInterruptState::NOT_INTERRUPTED;
-	QueryProfiler::Get(*services).ResetQueryStart();
+	QueryProfiler::Get(*this).ResetQueryStart();
 }
 
 unique_ptr<QueryResult> ClientContext::CompleteInternal(ClientContextLock &lock, unique_ptr<QueryResult> result) {
@@ -564,7 +564,7 @@ void ClientContext::EndStatementInternal(ClientContextLock &lock) {
 	// The plan outlives the executor
 	active_query->prepared.reset();
 	transaction.ResetActiveQuery();
-	QueryProfiler::Get(*services).EndQuery();
+	QueryProfiler::Get(*this).EndQuery();
 }
 
 unique_ptr<QueryResult> ClientContext::TakeFinishedResultInternal(ClientContextLock &lock) {
