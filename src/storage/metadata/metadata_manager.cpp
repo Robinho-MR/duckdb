@@ -236,7 +236,7 @@ MetadataPointer MetadataManager::FromDiskPointerInternal(unique_lock<mutex> &blo
 
 	auto entry = blocks.find(block_id);
 	if (entry == blocks.end()) { // LCOV_EXCL_START
-		throw InternalException("Failed to load metadata pointer (id %llu, idx %llu, ptr %llu)\n", block_id, index,
+		throw IOException("Failed to load metadata pointer - corrupt database file? (id %llu, idx %llu, ptr %llu)\n", block_id, index,
 		                        pointer.block_pointer);
 	} // LCOV_EXCL_STOP
 	MetadataPointer result;
