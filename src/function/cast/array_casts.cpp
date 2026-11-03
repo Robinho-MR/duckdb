@@ -67,24 +67,25 @@ static bool ArrayToArrayCast(Vector &source, Vector &result, idx_t count, CastPa
 			return true;
 		}
 
-		auto &source_cc = ArrayVector::GetChildMutable(source);
-		auto &result_cc = ArrayVector::GetChildMutable(result);
-
-		// If the array vector is constant, the child vector must be flat (or constant if array size is 1)
-		D_ASSERT(source_cc.GetVectorType() == VectorType::FLAT_VECTOR || source_array_size == 1);
+		auto source_cc = ArrayVector::GetOrderedChild(source, 1);
+		ListVector::Reserve(result, target_array_size);
+		auto &result_cc = ListVector::GetChildMutable(result);
 
 		CastParameters child_parameters(parameters, cast_data.child_cast_info.GetCastData(), parameters.local_state);
 		bool all_ok = cast_data.child_cast_info.Cast(source_cc, result_cc, source_array_size, child_parameters);
+		ArrayVector::SetConsecutiveEntries(result, 1);
 		FlatVector::SetSize(result, count_t(count));
 		return all_ok;
 	}
 	source.Flatten();
 	FlatVector::CopyValidity(result, source, count);
-	auto &source_cc = ArrayVector::GetChildMutable(source);
-	auto &result_cc = ArrayVector::GetChildMutable(result);
+	auto source_cc = ArrayVector::GetOrderedChild(source, count);
+	ListVector::Reserve(result, count * target_array_size);
+	auto &result_cc = ListVector::GetChildMutable(result);
 
 	CastParameters child_parameters(parameters, cast_data.child_cast_info.GetCastData(), parameters.local_state);
 	bool all_ok = cast_data.child_cast_info.Cast(source_cc, result_cc, count * source_array_size, child_parameters);
+	ArrayVector::SetConsecutiveEntries(result, count);
 	return all_ok;
 }
 
@@ -101,7 +102,7 @@ static bool ArrayToVarcharCast(Vector &source, Vector &result, idx_t count, Cast
 
 	varchar_list.Flatten();
 	auto &validity = FlatVector::Validity(varchar_list);
-	auto &child = ArrayVector::GetChild(varchar_list);
+	auto child = ArrayVector::GetOrderedChild(varchar_list, count);
 	auto &child_validity = FlatVector::Validity(child);
 
 	auto in_data = FlatVector::GetData<string_t>(child);
@@ -181,7 +182,7 @@ static bool ArrayToListCast(Vector &source, Vector &result, idx_t count, CastPar
 
 	ListVector::Reserve(result, child_count);
 
-	auto &source_child = ArrayVector::GetChildMutable(source);
+	auto source_child = ArrayVector::GetOrderedChild(source, count);
 	auto &result_child = ListVector::GetChildMutable(result);
 
 	CastParameters child_parameters(parameters, cast_data.child_cast_info.GetCastData(), parameters.local_state);

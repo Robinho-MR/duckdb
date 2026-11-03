@@ -34,7 +34,6 @@ enum class VectorBufferType : uint8_t {
 	STRING_BUFFER,     // VectorType::FLAT/CONSTANT - String          - Holds string_t array and StringHeap
 	STRUCT_BUFFER,     // VectorType::FLAT/CONSTANT - Struct          - Holds struct child vectors
 	LIST_BUFFER,       // VectorType::FLAT/CONSTANT - List            - Holds list_entry_t array and list child vector
-	ARRAY_BUFFER,      // VectorType::FLAT/CONSTANT - Array           - Holds array child vector
 	DICTIONARY_BUFFER, // VectorType::DICTIONARY    - Any             - Holds SelectionVector and dict child vector
 	FSST_BUFFER,       // VectorType::FSST          - String          - Holds string_t array, StringHeap and FSST table
 	SHREDDED_BUFFER,   // VectorType::SHREDDED      - Variant         - Holds shredded variant

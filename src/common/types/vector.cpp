@@ -1,4 +1,3 @@
-#include "duckdb/common/vector/array_vector.hpp"
 #include "duckdb/common/vector/constant_vector.hpp"
 #include "duckdb/common/vector/dictionary_vector.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
@@ -8,6 +7,7 @@
 #include "duckdb/common/vector/string_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
 #include "duckdb/common/types/vector.hpp"
+#include "duckdb/common/vector/array_vector.hpp"
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/fsst.hpp"
@@ -168,12 +168,6 @@ void CheckTypeIsReinterpretable(const LogicalType &a, const LogicalType &b) {
 		CheckTypeIsReinterpretable(left_child_type, right_child_type);
 		break;
 	}
-	case PhysicalType::ARRAY: {
-		auto &left_child_type = ArrayType::GetChildType(a);
-		auto &right_child_type = ArrayType::GetChildType(b);
-		CheckTypeIsReinterpretable(left_child_type, right_child_type);
-		break;
-	}
 	default:
 		throw InternalException("Unsupported nested type in CheckTypeIsReinterpretable");
 	}
@@ -276,13 +270,15 @@ void Vector::Initialize(VectorDataInitialization data_initialize, idx_t capacity
 	if (internal_type == PhysicalType::STRUCT) {
 		buffer = make_buffer<VectorStructBuffer>(type, capacity);
 	} else if (internal_type == PhysicalType::LIST) {
-		buffer = make_buffer<VectorListBuffer>(capacity, type);
+		auto child_capacity = capacity_t(STANDARD_VECTOR_SIZE);
+		if (type.id() == LogicalTypeId::ARRAY) {
+			child_capacity = capacity_t(capacity * ArrayType::GetSize(type));
+		}
+		buffer = make_buffer<VectorListBuffer>(capacity, type, child_capacity);
 		if (data_initialize == VectorDataInitialization::ZERO_INITIALIZE) {
 			auto data = buffer->GetData();
 			memset(data, 0, capacity * sizeof(list_entry_t));
 		}
-	} else if (internal_type == PhysicalType::ARRAY) {
-		buffer = make_buffer<VectorArrayBuffer>(type, capacity);
 	} else {
 		auto type_size = GetTypeIdSize(internal_type);
 		if (type_size == 0) {
@@ -486,11 +482,6 @@ void Vector::RecursiveToUnifiedFormat(const Vector &input, RecursiveUnifiedVecto
 		data.children.emplace_back();
 		RecursiveToUnifiedFormat(child, data.children.back());
 
-	} else if (input.GetType().InternalType() == PhysicalType::ARRAY) {
-		auto &child = ArrayVector::GetChild(input);
-		data.children.emplace_back();
-		RecursiveToUnifiedFormat(child, data.children.back());
-
 	} else if (input.GetType().InternalType() == PhysicalType::STRUCT) {
 		auto &children = StructVector::GetEntries(input);
 		for (idx_t i = 0; i < children.size(); i++) {
@@ -647,6 +638,15 @@ void Vector::Serialize(Serializer &serializer, bool compressed_serialization) {
 			auto &child = ListVector::GetChildMutable(*this);
 			auto list_size = ListVector::GetListSize(*this);
 
+			if (logical_type.id() == LogicalTypeId::ARRAY) {
+				// arrays are serialized as a child vector with array_size entries per row
+				auto array_child = ArrayVector::GetOrderedChild(*this, count);
+				serializer.WriteProperty<uint64_t>(103, "array_size", ArrayType::GetSize(logical_type));
+				serializer.WriteObject(
+				    104, "child", [&](Serializer &object) { array_child.Serialize(object, compressed_serialization); });
+				break;
+			}
+
 			// serialize the list entries in a flat array
 			auto entries = make_unsafe_uniq_array_uninitialized<list_entry_t>(count);
 			auto source_array = UnifiedVectorFormat::GetData<list_entry_t>(vdata);
@@ -669,17 +669,6 @@ void Vector::Serialize(Serializer &serializer, bool compressed_serialization) {
 				});
 			});
 			serializer.WriteObject(106, "child",
-			                       [&](Serializer &object) { child.Serialize(object, compressed_serialization); });
-			break;
-		}
-		case PhysicalType::ARRAY: {
-			Vector serialized_vector(Vector::Ref(*this));
-			serialized_vector.Flatten();
-
-			auto &child = ArrayVector::GetChildMutable(serialized_vector);
-			auto array_size = ArrayType::GetSize(serialized_vector.GetType());
-			serializer.WriteProperty<uint64_t>(103, "array_size", array_size);
-			serializer.WriteObject(104, "child",
 			                       [&](Serializer &object) { child.Serialize(object, compressed_serialization); });
 			break;
 		}
@@ -838,6 +827,19 @@ void Vector::Deserialize(Deserializer &deserializer, idx_t count) {
 			break;
 		}
 		case PhysicalType::LIST: {
+			if (logical_type.id() == LogicalTypeId::ARRAY) {
+				auto array_size = deserializer.ReadProperty<uint64_t>(103, "array_size");
+				if (array_size != ArrayType::GetSize(logical_type)) {
+					throw SerializationException("Failed to deserialize vector: array size %llu does not match type %s",
+					                             array_size, logical_type.ToString());
+				}
+				ArrayVector::SetConsecutiveEntries(*this, count);
+				deserializer.ReadObject(104, "child", [&](Deserializer &obj) {
+					auto &child = ListVector::GetChildMutable(*this);
+					child.Deserialize(obj, array_size * count);
+				});
+				break;
+			}
 			// Read the list size
 			auto list_size = deserializer.ReadProperty<uint64_t>(104, "list_size");
 			ListVector::Reserve(*this, list_size);
@@ -868,18 +870,6 @@ void Vector::Deserialize(Deserializer &deserializer, idx_t count) {
 			deserializer.ReadObject(106, "child", [&](Deserializer &obj) {
 				auto &child = ListVector::GetChildMutable(*this);
 				child.Deserialize(obj, list_size);
-			});
-			break;
-		}
-		case PhysicalType::ARRAY: {
-			auto array_size = deserializer.ReadProperty<uint64_t>(103, "array_size");
-			if (array_size != ArrayType::GetSize(logical_type)) {
-				throw SerializationException("Failed to deserialize vector: array size %llu does not match type %s",
-				                             array_size, logical_type.ToString());
-			}
-			deserializer.ReadObject(104, "child", [&](Deserializer &obj) {
-				auto &child = ArrayVector::GetChildMutable(*this);
-				child.Deserialize(obj, array_size * count);
 			});
 			break;
 		}
@@ -992,7 +982,8 @@ void Vector::DebugShuffleNestedVector(Vector &vector) {
 		}
 		break;
 	}
-	case LogicalTypeId::LIST: {
+	case LogicalTypeId::LIST:
+	case LogicalTypeId::ARRAY: {
 		if (vector.GetVectorType() != VectorType::FLAT_VECTOR) {
 			break;
 		}

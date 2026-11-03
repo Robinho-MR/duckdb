@@ -1,5 +1,4 @@
 #include "duckdb/common/vector/flat_vector.hpp"
-#include "duckdb/common/vector/array_vector.hpp"
 #include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/vector/string_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
@@ -501,9 +500,6 @@ void FlatVector::PrepareForWrite(Vector &vector, idx_t size) {
 
 void FlatVector::SetData(Vector &vector, data_ptr_t data, count_t count) {
 	VerifyFlatVector(vector);
-	if (vector.GetType().InternalType() == PhysicalType::ARRAY) {
-		throw InternalException("SetData not supported for array");
-	}
 	if (vector.GetType().InternalType() == PhysicalType::STRUCT) {
 		throw InternalException("SetData not supported for struct");
 	}
@@ -539,17 +535,6 @@ void FlatVector::SetNull(Vector &vector, idx_t idx, bool is_null) {
 		auto &entries = StructVector::GetEntries(vector);
 		for (auto &entry : entries) {
 			FlatVector::SetNull(entry, idx, is_null);
-		}
-		return;
-	}
-
-	// Set all child entries to NULL.
-	if (internal_type == PhysicalType::ARRAY) {
-		auto &child = ArrayVector::GetChildMutable(vector);
-		auto array_size = ArrayType::GetSize(type);
-		auto child_offset = idx * array_size;
-		for (idx_t i = 0; i < array_size; i++) {
-			FlatVector::SetNull(child, child_offset + i, is_null);
 		}
 	}
 }

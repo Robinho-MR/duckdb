@@ -191,6 +191,10 @@ DUCKDB_V2_ERROR duckdb_v2_vector_get_view(duckdb_v2_vector_handle vector, duckdb
 			// Unreachable thanks to IsSupportedVectorType above.
 			break;
 		}
+		if (vec->GetType().id() == duckdb::LogicalTypeId::ARRAY) {
+			// the elements of the arrays are exposed through the child vector
+			out_view->data = nullptr;
+		}
 	});
 }
 
@@ -256,6 +260,17 @@ DUCKDB_V2_ERROR duckdb_v2_vector_set_null(duckdb_v2_vector_handle vector, idx_t 
 			throw duckdb::InvalidInputException("row out of range in duckdb_v2_vector_set_null");
 		}
 		duckdb::FlatVector::SetNull(*vec, row, true);
+		if (vec->GetType().id() == duckdb::LogicalTypeId::ARRAY && duckdb::FlatVector::GetData(*vec)) {
+			// NULL arrays have NULL elements
+			auto entry = duckdb::FlatVector::GetData<duckdb::list_entry_t>(*vec)[row];
+			auto &elements = duckdb::ListVector::GetChildMutable(*vec);
+			if (entry.offset + entry.length > duckdb::ListVector::GetListSize(*vec)) {
+				return;
+			}
+			for (duckdb::idx_t k = 0; k < entry.length; k++) {
+				duckdb::FlatVector::SetNull(elements, entry.offset + k, true);
+			}
+		}
 	});
 }
 
@@ -354,7 +369,14 @@ DUCKDB_V2_ERROR duckdb_v2_vector_get_child(duckdb_v2_vector_handle vector, idx_t
 			if (index != 0) {
 				throw duckdb::InvalidInputException("duckdb_v2_vector_get_child: ARRAY has only child [0] (elements)");
 			}
-			auto &child = duckdb::ArrayVector::GetChildMutable(*vec);
+			// the C API exposes the elements of row i at [i * array_size, (i + 1) * array_size)
+			if (vec->size() == 0 || !duckdb::FlatVector::GetData(*vec)) {
+				// the vector is written to: provide entries for all rows
+				duckdb::ArrayVector::SetConsecutiveEntries(*vec, duckdb::FlatVector::GetCapacity(*vec));
+			} else {
+				duckdb::ArrayVector::MakeConsecutive(*vec, vec->size());
+			}
+			auto &child = duckdb::ListVector::GetChildMutable(*vec);
 			*out_child = Convert(&child);
 			return;
 		}

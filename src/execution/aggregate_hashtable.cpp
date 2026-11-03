@@ -1177,7 +1177,7 @@ struct FlushMoveState {
 	bool Scan() {
 		if (collection.Scan(scan_state, groups)) {
 			collection.Gather(scan_state.chunk_state.row_locations, *FlatVector::IncrementalSelectionVector(),
-			                  groups.size(), hash_col_idx, hashes, *FlatVector::IncrementalSelectionVector(), nullptr);
+			                  groups.size(), hash_col_idx, hashes, *FlatVector::IncrementalSelectionVector());
 			return true;
 		}
 

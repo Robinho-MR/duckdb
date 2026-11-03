@@ -16,7 +16,7 @@ struct RadixPartitioningConstants {
 };
 
 template <class OP, class RETURN_TYPE, typename... ARGS>
-RETURN_TYPE RadixBitsSwitch(const idx_t radix_bits, ARGS &&... args) {
+RETURN_TYPE RadixBitsSwitch(const idx_t radix_bits, ARGS &&...args) {
 	D_ASSERT(radix_bits <= RadixPartitioning::MAX_RADIX_BITS);
 	switch (radix_bits) {
 	case 0:
@@ -199,7 +199,7 @@ void RadixPartitionedTupleData::ComputePartitionIndices(Vector &row_locations, i
 	Vector &intermediate = *utility_vector;
 	intermediate.SetVectorType(VectorType::FLAT_VECTOR);
 	partitions[0]->Gather(row_locations, append_sel, count, hash_col_idx, intermediate,
-	                      *FlatVector::IncrementalSelectionVector(), nullptr);
+	                      *FlatVector::IncrementalSelectionVector());
 	RadixBitsSwitch<ComputePartitionIndicesFunctor, void>(radix_bits, intermediate, partition_indices, count,
 	                                                      *FlatVector::IncrementalSelectionVector(), count);
 }

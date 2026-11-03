@@ -62,8 +62,6 @@ static const vector<Value> &GetNestedValueChildren(const Value &value) {
 		return StructValue::GetChildren(value);
 	case PhysicalType::LIST:
 		return ListValue::GetChildren(value);
-	case PhysicalType::ARRAY:
-		return ArrayValue::GetChildren(value);
 	default:
 		throw InternalException("Expected a nested value");
 	}
@@ -78,8 +76,7 @@ static bool CanShareConstantValue(const Value &left, const Value &right) {
 	}
 	switch (left.type().InternalType()) {
 	case PhysicalType::STRUCT:
-	case PhysicalType::LIST:
-	case PhysicalType::ARRAY: {
+	case PhysicalType::LIST: {
 		// Compare VARIANT storage children directly to preserve payload types and object fields.
 		auto &left_children = GetNestedValueChildren(left);
 		auto &right_children = GetNestedValueChildren(right);

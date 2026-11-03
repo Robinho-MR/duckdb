@@ -326,7 +326,6 @@ static AggregateFunction GetMinMaxOperator(const LogicalType &type) {
 		return AggregateFunction::UnaryAggregate<MinMaxStringState, string_t, string_t, OP_STRING>(type, type);
 	case PhysicalType::LIST:
 	case PhysicalType::STRUCT:
-	case PhysicalType::ARRAY:
 		return GetMinMaxFunction<OP_VECTOR>(type);
 	default:
 		return GetUnaryAggregate<OP>(type);

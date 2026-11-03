@@ -3,7 +3,6 @@
 // Description: This file contains the vectorized hash implementations
 //===--------------------------------------------------------------------===//
 
-#include "duckdb/common/vector/array_vector.hpp"
 #include "duckdb/common/vector/constant_vector.hpp"
 #include "duckdb/common/vector/dictionary_vector.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
@@ -223,80 +222,6 @@ void ListLoopHash(const Vector &input, Vector &hashes, const SelectionVector *rs
 	}
 }
 
-template <bool HAS_RSEL, bool FIRST_HASH>
-void ArrayLoopHash(const Vector &input, Vector &hashes, const SelectionVector *rsel, idx_t count) {
-	hashes.Flatten();
-	FlatVector::SetSize(hashes, count_t(count));
-	auto hdata = FlatVector::GetDataMutable<hash_t>(hashes);
-
-	UnifiedVectorFormat idata;
-	input.ToUnifiedFormat(idata);
-
-	// Hash the children into a temporary
-	const auto &child = ArrayVector::GetChild(input);
-	auto array_size = ArrayType::GetSize(input.GetType());
-
-	auto is_flat = input.GetVectorType() == VectorType::FLAT_VECTOR;
-	auto is_constant = input.GetVectorType() == VectorType::CONSTANT_VECTOR;
-
-	if (!HAS_RSEL && (is_flat || is_constant)) {
-		// Fast path for contiguous vectors with no selection vector
-		auto child_count = array_size * (is_constant ? 1 : count);
-
-		Vector child_hashes(LogicalType::HASH, child_count);
-		VectorOperations::Hash(child, child_hashes, child_count);
-		child_hashes.Flatten();
-		auto chdata = FlatVector::GetDataMutable<hash_t>(child_hashes);
-
-		for (idx_t i = 0; i < count; i++) {
-			auto lidx = idata.sel->get_index(i);
-			if (idata.validity.RowIsValid(lidx)) {
-				if (FIRST_HASH) {
-					hdata[i] = 0;
-				}
-				for (idx_t j = 0; j < array_size; j++) {
-					auto offset = lidx * array_size + j;
-					hdata[i] = CombineHashScalar(hdata[i], chdata[offset]);
-				}
-			} else if (FIRST_HASH) {
-				hdata[i] = HashOp::NULL_HASH;
-			}
-		}
-	} else {
-		// Hash the arrays one-by-one
-		SelectionVector array_sel(array_size);
-		Vector array_hashes(LogicalType::HASH, array_size);
-		for (idx_t i = 0; i < count; i++) {
-			const auto ridx = HAS_RSEL ? rsel->get_index(i) : i;
-			const auto lidx = idata.sel->get_index(ridx);
-
-			if (idata.validity.RowIsValid(lidx)) {
-				// Create a selection vector for the array
-				for (idx_t j = 0; j < array_size; j++) {
-					array_sel.set_index(j, lidx * array_size + j);
-				}
-
-				// Hash the array slice
-				Vector dict_vec(child, array_sel, array_size);
-				VectorOperations::Hash(dict_vec, array_hashes, array_size);
-				auto ahdata = FlatVector::GetDataMutable<hash_t>(array_hashes);
-
-				if (FIRST_HASH) {
-					hdata[ridx] = 0;
-				}
-				// Combine the hashes of the array
-				for (idx_t j = 0; j < array_size; j++) {
-					hdata[ridx] = CombineHashScalar(hdata[ridx], ahdata[j]);
-					// Clear the hash for the next iteration
-					ahdata[j] = 0;
-				}
-			} else if (FIRST_HASH) {
-				hdata[ridx] = HashOp::NULL_HASH;
-			}
-		}
-	}
-}
-
 template <bool HAS_RSEL>
 void HashTypeSwitch(const Vector &input, Vector &result, const SelectionVector *rsel, idx_t count) {
 	D_ASSERT(result.GetType().id() == LogicalType::HASH);
@@ -349,9 +274,6 @@ void HashTypeSwitch(const Vector &input, Vector &result, const SelectionVector *
 		break;
 	case PhysicalType::LIST:
 		ListLoopHash<HAS_RSEL, true>(input, result, rsel, count);
-		break;
-	case PhysicalType::ARRAY:
-		ArrayLoopHash<HAS_RSEL, true>(input, result, rsel, count);
 		break;
 	default:
 		throw InvalidTypeException(input.GetType(), "Invalid type for hash");
@@ -490,9 +412,6 @@ void CombineHashTypeSwitch(Vector &hashes, const Vector &input, const SelectionV
 		break;
 	case PhysicalType::LIST:
 		ListLoopHash<HAS_RSEL, false>(input, hashes, rsel, count);
-		break;
-	case PhysicalType::ARRAY:
-		ArrayLoopHash<HAS_RSEL, false>(input, hashes, rsel, count);
 		break;
 	default:
 		throw InvalidTypeException(input.GetType(), "Invalid type for hash");

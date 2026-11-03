@@ -507,7 +507,6 @@ uint8_t JoinHashTable::GetDictSurvivingIndexWidth(idx_t build_col_idx, const Vec
 	switch (type.InternalType()) {
 	case PhysicalType::STRUCT:
 	case PhysicalType::LIST:
-	case PhysicalType::ARRAY:
 		return 0;
 	default:
 		break;
@@ -820,10 +819,8 @@ static inline void PerformKeyComparison(JoinHashTable::InsertState &state, JoinH
 
 	// The target selection vector says where to write the results into the lhs_data, we just want to write
 	// sequentially as otherwise we trigger a bug in the Gather function
-	data_collection.ResetCachedCastVectors(state.chunk_state, ht.equality_predicate_columns);
 	data_collection.Gather(row_locations, state.keys_to_compare_sel, count, ht.equality_predicate_columns,
-	                       state.lhs_data, *FlatVector::IncrementalSelectionVector(),
-	                       state.chunk_state.cached_cast_vectors);
+	                       state.lhs_data, *FlatVector::IncrementalSelectionVector());
 	TupleDataCollection::ToUnifiedFormat(state.chunk_state, state.lhs_data);
 
 	for (idx_t i = 0; i < count; i++) {
@@ -1059,7 +1056,7 @@ void JoinHashTable::InsertPrefixRangeChunk(TupleDataChunkState &chunk_state, idx
 	D_ASSERT(prefix_range_filter);
 	Vector build_keys(layout_ptr->GetTypes()[0], count);
 	auto &sel = *FlatVector::IncrementalSelectionVector();
-	data_collection->Gather(chunk_state.row_locations, sel, count, 0, build_keys, sel, nullptr);
+	data_collection->Gather(chunk_state.row_locations, sel, count, 0, build_keys, sel);
 	FlatVector::SetSize(build_keys, count_t(count));
 	if (parallel) {
 		prefix_range_filter->InsertKeysParallel(build_keys, state);
@@ -1684,7 +1681,7 @@ void ScanStructure::AdvancePointers() {
 
 void ScanStructure::GatherResult(Vector &result, const SelectionVector &result_vector,
                                  const SelectionVector &sel_vector, const idx_t count, const idx_t col_no) {
-	ht.data_collection->Gather(pointers, sel_vector, count, col_no, result, result_vector, nullptr);
+	ht.data_collection->Gather(pointers, sel_vector, count, col_no, result, result_vector);
 }
 
 void ScanStructure::GatherResult(Vector &result, const SelectionVector &sel_vector, const idx_t count,
@@ -1694,7 +1691,7 @@ void ScanStructure::GatherResult(Vector &result, const SelectionVector &sel_vect
 
 void ScanStructure::GatherResult(Vector &result, const idx_t count, const idx_t col_idx) {
 	ht.data_collection->Gather(rhs_pointers, *FlatVector::IncrementalSelectionVector(), count, col_idx, result,
-	                           *FlatVector::IncrementalSelectionVector(), nullptr);
+	                           *FlatVector::IncrementalSelectionVector());
 }
 
 void JoinHashTable::GatherRHS(Vector &row_ptrs, const SelectionVector &ptr_sel, const idx_t count, DataChunk &result,
@@ -1733,7 +1730,7 @@ void JoinHashTable::GatherRHS(Vector &row_ptrs, const SelectionVector &ptr_sel, 
 		if (vector.GetVectorType() != VectorType::FLAT_VECTOR) {
 			vector.Initialize();
 		}
-		data_collection->Gather(row_ptrs, ptr_sel, count, output_col_idx, vector, result_sel, nullptr);
+		data_collection->Gather(row_ptrs, ptr_sel, count, output_col_idx, vector, result_sel);
 		FlatVector::SetSize(vector, count_t(count));
 	}
 }
@@ -2396,7 +2393,7 @@ idx_t JoinHashTable::ScanKeyColumn(Vector &addresses, Vector &result, idx_t colu
 		return 0;
 	}
 	const auto &sel = *FlatVector::IncrementalSelectionVector();
-	data_collection->Gather(addresses, sel, key_count, column_index, result, sel, nullptr);
+	data_collection->Gather(addresses, sel, key_count, column_index, result, sel);
 	return key_count;
 }
 
@@ -2824,7 +2821,6 @@ bool JoinHashTable::CanUseDictionaryEmission(const PhysicalHashJoin &op, bool ex
 		switch (type.InternalType()) {
 		case PhysicalType::STRUCT:
 		case PhysicalType::LIST:
-		case PhysicalType::ARRAY:
 			return false;
 		default:
 			break;
@@ -2881,7 +2877,7 @@ void JoinHashTable::BuildDictionaryArrays(const PhysicalHashJoin &op) {
 		auto dict_entry = dict_on_every_chunk ? DictionaryVector::CreateReusableGlobalDictionary(type, build_count)
 		                                      : DictionaryVector::CreateReusableDictionary(type, build_count);
 		const auto output_col_idx = output_columns[col_idx];
-		collection.Gather(row_pointer_vector, sel, build_count, output_col_idx, dict_entry->data, sel, nullptr);
+		collection.Gather(row_pointer_vector, sel, build_count, output_col_idx, dict_entry->data, sel);
 		dict_arrays.emplace_back(std::move(dict_entry));
 	}
 

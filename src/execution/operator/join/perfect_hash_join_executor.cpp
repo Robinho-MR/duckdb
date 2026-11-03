@@ -93,7 +93,6 @@ bool PerfectHashJoinExecutor::CanDoPerfectHashJoin(const PhysicalHashJoin &op, c
 		switch (type.InternalType()) {
 		case PhysicalType::STRUCT:
 		case PhysicalType::LIST:
-		case PhysicalType::ARRAY:
 			return false;
 		default:
 			break;
@@ -185,7 +184,7 @@ bool PerfectHashJoinExecutor::FullScanHashTable() {
 		D_ASSERT(vector.GetType() == ht.layout_ptr->GetTypes()[output_col_idx]);
 		auto &col_mask = FlatVector::ValidityMutable(vector);
 		col_mask.Reset(build_size);
-		data_collection.Gather(tuples_addresses, sel_tuples, key_count, output_col_idx, vector, sel_build, nullptr);
+		data_collection.Gather(tuples_addresses, sel_tuples, key_count, output_col_idx, vector, sel_build);
 		// This ensures the empty entries are set to NULL, so that the emitted dictionary vectors make sense
 		col_mask.Combine(bitmap_build_idx, build_size);
 	}

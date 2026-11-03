@@ -614,8 +614,7 @@ void TupleDataAllocator::RecomputeHeapPointers(Vector &old_heap_ptrs, const Sele
 			VerifyStrings(layout, type.id(), row_locations, col_idx, base_col_offset, col_offset, offset, count);
 			break;
 		}
-		case PhysicalType::LIST:
-		case PhysicalType::ARRAY: {
+		case PhysicalType::LIST: {
 			for (idx_t i = 0; i < count; i++) {
 				const auto idx = offset + i;
 				const auto &row_location = row_locations[idx] + base_col_offset;
@@ -704,8 +703,7 @@ void TupleDataAllocator::FindHeapPointers(TupleDataChunkState &chunk_state, Sele
 			not_found_count = next_not_found_count;
 			break;
 		}
-		case PhysicalType::LIST:
-		case PhysicalType::ARRAY: {
+		case PhysicalType::LIST: {
 			for (idx_t i = 0; i < not_found_count; i++) {
 				const auto idx = not_found.get_index(i);
 				const auto &row_location = row_locations[idx] + base_col_offset;

@@ -1,4 +1,3 @@
-#include "duckdb/common/vector/array_vector.hpp"
 #include "duckdb/common/vector/constant_vector.hpp"
 #include "duckdb/common/vector/dictionary_vector.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
@@ -88,8 +87,7 @@ VectorDataIndex ColumnDataCollectionSegment::AllocateVectorInternal(const Logica
 	VectorDataIndex result(index);
 	if (!defer_allocation) {
 		auto internal_type = type.InternalType();
-		auto struct_or_array = internal_type == PhysicalType::STRUCT || internal_type == PhysicalType::ARRAY;
-		auto type_size = struct_or_array ? 0 : GetTypeIdSize(internal_type);
+		auto type_size = internal_type == PhysicalType::STRUCT ? 0 : GetTypeIdSize(internal_type);
 		AllocateVectorStorage(result, GetDataSize(type_size) + ValidityMask::STANDARD_MASK_SIZE, chunk_meta,
 		                      chunk_state);
 	}
@@ -206,7 +204,7 @@ void ColumnDataCollectionSegment::SetChildIndex(VectorChildIndex base_idx, idx_t
 }
 
 bool TypeHasData(const LogicalType &type) {
-	return type.InternalType() != PhysicalType::STRUCT && type.InternalType() != PhysicalType::ARRAY;
+	return type.InternalType() != PhysicalType::STRUCT;
 }
 
 void ColumnDataCollectionSegment::UnswizzleEntryPointers(ChunkManagementState &state, VectorMetaData &vdata,
@@ -384,10 +382,6 @@ idx_t ColumnDataCollectionSegment::ReadVector(ChunkManagementState &state, Vecto
 		auto &child_vector = ListVector::GetChildMutable(result);
 		auto child_count = ReadVector(state, GetChildIndex(vdata.child_index), child_vector);
 		ListVector::SetListSize(result, child_count);
-	} else if (internal_type == PhysicalType::ARRAY) {
-		auto &child_vector = ArrayVector::GetChildMutable(result);
-		auto child_count = ReadVector(state, GetChildIndex(vdata.child_index), child_vector);
-		(void)child_count;
 	} else if (internal_type == PhysicalType::STRUCT) {
 		auto &child_vectors = StructVector::GetEntries(result);
 		for (idx_t child_idx = 0; child_idx < child_vectors.size(); child_idx++) {

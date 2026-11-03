@@ -100,9 +100,7 @@ StatisticsType BaseStatistics::GetStatsType(const LogicalType &type) {
 	case PhysicalType::STRUCT:
 		return StatisticsType::STRUCT_STATS;
 	case PhysicalType::LIST:
-		return StatisticsType::LIST_STATS;
-	case PhysicalType::ARRAY:
-		return StatisticsType::ARRAY_STATS;
+		return type.id() == LogicalTypeId::ARRAY ? StatisticsType::ARRAY_STATS : StatisticsType::LIST_STATS;
 	case PhysicalType::BIT:
 	default:
 		return StatisticsType::BASE_STATS;

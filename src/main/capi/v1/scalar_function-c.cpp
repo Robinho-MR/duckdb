@@ -196,7 +196,7 @@ unique_ptr<FunctionLocalState> CScalarFunctionInit(ExpressionState &state, const
 }
 
 void CAPIScalarFunction(DataChunk &input, ExpressionState &state, Vector &result) {
-	PrepareCAPIVector(result);
+	PrepareCAPIVector(result, true);
 	auto &function = state.expr.Cast<BoundFunctionExpression>();
 	auto &bind_info = function.BindInfo();
 	auto &c_bind_info = bind_info->Cast<CScalarFunctionBindData>();

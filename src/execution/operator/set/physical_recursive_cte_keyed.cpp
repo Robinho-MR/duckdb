@@ -48,7 +48,6 @@ RecursiveCTEKeyedProperties RecursiveCTEKeyedProperties::Derive(const PhysicalRe
 		case PhysicalType::DOUBLE:
 		case PhysicalType::LIST:
 		case PhysicalType::STRUCT:
-		case PhysicalType::ARRAY:
 		case PhysicalType::UNKNOWN:
 			result.can_reuse_changed_group_candidates = false;
 			break;
@@ -60,7 +59,6 @@ RecursiveCTEKeyedProperties RecursiveCTEKeyedProperties::Derive(const PhysicalRe
 		switch (payload_type.InternalType()) {
 		case PhysicalType::LIST:
 		case PhysicalType::STRUCT:
-		case PhysicalType::ARRAY:
 		case PhysicalType::UNKNOWN:
 			result.can_reuse_changed_group_candidates = false;
 			break;

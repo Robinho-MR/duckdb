@@ -1036,7 +1036,6 @@ AsOfProbeBuffer::AsOfProbeBuffer(ClientContext &client, const PhysicalAsOfJoin &
 			break;
 		case PhysicalType::STRUCT:
 		case PhysicalType::LIST:
-		case PhysicalType::ARRAY:
 			col.type = SortKeyPrefixComparisonType::NESTED;
 			break;
 		default:

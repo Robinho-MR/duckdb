@@ -7,18 +7,20 @@
 
 namespace duckdb {
 
-void PrepareCAPIVector(Vector &result) {
+void PrepareCAPIVector(Vector &result, bool is_output) {
 	switch (result.GetType().InternalType()) {
 	case PhysicalType::STRUCT:
 		for (auto &child : StructVector::GetEntries(result)) {
-			PrepareCAPIVector(child);
+			PrepareCAPIVector(child, is_output);
 		}
 		return;
-	case PhysicalType::ARRAY:
-		PrepareCAPIVector(ArrayVector::GetChildMutable(result));
-		return;
 	case PhysicalType::LIST:
-		PrepareCAPIVector(ListVector::GetChildMutable(result));
+		if (is_output && result.GetType().id() == LogicalTypeId::ARRAY &&
+		    result.GetVectorType() == VectorType::FLAT_VECTOR) {
+			// the C API writes the elements of row i at [i * array_size, (i + 1) * array_size)
+			ArrayVector::SetConsecutiveEntries(result, FlatVector::GetCapacity(result));
+		}
+		PrepareCAPIVector(ListVector::GetChildMutable(result), is_output);
 		break;
 	default:
 		break;

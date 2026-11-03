@@ -141,8 +141,7 @@ bool PhysicalNestedLoopJoin::IsSupported(const vector<JoinCondition> &conditions
 			continue;
 		}
 		if (cond.GetLHS().GetReturnType().InternalType() == PhysicalType::STRUCT ||
-		    cond.GetLHS().GetReturnType().InternalType() == PhysicalType::LIST ||
-		    cond.GetLHS().GetReturnType().InternalType() == PhysicalType::ARRAY) {
+		    cond.GetLHS().GetReturnType().InternalType() == PhysicalType::LIST) {
 			return false;
 		}
 		comparison_count++;

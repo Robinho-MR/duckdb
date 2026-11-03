@@ -2031,7 +2031,7 @@ const vector<Value> &ArrayValue::GetChildren(const Value &value) {
 	if (value.is_null) {
 		throw InternalException("Calling ArrayValue::GetChildren on a NULL value");
 	}
-	D_ASSERT(value.type().InternalType() == PhysicalType::ARRAY);
+	D_ASSERT(value.type().id() == LogicalTypeId::ARRAY);
 	D_ASSERT(value.value_info_);
 	return value.value_info_->Get<NestedValueInfo>().GetValues();
 }
@@ -2207,8 +2207,6 @@ static const LogicalType &GetChildType(const LogicalType &parent_type, idx_t i) 
 		return ListType::GetChildType(parent_type);
 	case PhysicalType::STRUCT:
 		return StructType::GetChildType(parent_type, i);
-	case PhysicalType::ARRAY:
-		return ArrayType::GetChildType(parent_type);
 	default:
 		throw InternalException("Parent type is not a nested type");
 	}
@@ -2333,9 +2331,6 @@ void Value::SerializeInternal(Serializer &serializer, bool serialize_type) const
 		break;
 	case PhysicalType::STRUCT:
 		SerializeChildren(serializer, StructValue::GetChildren(*this), type_);
-		break;
-	case PhysicalType::ARRAY:
-		SerializeChildren(serializer, ArrayValue::GetChildren(*this), type_);
 		break;
 	default:
 		throw NotImplementedException("Unimplemented type for Serialize");
@@ -2495,7 +2490,6 @@ bool Value::IsValid() const {
 	switch (type_.InternalType()) {
 	case PhysicalType::STRUCT:
 	case PhysicalType::LIST:
-	case PhysicalType::ARRAY:
 		for (auto &child : value_info_->Get<NestedValueInfo>().GetValues()) {
 			if (!child.IsValid()) {
 				return false;
@@ -2625,14 +2619,6 @@ Value Value::Deserialize(Deserializer &deserializer) {
 			});
 			new_value.value_info_ = make_shared_ptr<NestedValueInfo>(children);
 		});
-	} break;
-	case PhysicalType::ARRAY: {
-		deserializer.Set<const LogicalType &>(ArrayType::GetChildType(type));
-		deserializer.ReadObject(102, "value", [&](Deserializer &obj) {
-			auto children = obj.ReadProperty<vector<Value>>(100, "children");
-			new_value.value_info_ = make_shared_ptr<NestedValueInfo>(children);
-		});
-		deserializer.Unset<LogicalType>();
 	} break;
 	default:
 		throw NotImplementedException("Unimplemented type for Deserialize");

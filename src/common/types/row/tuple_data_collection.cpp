@@ -1,5 +1,4 @@
 #include "duckdb/main/client_context.hpp"
-#include "duckdb/common/vector/array_vector.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/vector/map_vector.hpp"
@@ -273,8 +272,7 @@ void VerifyAppendColumns(const TupleDataLayout &layout, const vector<column_t> &
 		}
 		// This column will not be appended in the first go - verify that it is fixed-size - we cannot resize heap after
 		const auto physical_type = layout.GetTypes()[col_idx].InternalType();
-		D_ASSERT(physical_type != PhysicalType::VARCHAR && physical_type != PhysicalType::LIST &&
-		         physical_type != PhysicalType::ARRAY);
+		D_ASSERT(physical_type != PhysicalType::VARCHAR && physical_type != PhysicalType::LIST);
 		if (physical_type == PhysicalType::STRUCT) {
 			const auto &struct_layout = layout.GetStructLayout(col_idx);
 			vector<column_t> struct_column_ids;
@@ -327,9 +325,6 @@ static void InitializeVectorFormat(vector<TupleDataVectorFormat> &vector_data, c
 		case PhysicalType::LIST:
 			InitializeVectorFormat(vector_data[col_idx].children, {ListType::GetChildType(type)});
 			break;
-		case PhysicalType::ARRAY:
-			InitializeVectorFormat(vector_data[col_idx].children, {ArrayType::GetChildType(type)});
-			break;
 		default:
 			break;
 		}
@@ -346,21 +341,6 @@ void TupleDataCollection::InitializeChunkState(TupleDataChunkState &chunk_state,
 		GetAllColumnIDsInternal(column_ids, types.size());
 	}
 	InitializeVectorFormat(chunk_state.vector_data, types);
-
-	chunk_state.cached_cast_vectors.clear();
-	chunk_state.cached_cast_vector_cache.clear();
-	for (auto &col : column_ids) {
-		auto &type = types[col];
-		if (TypeVisitor::Contains(type, LogicalTypeId::ARRAY)) {
-			auto cast_type = ArrayType::ConvertToList(type);
-			chunk_state.cached_cast_vector_cache.push_back(
-			    make_uniq<VectorCache>(Allocator::DefaultAllocator(), cast_type));
-			chunk_state.cached_cast_vectors.push_back(make_uniq<Vector>(*chunk_state.cached_cast_vector_cache.back()));
-		} else {
-			chunk_state.cached_cast_vectors.emplace_back();
-			chunk_state.cached_cast_vector_cache.emplace_back();
-		}
-	}
 
 	chunk_state.column_ids = std::move(column_ids);
 }
@@ -428,30 +408,6 @@ static inline void ToUnifiedFormatInternal(TupleDataVectorFormat &format, const 
 		D_ASSERT(format.children.size() == 1);
 		ToUnifiedFormatInternal(format.children[0], ListVector::GetChild(vector));
 		break;
-	case PhysicalType::ARRAY: {
-		D_ASSERT(format.children.size() == 1);
-
-		// For arrays, we cheat a bit and pretend that they are lists by creating and assigning list_entry_t's to the
-		// vector This allows us to reuse all the list serialization functions for array types too.
-		auto array_size = ArrayType::GetSize(vector.GetType());
-
-		// How many list_entry_t's do we need to cover the whole child array?
-		// Make sure we round up so its all covered
-		auto child_array_total_size = ArrayVector::GetTotalSize(vector);
-		auto list_entry_t_count =
-		    MaxValue((child_array_total_size + array_size) / array_size, format.unified.validity.Capacity());
-
-		// Create list entries!
-		format.array_list_entries = make_unsafe_uniq_array<list_entry_t>(list_entry_t_count);
-		for (idx_t i = 0; i < list_entry_t_count; i++) {
-			format.array_list_entries[i].length = array_size;
-			format.array_list_entries[i].offset = i * array_size;
-		}
-		format.unified.data = reinterpret_cast<data_ptr_t>(format.array_list_entries.get());
-
-		ToUnifiedFormatInternal(format.children[0], ArrayVector::GetChild(vector));
-		break;
-	}
 	default:
 		break;
 	}
@@ -693,20 +649,6 @@ void TupleDataCollection::InitializeScan(TupleDataScanState &state, vector<colum
 
 	auto &chunk_state = state.chunk_state;
 
-	for (auto &col : column_ids) {
-		auto &type = layout.GetTypes()[col];
-
-		if (TypeVisitor::Contains(type, LogicalTypeId::ARRAY)) {
-			auto cast_type = ArrayType::ConvertToList(type);
-			chunk_state.cached_cast_vector_cache.push_back(
-			    make_uniq<VectorCache>(Allocator::DefaultAllocator(), cast_type));
-			chunk_state.cached_cast_vectors.push_back(make_uniq<Vector>(*chunk_state.cached_cast_vector_cache.back()));
-		} else {
-			chunk_state.cached_cast_vectors.emplace_back();
-			chunk_state.cached_cast_vector_cache.emplace_back();
-		}
-	}
-
 	state.chunk_state.column_ids = std::move(column_ids);
 }
 
@@ -868,18 +810,9 @@ void TupleDataCollection::ScanAtIndex(TupleDataPinState &pin_state, TupleDataChu
 	segment.allocator->InitializeChunkState(segment, pin_state, chunk_state, chunk_index, false);
 	result.Reset();
 
-	ResetCachedCastVectors(chunk_state, column_ids);
 	Gather(chunk_state.row_locations, *FlatVector::IncrementalSelectionVector(), chunk.count, column_ids, result,
-	       *FlatVector::IncrementalSelectionVector(), chunk_state.cached_cast_vectors);
+	       *FlatVector::IncrementalSelectionVector());
 	result.SetChildCardinality(chunk.count);
-}
-
-void TupleDataCollection::ResetCachedCastVectors(TupleDataChunkState &chunk_state, const vector<column_t> &column_ids) {
-	for (idx_t i = 0; i < column_ids.size(); i++) {
-		if (chunk_state.cached_cast_vectors[i]) {
-			chunk_state.cached_cast_vectors[i]->ResetFromCache(*chunk_state.cached_cast_vector_cache[i]);
-		}
-	}
 }
 
 // LCOV_EXCL_START

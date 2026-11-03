@@ -428,10 +428,12 @@ bool VectorStringToArray::StringToNestedTypeCastLoop(const string_t *source_data
 	}
 	D_ASSERT(total == child_count);
 
-	auto &result_child = ArrayVector::GetChildMutable(result);
+	ListVector::Reserve(result, child_count);
+	auto &result_child = ListVector::GetChildMutable(result);
 	auto &cast_data = parameters.cast_data->Cast<ArrayBoundCastData>();
 	CastParameters child_parameters(parameters, cast_data.child_cast_info.GetCastData(), parameters.local_state);
 	bool cast_result = cast_data.child_cast_info.Cast(varchar_vector, result_child, child_count, child_parameters);
+	ArrayVector::SetConsecutiveEntries(result, count);
 
 	return all_lengths_match && cast_result && vector_cast_data.all_converted;
 }

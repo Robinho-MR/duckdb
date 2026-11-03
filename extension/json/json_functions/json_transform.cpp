@@ -883,10 +883,12 @@ static bool TransformArrayToArray(yyjson_val *arrays[], yyjson_alc *alc, Vector 
 	}
 
 	// Transform array values
-	if (!JSONTransform::Transform(nested_vals, alc, ArrayVector::GetChildMutable(result), child_count, options,
+	ListVector::Reserve(result, child_count);
+	if (!JSONTransform::Transform(nested_vals, alc, ListVector::GetChildMutable(result), child_count, options,
 	                              nullptr)) {
 		success = false;
 	}
+	ArrayVector::SetConsecutiveEntries(result, count);
 
 	if (!options.delay_error && !success) {
 		throw InvalidInputException(options.error_message);

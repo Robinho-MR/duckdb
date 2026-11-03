@@ -163,9 +163,6 @@ enum class PhysicalType : uint8_t {
 	///// Custom data type, implemented by user
 	// EXTENSION = 28,
 
-	///// Array with fixed length of some logical type (a fixed-size list)
-	ARRAY = 29,
-
 	///// Measure of elapsed time in either seconds, milliseconds, microseconds
 	///// or nanoseconds.
 	// DURATION = 30,
@@ -384,9 +381,6 @@ struct LogicalType {
 			return true;
 		}
 		if (internal == PhysicalType::LIST) {
-			return true;
-		}
-		if (internal == PhysicalType::ARRAY) {
 			return true;
 		}
 		return false;
