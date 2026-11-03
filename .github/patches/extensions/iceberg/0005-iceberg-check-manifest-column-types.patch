@@ -1,0 +1,59 @@
+diff --git a/src/planning/metadata_io/manifest/iceberg_manifest_reader.cpp b/src/planning/metadata_io/manifest/iceberg_manifest_reader.cpp
+index 522d31b75..386d51cbf 100644
+--- a/src/planning/metadata_io/manifest/iceberg_manifest_reader.cpp
++++ b/src/planning/metadata_io/manifest/iceberg_manifest_reader.cpp
+@@ -111,6 +111,18 @@ static vector<int64_t> GetSplitOffsets(const Int64ListEntries::ValueEntry &entry
+ 	return GetListTemplated<int64_t>("split_offsets", entry);
+ }
+ 
++//! The layout of the manifest columns follows the format-version of the table metadata: if the manifests were written
++//! with another layout, the columns are not of the type we read them as
++static void CheckNestedColumn(const char *name, const Vector &column) {
++	auto type_id = column.GetType().id();
++	if (type_id != LogicalTypeId::LIST && type_id != LogicalTypeId::MAP) {
++		throw InvalidConfigurationException(
++		    "Manifest column '%s' has type %s, expected a list or map - does the format-version of the table metadata "
++		    "match the manifests?",
++		    name, column.GetType().ToString());
++	}
++}
++
+ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &partition_field_id_to_type,
+                                IcebergManifestReaderInput &input, vector<IcebergManifestEntry> &result) {
+ 	idx_t count = chunk.size();
+@@ -154,27 +166,35 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
+ 	auto file_size_in_bytes_entries = file_size_in_bytes.Values<int64_t>();
+ 
+ 	auto &column_sizes = data_file_entries[entry_index++];
++	CheckNestedColumn("column_sizes", column_sizes);
+ 	auto column_sizes_entries = column_sizes.Values<VectorListType<VectorStructType<int32_t, int64_t>>>();
+ 
+ 	auto &value_counts = data_file_entries[entry_index++];
++	CheckNestedColumn("value_counts", value_counts);
+ 	auto value_counts_entries = value_counts.Values<VectorListType<VectorStructType<int32_t, int64_t>>>();
+ 
+ 	auto &null_value_counts = data_file_entries[entry_index++];
++	CheckNestedColumn("null_value_counts", null_value_counts);
+ 	auto null_value_counts_entries = null_value_counts.Values<VectorListType<VectorStructType<int32_t, int64_t>>>();
+ 
+ 	auto &nan_value_counts = data_file_entries[entry_index++];
++	CheckNestedColumn("nan_value_counts", nan_value_counts);
+ 	auto nan_value_counts_entries = nan_value_counts.Values<VectorListType<VectorStructType<int32_t, int64_t>>>();
+ 
+ 	auto &lower_bounds = data_file_entries[entry_index++];
++	CheckNestedColumn("lower_bounds", lower_bounds);
+ 	auto lower_bounds_entries = lower_bounds.Values<VectorListType<VectorStructType<int32_t, string_t>>>();
+ 
+ 	auto &upper_bounds = data_file_entries[entry_index++];
++	CheckNestedColumn("upper_bounds", upper_bounds);
+ 	auto upper_bounds_entries = upper_bounds.Values<VectorListType<VectorStructType<int32_t, string_t>>>();
+ 
+ 	auto &split_offsets = data_file_entries[entry_index++];
++	CheckNestedColumn("split_offsets", split_offsets);
+ 	auto split_offsets_entries = split_offsets.Values<VectorListType<int64_t>>();
+ 
+ 	auto &equality_ids = data_file_entries[entry_index++];
++	CheckNestedColumn("equality_ids", equality_ids);
+ 	auto equality_ids_entries = equality_ids.Values<VectorListType<int32_t>>();
+ 
+ 	auto &sort_order_id = data_file_entries[entry_index++];
