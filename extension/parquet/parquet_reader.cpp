@@ -1135,6 +1135,11 @@ ParquetColumnSchema ParquetReader::ParseSchemaRecursive(idx_t depth, idx_t max_d
 	if (repetition_type == FieldRepetitionType::REPEATED) {
 		max_repeat++;
 	}
+	if (max_define > NumericLimits<uint8_t>::Maximum() || max_repeat > NumericLimits<uint8_t>::Maximum()) {
+		throw InvalidInputException("Malformed Parquet schema in file \"%s\": the definition/repetition levels exceed "
+		                            "the supported maximum of %d",
+		                            file.path, NumericLimits<uint8_t>::Maximum());
+	}
 
 	// Check for geometry type
 	string crs;
