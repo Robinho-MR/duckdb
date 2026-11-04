@@ -52,20 +52,20 @@ CompressionFunction GetAlpFunction(PhysicalType data_type) {
 
 template <>
 CompressionFunction GetAlpFunction<float>(PhysicalType data_type) {
-	auto function = CompressionFunction(CompressionType::COMPRESSION_ALP, data_type, AlpInitAnalyze<float>, AlpAnalyze<float>,
-	                           AlpFinalAnalyze<float>, AlpInitCompression<float>, AlpCompress<float>,
-	                           AlpFinalizeCompress<float>, AlpInitScan<float>, AlpScan<float>, AlpScanPartial<float>,
-	                           AlpSkip<float>);
+	auto function = CompressionFunction(CompressionType::COMPRESSION_ALP, data_type, AlpInitAnalyze<float>,
+	                                    AlpAnalyze<float>, AlpFinalAnalyze<float>, AlpInitCompression<float>,
+	                                    AlpCompress<float>, AlpFinalizeCompress<float>, AlpInitScan<float>,
+	                                    AlpScan<float>, AlpScanPartial<float>, AlpSkip<float>);
 	function.select = AlpSelect<float>;
 	return function;
 }
 
 template <>
 CompressionFunction GetAlpFunction<double>(PhysicalType data_type) {
-	auto function = CompressionFunction(CompressionType::COMPRESSION_ALP, data_type, AlpInitAnalyze<double>, AlpAnalyze<double>,
-	                           AlpFinalAnalyze<double>, AlpInitCompression<double>, AlpCompress<double>,
-	                           AlpFinalizeCompress<double>, AlpInitScan<double>, AlpScan<double>,
-	                           AlpScanPartial<double>, AlpSkip<double>);
+	auto function = CompressionFunction(CompressionType::COMPRESSION_ALP, data_type, AlpInitAnalyze<double>,
+	                                    AlpAnalyze<double>, AlpFinalAnalyze<double>, AlpInitCompression<double>,
+	                                    AlpCompress<double>, AlpFinalizeCompress<double>, AlpInitScan<double>,
+	                                    AlpScan<double>, AlpScanPartial<double>, AlpSkip<double>);
 	function.select = AlpSelect<double>;
 	return function;
 }
