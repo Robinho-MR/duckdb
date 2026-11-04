@@ -54,18 +54,22 @@ CompressionFunction GetAlpRDFunction(PhysicalType data_type) {
 
 template <>
 CompressionFunction GetAlpRDFunction<float>(PhysicalType data_type) {
-	return CompressionFunction(CompressionType::COMPRESSION_ALPRD, data_type, AlpRDInitAnalyze<float>,
-	                           AlpRDAnalyze<float>, AlpRDFinalAnalyze<float>, AlpRDInitCompression<float>,
-	                           AlpRDCompress<float>, AlpRDFinalizeCompress<float>, AlpRDInitScan<float>,
-	                           AlpRDScan<float>, AlpRDScanPartial<float>, AlpRDSkip<float>);
+	auto function = CompressionFunction(CompressionType::COMPRESSION_ALPRD, data_type, AlpRDInitAnalyze<float>,
+	                                    AlpRDAnalyze<float>, AlpRDFinalAnalyze<float>, AlpRDInitCompression<float>,
+	                                    AlpRDCompress<float>, AlpRDFinalizeCompress<float>, AlpRDInitScan<float>,
+	                                    AlpRDScan<float>, AlpRDScanPartial<float>, AlpRDSkip<float>);
+	function.select = AlpRDSelect<float>;
+	return function;
 }
 
 template <>
 CompressionFunction GetAlpRDFunction<double>(PhysicalType data_type) {
-	return CompressionFunction(CompressionType::COMPRESSION_ALPRD, data_type, AlpRDInitAnalyze<double>,
-	                           AlpRDAnalyze<double>, AlpRDFinalAnalyze<double>, AlpRDInitCompression<double>,
-	                           AlpRDCompress<double>, AlpRDFinalizeCompress<double>, AlpRDInitScan<double>,
-	                           AlpRDScan<double>, AlpRDScanPartial<double>, AlpRDSkip<double>);
+	auto function = CompressionFunction(CompressionType::COMPRESSION_ALPRD, data_type, AlpRDInitAnalyze<double>,
+	                                    AlpRDAnalyze<double>, AlpRDFinalAnalyze<double>, AlpRDInitCompression<double>,
+	                                    AlpRDCompress<double>, AlpRDFinalizeCompress<double>, AlpRDInitScan<double>,
+	                                    AlpRDScan<double>, AlpRDScanPartial<double>, AlpRDSkip<double>);
+	function.select = AlpRDSelect<double>;
+	return function;
 }
 
 CompressionFunction AlpRDCompressionFun::GetFunction(PhysicalType type) {

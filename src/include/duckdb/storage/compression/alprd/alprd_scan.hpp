@@ -334,6 +334,62 @@ void AlpRDScanPartial(ColumnSegment &segment, ColumnScanState &state, idx_t scan
 	}
 }
 
+//===--------------------------------------------------------------------===//
+// Select
+//===--------------------------------------------------------------------===//
+template <class T>
+void AlpRDSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vector_count, Vector &result,
+                 const SelectionVector &sel, idx_t sel_count, idx_t result_offset, ScanVectorType scan_type) {
+	using EXACT_TYPE = typename FloatingToExact<T>::TYPE;
+	auto &scan_state = (AlpRDScanState<T> &)*state.scan_state;
+	D_ASSERT(vector_count <= scan_state.count - scan_state.total_value_count);
+	result.SetVectorType(VectorType::FLAT_VECTOR);
+	auto result_data = FlatVector::GetDataMutableUnsafe<EXACT_TYPE>(result) + result_offset;
+
+	bool sorted = true;
+	for (idx_t i = 1; i < sel_count && sorted; i++) {
+		sorted = sel.get_index(i - 1) < sel.get_index(i);
+	}
+	if (!sorted) {
+		// unsorted selection: scan everything and gather
+		Vector scratch_vector(result.GetType(), vector_count);
+		AlpRDScanPartial<T>(segment, state, vector_count, scratch_vector, 0);
+		auto scratch_data = FlatVector::GetDataUnsafe<EXACT_TYPE>(scratch_vector);
+		for (idx_t i = 0; i < sel_count; i++) {
+			result_data[i] = scratch_data[sel.get_index(i)];
+		}
+		return;
+	}
+
+	const idx_t start = scan_state.total_value_count;
+	EXACT_TYPE scratch[AlpRDConstants::ALP_VECTOR_SIZE];
+	idx_t i = 0;
+	while (i < sel_count) {
+		// all selected rows of one ALP vector are served by a single decode
+		const idx_t first_row = start + sel.get_index(i);
+		const idx_t vector_start = first_row / AlpRDConstants::ALP_VECTOR_SIZE * AlpRDConstants::ALP_VECTOR_SIZE;
+		const idx_t vector_end = vector_start + AlpRDConstants::ALP_VECTOR_SIZE;
+		if (scan_state.total_value_count < vector_start) {
+			// vectors without selected rows are skipped using the metadata only
+			scan_state.Skip(segment, vector_start - scan_state.total_value_count);
+		}
+		const idx_t base = scan_state.total_value_count;
+		idx_t last = i;
+		while (last + 1 < sel_count && start + sel.get_index(last + 1) < vector_end) {
+			last++;
+		}
+		const idx_t scan_len = start + sel.get_index(last) - base + 1;
+		scan_state.template ScanVector<EXACT_TYPE>(scratch, scan_len);
+		for (; i <= last; i++) {
+			result_data[i] = scratch[start + sel.get_index(i) - base];
+		}
+	}
+	const idx_t end = start + vector_count;
+	if (scan_state.total_value_count < end) {
+		scan_state.Skip(segment, end - scan_state.total_value_count);
+	}
+}
+
 template <class T>
 void AlpRDSkip(ColumnSegment &segment, ColumnScanState &state, idx_t skip_count) {
 	auto &scan_state = (AlpRDScanState<T> &)*state.scan_state;
