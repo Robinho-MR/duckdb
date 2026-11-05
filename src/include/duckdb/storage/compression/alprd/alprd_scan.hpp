@@ -346,27 +346,15 @@ void AlpRDSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vector_co
 	result.SetVectorType(VectorType::FLAT_VECTOR);
 	auto result_data = FlatVector::GetDataMutableUnsafe<EXACT_TYPE>(result) + result_offset;
 
-	bool sorted = true;
-	for (idx_t i = 1; i < sel_count && sorted; i++) {
-		sorted = sel.get_index(i - 1) < sel.get_index(i);
-	}
-	if (!sorted) {
-		// unsorted selection: scan everything and gather
-		Vector scratch_vector(result.GetType(), vector_count);
-		AlpRDScanPartial<T>(segment, state, vector_count, scratch_vector, 0);
-		auto scratch_data = FlatVector::GetDataUnsafe<EXACT_TYPE>(scratch_vector);
-		for (idx_t i = 0; i < sel_count; i++) {
-			result_data[i] = scratch_data[sel.get_index(i)];
-		}
-		return;
-	}
-
 	const idx_t start = scan_state.total_value_count;
 	EXACT_TYPE scratch[AlpRDConstants::ALP_VECTOR_SIZE];
 	idx_t i = 0;
 	while (i < sel_count) {
 		// all selected rows of one ALP vector are served by a single decode
 		const idx_t first_row = start + sel.get_index(i);
+		if (first_row < scan_state.total_value_count) {
+			InternalException::Throw("Error in AlpRDSelect - selection vector indices are not ordered");
+		}
 		const idx_t vector_start = first_row / AlpRDConstants::ALP_VECTOR_SIZE * AlpRDConstants::ALP_VECTOR_SIZE;
 		const idx_t vector_end = vector_start + AlpRDConstants::ALP_VECTOR_SIZE;
 		if (scan_state.total_value_count < vector_start) {
@@ -376,6 +364,9 @@ void AlpRDSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vector_co
 		const idx_t base = scan_state.total_value_count;
 		idx_t last = i;
 		while (last + 1 < sel_count && start + sel.get_index(last + 1) < vector_end) {
+			if (sel.get_index(last + 1) < sel.get_index(last)) {
+				InternalException::Throw("Error in AlpRDSelect - selection vector indices are not ordered");
+			}
 			last++;
 		}
 		const idx_t scan_len = start + sel.get_index(last) - base + 1;
