@@ -1,6 +1,7 @@
 #include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/vector/map_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
+#include "duckdb/main/context.hpp"
 #include "duckdb/storage/table/variant_column_data.hpp"
 
 #include "duckdb/common/serializer/deserializer.hpp"
@@ -506,7 +507,7 @@ void VariantColumnData::FetchRows(TransactionData transaction, ColumnFetchState 
 		}
 
 		//! Need to perform the cast here as well
-		auto context = transaction.transaction->context.lock();
+		auto context = Context::TryGetClientContext(state.context.GetContext());
 		auto fetched_row = extracted_variant.GetValue(0).CastAs(*context, result.GetType());
 		result.SetValue(result_idx, fetched_row);
 	}

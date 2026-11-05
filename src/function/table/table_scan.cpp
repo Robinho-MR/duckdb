@@ -211,6 +211,7 @@ public:
 			l_state->all_columns.Initialize(context.client, scanned_types);
 		}
 		l_state->scan_state.options.force_fetch_row = Settings::Get<DebugForceFetchRowSetting>(context.client);
+		l_state->fetch_state.context = context.client;
 
 		// Initialize the local storage scan.
 		auto &bind_data = input.bind_data->Cast<TableScanBindData>();
