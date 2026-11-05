@@ -1,0 +1,14 @@
+# name: test/sql/copy/parquet/parquet_deep_nesting_levels.test
+# description: Reading a Parquet file whose definition levels exceed 255 is rejected
+# group: [parquet]
+
+require parquet
+
+# 130 nested lists: max definition level 261
+statement ok
+COPY (SELECT [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1, 2]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]::INTEGER[][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][][] AS l) TO '{TEST_DIR}/deep_list_levels.parquet';
+
+statement error
+SELECT * FROM '{TEST_DIR}/deep_list_levels.parquet';
+----
+levels exceeding 255 are not supported
