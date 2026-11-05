@@ -1051,10 +1051,9 @@ public:
 			bool bail = false;
 
 			for (auto &subplan : subplan_info.subplans) {
-				unordered_map<TableIndex, TableIndex> canonical_to_original;
-				if (HasRepeatedCanonicalTableIndex(*subplan.op.get(), canonical_to_original)) {
-					// Subplan reads the same canonical table more than once (e.g., a self-join): the canonical
-					// bindings cannot tell those reads apart, so they cannot be mapped between duplicate subplans
+				if (HasRepeatedCanonicalTableIndex(*subplan.op.get())) {
+					// Subplan exposes columns of the same canonical table read more than once (e.g., a self-join):
+					// the canonical bindings cannot tell those reads apart between duplicate subplans
 					bail = true;
 					break;
 				}
@@ -1462,20 +1461,16 @@ private:
 		return result;
 	}
 
-	bool HasRepeatedCanonicalTableIndex(LogicalOperator &op,
-	                                    unordered_map<TableIndex, TableIndex> &canonical_to_original) const {
-		for (auto &table_index : op.GetTableIndex()) {
-			auto entry = to_canonical_table_index.find(table_index);
+	//! Whether the bindings exposed by the subplan come from two occurrences of the same canonical table
+	bool HasRepeatedCanonicalTableIndex(LogicalOperator &op) const {
+		unordered_map<TableIndex, TableIndex> canonical_to_original;
+		for (auto &binding : GetExpandedColumnBindings(op)) {
+			auto entry = to_canonical_table_index.find(binding.table_index);
 			if (entry == to_canonical_table_index.end()) {
 				continue;
 			}
-			auto inserted = canonical_to_original.emplace(entry->second, table_index);
-			if (!inserted.second && inserted.first->second != table_index) {
-				return true;
-			}
-		}
-		for (auto &child : op.children) {
-			if (HasRepeatedCanonicalTableIndex(*child, canonical_to_original)) {
+			auto inserted = canonical_to_original.emplace(entry->second, binding.table_index);
+			if (!inserted.second && inserted.first->second != binding.table_index) {
 				return true;
 			}
 		}
