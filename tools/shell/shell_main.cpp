@@ -1,4 +1,5 @@
 #include "shell_state.hpp"
+#include "duckdb/common/stack_overflow_handler.hpp"
 
 #include <cstdio>
 #include <exception>
@@ -22,6 +23,7 @@ int wmain(int argc, wchar_t **wargv) {
 	}
 #endif
 
+	duckdb::StackOverflowHandler::Install();
 	auto &shell_state = ShellState::GetReference();
 	int rc = 0;
 	try {

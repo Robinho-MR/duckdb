@@ -21,6 +21,7 @@
 
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/stack_overflow_handler.hpp"
 #include "debug_fs_extension.hpp"
 #include "sqlite/catch_test_reporter.hpp"
 #include "sqlite/sqllogic_test_logger.hpp"
@@ -335,6 +336,7 @@ static bool TryReadExactSQLLogicTestFilter(const vector<string> &input_files, ve
 }
 
 int main(int argc_in, char *argv[]) {
+	StackOverflowHandler::Install();
 	string thread_stack_error;
 	if (!ConfigureThreadStackSize(argc_in, argv, thread_stack_error)) {
 		fprintf(stderr, "%s\n", thread_stack_error.c_str());
