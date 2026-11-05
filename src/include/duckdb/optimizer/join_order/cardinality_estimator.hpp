@@ -44,6 +44,8 @@ private:
 	CardinalityValue GetInnerSelectivity(JoinRelationSet &set);
 	CardinalityValue GetJoinSelectivity(JoinRelationSet &set, JoinRelationSet &left, JoinRelationSet &right);
 	CardinalityValue GetSelectivity(JoinRelationSet &set);
+	void BuildEdgeIndex();
+	vector<FilterInfoWithTotalDomains> GetEdges(JoinRelationSet &requested_set);
 	void ProcessSelectivityEdge(FilterInfoWithTotalDomains &edge, JoinRelationSet &requested_set,
 	                            SelectivityState &state);
 	void CreateSelectivitySubgraph(FilterInfoWithTotalDomains &edge, JoinRelationSet &edge_left_set,
@@ -68,8 +70,7 @@ private:
 	                      reference_map_t<JoinRelationSet, CompositeJoinPairStats> &inner_join_pair_stats,
 	                      reference_set_t<JoinRelationSet> &capped_join_pairs);
 	bool ApplyCompositeJoinPairCaps(CardinalityValue &target_selectivity, JoinRelationSet &scope,
-	                                reference_map_t<JoinRelationSet, CompositeJoinPairStats> &inner_join_pair_stats,
-	                                reference_set_t<JoinRelationSet> &capped_join_pairs);
+	                                SelectivityState &state);
 	double GetJoinPairCap(JoinRelationSet &join_pair);
 
 	void AddRelationStats(const FilterInfo &filter_info);
