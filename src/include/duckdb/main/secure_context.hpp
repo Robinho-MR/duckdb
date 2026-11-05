@@ -47,6 +47,8 @@ public:
 	[[noreturn]] static void ThrowSanitizedError(const ErrorData &error, const string &what);
 
 private:
+	//! The secure instance uses the scheduler of the caller instance, which must outlive it (destroyed last)
+	shared_ptr<DatabaseInstance> caller_db;
 	shared_ptr<DuckDB> db;
 	unique_ptr<Connection> connection;
 };

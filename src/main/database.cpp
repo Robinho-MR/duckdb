@@ -125,7 +125,7 @@ DatabaseInstance::~DatabaseInstance() {
 	if (config.block_allocator) {
 		config.block_allocator->FlushOnShutdown();
 	}
-	if (!secure_parent) {
+	if (!parent_scheduler) {
 		// the allocator threads are process-wide: the parent keeps using them
 		Allocator::SetBackgroundThreads(false);
 	}
@@ -390,11 +390,10 @@ void DatabaseInstance::InitializeInstance(const char *database_path, DBConfig *u
 	result_set_manager = make_uniq<ResultSetManager>(*this);
 
 	if (parent) {
-		// the scheduler is shared with the parent, which outlives it
-		secure_parent = parent->shared_from_this();
-		scheduler = parent->scheduler;
+		// the parent outlives its secure instances (see SecureContext), so its scheduler can be used directly
+		parent_scheduler = parent->GetScheduler();
 	} else {
-		scheduler = make_shared_ptr<TaskScheduler>(*this);
+		scheduler = make_uniq<TaskScheduler>(*this);
 	}
 	object_cache = make_uniq<ObjectCache>(*config.buffer_pool);
 	config.buffer_pool->AddObjectCache(*object_cache);
@@ -477,7 +476,7 @@ DatabaseManager &DatabaseManager::Get(ClientContext &db) {
 }
 
 TaskScheduler &DatabaseInstance::GetScheduler() {
-	return *scheduler;
+	return parent_scheduler ? *parent_scheduler : *scheduler;
 }
 
 ObjectCache &DatabaseInstance::GetObjectCache() {
@@ -645,7 +644,7 @@ const DBConfig &DBConfig::GetConfig(const ClientContext &context) {
 }
 
 idx_t DatabaseInstance::NumberOfThreads() {
-	return scheduler->NumberOfThreads();
+	return GetScheduler().NumberOfThreads();
 }
 
 idx_t DuckDB::NumberOfThreads() {

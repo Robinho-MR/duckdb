@@ -124,9 +124,9 @@ private:
 	unique_ptr<DatabaseManager> db_manager;
 	unique_ptr<ExternalResourceTypeRegistry> external_resource_type_registry;
 	unique_ptr<ExternalResourcesManager> external_resources_manager;
-	shared_ptr<TaskScheduler> scheduler;
-	//! The instance this instance is the secure context of (keeps the shared scheduler alive); null otherwise
-	shared_ptr<DatabaseInstance> secure_parent;
+	unique_ptr<TaskScheduler> scheduler;
+	//! The scheduler of the parent of a secure instance, which uses it instead of its own; null otherwise
+	optional_ptr<TaskScheduler> parent_scheduler;
 	unique_ptr<ObjectCache> object_cache;
 	unique_ptr<ConnectionManager> connection_manager;
 	unique_ptr<ExtensionManager> extension_manager;

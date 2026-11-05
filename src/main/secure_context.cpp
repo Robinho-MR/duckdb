@@ -66,8 +66,8 @@ static void LoadExtensions(DuckDB &secure_db, DatabaseInstance &caller) {
 	}
 }
 
-SecureContext::SecureContext(ClientContext &caller) {
-	auto &caller_instance = *caller.db;
+SecureContext::SecureContext(ClientContext &caller) : caller_db(caller.db) {
+	auto &caller_instance = *caller_db;
 	DBConfig config;
 	// the core options are inherited: these configure the resources that are shared (e.g. memory and threads)
 	config.options = caller_instance.config.options;
