@@ -1,0 +1,15 @@
+diff --git a/src/storage/ducklake_catalog.cpp b/src/storage/ducklake_catalog.cpp
+index e0137134..2620f18d 100644
+--- a/src/storage/ducklake_catalog.cpp
++++ b/src/storage/ducklake_catalog.cpp
+@@ -530,6 +530,10 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(const DuckLakeColumnInfo
+ 	col_data.id = col.id;
+ 	if (col.children.empty()) {
+ 		auto col_type = DuckLakeTypes::FromString(col.type);
++		if (DuckLakeTypes::IsNested(col_type)) {
++			throw InvalidInputException("Column \"%s\" has the nested type \"%s\" but no child columns", col.name,
++			                            col.type);
++		}
+ 		col_data.initial_default = col.initial_default.DefaultCastAs(col_type);
+ 		if (col.default_value.IsNull()) {
+ 			col_data.default_value = ConstantExpression::Null();
