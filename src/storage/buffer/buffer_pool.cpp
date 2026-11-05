@@ -390,10 +390,35 @@ TemporaryMemoryManager &BufferPool::GetTemporaryMemoryManager() {
 	return *temporary_memory_manager;
 }
 
+void BufferPool::AddObjectCache(ObjectCache &object_cache) {
+	lock_guard<mutex> guard(object_cache_lock);
+	object_caches.push_back(object_cache);
+}
+
+void BufferPool::RemoveObjectCache(ObjectCache &object_cache) {
+	lock_guard<mutex> guard(object_cache_lock);
+	for (idx_t i = 0; i < object_caches.size(); i++) {
+		if (&object_caches[i].get() == &object_cache) {
+			object_caches.erase_at(i);
+			return;
+		}
+	}
+}
+
 BufferPool::EvictionResult BufferPool::EvictObjectCacheEntries(MemoryTag tag, idx_t extra_memory, idx_t memory_limit) {
 	TempBufferPoolReservation r(tag, *this, extra_memory);
 
-	if (!object_cache->EvictToMemoryLimit(memory_limit)) {
+	bool evicted = false;
+	{
+		lock_guard<mutex> guard(object_cache_lock);
+		for (auto &object_cache : object_caches) {
+			if (object_cache.get().EvictToMemoryLimit(memory_limit)) {
+				evicted = true;
+				break;
+			}
+		}
+	}
+	if (!evicted) {
 		r.Resize(0);
 		return {false, std::move(r)};
 	}
