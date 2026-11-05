@@ -362,4 +362,28 @@ TEST_CASE("Test KeyValueSecret deserialization validates redact_keys", "[seriali
 	}
 }
 
+TEST_CASE("Test deserializing deeply nested types is bounded", "[serialization]") {
+	for (idx_t depth : {100, 20000}) {
+		LogicalType type = LogicalType::INTEGER;
+		for (idx_t i = 0; i < depth; i++) {
+			type = LogicalType::LIST(type);
+		}
+		Allocator allocator;
+		MemoryStream stream(allocator);
+		SerializationOptions options;
+		BinarySerializer serializer(stream, options);
+		serializer.Begin();
+		serializer.WriteProperty(100, "type", type);
+		serializer.End();
+		stream.Rewind();
+		BinaryDeserializer deserializer(stream);
+		deserializer.Begin();
+		if (depth < 1000) {
+			REQUIRE(deserializer.ReadProperty<LogicalType>(100, "type") == type);
+		} else {
+			REQUIRE_THROWS_AS(deserializer.ReadProperty<LogicalType>(100, "type"), SerializationException);
+		}
+	}
+}
+
 } // namespace duckdb

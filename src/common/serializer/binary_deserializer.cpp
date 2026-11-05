@@ -29,6 +29,10 @@ void BinaryDeserializer::OnOptionalPropertyEnd(bool present) {
 }
 
 void BinaryDeserializer::OnObjectBegin() {
+	if (nesting_level >= MAX_NESTING_LEVEL) {
+		throw SerializationException("Failed to deserialize: maximum nesting depth of %llu exceeded",
+		                             MAX_NESTING_LEVEL);
+	}
 	nesting_level++;
 }
 
