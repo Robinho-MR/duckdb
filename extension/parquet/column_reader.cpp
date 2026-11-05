@@ -224,7 +224,9 @@ void ColumnReader::RegisterPrefetch(ThriftFileTransport &transport, bool allow_m
 	// fetch the chunk whole, so this and every later read of it is served from the cache, as it would be without the
 	// page index. The read re-fetches the cached pieces with the gaps around them, so it sends about as many requests
 	// as on a cold cache
-	if (ShouldReadChunkWhole(transport.GetCachingFileHandle(), chunk_start, chunk_size, ranges)) {
+	// pieces cached by the other slices of the row group are not repeated probes
+	if (!page_index_restricted_to_slice &&
+	    ShouldReadChunkWhole(transport.GetCachingFileHandle(), chunk_start, chunk_size, ranges)) {
 		transport.RegisterPrefetch(chunk_start, chunk_size, allow_merge, true);
 		return;
 	}
@@ -244,6 +246,7 @@ void ColumnReader::InitializePageIndex(const ParquetRowGroupPageIndex &page_inde
 	}
 	offset_index = *page_index.offset_indexes[ColumnIndex()];
 	page_index_rows = page_index.row_ranges;
+	page_index_restricted_to_slice = page_index.restricted_to_slice;
 }
 
 void ColumnReader::VerifyPageAgainstOffsetIndex(idx_t header_location, const PageHeader &page_hdr) {
@@ -432,6 +435,7 @@ void ColumnReader::InitializeRead(idx_t row_group_idx_p, idx_t row_group_num_row
 	}
 	offset_index = nullptr;
 	page_index_rows = nullptr;
+	page_index_restricted_to_slice = false;
 	// ugh. sometimes there is an extra offset for the dict. sometimes it's wrong.
 	chunk_read_offset = NumericCast<idx_t>(chunk->meta_data.data_page_offset);
 	if (chunk->meta_data.__isset.dictionary_page_offset && chunk->meta_data.dictionary_page_offset >= 4) {

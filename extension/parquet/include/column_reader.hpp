@@ -409,6 +409,8 @@ private:
 	//! the scan state), set only when the page index can be used to skip pages of this column chunk
 	optional_ptr<const duckdb_parquet::OffsetIndex> offset_index;
 	optional_ptr<const vector<ParquetPageRowRange>> page_index_rows;
+	//! Whether page_index_rows restrict the scan to a slice of the row group that other threads read the rest of
+	bool page_index_restricted_to_slice = false;
 	//! The first offset registered for prefetching, when it is not the chunk start
 	optional_idx prefetch_offset;
 	//! Whether the rows [begin, end) of the row group are needed according to the page index

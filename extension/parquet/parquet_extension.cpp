@@ -1191,6 +1191,10 @@ static void LoadInternal(ExtensionLoader &loader) {
 	                          "Use the page index (ColumnIndex and OffsetIndex) of Parquet files to skip the pages "
 	                          "that cannot contain rows matching the filters",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(true));
+	config.AddExtensionOption("parquet_split_row_groups",
+	                          "Split the row groups of a Parquet file with fewer row groups than threads into slices "
+	                          "that different threads scan, using the page index to read only the pages of a slice",
+	                          LogicalType::BOOLEAN, Value::BOOLEAN(true));
 	config.AddExtensionOption(
 	    "enable_geoparquet_conversion",
 	    "Attempt to decode/encode geometry data in/as GeoParquet files if the spatial extension is present.",

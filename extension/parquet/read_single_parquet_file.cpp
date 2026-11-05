@@ -252,6 +252,11 @@ static unique_ptr<GlobalTableFunctionState> ReadSingleParquetFileInitGlobal(Clie
 		reader.deletion_filter = make_uniq<BorrowedDeleteFilter>(*file_input.deletion_filter);
 	}
 	result->max_threads = MaxValue<idx_t>(reader.NumRowGroups(), 1);
+	// with several files, the threads already have the row groups of the other files to scan
+	if (file_input.file_count == 1 && ParquetReader::SplitRowGroupsEnabled(context)) {
+		result->state.allow_row_group_slicing = true;
+		result->max_threads = MaxValue(result->max_threads, ParquetReader::MaxScanTaskCount(*reader.GetFileMetadata()));
+	}
 	return std::move(result);
 }
 

@@ -28,6 +28,7 @@
 #include "duckdb/function/partition_stats.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/parallel/async_result.hpp"
+#include "duckdb/parallel/task_scheduler.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/parsed_expression.hpp"
 #include "parquet_column_schema.hpp"
@@ -557,6 +558,15 @@ shared_ptr<BaseUnionData> ParquetReader::GetUnionData(idx_t file_idx) {
 	return std::move(result);
 }
 
+bool ParquetReader::SplitRowGroupsEnabled(ClientContext &context) {
+	bool split_row_groups = true;
+	bool use_page_index = true;
+	context.TryGetCurrentSetting("parquet_split_row_groups", split_row_groups);
+	// a slice relies on the OffsetIndex to jump to its first row
+	context.TryGetCurrentSetting("parquet_use_page_index", use_page_index);
+	return split_row_groups && use_page_index && TaskScheduler::GetScheduler(context).NumberOfThreads() > 1;
+}
+
 unique_ptr<GlobalTableFunctionState> ParquetMultiFileInfo::InitializeGlobalState(ClientContext &, MultiFileBindData &,
                                                                                  MultiFileGlobalState &global_state) {
 	return make_uniq<ParquetReadGlobalState>(global_state.op);
@@ -576,8 +586,22 @@ bool ParquetReader::TryInitializeScan(ClientContext &context, GlobalTableFunctio
 		return false;
 	}
 	// The current reader has rowgroups left to be scanned
+	if (gstate.slice_count == 0) {
+		gstate.slice_index = 0;
+		gstate.slice_count = 1;
+		if (gstate.allow_row_group_slicing) {
+			auto thread_count = NumericCast<idx_t>(TaskScheduler::GetScheduler(context).NumberOfThreads());
+			gstate.slice_count = GetRowGroupSliceCount(gstate.row_group_index, thread_count);
+		}
+	}
 	lstate.group_index = gstate.row_group_index;
-	gstate.row_group_index++;
+	lstate.slice_index = gstate.slice_index;
+	lstate.slice_count = gstate.slice_count;
+	gstate.slice_index++;
+	if (gstate.slice_index >= gstate.slice_count) {
+		gstate.row_group_index++;
+		gstate.slice_count = 0;
+	}
 	return true;
 }
 
@@ -587,6 +611,8 @@ void ParquetReader::PrepareScan(ClientContext &context, GlobalTableFunctionState
 	auto &lstate = lstate_p.Cast<ParquetReadLocalState>();
 	lstate.scan_state.op = gstate.op;
 	InitializeScan(context, lstate.scan_state, lstate.group_index);
+	lstate.scan_state.slice_index = lstate.slice_index;
+	lstate.scan_state.slice_count = lstate.slice_count;
 }
 
 AsyncResult ParquetReader::ScheduleIO(ClientContext &context, GlobalTableFunctionState &gstate_p,
@@ -599,6 +625,7 @@ AsyncResult ParquetReader::ScheduleIO(ClientContext &context, GlobalTableFunctio
 	auto strategy = RegisterRowGroupReads(context, scan_state);
 	auto read = scan_state.row_groups_read - read_before;
 	auto skipped = scan_state.row_groups_skipped - skipped_before;
+	D_ASSERT(read + skipped <= 1);
 	gstate.row_groups_scanned_unreported += read;
 	gstate.total_row_groups_to_scan += read + skipped;
 	return ScheduleRowGroupReads(scan_state, strategy);
@@ -607,6 +634,8 @@ AsyncResult ParquetReader::ScheduleIO(ClientContext &context, GlobalTableFunctio
 void ParquetReader::FinishFile(ClientContext &context, GlobalTableFunctionState &gstate_p) {
 	auto &gstate = gstate_p.Cast<ParquetReadGlobalState>();
 	gstate.row_group_index = 0;
+	gstate.slice_index = 0;
+	gstate.slice_count = 0;
 }
 
 AsyncResult ParquetReader::Scan(ClientContext &context, GlobalTableFunctionState &gstate_p,

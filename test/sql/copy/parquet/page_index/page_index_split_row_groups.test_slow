@@ -1,0 +1,326 @@
+# name: test/sql/copy/parquet/page_index/page_index_split_row_groups.test_slow
+# description: Scan the slices of a large row group in parallel when a file has fewer row groups than threads
+# group: [page_index]
+
+require parquet
+
+statement ok
+SET threads=8;
+
+statement ok
+CREATE TABLE data AS
+	SELECT range AS id,
+	       'v' || (range % 100)::VARCHAR AS s,
+	       CASE WHEN range % 7 = 0 THEN NULL ELSE range END AS n,
+	       (range / 4)::DOUBLE AS d,
+	       {'a': range::INTEGER, 'b': 't' || (range % 13)::VARCHAR} AS st
+	FROM range(1000000);
+
+statement ok
+COPY data TO '{TEST_DIR}/split_row_groups.parquet' (ROW_GROUP_SIZE 1000000, WRITE_PAGE_INDEX true);
+
+statement ok
+COPY data TO '{TEST_DIR}/split_row_groups_no_index.parquet' (ROW_GROUP_SIZE 1000000);
+
+query I
+SELECT count(*) FROM parquet_metadata('{TEST_DIR}/split_row_groups.parquet') WHERE column_id = 0
+----
+1
+
+# the single row group is scanned in 8 slices of at least 122880 rows
+statement ok
+CALL enable_logging('PhysicalOperator');
+
+query IIIIIIII
+SELECT count(*), sum(id), count(n), sum(n), min(s), max(s), sum(d), sum(st.a) FROM '{TEST_DIR}/split_row_groups.parquet'
+----
+1000000	499999500000	857142	428570571429	v0	v99	124999875000.0	499999500000
+
+statement ok
+CALL disable_logging();
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('PhysicalOperator') WHERE class = 'ParquetReader' AND event = 'ReadRowGroup'
+----
+8
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# no slice is ruled out
+query I
+SELECT count(*) FROM duckdb_logs_parsed('PhysicalOperator') WHERE class = 'ParquetReader' AND event = 'SkipRowGroup'
+----
+0
+
+# every row is read exactly once, at its own row number
+query II
+SELECT count(*), count(DISTINCT id) FROM read_parquet('{TEST_DIR}/split_row_groups.parquet', file_row_number = true) WHERE id = file_row_number
+----
+1000000	1000000
+
+# the order of the rows is preserved
+statement ok
+CREATE TABLE ordered AS SELECT id, s FROM '{TEST_DIR}/split_row_groups.parquet';
+
+query I
+SELECT count(*) FROM ordered WHERE id <> rowid OR s <> 'v' || (rowid % 100)::VARCHAR
+----
+0
+
+query I
+SELECT id FROM '{TEST_DIR}/split_row_groups.parquet' LIMIT 5 OFFSET 500000
+----
+500000
+500001
+500002
+500003
+500004
+
+# filters across the boundaries of the slices
+query III
+SELECT count(*), min(id), max(id) FROM '{TEST_DIR}/split_row_groups.parquet' WHERE id BETWEEN 122000 AND 128000
+----
+6001	122000	128000
+
+query III
+SELECT count(*), min(id), max(id) FROM '{TEST_DIR}/split_row_groups.parquet' WHERE id BETWEEN 0 AND 1000 OR id >= 999000
+----
+2001	0	999999
+
+query II
+SELECT count(*), sum(n) FROM '{TEST_DIR}/split_row_groups.parquet' WHERE id % 1000 = 7
+----
+1000	428434999
+
+query II
+SELECT count(*), sum(id) FROM '{TEST_DIR}/split_row_groups.parquet' WHERE s = 'v42'
+----
+10000	4999920000
+
+query I
+SELECT count(*) FROM '{TEST_DIR}/split_row_groups.parquet' WHERE id > 2000000
+----
+0
+
+# a slice can be ruled out by the page index: only the slices that hold the rows are read
+statement ok
+CALL enable_logging('PhysicalOperator');
+
+query II
+SELECT id, s FROM '{TEST_DIR}/split_row_groups.parquet' WHERE id = 777777
+----
+777777	v77
+
+statement ok
+CALL disable_logging();
+
+query I
+SELECT sum(info['rows_skipped']::BIGINT) < 1000000 FROM duckdb_logs_parsed('PhysicalOperator') WHERE class = 'ParquetReader' AND event = 'SkipPages'
+----
+true
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# the same results with the row group read in one piece
+statement ok
+SET parquet_split_row_groups = false;
+
+statement ok
+CALL enable_logging('PhysicalOperator');
+
+query IIIIIIII
+SELECT count(*), sum(id), count(n), sum(n), min(s), max(s), sum(d), sum(st.a) FROM '{TEST_DIR}/split_row_groups.parquet'
+----
+1000000	499999500000	857142	428570571429	v0	v99	124999875000.0	499999500000
+
+statement ok
+CALL disable_logging();
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('PhysicalOperator') WHERE class = 'ParquetReader' AND event = 'ReadRowGroup'
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+RESET parquet_split_row_groups;
+
+# without the page index a slice would read every page in front of it: no splitting
+statement ok
+CALL enable_logging('PhysicalOperator');
+
+query II
+SELECT count(*), sum(id) FROM '{TEST_DIR}/split_row_groups_no_index.parquet'
+----
+1000000	499999500000
+
+statement ok
+CALL disable_logging();
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('PhysicalOperator') WHERE class = 'ParquetReader' AND event = 'ReadRowGroup'
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# nor when the page index is disabled
+statement ok
+SET parquet_use_page_index = false;
+
+statement ok
+CALL enable_logging('PhysicalOperator');
+
+query II
+SELECT count(*), sum(id) FROM '{TEST_DIR}/split_row_groups.parquet'
+----
+1000000	499999500000
+
+statement ok
+CALL disable_logging();
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('PhysicalOperator') WHERE class = 'ParquetReader' AND event = 'ReadRowGroup'
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+RESET parquet_use_page_index;
+
+# nor with a single thread
+statement ok
+SET threads=1;
+
+statement ok
+CALL enable_logging('PhysicalOperator');
+
+query II
+SELECT count(*), sum(id) FROM '{TEST_DIR}/split_row_groups.parquet'
+----
+1000000	499999500000
+
+statement ok
+CALL disable_logging();
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('PhysicalOperator') WHERE class = 'ParquetReader' AND event = 'ReadRowGroup'
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+SET threads=8;
+
+# nor when the threads have the row groups of other files to scan
+statement ok
+CALL enable_logging('PhysicalOperator');
+
+query II
+SELECT count(*), sum(id) FROM read_parquet(['{TEST_DIR}/split_row_groups.parquet', '{TEST_DIR}/split_row_groups.parquet'])
+----
+2000000	999999000000
+
+statement ok
+CALL disable_logging();
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('PhysicalOperator') WHERE class = 'ParquetReader' AND event = 'ReadRowGroup'
+----
+2
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# repeated columns cannot jump over pages: a file with a list column is split only when the list is not read
+statement ok
+COPY (SELECT id, [id, id + 1] AS arr FROM data) TO '{TEST_DIR}/split_row_groups_list.parquet' (ROW_GROUP_SIZE 1000000, WRITE_PAGE_INDEX true);
+
+statement ok
+CALL enable_logging('PhysicalOperator');
+
+query II
+SELECT count(*), sum(arr[2]) FROM '{TEST_DIR}/split_row_groups_list.parquet'
+----
+1000000	500000500000
+
+statement ok
+CALL disable_logging();
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('PhysicalOperator') WHERE class = 'ParquetReader' AND event = 'ReadRowGroup'
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+CALL enable_logging('PhysicalOperator');
+
+query II
+SELECT count(*), sum(id) FROM '{TEST_DIR}/split_row_groups_list.parquet'
+----
+1000000	499999500000
+
+statement ok
+CALL disable_logging();
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('PhysicalOperator') WHERE class = 'ParquetReader' AND event = 'ReadRowGroup'
+----
+8
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# two row groups for eight threads: each is split into four slices
+statement ok
+COPY data TO '{TEST_DIR}/split_row_groups_two.parquet' (ROW_GROUP_SIZE 500000, WRITE_PAGE_INDEX true);
+
+query I
+SELECT count(*) FROM parquet_metadata('{TEST_DIR}/split_row_groups_two.parquet') WHERE column_id = 0
+----
+2
+
+statement ok
+CALL enable_logging('PhysicalOperator');
+
+query III
+SELECT count(*), sum(id), sum(n) FROM '{TEST_DIR}/split_row_groups_two.parquet'
+----
+1000000	499999500000	428570571429
+
+statement ok
+CALL disable_logging();
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('PhysicalOperator') WHERE class = 'ParquetReader' AND event = 'ReadRowGroup'
+----
+8
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM read_parquet('{TEST_DIR}/split_row_groups_two.parquet', file_row_number = true) WHERE id <> file_row_number
+----
+0
+
+# the order of the rows of both row groups is preserved
+statement ok
+CREATE TABLE ordered_two AS SELECT id FROM '{TEST_DIR}/split_row_groups_two.parquet';
+
+query I
+SELECT count(*) FROM ordered_two WHERE id <> rowid
+----
+0

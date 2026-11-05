@@ -43,10 +43,13 @@ struct ParquetRowGroupPageIndex {
 	vector<unique_ptr<duckdb_parquet::OffsetIndex>> offset_indexes;
 	//! The rows of the row group that may match the filters, sorted and non-overlapping
 	vector<ParquetPageRowRange> row_ranges;
+	//! Whether row_ranges are restricted to a slice of the row group that other threads scan the rest of
+	bool restricted_to_slice = false;
 
 	void Reset() {
 		offset_indexes.clear();
 		row_ranges.clear();
+		restricted_to_slice = false;
 		arena.Reset();
 	}
 	bool HasOffsetIndex(idx_t column_chunk_idx) const {

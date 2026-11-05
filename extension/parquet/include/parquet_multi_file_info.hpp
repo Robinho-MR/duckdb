@@ -56,6 +56,12 @@ struct ParquetReadGlobalState : public GlobalTableFunctionState {
 	}
 	//! Index of row group within file currently up for scanning
 	idx_t row_group_index;
+	//! Whether a row group may be split into slices that different threads scan
+	bool allow_row_group_slicing = false;
+	//! The slice of the row group at row_group_index that is up next, and the number of slices it is split into (0 if
+	//! not decided yet)
+	idx_t slice_index = 0;
+	idx_t slice_count = 0;
 	//! (Optional) pointer to physical operator performing the scan
 	optional_ptr<const PhysicalOperator> op;
 	//! Row groups read but not yet reported to the profiler
@@ -69,6 +75,8 @@ struct ParquetReadGlobalState : public GlobalTableFunctionState {
 struct ParquetReadLocalState : public LocalTableFunctionState {
 	ParquetReaderScanState scan_state;
 	idx_t group_index;
+	idx_t slice_index = 0;
+	idx_t slice_count = 1;
 };
 
 struct ParquetMultiFileInfo : MultiFileReaderInterface {

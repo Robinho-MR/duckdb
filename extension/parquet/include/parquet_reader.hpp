@@ -230,6 +230,14 @@ public:
 public:
 	//! The row group index this scan state decodes
 	idx_t group_index;
+	//! The slice of the row group this scan state decodes, out of the slices the row group is split into
+	idx_t slice_index = 0;
+	idx_t slice_count = 1;
+	//! The rows [scan_begin, scan_end) of the row group this scan state decodes (all rows unless it is split)
+	idx_t scan_begin = 0;
+	idx_t scan_end = 0;
+	//! Rows in front of scan_begin that the column readers have yet to skip
+	idx_t pending_slice_skip = 0;
 	idx_t offset_in_group;
 	idx_t group_offset;
 	shared_ptr<CachingFileHandle> file_handle;
@@ -427,6 +435,19 @@ public:
 public:
 	//! Initialize the state for the next rowgroup to read
 	void InitializeScan(ClientContext &context, ParquetReaderScanState &state, idx_t group_to_read) const;
+	//! The number of slices that different threads scan the row group in, when the file has fewer row groups than
+	//! there are threads
+	idx_t GetRowGroupSliceCount(idx_t group_idx, idx_t thread_count) const;
+	//! The upper bound of GetRowGroupSliceCount for a row group, from its metadata
+	static idx_t MaxRowGroupSliceCount(const duckdb_parquet::RowGroup &group);
+	//! The number of scan tasks a file can be split into: its row groups, or their slices
+	static idx_t MaxScanTaskCount(const duckdb_parquet::FileMetaData &metadata);
+	//! Whether row groups may be split into slices, see parquet_split_row_groups
+	static bool SplitRowGroupsEnabled(ClientContext &context);
+	//! The minimum number of rows of a slice of a row group
+	static constexpr idx_t MINIMUM_ROWS_PER_SLICE = 122880;
+	//! Column chunks without an OffsetIndex may hold at most 1/10th of the bytes of a row group that is split
+	static constexpr idx_t MAXIMUM_SIZE_WITHOUT_OFFSET_INDEX_DIVISOR = 10;
 
 	idx_t NumRows() const;
 	idx_t NumRowGroups() const;
@@ -581,6 +602,9 @@ private:
 	unordered_map<idx_t, unordered_map<idx_t, shared_ptr<ReadHead>>> bloom_filter_read_heads;
 	//! Scan handle shared by all scan states of this reader
 	mutable shared_ptr<CachingFileHandle> shared_scan_handle;
+	//! Whether every column the scan reads can jump over the pages in front of a slice of a row group
+	mutable OnceFlag columns_support_slicing_computed;
+	mutable bool columns_support_slicing = false;
 	mutable annotated_mutex variant_stats_lock;
 	mutable unordered_map<idx_t, unique_ptr<BaseStatistics>> variant_stats_cache;
 };

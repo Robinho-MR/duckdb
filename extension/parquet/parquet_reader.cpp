@@ -1609,6 +1609,121 @@ static idx_t GetRowGroupOffset(const ParquetReader &reader, idx_t group_idx) {
 	return row_group_offset;
 }
 
+//! The rows of the slice the scan state decodes: the row group is cut into equal slices at vector boundaries
+static void SetSliceBounds(ParquetReaderScanState &state, idx_t group_num_rows) {
+	D_ASSERT(state.slice_index < state.slice_count);
+	if (state.slice_count <= 1) {
+		state.scan_begin = 0;
+		state.scan_end = group_num_rows;
+		return;
+	}
+	auto slice_bound = [&](idx_t slice_idx) -> idx_t {
+		if (slice_idx >= state.slice_count) {
+			return group_num_rows;
+		}
+		auto bound = slice_idx * (group_num_rows / state.slice_count);
+		return MinValue<idx_t>(bound - bound % STANDARD_VECTOR_SIZE, group_num_rows);
+	};
+	state.scan_begin = slice_bound(state.slice_index);
+	state.scan_end = slice_bound(state.slice_index + 1);
+	D_ASSERT(state.scan_begin <= state.scan_end);
+}
+
+static bool SchemaHasRepeats(const ParquetColumnSchema &schema) {
+	if (schema.max_repeat > 0) {
+		return true;
+	}
+	for (auto &child : schema.children) {
+		if (SchemaHasRepeats(child)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+idx_t ParquetReader::MaxRowGroupSliceCount(const duckdb_parquet::RowGroup &group) {
+	if (group.num_rows <= 0) {
+		return 1;
+	}
+	// a slice reads the column chunks without an OffsetIndex up to its first row: allowed only for small ones (writers
+	// leave out the OffsetIndex of single-page chunks)
+	idx_t total_size = 0;
+	idx_t size_without_offset_index = 0;
+	for (auto &column_chunk : group.columns) {
+		if (column_chunk.__isset.crypto_metadata) {
+			return 1;
+		}
+		const auto chunk_size =
+		    column_chunk.meta_data.total_compressed_size > 0 ? idx_t(column_chunk.meta_data.total_compressed_size) : 0;
+		total_size += chunk_size;
+		if (!ParquetPageIndexUtils::HasOffsetIndex(column_chunk)) {
+			size_without_offset_index += chunk_size;
+		}
+	}
+	if (size_without_offset_index * MAXIMUM_SIZE_WITHOUT_OFFSET_INDEX_DIVISOR > total_size) {
+		return 1;
+	}
+	return MaxValue<idx_t>(NumericCast<idx_t>(group.num_rows) / MINIMUM_ROWS_PER_SLICE, 1);
+}
+
+idx_t ParquetReader::MaxScanTaskCount(const duckdb_parquet::FileMetaData &metadata) {
+	idx_t result = 0;
+	for (auto &group : metadata.row_groups) {
+		result += MaxRowGroupSliceCount(group);
+	}
+	return result;
+}
+
+idx_t ParquetReader::GetRowGroupSliceCount(idx_t group_idx, idx_t thread_count) const {
+	auto &row_groups = GetFileMetadata()->row_groups;
+	const auto row_group_count = row_groups.size();
+	if (row_group_count == 0 || row_group_count >= thread_count) {
+		// the row groups keep every thread busy
+		return 1;
+	}
+	D_ASSERT(group_idx < row_group_count);
+	const auto max_slices = MaxRowGroupSliceCount(row_groups[group_idx]);
+	if (max_slices <= 1) {
+		return 1;
+	}
+	CallOnce(columns_support_slicing_computed, [&] {
+		if (parquet_options.encryption_config ||
+		    parquet_options.prefetch_strategy == ParquetPrefetchStrategyOption::WHOLE_GROUP) {
+			columns_support_slicing = false;
+			return;
+		}
+		// repeated columns cannot jump over pages: every slice would decode the rows in front of it
+		auto column_has_repeats = [&](const ColumnIndex &index) {
+			auto primary_index = index.GetPrimaryIndex();
+			return primary_index >= root_schema->children.size() ||
+			       SchemaHasRepeats(root_schema->children[primary_index]);
+		};
+		columns_support_slicing = true;
+		for (idx_t i = 0; i < column_indexes.size(); i++) {
+			if (expression_map.find(ProjectionIndex(i)) != expression_map.end()) {
+				continue;
+			}
+			if (column_has_repeats(column_indexes[i])) {
+				columns_support_slicing = false;
+				return;
+			}
+		}
+		for (auto &entry : expression_map) {
+			for (auto &index : entry.second.column_indexes) {
+				if (column_has_repeats(index)) {
+					columns_support_slicing = false;
+					return;
+				}
+			}
+		}
+	});
+	if (!columns_support_slicing) {
+		return 1;
+	}
+	const auto target = (thread_count + row_group_count - 1) / row_group_count;
+	return MinValue(target, max_slices);
+}
+
 const ParquetRowGroup &ParquetReader::GetGroup(ParquetReaderScanState &state) {
 	auto file_meta_data = GetFileMetadata();
 	D_ASSERT(state.group_index < file_meta_data->row_groups.size());
@@ -1950,7 +2065,7 @@ void ParquetReader::PrepareRowGroupBuffer(ClientContext &context, ParquetReaderS
 	}
 	auto row_group_num_rows = NumericCast<idx_t>(group.num_rows);
 
-	if (filters && row_group_num_rows > 0 && state.offset_in_group == row_group_num_rows) {
+	if (filters && row_group_num_rows > 0 && state.offset_in_group == state.scan_end) {
 		// the row group is already ruled out (statistics pass or an earlier column): no Bloom filter reads
 		return;
 	}
@@ -2006,8 +2121,8 @@ void ParquetReader::PrepareRowGroupBuffer(ClientContext &context, ParquetReaderS
 			if (prune_result == FilterPropagateResult::FILTER_ALWAYS_FALSE ||
 			    prune_result == FilterPropagateResult::FILTER_FALSE_OR_NULL) {
 				// this effectively will skip this chunk - count the skipped rows towards the progress
-				rows_read += row_group_num_rows - state.offset_in_group;
-				state.offset_in_group = group.num_rows;
+				rows_read += state.scan_end - state.offset_in_group;
+				state.offset_in_group = state.scan_end;
 				return;
 			}
 		}
@@ -2234,12 +2349,18 @@ void ParquetReader::PreparePageIndex(ClientContext &context, ParquetReaderScanSt
 
 void ParquetReader::PreparePageIndexInternal(ClientContext &context, ParquetReaderScanState &state) {
 	auto &group = GetGroup(state);
-	if (!filters || !state.use_page_index || parquet_options.encryption_config || group.num_rows <= 0 ||
-	    state.offset_in_group == NumericCast<idx_t>(group.num_rows)) {
-		// no filters to prune with, the page index is disabled, or the row group was skipped already
+	if (!state.use_page_index || parquet_options.encryption_config || group.num_rows <= 0 ||
+	    state.offset_in_group == state.scan_end) {
+		// the page index is disabled, or the row group was skipped already
 		return;
 	}
 	const auto row_group_num_rows = NumericCast<idx_t>(group.num_rows);
+	// a slice of the row group reads only the pages of its own rows
+	const bool sliced = state.scan_begin > 0 || state.scan_end < row_group_num_rows;
+	if (!filters && !sliced) {
+		// no filters to prune with
+		return;
+	}
 	auto &trans = reinterpret_cast<ThriftFileTransport &>(*state.thrift_file_proto->getTransport());
 	const auto file_size = trans.GetSize();
 
@@ -2253,6 +2374,9 @@ void ParquetReader::PreparePageIndexInternal(ClientContext &context, ParquetRead
 	idx_t column_index_begin = NumericLimits<idx_t>::Maximum();
 	idx_t column_index_end = 0;
 	for (auto &scan_filter : state.scan_filters) {
+		if (!filters) {
+			break;
+		}
 		auto &column_reader = state.GetColumnReader(MultiFileLocalIndex(scan_filter.filter_idx));
 		if (column_reader.IsSkipped() || column_reader.Schema().schema_type != ParquetColumnSchemaType::COLUMN ||
 		    column_reader.Type().IsNested() || column_reader.MaxRepeat() != 0 ||
@@ -2273,7 +2397,7 @@ void ParquetReader::PreparePageIndexInternal(ClientContext &context, ParquetRead
 		column_index_end = MaxValue(column_index_end, begin + NumericCast<idx_t>(column_chunk.column_index_length));
 		filter_columns.push_back({column_chunk_idx, column_reader, scan_filter.filter});
 	}
-	if (filter_columns.empty()) {
+	if (filter_columns.empty() && !sliced) {
 		return;
 	}
 
@@ -2298,6 +2422,12 @@ void ParquetReader::PreparePageIndexInternal(ClientContext &context, ParquetRead
 		throw InvalidInputException("Failed to read file \"%s\": metadata is corrupt. Page index lies outside the file",
 		                            GetFileName());
 	}
+	const bool has_offset_indexes = offset_index_begin < offset_index_end;
+	if (filter_columns.empty()) {
+		// no ColumnIndex to read: only the slice restricts the rows
+		column_index_begin = offset_index_begin;
+		column_index_end = offset_index_begin;
+	}
 
 	// the page index of the whole file is read once per reader when it fits one coalesced read; otherwise this row
 	// group fetches the ColumnIndexes of its filter columns, and the OffsetIndexes of its scanned columns join that
@@ -2307,11 +2437,12 @@ void ParquetReader::PreparePageIndexInternal(ClientContext &context, ParquetRead
 	const auto index_end = MaxValue(column_index_end, offset_index_end);
 	const auto covered = (column_index_end - column_index_begin) + (offset_index_end - offset_index_begin);
 	const auto gap_between = index_end - index_begin > covered ? index_end - index_begin - covered : 0;
-	const bool fetch_indexes_together = !whole_index_attached && gap_between <= trans.GetAcceptedColumnGap();
+	const bool fetch_indexes_together =
+	    !whole_index_attached && has_offset_indexes && gap_between <= trans.GetAcceptedColumnGap();
 	if (!whole_index_attached) {
 		if (fetch_indexes_together) {
 			trans.Prefetch(index_begin, index_end - index_begin);
-		} else {
+		} else if (column_index_begin < column_index_end) {
 			trans.Prefetch(column_index_begin, column_index_end - column_index_begin);
 		}
 	}
@@ -2336,13 +2467,13 @@ void ParquetReader::PreparePageIndexInternal(ClientContext &context, ParquetRead
 			any_page_pruned = any_page_pruned || !may_match;
 		}
 	}
-	if (!any_page_pruned) {
+	if (!any_page_pruned && !sliced) {
 		// every page may match: the OffsetIndex is not needed
 		trans.ClearPrefetch();
 		return;
 	}
 
-	if (!whole_index_attached && !fetch_indexes_together) {
+	if (!whole_index_attached && !fetch_indexes_together && has_offset_indexes) {
 		trans.Prefetch(offset_index_begin, offset_index_end - offset_index_begin);
 	}
 	state.page_index.offset_indexes.resize(group.columns.size());
@@ -2375,27 +2506,35 @@ void ParquetReader::PreparePageIndexInternal(ClientContext &context, ParquetRead
 		    first ? std::move(column_ranges) : ParquetPageIndexUtils::IntersectRowRanges(row_ranges, column_ranges);
 		first = false;
 	}
+	if (sliced) {
+		vector<ParquetPageRowRange> slice_range {{state.scan_begin, state.scan_end}};
+		row_ranges =
+		    first ? std::move(slice_range) : ParquetPageIndexUtils::IntersectRowRanges(row_ranges, slice_range);
+		first = false;
+	}
 	if (first) {
 		return;
 	}
 	const auto rows_kept = ParquetPageIndexUtils::RowCount(row_ranges);
+	const auto rows_total = state.scan_end - state.scan_begin;
 	if (rows_kept == row_group_num_rows) {
 		return;
 	}
-	if (state.op) {
+	if (state.op && rows_kept < rows_total) {
 		DUCKDB_LOG(context, PhysicalOperatorLogType, *state.op, "ParquetReader", "SkipPages",
 		           {{"file", file.path},
 		            {"row_group_id", to_string(state.group_index)},
-		            {"rows_skipped", to_string(row_group_num_rows - rows_kept)},
-		            {"rows_total", to_string(row_group_num_rows)}});
+		            {"rows_skipped", to_string(rows_total - rows_kept)},
+		            {"rows_total", to_string(rows_total)}});
 	}
 	if (row_ranges.empty()) {
 		// no page of the row group can hold a match: skip the row group
-		rows_read += row_group_num_rows - state.offset_in_group;
-		state.offset_in_group = row_group_num_rows;
+		rows_read += state.scan_end - state.offset_in_group;
+		state.offset_in_group = state.scan_end;
 		return;
 	}
 	state.page_index.row_ranges = std::move(row_ranges);
+	state.page_index.restricted_to_slice = sliced;
 	state.page_index_active = true;
 	for (idx_t i = 0; i < column_ids.size(); i++) {
 		state.GetColumnReader(MultiFileLocalIndex(i)).InitializePageIndex(state.page_index);
@@ -2403,7 +2542,7 @@ void ParquetReader::PreparePageIndexInternal(ClientContext &context, ParquetRead
 }
 
 idx_t ParquetReader::SkipToPageIndexRows(ParquetReaderScanState &state) {
-	const auto group_num_rows = NumericCast<idx_t>(GetGroup(state).num_rows);
+	const auto group_num_rows = state.scan_end;
 	auto &ranges = state.page_index.row_ranges;
 	auto &range_idx = state.page_index_range_idx;
 	while (range_idx < ranges.size() && ranges[range_idx].end <= state.offset_in_group) {
@@ -2483,6 +2622,11 @@ void ParquetReader::InitializeScan(ClientContext &context, ParquetReaderScanStat
 	state.offset_in_group = 0;
 	state.filter_count = 0;
 	state.group_index = group_to_read;
+	state.slice_index = 0;
+	state.slice_count = 1;
+	state.scan_begin = 0;
+	state.scan_end = 0;
+	state.pending_slice_skip = 0;
 	state.sel.Initialize(STANDARD_VECTOR_SIZE);
 	if (!state.file_handle || state.file_handle->GetPath() != file_handle->GetPath()) {
 		state.prefetch_mode = ShouldAndCanPrefetch(context, *file_handle);
@@ -2774,7 +2918,11 @@ ParquetPrefetchStrategy ParquetReader::ColumnWisePrefetch(ParquetReaderScanState
 ParquetPrefetchStrategy ParquetReader::RegisterRowGroupReads(ClientContext &context, ParquetReaderScanState &state) {
 	const bool log_prefetch =
 	    Logger::Get(context).ShouldLog(ParquetPrefetchLogType::NAME, ParquetPrefetchLogType::LEVEL);
-	state.offset_in_group = 0;
+	auto &group = GetGroup(state);
+	SetSliceBounds(state, group.num_rows > 0 ? NumericCast<idx_t>(group.num_rows) : 0);
+	state.offset_in_group = state.scan_begin;
+	// the column readers skip the rows in front of the slice once the scan starts
+	state.pending_slice_skip = state.scan_begin;
 	ParquetPrefetchStrategy strategy = ParquetPrefetchStrategy::NONE;
 
 	auto &trans = reinterpret_cast<ThriftFileTransport &>(*state.thrift_file_proto->getTransport());
@@ -2788,11 +2936,10 @@ ParquetPrefetchStrategy ParquetReader::RegisterRowGroupReads(ClientContext &cont
 	// TODO: only need this if we have a deletion vector?
 	state.group_offset = GetRowGroupOffset(*this, state.group_index);
 
-	auto &group = GetGroup(state);
 	// rule the row group out on the statistics of all filters before any column reads a Bloom filter
 	if (filters && group.num_rows > 0 && FiltersExcludeRowGroup(context, state, false)) {
-		rows_read += NumericCast<idx_t>(group.num_rows);
-		state.offset_in_group = NumericCast<idx_t>(group.num_rows);
+		rows_read += state.scan_end - state.scan_begin;
+		state.offset_in_group = state.scan_end;
 	}
 	// several readers can read the same column chunk (e.g. two fields of one variant column), count each chunk once
 	unordered_set<idx_t> scanned_column_chunks;
@@ -2807,15 +2954,28 @@ ParquetPrefetchStrategy ParquetReader::RegisterRowGroupReads(ClientContext &cont
 	for (auto column_chunk : scanned_column_chunks) {
 		to_scan_compressed_bytes += NumericCast<uint64_t>(group.columns[column_chunk].meta_data.total_compressed_size);
 	}
-	const bool row_group_skipped = state.offset_in_group == (idx_t)group.num_rows;
-	if (row_group_skipped) {
-		++state.row_groups_skipped;
-	} else {
-		++state.row_groups_read;
+	const bool row_group_skipped = state.offset_in_group == state.scan_end;
+	// a row group split into slices is counted once, by its first slice
+	if (state.slice_index == 0) {
+		if (row_group_skipped) {
+			++state.row_groups_skipped;
+		} else {
+			++state.row_groups_read;
+		}
 	}
 	// counted in Process when the scan of the row group starts: a row group that is read ahead but never scanned,
 	// or whose prefetch fails, is not counted
-	state.pending_bytes_scanned = row_group_skipped ? 0 : to_scan_compressed_bytes;
+	state.pending_bytes_scanned = 0;
+	if (!row_group_skipped) {
+		state.pending_bytes_scanned = to_scan_compressed_bytes;
+		if (state.slice_count > 1) {
+			// a slice reads its share of the bytes of the row group
+			auto slice_share =
+			    static_cast<double>(state.scan_end - state.scan_begin) / static_cast<double>(group.num_rows);
+			state.pending_bytes_scanned =
+			    LossyNumericCast<idx_t>(static_cast<double>(to_scan_compressed_bytes) * slice_share);
+		}
+	}
 	if (state.op) {
 		DUCKDB_LOG(context, PhysicalOperatorLogType, *state.op, "ParquetReader",
 		           row_group_skipped ? "SkipRowGroup" : "ReadRowGroup",
@@ -3050,13 +3210,20 @@ AsyncResult ParquetReader::ProcessFilters(ParquetReaderScanState &state, DataChu
 AsyncResult ParquetReader::Process(ClientContext &context, ParquetReaderScanState &state, DataChunk &result) {
 	const bool log_prefetch =
 	    Logger::Get(context).ShouldLog(ParquetPrefetchLogType::NAME, ParquetPrefetchLogType::LEVEL);
-	const idx_t group_num_rows = GetGroup(state).num_rows;
 	// Queued row groups may predate the current dynamic filter. Do not revisit a partially decoded chunk.
-	if (state.offset_in_group == 0 && !state.resuming_payload && FiltersExcludeRowGroup(context, state, true)) {
-		rows_read += group_num_rows;
-		state.offset_in_group = group_num_rows;
+	if (state.offset_in_group == state.scan_begin && !state.resuming_payload &&
+	    FiltersExcludeRowGroup(context, state, true)) {
+		rows_read += state.scan_end - state.offset_in_group;
+		state.offset_in_group = state.scan_end;
 	}
-	auto scan_count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, group_num_rows - state.offset_in_group);
+	if (state.pending_slice_skip > 0 && state.offset_in_group < state.scan_end) {
+		// move every column to the first row of the slice - the rows in front of it belong to other slices
+		for (idx_t i = 0; i < column_ids.size(); i++) {
+			state.GetColumnReader(MultiFileLocalIndex(i)).Skip(state.pending_slice_skip);
+		}
+		state.pending_slice_skip = 0;
+	}
+	auto scan_count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, state.scan_end - state.offset_in_group);
 	if (state.page_index_active && scan_count > 0) {
 		// read only the rows of pages that may match according to the page index
 		scan_count = SkipToPageIndexRows(state);
