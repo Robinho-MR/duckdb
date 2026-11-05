@@ -318,6 +318,38 @@ void AlpScanPartial(ColumnSegment &segment, ColumnScanState &state, idx_t scan_c
 //===--------------------------------------------------------------------===//
 // Select
 //===--------------------------------------------------------------------===//
+//! Decodes only the selected rows [first, last] of a loaded (compressed-mode) ALP vector
+template <class T>
+void AlpSelectFromVector(const AlpVectorState<T> &vector_state, const SelectionVector &sel, idx_t first, idx_t last,
+                         idx_t selection_start, idx_t vector_start, idx_t vector_size, T *result_data) {
+	constexpr idx_t GROUP_SIZE = BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE;
+	const alp::AlpEncodingIndices encoding_indices = {vector_state.v_exponent, vector_state.v_factor};
+	const auto bit_width = vector_state.bit_width;
+	uint64_t group[GROUP_SIZE] = {0};
+	idx_t loaded_group = DConstants::INVALID_INDEX;
+	idx_t exception_idx = 0;
+	for (idx_t k = first; k <= last; k++) {
+		const idx_t row = selection_start + sel.get_index(k) - vector_start;
+		D_ASSERT(row < vector_size);
+		const idx_t group_idx = row / GROUP_SIZE;
+		if (bit_width > 0 && group_idx != loaded_group) {
+			auto group_data = const_data_ptr_cast(vector_state.for_encoded) + (group_idx * GROUP_SIZE * bit_width) / 8;
+			BitpackingPrimitives::UnPackBlock<uint64_t>(data_ptr_cast(group), group_data, bit_width);
+			loaded_group = group_idx;
+		}
+		const auto encoded = static_cast<int64_t>(group[row % GROUP_SIZE] + vector_state.frame_of_reference);
+		result_data[k] = alp::AlpCompression<T, true>::DecodeValue(encoded, encoding_indices);
+		// exception positions are written in increasing order
+		while (exception_idx < vector_state.exceptions_count &&
+		       vector_state.exceptions_positions[exception_idx] < row) {
+			exception_idx++;
+		}
+		if (exception_idx < vector_state.exceptions_count && vector_state.exceptions_positions[exception_idx] == row) {
+			result_data[k] = vector_state.exceptions[exception_idx];
+		}
+	}
+}
+
 template <class T>
 void AlpSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vector_count, Vector &result,
                const SelectionVector &sel, idx_t sel_count, idx_t result_offset, ScanVectorType scan_type) {
@@ -357,6 +389,17 @@ void AlpSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vector_coun
 		idx_t last = i;
 		while (last + 1 < sel_count && start + sel.get_index(last + 1) < vector_end) {
 			last++;
+		}
+		const idx_t vector_size = MinValue<idx_t>(AlpConstants::ALP_VECTOR_SIZE, scan_state.count - base);
+		if (base == vector_start && base + vector_size <= start + vector_count) {
+			// the vector is fully consumed by this select: decode only the selected rows
+			scan_state.template LoadVector<true>(nullptr);
+			if (scan_state.vector_state.v_exponent != AlpConstants::UNCOMPRESSED_MODE_SENTINEL) {
+				AlpSelectFromVector<T>(scan_state.vector_state, sel, i, last, start, base, vector_size, result_data);
+				scan_state.total_value_count += vector_size;
+				i = last + 1;
+				continue;
+			}
 		}
 		const idx_t scan_len = start + sel.get_index(last) - base + 1;
 		scan_state.template ScanVector<T>(scratch, scan_len);
