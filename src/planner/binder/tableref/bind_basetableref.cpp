@@ -340,6 +340,7 @@ BoundStatement Binder::Bind(BaseTableRef &ref) {
 		auto view_search_path =
 		    GetSearchPath(view_catalog_entry.ParentCatalog(), view_catalog_entry.ParentSchema().GetSchemaPath(), true);
 		view_binder->entry_retriever.SetSearchPath(std::move(view_search_path));
+		view_binder->entry_retriever.SetPreferredSchemaCatalog(view_catalog_entry.ParentCatalog());
 		// propagate the AT clause through the view
 		view_binder->entry_retriever.SetAtClause(entry_at_clause);
 
