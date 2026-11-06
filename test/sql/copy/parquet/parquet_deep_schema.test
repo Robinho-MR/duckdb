@@ -4,16 +4,16 @@
 
 require parquet
 
-# a STRUCT nested 600 levels deep
+# a STRUCT nested 600 levels deep (optional fields: the definition level limit is hit first)
 statement error
 SELECT * FROM read_parquet('data/parquet-testing/broken/deep_schema.parquet');
 ----
-the schema is nested more than 500 levels deep
+levels exceeding 255 are not supported
 
 statement error
 DESCRIBE SELECT * FROM 'data/parquet-testing/broken/deep_schema.parquet';
 ----
-the schema is nested more than 500 levels deep
+levels exceeding 255 are not supported
 
 statement ok
 COPY (SELECT {'a': {'a': {'a': [1, 2]}}} s) TO '{TEMP_DIR}/parquet_nested_ok.parquet';
