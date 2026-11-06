@@ -105,8 +105,8 @@ optional_ptr<ClientContext> ActiveCheckpointWrapper::GetCheckpointContext() cons
 
 CheckpointWriter::CheckpointWriter(AttachedDatabase &db_p, QueryContext query_context,
                                    optional_ptr<ClientContext> client_context_p)
-    : db(db_p), owned_context(query_context.Valid() ? nullptr : db_p.GetDatabase().Services()),
-      context(query_context.Valid() ? *query_context.GetContext() : *owned_context), client_context(client_context_p) {
+    : db(db_p), context(query_context.Valid() ? *query_context.GetContext() : db_p.GetDatabase().GetContext()),
+      client_context(client_context_p) {
 }
 
 CheckpointWriter::~CheckpointWriter() {
