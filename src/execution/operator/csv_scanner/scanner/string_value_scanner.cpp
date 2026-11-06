@@ -669,6 +669,13 @@ void StringValueResult::AddValue(StringValueResult &result, const idx_t buffer_p
 	if (result.last_position.buffer_pos > buffer_pos) {
 		return;
 	}
+	// an unquoted value of a column that is not projected only advances the column
+	if (result.projecting_columns && !result.quoted && !result.escaped &&
+	    result.cur_col_id < result.number_of_columns && !result.projected_columns[result.cur_col_id]) {
+		result.cur_col_id++;
+		result.last_position.buffer_pos = buffer_pos + 1;
+		return;
+	}
 	if (result.quoted) {
 		AddQuotedValue(result, buffer_pos - result.extra_delimiter_bytes);
 	} else if (result.escaped) {

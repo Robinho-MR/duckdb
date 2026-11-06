@@ -584,9 +584,18 @@ protected:
 		return false;
 	}
 
-	//! Process one chunk
+	//! Process one chunk, dialects the block scan cannot drive get a byte loop without its checks
 	template <class T>
 	void Process(T &result) {
+		if (T::BLOCK_SCAN && block_scan) {
+			ProcessInternal<T, true>(result);
+		} else {
+			ProcessInternal<T, false>(result);
+		}
+	}
+
+	template <class T, bool BLOCK_SCAN>
+	void ProcessInternal(T &result) {
 		idx_t to_pos;
 		const bool has_escaped_value = state_machine->dialect_options.state_machine_options.escape != '\0';
 		const idx_t start_pos = iterator.pos.buffer_pos;
@@ -600,7 +609,7 @@ protected:
 		}
 		skipper.SetBuffer(*cur_buffer_handle);
 		while (iterator.pos.buffer_pos < to_pos) {
-			if (T::BLOCK_SCAN && block_scan && BlockScanPossible(result)) {
+			if (BLOCK_SCAN && BlockScanPossible(result)) {
 				const bool full = block_comment != '\0'
 				                      ? (block_multi_byte_delimiter ? ProcessBlocks<T, true, true>(result, to_pos)
 				                                                    : ProcessBlocks<T, false, true>(result, to_pos))
