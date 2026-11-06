@@ -787,6 +787,17 @@ public:
 	idx_t segment_count;
 
 	T decompression_buffer[BITPACKING_METADATA_GROUP_SIZE];
+	//! Scratch space for dense selections, which scan the whole range before gathering the selected rows.
+	unsafe_unique_array<T> select_buffer;
+	idx_t select_buffer_capacity = 0;
+
+	T *GetSelectBuffer(idx_t count) {
+		if (count > select_buffer_capacity) {
+			select_buffer = make_unsafe_uniq_array_uninitialized<T>(count);
+			select_buffer_capacity = count;
+		}
+		return select_buffer.get();
+	}
 
 	//! Group count derived from the segment row count read from disk.
 	idx_t group_count;
@@ -1034,15 +1045,10 @@ unique_ptr<SegmentScanState> BitpackingInitScan(const QueryContext &context, Col
 // Scan base data
 //===--------------------------------------------------------------------===//
 template <class T, class T_S = typename MakeSigned<T>::type, class T_U = typename MakeUnsigned<T>::type>
-void BitpackingScanPartial(ColumnSegment &segment, ColumnScanState &state, idx_t scan_count, Vector &result,
-                           idx_t result_offset) {
-	auto &scan_state = state.scan_state->Cast<BitpackingScanState<T>>();
+void BitpackingScanData(BitpackingScanState<T> &scan_state, idx_t scan_count, T *result_data, idx_t result_offset) {
 	if (scan_count == 0) {
 		return;
 	}
-
-	T *result_data = FlatVector::GetDataMutable<T>(result);
-	result.SetVectorType(VectorType::FLAT_VECTOR);
 
 	if (scan_state.IsInitial()) {
 		scan_state.LoadGroup(0);
@@ -1135,6 +1141,15 @@ void BitpackingScanPartial(ColumnSegment &segment, ColumnScanState &state, idx_t
 }
 
 template <class T>
+void BitpackingScanPartial(ColumnSegment &segment, ColumnScanState &state, idx_t scan_count, Vector &result,
+                           idx_t result_offset) {
+	auto &scan_state = state.scan_state->Cast<BitpackingScanState<T>>();
+	T *result_data = FlatVector::GetDataMutable<T>(result);
+	result.SetVectorType(VectorType::FLAT_VECTOR);
+	BitpackingScanData<T>(scan_state, scan_count, result_data, result_offset);
+}
+
+template <class T>
 void BitpackingScan(ColumnSegment &segment, ColumnScanState &state, idx_t scan_count, Vector &result) {
 	BitpackingScanPartial<T>(segment, state, scan_count, result, 0);
 }
@@ -1148,6 +1163,18 @@ void BitpackingSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vect
 	auto &scan_state = state.scan_state->Cast<BitpackingScanState<T>>();
 	result.SetVectorType(VectorType::FLAT_VECTOR);
 	T *result_data = FlatVector::GetDataMutable<T>(result) + result_offset;
+
+	// dense selections decode (nearly) every algorithm group anyway: scan the range and gather from it
+	if (sel_count * BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE >= vector_count) {
+		auto scanned = scan_state.GetSelectBuffer(vector_count);
+		BitpackingScanData<T>(scan_state, vector_count, scanned, 0);
+		for (idx_t i = 0; i < sel_count; i++) {
+			const idx_t index = sel.get_index(i);
+			D_ASSERT(index < vector_count);
+			result_data[i] = scanned[index];
+		}
+		return;
+	}
 
 	idx_t previous_index = 0;
 	auto next_index = [&](idx_t sel_idx) {
@@ -1164,8 +1191,19 @@ void BitpackingSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vect
 	while (i < sel_count) {
 		const idx_t target = next_index(i);
 		D_ASSERT(target >= pos && target < vector_count);
-		scan_state.Skip(target - pos);
-		pos = target;
+		idx_t skip_target = target;
+		if (scan_state.HasCurrentGroup()) {
+			auto &current = scan_state.GetCurrentGroup();
+			if (current.metadata.mode == BitpackingMode::DELTA_FOR && !current.AtEnd() &&
+			    target - pos < current.Remaining()) {
+				// stop at the target's algorithm group: the prefix sum below covers the rows before the target
+				const idx_t target_in_algorithm_group =
+				    (current.offset + (target - pos)) % BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE;
+				skip_target = MaxValue<idx_t>(pos, target - target_in_algorithm_group);
+			}
+		}
+		scan_state.Skip(skip_target - pos);
+		pos = skip_target;
 		if (!scan_state.HasCurrentGroup()) {
 			ThrowBitpackingReadPastEnd();
 		}
@@ -1226,6 +1264,11 @@ void BitpackingSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vect
 					carry += deltas[cur - pos] + frame;
 				}
 				result_data[i] = static_cast<T>(carry);
+			}
+			// finish the unpacked algorithm group so that the next Skip does not decode it again
+			const idx_t unpacked_end = MinValue<idx_t>(run_end, vector_count);
+			for (; cur < unpacked_end; cur++) {
+				carry += deltas[cur - pos] + frame;
 			}
 			if (scan_state.is_bool) {
 				VerifyBooleanValues(result_data + first, i - first);
