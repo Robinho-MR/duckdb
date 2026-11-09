@@ -48,7 +48,7 @@ set(JSON_CREATE_SOURCES
     src/functions/json_strftime.cpp)
 
 # json_transform/from_json and the casts from JSON to nested types
-set(JSON_TRANSFORM_SOURCES src/functions/register_transform.cpp)
+set(JSON_TRANSFORM_SOURCES src/functions/register_transform.cpp src/functions/json_transform.cpp)
 
 # json_structure, json_group_structure, schema inference
 set(JSON_STRUCTURE_SOURCES src/functions/register_structure.cpp)
