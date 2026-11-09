@@ -839,11 +839,10 @@ static void RegisterCreateFunction(Extension &extension, Factory &factory, const
 	}
 }
 
-//! The casts to JSON, one per source type. The nested types and the types with parameters are registered with a
-//! wildcard source type, as the engine's cast lookup relaxes them (STRUCT(any ANY), LIST(ANY), DECIMAL, ...)
+//! The casts to JSON, one per source type. The nested types and the types with parameters are registered once per
+//! kind, as a wildcard source
 static void RegisterCreateCasts(Extension &extension, Factory &factory) {
 	const auto json = JSONType(factory);
-	const auto any = factory.CreateType(LogicalTypeId::ANY);
 
 	vector<std::pair<LogicalType, int64_t>> sources;
 	for (auto id : {LogicalTypeId::BOOLEAN,   LogicalTypeId::TINYINT,       LogicalTypeId::SMALLINT,
@@ -864,55 +863,28 @@ static void RegisterCreateCasts(Extension &extension, Factory &factory) {
 			sources.emplace_back(factory.ParseType("GEOMETRY"), 0);
 		}
 	}
-	// The nested types and the types with parameters
-	auto nested = [&](LogicalTypeId id, const char *name, idx_t params) {
-		try {
-			vector<cxx::TypeParam> type_params;
-			for (idx_t i = 0; i < params; i++) {
-				type_params.emplace_back(name, factory.CreateValue(any));
-			}
-			sources.emplace_back(factory.CreateType(id, type_params), 0);
-		} catch (cxx::Exception &) {
-			// API gap: a wildcard type parameter cannot be built
-		}
-	};
-	nested(LogicalTypeId::STRUCT, "any", 1);
-	nested(LogicalTypeId::TUPLE, "", 1);
-	nested(LogicalTypeId::LIST, "", 1);
-	nested(LogicalTypeId::MAP, "", 2);
-	nested(LogicalTypeId::UNION, "any", 1);
-	{
-		try {
-			vector<cxx::TypeParam> array_params;
-			array_params.emplace_back(factory.CreateValue(any));
-			array_params.emplace_back(factory.CreateValue(int64_t(0)));
-			sources.emplace_back(factory.CreateType(LogicalTypeId::ARRAY, array_params), 0);
-		} catch (cxx::Exception &) {
-			// API gap: no ARRAY type of any size
-		}
-	}
-	{
-		vector<cxx::TypeParam> decimal_params;
-		decimal_params.emplace_back(factory.CreateValue(uint8_t(18)));
-		decimal_params.emplace_back(factory.CreateValue(uint8_t(3)));
-		sources.emplace_back(factory.CreateType(LogicalTypeId::DECIMAL, decimal_params), 0);
-	}
-
-	// ENUM has an implicit cast to VARCHAR (cost 149). VARIANT is left to the engine's own cast to JSON
-	sources.emplace_back(factory.ParseType("ENUM('a')"), 148);
-
 	for (auto &source : sources) {
 		auto cast = CastFunction::Create(factory);
 		cast.SetSourceType(source.first)
 		    .SetTargetType(json)
 		    .SetImplicitCastCost(source.second)
 		    .SetExecCallback(CastAnyToJSON);
-		try {
-			extension.Register(cast);
-		} catch (cxx::Exception &) {
-			// API gap: casts from wildcard types (nested types, DECIMAL, ENUM) cannot be registered through the
-			// stable API yet (see the README)
-		}
+		extension.Register(cast);
+	}
+
+	// The nested types and the types with parameters. ENUM has an implicit cast to VARCHAR (cost 149), the other
+	// kinds have none. VARIANT is left to the engine's own cast to JSON
+	const std::pair<cxx::CastWildcardKind, int64_t> kinds[] = {
+	    {cxx::CastWildcardKind::STRUCT, 0},  {cxx::CastWildcardKind::TUPLE, 0}, {cxx::CastWildcardKind::LIST, 0},
+	    {cxx::CastWildcardKind::MAP, 0},     {cxx::CastWildcardKind::UNION, 0}, {cxx::CastWildcardKind::ARRAY, 0},
+	    {cxx::CastWildcardKind::DECIMAL, 0}, {cxx::CastWildcardKind::ENUM, 148}};
+	for (auto &kind : kinds) {
+		auto cast = CastFunction::Create(factory);
+		cast.SetSourceKind(kind.first)
+		    .SetTargetType(json)
+		    .SetImplicitCastCost(kind.second)
+		    .SetExecCallback(CastAnyToJSON);
+		extension.Register(cast);
 	}
 }
 

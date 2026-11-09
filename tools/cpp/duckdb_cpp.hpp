@@ -6294,6 +6294,26 @@ enum class CastMode : uint8_t {
 	TRY = 1,
 };
 
+/// A kind of parameterized type that a cast can be registered for as a whole, see `CastFunction::SetSourceKind`.
+enum class CastWildcardKind : uint8_t {
+	/// Every DECIMAL, whatever its width and scale.
+	DECIMAL = 0,
+	/// Every ENUM, whatever its entries.
+	ENUM = 1,
+	/// Every LIST, whatever its child type.
+	LIST = 2,
+	/// Every named STRUCT, whatever its fields.
+	STRUCT = 3,
+	/// Every unnamed struct, whatever its fields.
+	TUPLE = 4,
+	/// Every MAP, whatever its key and value types.
+	MAP = 5,
+	/// Every UNION, whatever its members.
+	UNION = 6,
+	/// Every ARRAY, whatever its child type and size.
+	ARRAY = 7,
+};
+
 /// A user-defined cast between two types, built up with the setters and made live with `Connection::Register` or
 /// `Extension::Register`. Create one through a `Factory` of the database it will be registered in, describe it (source
 /// type, target type, exec callback), then register it with `Connection::Register` or `Extension::Register`. The
@@ -6326,8 +6346,17 @@ public:
 	/// Sets the type the cast converts from. Must be a fully defined concrete type.
 	auto SetSourceType(const LogicalType &type) & -> CastFunction &;
 
+	/// Sets the cast to convert from every type of one kind, whatever its parameters. A cast registered for exactly
+	/// the requested type wins over the wildcard. The exec callback sees the concrete input vector. Replaces a
+	/// previous source type, and is replaced by a later `SetSourceType`.
+	auto SetSourceKind(CastWildcardKind kind) & -> CastFunction &;
+
 	/// Sets the type the cast converts to. Must be a fully defined concrete type.
 	auto SetTargetType(const LogicalType &type) & -> CastFunction &;
+
+	/// Sets the cast to convert to every type of one kind, whatever its parameters: the target-side twin of
+	/// `SetSourceKind`. The exec callback writes into an output vector of the concrete requested type.
+	auto SetTargetKind(CastWildcardKind kind) & -> CastFunction &;
 
 	/// Sets what it costs to apply this cast implicitly. The binder uses the cost to choose between candidate
 	/// implicit casts: a lower non-negative cost makes this cast more likely to be picked. Built-in widening casts

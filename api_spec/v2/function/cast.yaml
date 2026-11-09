@@ -33,6 +33,36 @@ enums:
         value: 1
         description: A "try" cast. Conversion failures should be written as NULLs into the output vector; an error reported through the slot is swallowed and the affected rows are left NULL.
 
+  CAST_WILDCARD_KIND:
+    description: |
+      A kind of parameterized type, used to register a cast for every type of that kind at once instead of for one
+      concrete type. See `[[cast_function_set_source_kind]]` and `[[cast_function_set_target_kind]]`.
+    values:
+      CAST_WILDCARD_KIND_DECIMAL:
+        value: 0
+        description: Every DECIMAL, whatever its width and scale.
+      CAST_WILDCARD_KIND_ENUM:
+        value: 1
+        description: Every ENUM, whatever its entries.
+      CAST_WILDCARD_KIND_LIST:
+        value: 2
+        description: Every LIST, whatever its child type.
+      CAST_WILDCARD_KIND_STRUCT:
+        value: 3
+        description: Every named STRUCT, whatever its fields.
+      CAST_WILDCARD_KIND_TUPLE:
+        value: 4
+        description: Every unnamed struct (TUPLE), whatever its fields.
+      CAST_WILDCARD_KIND_MAP:
+        value: 5
+        description: Every MAP, whatever its key and value types.
+      CAST_WILDCARD_KIND_UNION:
+        value: 6
+        description: Every UNION, whatever its members.
+      CAST_WILDCARD_KIND_ARRAY:
+        value: 7
+        description: Every ARRAY, whatever its child type and size.
+
 #-----------------------------------------------------------------------------------------------------------------------
 # Handles
 #-----------------------------------------------------------------------------------------------------------------------
@@ -112,7 +142,8 @@ functions:
       Sets the type the cast converts from.
 
       The type is borrowed and copied. Calling this again replaces the previous source type. A source type must
-      be set before registration, and it must be a fully defined concrete type.
+      be set before registration, and it must be a fully defined concrete type. To cast from every type of one kind,
+      use `[[cast_function_set_source_kind]]` instead.
     parameters:
       function:
         type: cast_function
@@ -126,6 +157,37 @@ functions:
         description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
     return_type: ERROR
 
+  cast_function_set_source_kind:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-09" ]
+    description: |
+      Sets the cast to convert from every type of one kind, rather than from one concrete type.
+
+      A wildcard source matches every type of the given kind regardless of its parameters: DECIMAL matches every
+      DECIMAL(w, s), ENUM every enum, LIST every list, and so on, whatever the child types and sizes. This is the
+      registration form of the engine's own nested-type casts, such as the casts to JSON. A value that is not one of
+      the `CAST_WILDCARD_KIND` values fails with `DUCKDB_V2_ERROR_INPUT_INVALID`.
+
+      When the engine looks up a cast for a concrete source type, a cast registered for exactly that type wins over a
+      wildcard of its kind. The implicit cast cost and the target type work as for a concrete source type, and the
+      exec callback receives the concrete input vector, so it can read the actual type with `[[vector_get_logical_type]]`.
+
+      This is the only way to express a wildcard source: `[[cast_function_set_source_type]]` still requires a fully
+      defined concrete type, and ANY (also as a child type) is still rejected by the value and data chunk APIs.
+      Calling this replaces any source type set before, and setting a source type afterwards replaces the wildcard.
+    parameters:
+      function:
+        type: cast_function
+        description: The function to set the source type of.
+      kind:
+        type: CAST_WILDCARD_KIND
+        description: The kind of type to cast from.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
   cast_function_set_target_type:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-09-02" ]
@@ -133,7 +195,8 @@ functions:
       Sets the type the cast converts to.
 
       The type is borrowed and copied. Calling this again replaces the previous target type. A target type must
-      be set before registration, and it must be a fully defined concrete type.
+      be set before registration, and it must be a fully defined concrete type. To cast to every type of one kind,
+      use `[[cast_function_set_target_kind]]` instead.
     parameters:
       function:
         type: cast_function
@@ -141,6 +204,30 @@ functions:
       target_type:
         type: logical_type
         description: The type to cast to. Borrowed for the call only.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  cast_function_set_target_kind:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-09" ]
+    description: |
+      Sets the cast to convert to every type of one kind, rather than to one concrete type.
+
+      The target-side twin of `[[cast_function_set_source_kind]]`, with the same matching rules: the
+      cast applies to every type of the given kind regardless of its parameters, and a cast registered for exactly the
+      requested target type wins over a wildcard of its kind. The exec callback writes into an output vector of the
+      concrete requested type, readable with `[[vector_get_logical_type]]`. Calling this replaces any target type set
+      before, and setting a target type afterwards replaces the wildcard.
+    parameters:
+      function:
+        type: cast_function
+        description: The function to set the target type of.
+      kind:
+        type: CAST_WILDCARD_KIND
+        description: The kind of type to cast to.
       err:
         type: error_info
         indirection: 1
