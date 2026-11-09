@@ -5,6 +5,7 @@
 // to the file in order. Writing a file is: a prefix, the rows separated by a separator, and a suffix.
 
 #include "json_geojson.hpp"
+#include "json_scan.hpp"
 
 #include <limits>
 
@@ -512,6 +513,7 @@ static void RegisterCopyFormat(Extension &extension, Factory &factory, const str
 	    .SetCopyToFlushCallback(CopyToFlush)
 	    .SetCopyToFinalizeCallback(CopyToFinalize)
 	    .SetCopyToStatisticsCallback(CopyToStatistics);
+	SetJSONCopyFromCallbacks(function, geojson);
 	extension.Register(function);
 }
 
