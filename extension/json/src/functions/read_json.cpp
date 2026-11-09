@@ -262,6 +262,10 @@ void JSONScan::ParseNamedArguments(TableFunction::BindInput &input, JSONReaderOp
 	for (idx_t i = counts.NamedOffset(); i < counts.Total(); i++) {
 		auto name = StringUtil::Lower(input.GetArgName(i));
 		auto value = input.GetConstantArgument(i);
+		if (value.IsNull()) {
+			// not specified
+			continue;
+		}
 		if (!ParseOption(context, name, value, options)) {
 			throw NotImplementedException("Unimplemented option %s", name);
 		}
@@ -815,14 +819,62 @@ static void ReadJSONProgress(TableFunction::ProgressInput &input) {
 	input.SetProgress(gstate.reader->GetProgress());
 }
 
+//! The named parameters of the scan functions: unspecified ones are NULL
+struct JSONNamedParameter {
+	const char *name;
+	const char *type;
+};
+
+static const JSONNamedParameter COMMON_PARAMETERS[] = {{"maximum_object_size", "UINTEGER"},
+                                                       {"ignore_errors", "BOOLEAN"},
+                                                       {"format", "VARCHAR"},
+                                                       {"compression", "VARCHAR"}};
+static const JSONNamedParameter READ_JSON_PARAMETERS[] = {{"columns", "ANY"},
+                                                          {"auto_detect", "BOOLEAN"},
+                                                          {"geojson", "BOOLEAN"},
+                                                          {"sample_size", "BIGINT"},
+                                                          {"dateformat", "VARCHAR"},
+                                                          {"date_format", "VARCHAR"},
+                                                          {"timestampformat", "VARCHAR"},
+                                                          {"timestamp_format", "VARCHAR"},
+                                                          {"records", "ANY"},
+                                                          {"array", "BOOLEAN"},
+                                                          {"maximum_sample_files", "BIGINT"},
+                                                          {"case_insensitive_keys", "BOOLEAN"}};
+static const JSONNamedParameter AUTO_DETECT_PARAMETERS[] = {{"maximum_depth", "BIGINT"},
+                                                            {"field_appearance_threshold", "DOUBLE"},
+                                                            {"convert_strings_to_integers", "BOOLEAN"},
+                                                            {"map_inference_threshold", "BIGINT"}};
+
+static void AddNamedParameters(Factory &factory, cxx::FunctionSignature &signature,
+                               const JSONNamedParameter *parameters, idx_t count) {
+	for (idx_t i = 0; i < count; i++) {
+		const bool any = string(parameters[i].type) == "ANY";
+		// An ANY parameter is not cast, so its (unspecified) default is the NULL type
+		auto type = any ? factory.CreateType(LogicalTypeId::ANY) : factory.ParseType(parameters[i].type);
+		auto null_type = any ? factory.ParseType("\"NULL\"") : factory.ParseType(parameters[i].type);
+		signature.AddParameter(parameters[i].name, type, Value::CreateNull(factory, null_type),
+		                       cxx::FunctionParameterKind::NAMED_ONLY);
+	}
+}
+
 static void RegisterSingleFileFunction(Extension &extension, Context &context, JSONScanInfo info) {
 	auto &factory = context.GetFactory();
 	auto function = TableFunction::Create(factory);
 	function.SetName(info.name);
+	const bool objects = info.type == JSONScanType::READ_JSON_OBJECTS;
 	function.WithSignature([&](cxx::FunctionSignature &signature) {
 		signature.AddParameter("file", factory.CreateType(LogicalTypeId::ANY),
 		                       cxx::FunctionParameterKind::POSITIONAL_ONLY);
-		signature.AddKwargs("options", factory.CreateType(LogicalTypeId::ANY));
+		AddNamedParameters(factory, signature, COMMON_PARAMETERS,
+		                   sizeof(COMMON_PARAMETERS) / sizeof(JSONNamedParameter));
+		if (!objects) {
+			// read_json_objects always emits a single JSON column - it has no schema options
+			AddNamedParameters(factory, signature, READ_JSON_PARAMETERS,
+			                   sizeof(READ_JSON_PARAMETERS) / sizeof(JSONNamedParameter));
+			AddNamedParameters(factory, signature, AUTO_DETECT_PARAMETERS,
+			                   sizeof(AUTO_DETECT_PARAMETERS) / sizeof(JSONNamedParameter));
+		}
 	});
 	function.SetUserData<JSONScanInfo>(std::move(info));
 	function.SetBindCallback(ReadJSONBind);

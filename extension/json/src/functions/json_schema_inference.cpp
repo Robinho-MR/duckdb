@@ -947,6 +947,9 @@ LogicalType JSONStructure::StructureToType(Factory &factory, const JSONStructure
 	case LogicalTypeId::SQLNULL:
 		// The NULL type can only be parsed (CreateType refuses it)
 		return factory.ParseType("\"NULL\"");
+	case LogicalTypeId::GEOMETRY:
+		// GEOMETRY takes type parameters (the CRS), so it cannot be created from its id
+		return factory.ParseType("GEOMETRY");
 	default:
 		return factory.CreateType(desc.type);
 	}
