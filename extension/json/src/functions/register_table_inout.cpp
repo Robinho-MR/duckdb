@@ -521,6 +521,7 @@ void RegisterJSONTableInOutOverload(Extension &extension, Context &context, cons
 	auto &factory = context.GetFactory();
 	auto function = TableFunction::Create(factory);
 	function.SetName(name);
+	function.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
 	function.GetSignature().AddParameter("json", input_type);
 	if (has_path_param) {
 		function.GetSignature().AddParameter("path", factory.CreateType(LogicalTypeId::VARCHAR));

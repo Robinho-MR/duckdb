@@ -1534,6 +1534,9 @@ typedef struct {
 	DUCKDB_V2_ERROR(*duckdb_v2_table_function_set_in_out_final_callback)
 	(duckdb_v2_table_function_handle function, duckdb_v2_table_function_in_out_callback_fn callback,
 	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_set_property)
+	(duckdb_v2_table_function_handle function, DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
+	 DUCKDB_V2_FUNCTION_PROPERTY_VALUE value, duckdb_v2_error_info_handle *err);
 } duckdb_ext_api_v2;
 
 //===--------------------------------------------------------------------===//
@@ -2230,6 +2233,7 @@ inline duckdb_ext_api_v2 CreateAPIv2(void) {
 	result.duckdb_v2_table_function_in_out_set_result = duckdb_v2_table_function_in_out_set_result;
 	result.duckdb_v2_table_function_set_in_out_callback = duckdb_v2_table_function_set_in_out_callback;
 	result.duckdb_v2_table_function_set_in_out_final_callback = duckdb_v2_table_function_set_in_out_final_callback;
+	result.duckdb_v2_table_function_set_property = duckdb_v2_table_function_set_property;
 	return result;
 }
 
