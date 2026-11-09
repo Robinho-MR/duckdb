@@ -21,5 +21,4 @@ DUCKDB_CPP_EXTENSION_ENTRYPOINT(duckdb::cxx::Extension &extension, duckdb::cxx::
 	RegisterReader(extension, context);
 	RegisterTableInOut(extension, context);
 	RegisterCopy(extension, context);
-	RegisterSerialize(extension, context);
 }

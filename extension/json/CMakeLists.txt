@@ -66,9 +66,6 @@ set(JSON_COPY_SOURCES
     src/functions/register_copy.cpp src/functions/json_copy.cpp
     src/functions/json_geojson.cpp)
 
-# json_serialize_sql, json_deserialize_sql, json_execute_serialized_sql, json_serialize_plan
-set(JSON_SERIALIZE_SOURCES src/functions/register_serialize.cpp)
-
 set(JSON_EXTENSION_FILES
     ${JSON_CORE_SOURCES}
     ${JSON_SCALAR_READ_SOURCES}
@@ -78,8 +75,7 @@ set(JSON_EXTENSION_FILES
     ${JSON_STRUCTURE_SOURCES}
     ${JSON_READER_SOURCES}
     ${JSON_TABLE_INOUT_SOURCES}
-    ${JSON_COPY_SOURCES}
-    ${JSON_SERIALIZE_SOURCES})
+    ${JSON_COPY_SOURCES})
 
 set(JSON_INCLUDE_DIRS
     ${CMAKE_CURRENT_LIST_DIR}/src/include
