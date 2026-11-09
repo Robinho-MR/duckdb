@@ -477,11 +477,6 @@ void JSONReader::DetectFormat(Context &context, const Value &file, const string 
 			record_type = detected.second;
 		}
 	}
-	if (!options.ignore_errors && options.record_type == JSONRecordType::RECORDS &&
-	    record_type != JSONRecordType::RECORDS) {
-		throw InvalidInputException(
-		    "JSON auto-detection error in file \"%s\": Expected records, detected non-record JSON instead", file_name);
-	}
 }
 
 idx_t JSONReader::BatchCount() const {

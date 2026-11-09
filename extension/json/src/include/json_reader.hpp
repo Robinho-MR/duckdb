@@ -216,6 +216,10 @@ public:
 	//! Records a transform error found in the object `object_index` of the last scan
 	void AddTransformError(JSONReaderScanState &state, idx_t object_index, const string &error_message);
 
+	//! The number of bytes read from the file so far
+	idx_t BytesRead() const {
+		return bytes_read.load();
+	}
 	//! Scan progress in [0, 1]
 	double GetProgress() const;
 

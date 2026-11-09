@@ -152,6 +152,15 @@ struct StringUtil {
 		}
 		return true;
 	}
+	//! The string with its ASCII letters in lower case
+	static string Lower(string source) {
+		for (auto &c : source) {
+			if (c >= 'A' && c <= 'Z') {
+				c = static_cast<char>(c + ('a' - 'A'));
+			}
+		}
+		return source;
+	}
 	static string Replace(string source, const string &from, const string &to) {
 		if (from.empty()) {
 			return source;

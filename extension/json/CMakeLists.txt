@@ -59,7 +59,9 @@ set(JSON_STRUCTURE_SOURCES
 set(JSON_READER_SOURCES
     src/functions/register_reader.cpp
     src/functions/json_date_formats.cpp
-    src/functions/json_reader.cpp)
+    src/functions/json_reader.cpp
+    src/functions/read_json.cpp
+    src/functions/copy_json_from.cpp)
 
 # json_each, json_tree
 set(JSON_TABLE_INOUT_SOURCES src/functions/register_table_inout.cpp)
