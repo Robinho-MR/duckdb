@@ -1,8 +1,7 @@
 // Reading JSON files: read_json and friends (functions/read_json.cpp), the replacement scan that turns
 // FROM 'x.json' into read_json_auto, and COPY ... FROM (functions/copy_json_from.cpp).
-//
-// To port still: the extension's settings (json_geometry_format in legacy/json_extension.cpp).
 
+#include "json_geojson.hpp"
 #include "json_scan.hpp"
 
 namespace duckdb {
@@ -61,6 +60,8 @@ static void ReadJSONReplacement(cxx::ReplacementScan::Input &input) {
 }
 
 void RegisterReader(Extension &extension, Context &context) {
+	// GeoJSON geometries become GEOMETRY leaves when the schema of a GeoJSON file is detected
+	JSONScan::SetGeoJSONGeometryDetector(IsGeoJSONGeometry);
 	RegisterReadJSON(extension, context);
 
 	auto scan = cxx::ReplacementScan::Create(context.GetFactory());
