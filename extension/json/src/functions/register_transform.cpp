@@ -165,25 +165,27 @@ static void CastJSONToAny(CastFunction::ExecInput &input) {
 //! The type a cast from JSON is registered for: casts to nested types are registered for the type with ANY children
 //! (the engine matches every nested type against it)
 static LogicalType CastTargetType(Factory &factory, LogicalTypeId id) {
-	auto any = Value::Create(factory, factory.CreateType(LogicalTypeId::ANY));
+	auto make_any = [&]() {
+		return Value::Create(factory, factory.CreateType(LogicalTypeId::ANY));
+	};
 	vector<cxx::TypeParam> params;
 	switch (id) {
 	case LogicalTypeId::STRUCT:
 	case LogicalTypeId::UNION:
-		params.emplace_back("any", std::move(any));
+		params.emplace_back("any", make_any());
 		break;
 	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::LIST:
-		params.emplace_back(std::move(any));
+		params.emplace_back(make_any());
 		break;
 	case LogicalTypeId::ARRAY:
 		// An ARRAY of any size
-		params.emplace_back(std::move(any));
+		params.emplace_back(make_any());
 		params.emplace_back(Value::Create(factory, static_cast<int64_t>(0)));
 		break;
 	case LogicalTypeId::MAP:
-		params.emplace_back(Value::Create(factory, factory.CreateType(LogicalTypeId::ANY)));
-		params.emplace_back(std::move(any));
+		params.emplace_back(make_any());
+		params.emplace_back(make_any());
 		break;
 	case LogicalTypeId::GEOMETRY:
 		return factory.ParseType("GEOMETRY");

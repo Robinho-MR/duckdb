@@ -192,6 +192,7 @@ static void CopyToBind(CopyFunction::CopyToBindInput &input) {
 		data.types.push_back(input.GetColumnType(i));
 	}
 
+	bool compression_given = false;
 	ColumnOption geometry_column;
 	ColumnOption id_column;
 	for (idx_t i = 0; i < input.GetOptionCount(); i++) {
@@ -212,6 +213,7 @@ static void CopyToBind(CopyFunction::CopyToBindInput &input) {
 		} else if (user.geojson && name == "bbox") {
 			data.bbox = GetBooleanOption(context, user, name, value);
 		} else if (name == "compression") {
+			compression_given = true;
 			CheckCompression(GetStringOption(user, name, value), input.GetFilePath());
 		} else if (name == "encoding") {
 			const auto encoding = LowerCase(GetStringOption(user, name, value));
@@ -224,6 +226,9 @@ static void CopyToBind(CopyFunction::CopyToBindInput &input) {
 		}
 	}
 
+	if (!compression_given) {
+		CheckCompression("auto", input.GetFilePath());
+	}
 	if (user.geojson) {
 		// GEOMETRY_COLUMN selects the feature geometry, defaulting to the first GEOMETRY column
 		if (geometry_column.given) {
