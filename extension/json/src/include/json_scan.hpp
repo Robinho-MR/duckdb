@@ -95,7 +95,7 @@ public:
 
 	//! Derive the columns that are read from a detected JSON structure
 	static void StructureToColumns(Context &context, JSONScanData &data, const JSONStructureNode &node,
-	                               vector<LogicalType> &return_types, vector<string> &names);
+	                               vector<LogicalType> &return_types, vector<string> &names, vector<string> &keys);
 
 	//! Installs the GeoJSON hooks of the reader (see json_geometry_*): without them GeoJSON is not detected
 	static void SetGeoJSONGeometryDetector(JSONGeometryDetector detector);

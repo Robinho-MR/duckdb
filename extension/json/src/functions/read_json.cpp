@@ -406,6 +406,7 @@ static void BindGeoJSONFeatureColumns(const LogicalType &type, const vector<stri
 
 static JSONInferenceOptions MakeInferenceOptions(const JSONReaderOptions &options) {
 	JSONInferenceOptions inference;
+	inference.rename_duplicate_root_members = options.record_type != JSONRecordType::VALUES;
 	inference.max_depth = options.max_depth;
 	inference.field_appearance_threshold = options.field_appearance_threshold;
 	inference.map_inference_threshold = options.map_inference_threshold;
@@ -470,7 +471,7 @@ static unique_ptr<JSONStructureNode> DetectStructure(Context &context, JSONScanD
 }
 
 void JSONScan::StructureToColumns(Context &context, JSONScanData &data, const JSONStructureNode &node,
-                                  vector<LogicalType> &return_types, vector<string> &names) {
+                                  vector<LogicalType> &return_types, vector<string> &names, vector<string> &keys) {
 	auto &factory = context.GetFactory();
 	auto &options = data.options;
 	// Convert structure to logical type
@@ -494,21 +495,28 @@ void JSONScan::StructureToColumns(Context &context, JSONScanData &data, const JS
 			// COPY - we already have names/types, but we still need to know where each of them is read from
 			BindGeoJSONFeatureColumns(type, names, data.feature_columns);
 		}
+		keys = names;
 		return;
 	}
 
 	if (!names.empty()) {
 		// COPY - we already have names/types
+		keys = names;
 		return;
 	}
 
 	// Auto-detect columns
 	if (options.record_type == JSONRecordType::RECORDS) {
 		if (type.GetTypeId() == LogicalTypeId::STRUCT) {
+			// the reader looks columns up by their exact key, while the names of the columns are unique
+			const bool keys_known = node.descriptions.size() == 1 &&
+			                        node.descriptions[0].type == LogicalTypeId::STRUCT &&
+			                        node.descriptions[0].children.size() == type.GetStructChildCount();
 			for (idx_t i = 0; i < type.GetStructChildCount(); i++) {
 				return_types.push_back(
 				    RemoveDuplicateStructKeys(factory, type.GetStructChildType(i), options.ignore_errors));
 				names.push_back(type.GetStructChildName(i));
+				keys.push_back(keys_known ? *node.descriptions[0].children[i].key : names.back());
 			}
 		} else {
 			throw BinderException("json_read expected records, but got non-record JSON instead."
@@ -519,6 +527,7 @@ void JSONScan::StructureToColumns(Context &context, JSONScanData &data, const JS
 		return_types.push_back(RemoveDuplicateStructKeys(factory, type, options.ignore_errors));
 		// Newline-delimited bare geometries produce a single GEOMETRY column, which "json" would be a poor name for
 		names.push_back(type.GetTypeId() == LogicalTypeId::GEOMETRY ? "geometry" : "json");
+		keys.push_back(names.back());
 	}
 }
 
@@ -578,12 +587,15 @@ void JSONScan::BindSchema(Context &context, JSONScanData &data, vector<LogicalTy
 		                         data.skip_feature_collection_prefix);
 	}
 
+	vector<string> keys;
 	if (options.auto_detect || options.record_type == JSONRecordType::AUTO_DETECT) {
 		auto node = DetectStructure(context, data);
-		StructureToColumns(context, data, *node, return_types, names);
+		StructureToColumns(context, data, *node, return_types, names, keys);
 		D_ASSERT(return_types.size() == names.size());
+	} else {
+		keys = names;
 	}
-	data.key_names = names;
+	data.key_names = keys;
 }
 
 void JSONScan::FinalizeBind(JSONScanData &data) {

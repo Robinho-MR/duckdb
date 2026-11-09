@@ -70,7 +70,48 @@ bool JSONStringTypeTester::TryCast(LogicalTypeId type) {
 		return true;
 	}
 	auto result = ResultVector(type);
-	return LoadedStrings().TryCast(factory, result);
+	if (!LoadedStrings().TryCast(factory, result)) {
+		return false;
+	}
+	if (type == LogicalTypeId::UUID) {
+		// The detection casts strictly: only the canonical form with hyphens is a UUID
+		auto strings = LoadedStrings();
+		ValueView<varchar_t> values(strings);
+		for (idx_t i = 0; i < count; i++) {
+			if (!values.IsValid(i)) {
+				continue;
+			}
+			const auto value = values.Get(i);
+			const auto text = value.view();
+			if (text.size() != 36 || text[8] != '-' || text[13] != '-' || text[18] != '-' || text[23] != '-') {
+				return false;
+			}
+		}
+	}
+	if (type == LogicalTypeId::TIME) {
+		// The detection casts strictly: a TIME is HH:MM[:SS], not a date or timestamp that happens to start a time
+		auto strings = LoadedStrings();
+		ValueView<varchar_t> values(strings);
+		for (idx_t i = 0; i < count; i++) {
+			if (!values.IsValid(i)) {
+				continue;
+			}
+			const auto value = values.Get(i);
+			const auto text = value.view();
+			idx_t pos = 0;
+			while (pos < text.size() && (text[pos] == ' ' || (text[pos] >= '\t' && text[pos] <= '\r'))) {
+				pos++;
+			}
+			const auto digits_start = pos;
+			while (pos < text.size() && text[pos] >= '0' && text[pos] <= '9') {
+				pos++;
+			}
+			if (pos == digits_start || pos >= text.size() || text[pos] != ':') {
+				return false;
+			}
+		}
+	}
+	return true;
 }
 
 Vector JSONStringTypeTester::ResultVector(LogicalTypeId type) {
@@ -162,7 +203,9 @@ void JSONStringTypeTester::UpdateTimestampOffsetState(TimestampOffsetState &stat
 		if (ts == std::numeric_limits<int64_t>::max() || ts == -std::numeric_limits<int64_t>::max()) {
 			continue; // +-infinity is valid for TIMESTAMP and TIMESTAMPTZ
 		}
-		const auto text = input.Get(i).view();
+		// the view of an inlined string points into the string itself, so it needs to outlive the view
+		const auto value = input.Get(i);
+		const auto text = value.view();
 		if (text.find_first_of("0123456789") == string_view::npos) {
 			continue; // specials such as epoch carry no offset
 		}
@@ -903,9 +946,30 @@ static LogicalType StructureToTypeObject(Factory &factory, const JSONStructureNo
 		}
 	}
 
+	// Member names are unique ignoring case. The columns of a record are renamed (the reader still finds them by
+	// their key), the members of anything else are dropped or an error
 	vector<cxx::TypeParam> params;
+	std::unordered_map<string, idx_t> member_names;
+	const bool rename = depth == 0 && options.rename_duplicate_root_members;
 	for (const auto &child_type : child_types) {
-		params.emplace_back(child_type.first, factory.CreateValue(child_type.second));
+		auto name = child_type.first;
+		auto lower = StringUtil::Lower(name);
+		if (member_names.find(lower) != member_names.end()) {
+			if (rename) {
+				while (member_names.find(lower) != member_names.end()) {
+					member_names[lower] += 1;
+					name = name + "_" + std::to_string(member_names[lower]);
+					lower = StringUtil::Lower(name);
+				}
+			} else if (options.ignore_errors) {
+				continue;
+			} else {
+				throw NotImplementedException(
+				    "Duplicate name %s in struct auto-detected in JSON, try ignore_errors=true", child_type.first);
+			}
+		}
+		member_names[lower] = 0;
+		params.emplace_back(name, factory.CreateValue(child_type.second));
 	}
 	return factory.CreateType(LogicalTypeId::STRUCT, params);
 }

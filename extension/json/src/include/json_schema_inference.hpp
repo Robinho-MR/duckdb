@@ -52,6 +52,9 @@ struct JSONInferenceOptions {
 	bool convert_strings_to_integers = false;
 	//! Whether the user passed a date/timestamp format (TIMESTAMPTZ is then never inferred)
 	bool user_specified_timestamp_format = false;
+	//! Whether the members of the top-level object that differ only in case are renamed (the columns of a record)
+	//! instead of dropped (ignore_errors) or an error
+	bool rename_duplicate_root_members = false;
 	//! Detects GeoJSON geometries, which become GEOMETRY leaves. Null: no GeoJSON detection.
 	JSONGeometryDetector geometry_detector = nullptr;
 };
