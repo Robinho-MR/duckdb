@@ -1,7 +1,9 @@
 #pragma once
 
-#include "json_common.hpp"
 #include "duckdb/common/serializer/serializer.hpp"
+#include "yyjson.hpp"
+
+using namespace duckdb_yyjson; // NOLINT
 
 namespace duckdb {
 
@@ -54,9 +56,12 @@ public:
 		value.Serialize(serializer);
 		auto result_obj = serializer.GetRootObject();
 		idx_t len = 0;
-		auto data = yyjson_mut_val_write_opts(result_obj, JSONCommon::WRITE_PRETTY_FLAG, nullptr,
+		auto data = yyjson_mut_val_write_opts(result_obj, YYJSON_WRITE_ALLOW_INF_AND_NAN | YYJSON_WRITE_PRETTY, nullptr,
 		                                      reinterpret_cast<size_t *>(&len), nullptr);
-		return string(data, len);
+		string result(data, len);
+		free(data);
+		yyjson_mut_doc_free(doc);
+		return result;
 	}
 
 	yyjson_mut_val *GetRootObject() {

@@ -1,12 +1,15 @@
 #pragma once
-#include "json_common.hpp"
+
 #include "duckdb/common/serializer/deserializer.hpp"
+#include "yyjson.hpp"
+
+using namespace duckdb_yyjson; // NOLINT
 
 namespace duckdb {
 
 class JsonDeserializer : public Deserializer {
 public:
-	JsonDeserializer(yyjson_val *val, const yyjson_doc_ptr &doc) : doc(doc.get()) {
+	JsonDeserializer(yyjson_val *val, yyjson_doc *doc) : doc(doc) {
 		deserialize_enum_from_string = true;
 		stack.emplace_back(val);
 	}

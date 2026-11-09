@@ -167,8 +167,6 @@ void RegisterReader(Extension &extension, Context &context);
 void RegisterTableInOut(Extension &extension, Context &context);
 //! functions/register_copy.cpp
 void RegisterCopy(Extension &extension, Context &context);
-//! functions/register_serialize.cpp
-void RegisterSerialize(Extension &extension, Context &context);
 
 //! Individual read functions (functions/<name>.cpp), registered by RegisterScalarRead
 void RegisterJSONTypeFunction(Extension &extension, Context &context);

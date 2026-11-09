@@ -1,5 +1,6 @@
-#include "json_deserializer.hpp"
+#include "duckdb/common/serializer/json_deserializer.hpp"
 #include "duckdb/common/types/blob.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
 
 namespace duckdb {
 

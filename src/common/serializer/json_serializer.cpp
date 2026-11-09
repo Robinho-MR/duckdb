@@ -1,4 +1,4 @@
-#include "json_serializer.hpp"
+#include "duckdb/common/serializer/json_serializer.hpp"
 #include "duckdb/common/types/blob.hpp"
 
 namespace duckdb {

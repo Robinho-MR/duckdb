@@ -60,6 +60,9 @@ private:
 	// pragmas
 	void RegisterPragmaFunctions();
 
+	// serialization of statements and plans as JSON
+	void RegisterSerializeFunctions();
+
 	void AddExtensionFunction(ScalarFunctionSet set);
 };
 
