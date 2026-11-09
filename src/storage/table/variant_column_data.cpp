@@ -5,6 +5,7 @@
 
 #include "duckdb/common/serializer/deserializer.hpp"
 #include "duckdb/function/variant/variant_shredding.hpp"
+#include "duckdb/function/cast/cast_function_set.hpp"
 #include "duckdb/main/settings.hpp"
 #include "duckdb/storage/statistics/struct_stats.hpp"
 #include "duckdb/storage/statistics/variant_stats.hpp"
@@ -506,8 +507,9 @@ void VariantColumnData::FetchRows(TransactionData transaction, ColumnFetchState 
 		}
 
 		//! Need to perform the cast here as well
-		auto context = transaction.transaction->context.lock();
-		auto fetched_row = extracted_variant.GetValue(0).CastAs(*context, result.GetType());
+		auto &cast_set = CastFunctionSet::Get(GetDatabase());
+		GetCastFunctionInput cast_input;
+		auto fetched_row = extracted_variant.GetValue(0).CastAs(cast_set, cast_input, result.GetType());
 		result.SetValue(result_idx, fetched_row);
 	}
 }

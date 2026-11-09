@@ -242,7 +242,7 @@ void PartialBlock::Clear() {
 // PartialBlockManager
 //===--------------------------------------------------------------------===//
 
-PartialBlockManager::PartialBlockManager(Context &context_p, BlockManager &block_manager,
+PartialBlockManager::PartialBlockManager(const QueryContext &context_p, BlockManager &block_manager,
                                          PartialBlockType partial_block_type, optional_idx max_partial_block_size_p,
                                          uint32_t max_use_count)
     : context(context_p), block_manager(block_manager), partial_block_type(partial_block_type),
@@ -417,7 +417,11 @@ BlockManager &PartialBlockManager::GetBlockManager() const {
 }
 
 QueryContext PartialBlockManager::GetQueryContext() const {
-	return QueryContext(context);
+	return context;
+}
+
+void PartialBlockManager::SetQueryContext(const QueryContext &new_context) {
+	context = new_context;
 }
 
 } // namespace duckdb

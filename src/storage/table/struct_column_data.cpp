@@ -1,4 +1,5 @@
 #include "duckdb/storage/table/struct_column_data.hpp"
+#include "duckdb/function/cast/cast_function_set.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
 #include "duckdb/storage/statistics/struct_stats.hpp"
@@ -344,13 +345,14 @@ void StructColumnData::FetchRows(TransactionData transaction, ColumnFetchState &
 		auto &child_type = StructType::GetChildTypes(type)[child_index].second;
 		if (!child_storage_index.HasChildren() && child_storage_index.HasType() &&
 		    child_storage_index.GetType() != child_type) {
-			auto context = transaction.transaction->context.lock();
+			auto &cast_set = CastFunctionSet::Get(GetDatabase());
+			GetCastFunctionInput cast_input;
 			for (idx_t idx = 0; idx < fetch_count; idx++) {
 				const idx_t offset = offsets[sel.get_index(idx)];
 				Vector intermediate(child_type, 1);
 				sub_column.FetchRows(transaction, state, child_storage_index, &offset,
 				                     *FlatVector::IncrementalSelectionVector(), /*count=*/1, intermediate, 0);
-				auto fetched_row = intermediate.GetValue(0).CastAs(*context, result.GetType());
+				auto fetched_row = intermediate.GetValue(0).CastAs(cast_set, cast_input, result.GetType());
 				result.SetValue(result_offset + idx, fetched_row);
 			}
 			return;

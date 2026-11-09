@@ -36,7 +36,7 @@ public:
 
 public:
 	//! Use the default packing threshold unless supplied; it must not exceed the block size.
-	PartialBlockManager(Context &context, BlockManager &block_manager, PartialBlockType partial_block_type,
+	PartialBlockManager(const QueryContext &context, BlockManager &block_manager, PartialBlockType partial_block_type,
 	                    optional_idx max_partial_block_size = optional_idx(),
 	                    uint32_t max_use_count = DEFAULT_MAX_USE_COUNT);
 	//! Discard pending blocks without flushing or finalizing their packables.
@@ -70,6 +70,8 @@ public:
 	BlockManager &GetBlockManager() const;
 	//! Returns the query context to attribute IO to.
 	QueryContext GetQueryContext() const;
+	//! Sets the query context to attribute IO to, for managers that outlive the query that created them.
+	void SetQueryContext(const QueryContext &new_context);
 
 private:
 	//! Remove the smallest fitting block from the map, or return nullptr if none fits.
@@ -84,8 +86,8 @@ private:
 	void RetainOrFlush(unique_ptr<PartialBlock> partial_block);
 
 private:
-	//! The context in which we use the partial block manager (owned by the checkpoint writer)
-	Context &context;
+	//! The context to attribute IO to
+	QueryContext context;
 	BlockManager &block_manager;
 	PartialBlockType partial_block_type;
 	mutex partial_block_lock;
