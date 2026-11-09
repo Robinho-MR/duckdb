@@ -58,11 +58,11 @@ struct JSONInferenceOptions {
 
 //! The user-provided or auto-detected date/timestamp formats, implemented by the reader (strptime formats are not
 //! part of the stable API)
-class JSONDateFormats {
+class JSONInferenceDateFormats {
 public:
-	virtual ~JSONDateFormats() = default;
+	virtual ~JSONInferenceDateFormats() = default;
 	//! Whether there are formats for DATE / TIMESTAMP
-	virtual bool HasFormats(LogicalTypeId type) = 0;
+	virtual bool HasFormats(LogicalTypeId type) const = 0;
 	//! Whether any format of the type parses all non-NULL strings of the vector. Called for rows [0, count).
 	virtual bool MatchesAnyFormat(LogicalTypeId type, const Vector &strings, idx_t count) = 0;
 };
@@ -70,7 +70,7 @@ public:
 //! Tests whether strings convert to a candidate type. Holds scratch vectors, so use one per thread.
 class JSONStringTypeTester {
 public:
-	JSONStringTypeTester(Factory &factory, JSONDateFormats *date_formats, const JSONInferenceOptions &options);
+	JSONStringTypeTester(Factory &factory, JSONInferenceDateFormats *date_formats, const JSONInferenceOptions &options);
 
 	//! Loads the strings of `vals` (null and non-string values become NULL)
 	void LoadStrings(yyjson_val *vals[], idx_t count);
@@ -79,7 +79,7 @@ public:
 	//! Updates the offset observation of the loaded strings
 	void UpdateTimestampOffsetState(TimestampOffsetState &state);
 
-	JSONDateFormats *GetDateFormats() const {
+	JSONInferenceDateFormats *GetDateFormats() const {
 		return date_formats;
 	}
 	bool UserSpecifiedTimestampFormat() const {
@@ -92,7 +92,7 @@ public:
 
 private:
 	Factory &factory;
-	JSONDateFormats *date_formats;
+	JSONInferenceDateFormats *date_formats;
 	bool user_specified_timestamp_format;
 	idx_t count = 0;
 	std::optional<cxx::DataChunk> string_chunk;

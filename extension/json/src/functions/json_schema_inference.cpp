@@ -34,7 +34,7 @@ LogicalTypeId JSONSchemaInference::MaxNumericType(LogicalTypeId a, LogicalTypeId
 //===--------------------------------------------------------------------===//
 // JSONStringTypeTester
 //===--------------------------------------------------------------------===//
-JSONStringTypeTester::JSONStringTypeTester(Factory &factory_p, JSONDateFormats *date_formats_p,
+JSONStringTypeTester::JSONStringTypeTester(Factory &factory_p, JSONInferenceDateFormats *date_formats_p,
                                            const JSONInferenceOptions &options)
     : factory(factory_p), date_formats(date_formats_p),
       user_specified_timestamp_format(options.user_specified_timestamp_format) {
