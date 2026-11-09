@@ -8,7 +8,7 @@ SET max_streaming_buffer_size='2MiB'
 query II
 SELECT current_setting('max_streaming_buffer_size'), current_setting('streaming_buffer_size')
 ----
-2.0 MiB	2.0 MiB
+2MiB	2MiB
 
 # The alias writes the same backing option
 statement ok
@@ -17,7 +17,7 @@ SET streaming_buffer_size='4.0MiB'
 query II
 SELECT current_setting('max_streaming_buffer_size'), current_setting('streaming_buffer_size')
 ----
-4.0 MiB	4.0 MiB
+4.0MiB	4.0MiB
 
 statement ok
 RESET streaming_buffer_size

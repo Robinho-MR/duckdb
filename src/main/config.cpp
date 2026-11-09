@@ -94,7 +94,7 @@ static const ConfigurationOption internal_options[] = {
     DUCKDB_SETTING(ArrowOutputListViewSetting),
     DUCKDB_SETTING_CALLBACK(ArrowOutputVersionSetting),
     DUCKDB_SETTING(AsofLoopJoinThresholdSetting),
-    DUCKDB_GLOBAL(AsyncThreadsSetting),
+    DUCKDB_SETTING_CALLBACK(AsyncThreadsSetting),
     DUCKDB_SETTING(AutoCheckpointSkipWalThresholdSetting),
     DUCKDB_SETTING(AutoinstallExtensionRepositorySetting),
     DUCKDB_SETTING(AutoinstallKnownExtensionsSetting),
@@ -201,7 +201,7 @@ static const ConfigurationOption internal_options[] = {
     DUCKDB_SETTING(GeometryMinimumShreddingSize),
     DUCKDB_SETTING_CALLBACK(HomeDirectorySetting),
     DUCKDB_GLOBAL(HTTPClientPoolCapacitySetting),
-    DUCKDB_GLOBAL(HTTPProxySetting),
+    DUCKDB_SETTING_CALLBACK(HTTPProxySetting),
     DUCKDB_SETTING(HTTPProxyPasswordSetting),
     DUCKDB_SETTING(HTTPProxyUsernameSetting),
     DUCKDB_SETTING(HTTPRetryQuotaThrottledSetting),
@@ -226,8 +226,8 @@ static const ConfigurationOption internal_options[] = {
     DUCKDB_SETTING(MatchRecognizeMaxStatesSetting),
     DUCKDB_SETTING(MaxExecutionTimeSetting),
     DUCKDB_SETTING(MaxExpressionDepthSetting),
-    DUCKDB_GLOBAL(MaxMemorySetting),
-    DUCKDB_LOCAL(MaxStreamingBufferSizeSetting),
+    DUCKDB_SETTING_CALLBACK(MaxMemorySetting),
+    DUCKDB_SETTING_CALLBACK(MaxStreamingBufferSizeSetting),
     DUCKDB_GLOBAL(MaxTempDirectorySizeSetting),
     DUCKDB_SETTING(MaxVacuumTasksSetting),
     DUCKDB_SETTING(MergeJoinThresholdSetting),
@@ -264,11 +264,11 @@ static const ConfigurationOption internal_options[] = {
     DUCKDB_SETTING_CALLBACK(ShowBehaviorSetting),
     DUCKDB_GLOBAL(StandardVectorSizeSetting),
     DUCKDB_SETTING_CALLBACK(StorageBlockPrefetchSetting),
-    DUCKDB_GLOBAL(StorageCompatibilityVersionSetting),
+    DUCKDB_SETTING_CALLBACK(StorageCompatibilityVersionSetting),
     DUCKDB_SETTING_CALLBACK(TableFunctionIdentifierConversionSetting),
     DUCKDB_GLOBAL(TempDirectorySetting),
     DUCKDB_SETTING_CALLBACK(TempFileEncryptionSetting),
-    DUCKDB_GLOBAL(ThreadsSetting),
+    DUCKDB_SETTING_CALLBACK(ThreadsSetting),
     DUCKDB_SETTING_CALLBACK(TrackedMetricsSetting),
     DUCKDB_SETTING(TrimFreeBlocksSetting),
     DUCKDB_SETTING(UsernameSetting),
@@ -395,7 +395,8 @@ idx_t DBConfig::GetWriteBufferMemoryLimit() const {
 	if (options.write_buffer_row_group_memory_limit.IsValid()) {
 		return options.write_buffer_row_group_memory_limit.GetIndex();
 	}
-	return options.maximum_memory / 5 / (options.maximum_threads + 1);
+	auto threads = NumericCast<idx_t>(MaxValue<int64_t>(Settings::Get<ThreadsSetting>(*this), 0));
+	return options.maximum_memory / 5 / (threads + 1);
 }
 
 vector<string> DBConfig::GetExtensionDirectories() const {
@@ -460,13 +461,19 @@ void DBConfig::SetOption(optional_ptr<DatabaseInstance> db, const ConfigurationO
 void DBConfig::ResetOption(optional_ptr<DatabaseInstance> db, const ConfigurationOption &option) {
 	if (option.default_value) {
 		// generic option
+		auto reset_value = Value(option.default_value).DefaultCastAs(ParseLogicalType(option.parameter_type));
+		bool has_computed_default = false;
 		if (option.set_callback) {
 			SettingCallbackInfo info(*this, db);
 			info.is_reset = true;
-			auto reset_value = Value(option.default_value).DefaultCastAs(ParseLogicalType(option.parameter_type));
 			option.set_callback(info, reset_value);
+			has_computed_default = info.has_computed_default;
 		}
-		user_settings.ClearSetting(option.setting_idx.GetIndex());
+		if (has_computed_default) {
+			user_settings.SetUserSetting(option.setting_idx.GetIndex(), std::move(reset_value));
+		} else {
+			user_settings.ClearSetting(option.setting_idx.GetIndex());
+		}
 		return;
 	}
 	if (!option.reset_global) {
@@ -676,15 +683,20 @@ IndexTypeSet &DBConfig::GetIndexTypes() {
 	return *index_types;
 }
 
-void DBConfig::SetDefaultMaxMemory() {
+idx_t DBConfig::GetDefaultMaxMemory() {
 	auto memory = GetSystemAvailableMemory(*file_system);
 	if (memory == DBConfigOptions().maximum_memory) {
 		// If GetSystemAvailableMemory returned the default, use it as is
-		options.maximum_memory = memory;
-	} else {
-		// Otherwise, use 80% of the available memory
-		options.maximum_memory = memory * 8 / 10;
+		return memory;
 	}
+	// Otherwise, use 80% of the available memory
+	return memory * 8 / 10;
+}
+
+void DBConfig::SetDefaultMaxMemory() {
+	options.maximum_memory = GetDefaultMaxMemory();
+	Settings::Set<MaxMemorySetting>(*this, SetScope::GLOBAL,
+	                                Value(StringUtil::BytesToHumanReadableString(options.maximum_memory)));
 }
 
 void DBConfig::SetDefaultTempDirectory() {

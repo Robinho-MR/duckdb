@@ -335,8 +335,9 @@ void DatabaseInstance::InitializeEmpty(DBConfig *user_config) {
 }
 
 void DatabaseInstance::StartScheduler() {
-	scheduler->SetThreads(config.options.maximum_threads, Settings::Get<ExternalThreadsSetting>(config));
-	scheduler->SetAsyncThreads(config.options.async_threads);
+	scheduler->SetThreads(NumericCast<idx_t>(Settings::Get<ThreadsSetting>(config)),
+	                      Settings::Get<ExternalThreadsSetting>(config));
+	scheduler->SetAsyncThreads(NumericCast<idx_t>(Settings::Get<AsyncThreadsSetting>(config)));
 	scheduler->RelaunchThreads();
 }
 
@@ -552,8 +553,11 @@ void DatabaseInstance::Configure(DBConfig &new_config, const char *database_path
 		config.SetDefaultTempDirectory();
 	}
 
-	if (new_config.options.http_proxy.empty()) {
-		HTTPProxySetting::ResetGlobal(this, config);
+	if (!config.user_settings.IsSet(HTTPProxySetting::SettingIndex)) {
+		auto http_proxy = FileSystem::GetEnvVariable("HTTP_PROXY");
+		if (!http_proxy.empty()) {
+			Settings::Set<HTTPProxySetting>(config, SetScope::GLOBAL, Value(http_proxy));
+		}
 	}
 
 	if (config.options.access_mode == AccessMode::UNDEFINED) {
@@ -577,11 +581,13 @@ void DatabaseInstance::Configure(DBConfig &new_config, const char *database_path
 	if (config.options.maximum_memory == DConstants::INVALID_INDEX) {
 		config.SetDefaultMaxMemory();
 	}
-	if (new_config.options.maximum_threads == DConstants::INVALID_INDEX) {
-		config.options.maximum_threads = config.GetSystemMaxThreads(*config.file_system);
+	if (Settings::Get<ThreadsSetting>(config) < 1) {
+		auto threads = NumericCast<int64_t>(config.GetSystemMaxThreads(*config.file_system));
+		Settings::Set<ThreadsSetting>(config, SetScope::GLOBAL, Value::BIGINT(threads));
 	}
-	if (new_config.options.async_threads == DConstants::INVALID_INDEX) {
-		config.options.async_threads = config.GetSystemMaxAsyncThreads(*config.file_system);
+	if (Settings::Get<AsyncThreadsSetting>(config) < 0) {
+		auto async_threads = NumericCast<int64_t>(config.GetSystemMaxAsyncThreads(*config.file_system));
+		Settings::Set<AsyncThreadsSetting>(config, SetScope::GLOBAL, Value::BIGINT(async_threads));
 	}
 	config.allocator = std::move(new_config.allocator);
 	if (!config.allocator) {

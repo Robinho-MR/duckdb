@@ -105,10 +105,6 @@ struct DBConfigOptions {
 #endif
 	//! The maximum size of the 'temp_directory' folder when set (in bytes). Default: 90% of available disk space.
 	idx_t maximum_swap_space = DConstants::INVALID_INDEX;
-	//! The maximum amount of CPU threads used by the database system. Default: all available.
-	idx_t maximum_threads = DConstants::INVALID_INDEX;
-	//! The maximum amount of async threads used by the database system. Default: all available.
-	idx_t async_threads = DConstants::INVALID_INDEX;
 	//! HTTP client limit derived from thread counts unless configured
 	idx_t http_client_pool_capacity = DConstants::INVALID_INDEX;
 	//! Whether or not to create and use a temporary directory to store intermediates that do not fit in memory
@@ -128,8 +124,6 @@ struct DBConfigOptions {
 	identifier_map_t<Value> user_options;
 	//! The set of unrecognized (other) options
 	identifier_map_t<Value> unrecognized_options;
-	//! HTTP proxy host (defaults to the HTTP_PROXY environment variable when unset)
-	string http_proxy;
 	//! The default block header size for new duckdb database files.
 	idx_t default_block_header_size = DEFAULT_BLOCK_HEADER_STORAGE_SIZE;
 	//! Paths that are explicitly allowed, even if enable_external_access is false
@@ -333,6 +327,7 @@ public:
 	static idx_t GetSystemMaxAsyncThreads(FileSystem &fs);
 	static idx_t GetSystemAvailableMemory(FileSystem &fs);
 	static optional_idx ParseMemoryLimitSlurm(const string &arg);
+	idx_t GetDefaultMaxMemory();
 	void SetDefaultMaxMemory();
 	void SetDefaultTempDirectory();
 

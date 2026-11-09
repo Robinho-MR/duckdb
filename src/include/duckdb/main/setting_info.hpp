@@ -73,6 +73,8 @@ struct SettingCallbackInfo {
 	SetScope scope;
 	//! Whether the callback fires for a RESET rather than a SET
 	bool is_reset = false;
+	//! Set by a callback during RESET that replaced the input by a computed default, which is then stored
+	bool has_computed_default = false;
 
 public:
 	//! Logs that the setting is deprecated; resetting it back to its default does not
