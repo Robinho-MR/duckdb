@@ -27,10 +27,20 @@ set(JSON_SCALAR_READ_SOURCES
     src/functions/json_extract.cpp
     src/functions/json_type.cpp
     src/functions/json_valid.cpp
-    src/functions/json_value.cpp)
+    src/functions/json_value.cpp
+    src/functions/json_keys.cpp
+    src/functions/json_contains.cpp
+    src/functions/json_pretty.cpp)
 
 # json_merge_patch, json_deep_merge, json_insert/replace/set/remove, json_strip_nulls, json_pretty, ...
-set(JSON_SCALAR_MODIFY_SOURCES src/functions/register_scalar_modify.cpp)
+set(JSON_SCALAR_MODIFY_SOURCES
+    src/functions/register_scalar_modify.cpp
+    src/functions/json_merge_patch.cpp
+    src/functions/json_merge_patch_diff.cpp
+    src/functions/json_deep_merge.cpp
+    src/functions/json_modify.cpp
+    src/functions/json_strip_nulls.cpp
+    src/functions/json_normalize.cpp)
 
 # json_create/to_json/json_object/json_array, json_group_array/json_group_object and their casts
 set(JSON_CREATE_SOURCES src/functions/register_create.cpp)
