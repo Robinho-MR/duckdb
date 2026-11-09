@@ -33,8 +33,17 @@ static JSONGeometryFormat ParseGeometryFormat(const Value &value) {
 	                            string(text.data(), text.size()));
 }
 
+static yyjson_mut_val *(*geometry_to_geojson_hook)(yyjson_mut_doc *, blob_t) = nullptr;
+
+void SetGeometryToGeoJSON(yyjson_mut_val *(*converter)(yyjson_mut_doc *, blob_t)) {
+	geometry_to_geojson_hook = converter;
+}
+
 JSONCreateOptions ClientJSONCreateOptions(Context &context) {
 	JSONCreateOptions result;
+	if (geometry_to_geojson_hook) {
+		result.geometry_to_geojson = geometry_to_geojson_hook;
+	}
 	auto option = context.GetConfig().TryGetOption("json_geometry_format");
 	if (option) {
 		result.geometry_format = ParseGeometryFormat(option->value);
