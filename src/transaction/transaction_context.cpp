@@ -18,20 +18,21 @@ TransactionContext::TransactionContext(ClientContext &context)
       auto_rollback(false), current_transaction(nullptr) {
 }
 
-bool TransactionContext::HasActiveTransaction() const {
-	return current_transaction && !current_transaction->IsFinished();
+bool TransactionContext::IsSharedTransaction() const {
+	return current_transaction && current_transaction->IsShared();
 }
 
-bool TransactionContext::IsJoinedTransaction() const {
-	return current_transaction && &current_transaction->context != &context;
+void TransactionContext::LeaveSharedTransaction() {
+	if (!IsSharedTransaction() || auto_commit) {
+		return;
+	}
+	try {
+		Rollback(nullptr);
+	} catch (...) { // NOLINT
+	}
 }
 
 TransactionContext::~TransactionContext() {
-	if (IsJoinedTransaction()) {
-		// the transaction belongs to the connection that created it
-		current_transaction.reset();
-		return;
-	}
 	if (HasActiveTransaction()) {
 		try {
 			Rollback(nullptr);
@@ -77,9 +78,18 @@ void TransactionContext::Commit() {
 		throw TransactionException("failed to commit: no transaction active");
 	}
 	autocheckpoint_error = ErrorData();
-	EndSharedTransaction();
 	auto transaction = std::move(current_transaction);
 	ClearTransaction();
+	bool commit_result = true;
+	if (!LeaveTransaction(*transaction, true, commit_result)) {
+		// other connections still participate in the transaction, the last one to leave ends it
+		return;
+	}
+	if (!commit_result) {
+		// a participant rolled back: the transaction cannot be committed
+		RollbackTransaction(std::move(transaction), nullptr);
+		throw TransactionException("Failed to commit: a connection sharing the transaction rolled it back");
+	}
 	auto error = transaction->Commit();
 	// Notify any registered state of transaction commit
 	if (error.HasError()) {
@@ -118,10 +128,16 @@ void TransactionContext::Rollback(optional_ptr<ErrorData> error) {
 	if (!current_transaction) {
 		throw TransactionException("failed to rollback: no transaction active");
 	}
-	EndSharedTransaction();
 	auto transaction = std::move(current_transaction);
 	ClearTransaction();
+	bool commit_result = false;
+	if (!LeaveTransaction(*transaction, false, commit_result)) {
+		return;
+	}
+	RollbackTransaction(std::move(transaction), error);
+}
 
+void TransactionContext::RollbackTransaction(shared_ptr<MetaTransaction> transaction, optional_ptr<ErrorData> error) {
 	ErrorData rollback_error;
 	try {
 		transaction->Rollback();
@@ -144,37 +160,40 @@ void TransactionContext::Rollback(optional_ptr<ErrorData> error) {
 	transaction->Finalize();
 }
 
-void TransactionContext::EndSharedTransaction() {
-	auto &transaction = *current_transaction;
-	if (transaction.IsShared()) {
-		if (!transaction.TryFinish(joined_transaction ? 1 : 0)) {
-			throw TransactionException("cannot end the transaction: other connections are running queries on it");
-		}
-	} else {
+bool TransactionContext::LeaveTransaction(MetaTransaction &transaction, bool commit, bool &commit_result) {
+	if (!transaction.IsShared()) {
 		transaction.MarkFinished();
+		commit_result = commit;
+		return true;
 	}
-	auto snapshot_id = transaction.GetSnapshotId();
-	if (!snapshot_id.empty()) {
+	auto result = transaction.Leave(commit);
+	commit_result = result.commit;
+	if (result.last) {
+		auto snapshot_id = transaction.GetSnapshotId();
 		context.db->GetDatabaseManager().RemoveExportedTransaction(snapshot_id);
+		return true;
 	}
+	if (&transaction.context == &context) {
+		// the other participants keep using the objects that belong to this connection
+		try {
+			transaction.SetKeepAlive(context.shared_from_this());
+		} catch (std::bad_weak_ptr &) { // NOLINT
+			                            // the context is being destroyed: nothing keeps it alive
+		}
+	}
+	return false;
 }
 
 string TransactionContext::ExportSnapshot() {
 	if (!HasActiveTransaction() || auto_commit) {
 		throw TransactionException("a snapshot can only be exported from within a transaction");
 	}
-	if (IsJoinedTransaction()) {
-		throw TransactionException("cannot export a snapshot from a transaction that was joined from another "
-		                           "connection");
-	}
 	auto snapshot_id = current_transaction->GetSnapshotId();
 	if (!snapshot_id.empty()) {
 		return snapshot_id;
 	}
 	snapshot_id = context.db->GetDatabaseManager().ExportTransaction(current_transaction);
-	// from now on other connections can use the transaction, this connection is running a query on it
 	current_transaction->Share(snapshot_id);
-	joined_transaction = current_transaction;
 	return snapshot_id;
 }
 
@@ -189,13 +208,12 @@ void TransactionContext::ImportSnapshot(const string &snapshot_id) {
 	if (!source || source->IsFinished()) {
 		throw TransactionException("invalid snapshot identifier: \"%s\"", snapshot_id);
 	}
-	if (!source->TryJoin()) {
+	if (!source->Join()) {
 		throw TransactionException("invalid snapshot identifier: \"%s\"", snapshot_id);
 	}
 	// discard our own (empty) transaction and continue in the shared one
 	auto previous = std::move(current_transaction);
 	current_transaction = source;
-	joined_transaction = source;
 	previous->MarkFinished();
 	previous->Rollback();
 	for (auto const &s : context.GetContext().GetRegisteredState().States()) {
@@ -205,42 +223,6 @@ void TransactionContext::ImportSnapshot(const string &snapshot_id) {
 	for (auto &state : context.GetContext().GetRegisteredState().States()) {
 		state->TransactionBegin(*current_transaction, context);
 	}
-}
-
-void TransactionContext::OnQueryBegin() {
-	if (!current_transaction || !current_transaction->IsShared() || joined_transaction) {
-		return;
-	}
-	if (!current_transaction->TryJoin()) {
-		// another connection ended the shared transaction
-		current_transaction.reset();
-		auto_commit = true;
-		throw TransactionException("the shared transaction was ended by another connection");
-	}
-	joined_transaction = current_transaction;
-}
-
-void TransactionContext::OnQueryEnd() {
-	if (!joined_transaction) {
-		return;
-	}
-	auto transaction = std::move(joined_transaction);
-	transaction->Leave();
-}
-
-void TransactionContext::WaitForOtherUsers() {
-	if (joined_transaction) {
-		joined_transaction->WaitForOtherUsers(1);
-	}
-}
-
-bool TransactionContext::DetachSharedTransaction() {
-	if (!IsJoinedTransaction()) {
-		return false;
-	}
-	current_transaction.reset();
-	auto_commit = true;
-	return true;
 }
 
 void TransactionContext::ClearTransaction() {

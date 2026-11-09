@@ -19,8 +19,6 @@
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/atomic.hpp"
 
-#include <condition_variable>
-
 namespace duckdb {
 class AttachedDatabase;
 class ClientContext;
@@ -67,19 +65,23 @@ public:
 		return temporary_objects;
 	}
 
-	//! Marks the transaction as shared. The calling connection is running a query on it (it counts as a user).
+	//! Marks the transaction as shared, with the calling connection as its only participant
 	void Share(const string &snapshot_id);
 	bool IsShared();
 	//! The identifier under which a shared transaction was exported (empty if not exported)
 	string GetSnapshotId();
-	//! Registers a query of another connection on the transaction. Returns false if the transaction ended.
-	bool TryJoin();
-	//! Unregisters a query of a connection
-	void Leave();
-	//! Ends the transaction if no other connection runs queries on it, own_users is the number of users of the caller
-	bool TryFinish(idx_t own_users);
-	//! Blocks until only the users of the caller are left
-	void WaitForOtherUsers(idx_t own_users);
+	//! Adds a participant to the shared transaction. Returns false if the transaction already ended.
+	bool Join();
+	struct LeaveResult {
+		//! Whether the participant that left was the last one - it then has to commit or roll back
+		bool last;
+		//! Whether all participants that left voted to commit
+		bool commit;
+	};
+	//! A participant leaves the transaction, voting for a commit or rollback
+	LeaveResult Leave(bool commit);
+	//! Keeps the context of the creating connection alive for the remaining participants after it left
+	void SetKeepAlive(shared_ptr<ClientContext> context);
 	//! Whether the transaction was committed or rolled back
 	bool IsFinished() const {
 		return finished;
@@ -142,9 +144,12 @@ private:
 	atomic<bool> finished;
 	//! Guards the shared state below
 	mutex shared_lock;
-	std::condition_variable shared_cv;
-	//! The number of queries currently running on the shared transaction
-	idx_t users = 0;
+	//! The number of connections participating in the shared transaction
+	idx_t participants = 0;
+	//! Whether a participant of the shared transaction voted to roll back
+	bool rollback_vote = false;
+	//! The context of the connection that created the transaction, once it left while others still participate
+	shared_ptr<ClientContext> keep_alive;
 	//! Whether the transaction is shared with other connections
 	bool shared = false;
 	//! The identifier the transaction was exported under

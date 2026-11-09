@@ -215,18 +215,9 @@ static unique_ptr<SQLStatement> WrapAsSelect(unique_ptr<TableRef> from_ref) {
 
 void ClientContext::Destroy() {
 	auto lock = LockContext();
-	// a transaction that belongs to another connection is left to that connection
-	if (!transaction.DetachSharedTransaction() && transaction.HasActiveTransaction()) {
-		try {
-			transaction.OnQueryBegin();
-		} catch (...) { // NOLINT
-		}
-	}
 	if (transaction.HasActiveTransaction()) {
 		transaction.ResetActiveQuery();
-		while (!transaction.IsAutoCommit() && transaction.HasActiveTransaction()) {
-			// the transaction cannot end while other connections run queries on it
-			transaction.WaitForOtherUsers();
+		if (!transaction.IsAutoCommit()) {
 			// a destructor cannot throw: once the database is invalidated, the rollback can fail as well
 			try {
 				transaction.Rollback(nullptr);
@@ -234,7 +225,6 @@ void ClientContext::Destroy() {
 			}
 		}
 	}
-	transaction.OnQueryEnd();
 	CleanupInternal(*lock);
 }
 

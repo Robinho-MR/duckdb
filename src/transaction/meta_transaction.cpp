@@ -197,7 +197,7 @@ void MetaTransaction::Share(const string &snapshot_id_p) {
 	lock_guard<mutex> guard(shared_lock);
 	shared = true;
 	snapshot_id = snapshot_id_p;
-	users = 1;
+	participants = 1;
 }
 
 bool MetaTransaction::IsShared() {
@@ -210,36 +210,34 @@ string MetaTransaction::GetSnapshotId() {
 	return snapshot_id;
 }
 
-bool MetaTransaction::TryJoin() {
+bool MetaTransaction::Join() {
 	lock_guard<mutex> guard(shared_lock);
 	if (finished) {
 		return false;
 	}
-	users++;
+	participants++;
 	return true;
 }
 
-void MetaTransaction::Leave() {
-	{
-		lock_guard<mutex> guard(shared_lock);
-		D_ASSERT(users > 0);
-		users--;
-	}
-	shared_cv.notify_all();
-}
-
-bool MetaTransaction::TryFinish(idx_t own_users) {
+MetaTransaction::LeaveResult MetaTransaction::Leave(bool commit) {
 	lock_guard<mutex> guard(shared_lock);
-	if (users > own_users) {
-		return false;
+	D_ASSERT(participants > 0);
+	if (!commit) {
+		rollback_vote = true;
 	}
-	finished = true;
-	return true;
+	participants--;
+	LeaveResult result;
+	result.last = participants == 0;
+	result.commit = !rollback_vote;
+	if (result.last) {
+		finished = true;
+	}
+	return result;
 }
 
-void MetaTransaction::WaitForOtherUsers(idx_t own_users) {
-	unique_lock<mutex> guard(shared_lock);
-	shared_cv.wait(guard, [&]() { return users <= own_users; });
+void MetaTransaction::SetKeepAlive(shared_ptr<ClientContext> context_p) {
+	lock_guard<mutex> guard(shared_lock);
+	keep_alive = std::move(context_p);
 }
 
 void MetaTransaction::Finalize() {

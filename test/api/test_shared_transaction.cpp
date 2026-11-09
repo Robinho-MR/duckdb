@@ -11,6 +11,11 @@ static string ExportSnapshot(Connection &con) {
 	return result->Collection().GetValue(0, 0).ToString();
 }
 
+static void RequireValue(Connection &con, const string &query, int64_t expected) {
+	auto result = con.Query(query);
+	REQUIRE(CHECK_COLUMN(result, 0, {Value::BIGINT(expected)}));
+}
+
 TEST_CASE("Test sharing a transaction between connections", "[api][transaction]") {
 	DuckDB db(nullptr);
 	Connection con1(db);
@@ -27,52 +32,78 @@ TEST_CASE("Test sharing a transaction between connections", "[api][transaction]"
 		auto snapshot = ExportSnapshot(con1);
 
 		// not visible outside of the transaction
-		auto result = con3.Query("SELECT SUM(i) FROM tbl");
-		REQUIRE(CHECK_COLUMN(result, 0, {1}));
+		RequireValue(con3, "SELECT SUM(i) FROM tbl", 1);
 		REQUIRE_FAIL(con3.Query("SELECT * FROM tmp"));
 
 		REQUIRE_NO_FAIL(con2.Query("BEGIN TRANSACTION"));
 		REQUIRE_NO_FAIL(con2.Query("SET TRANSACTION SNAPSHOT '" + snapshot + "'"));
-		result = con2.Query("SELECT SUM(i) FROM tbl");
-		REQUIRE(CHECK_COLUMN(result, 0, {3}));
-		result = con2.Query("SELECT i FROM tmp");
-		REQUIRE(CHECK_COLUMN(result, 0, {10}));
+		RequireValue(con2, "SELECT SUM(i) FROM tbl", 3);
+		RequireValue(con2, "SELECT SUM(i) FROM tmp", 10);
 
 		// changes by the second connection are visible to the first
 		REQUIRE_NO_FAIL(con2.Query("INSERT INTO tbl VALUES (3)"));
 		REQUIRE_NO_FAIL(con2.Query("INSERT INTO tmp VALUES (20)"));
 		REQUIRE_NO_FAIL(con2.Query("CREATE TEMPORARY TABLE tmp2 AS SELECT 5 AS i"));
-		result = con1.Query("SELECT SUM(i) FROM tbl");
-		REQUIRE(CHECK_COLUMN(result, 0, {6}));
-		result = con1.Query("SELECT SUM(i) FROM tmp");
-		REQUIRE(CHECK_COLUMN(result, 0, {30}));
-		result = con1.Query("SELECT i FROM tmp2");
-		REQUIRE(CHECK_COLUMN(result, 0, {5}));
+		RequireValue(con1, "SELECT SUM(i) FROM tbl", 6);
+		RequireValue(con1, "SELECT SUM(i) FROM tmp", 30);
+		RequireValue(con1, "SELECT SUM(i) FROM tmp2", 5);
 
-		// committing from the second connection commits for both
+		// the second connection commits: the transaction is still running for the first connection
 		REQUIRE_NO_FAIL(con2.Query("COMMIT"));
-		result = con3.Query("SELECT SUM(i) FROM tbl");
-		REQUIRE(CHECK_COLUMN(result, 0, {6}));
+		RequireValue(con3, "SELECT SUM(i) FROM tbl", 1);
+		RequireValue(con1, "SELECT SUM(i) FROM tbl", 6);
+		REQUIRE_NO_FAIL(con2.Query("SELECT 42"));
+		REQUIRE_FAIL(con2.Query("COMMIT"));
 
-		// the first connection learns that its transaction ended
-		REQUIRE_FAIL(con1.Query("SELECT 42"));
-		result = con1.Query("SELECT 42");
-		REQUIRE(CHECK_COLUMN(result, 0, {42}));
-		REQUIRE_FAIL(con1.Query("COMMIT"));
+		// the last connection to commit commits the transaction
+		REQUIRE_NO_FAIL(con1.Query("COMMIT"));
+		RequireValue(con3, "SELECT SUM(i) FROM tbl", 6);
 		// the snapshot is no longer valid
 		REQUIRE_NO_FAIL(con3.Query("BEGIN TRANSACTION"));
 		REQUIRE_FAIL(con3.Query("SET TRANSACTION SNAPSHOT '" + snapshot + "'"));
 	}
-	SECTION("rollback ends the shared transaction for everyone") {
+	SECTION("the owner can commit before the joined connection") {
 		REQUIRE_NO_FAIL(con1.Query("BEGIN TRANSACTION"));
 		REQUIRE_NO_FAIL(con1.Query("INSERT INTO tbl VALUES (2)"));
 		auto snapshot = ExportSnapshot(con1);
 		REQUIRE_NO_FAIL(con2.Query("BEGIN TRANSACTION"));
 		REQUIRE_NO_FAIL(con2.Query("SET TRANSACTION SNAPSHOT '" + snapshot + "'"));
+		REQUIRE_NO_FAIL(con1.Query("COMMIT"));
+		RequireValue(con3, "SELECT SUM(i) FROM tbl", 1);
+		REQUIRE_NO_FAIL(con2.Query("INSERT INTO tbl VALUES (3)"));
+		// the snapshot can still be joined while a participant remains
+		REQUIRE_NO_FAIL(con3.Query("BEGIN TRANSACTION"));
+		REQUIRE_NO_FAIL(con3.Query("SET TRANSACTION SNAPSHOT '" + snapshot + "'"));
+		RequireValue(con3, "SELECT SUM(i) FROM tbl", 6);
+		REQUIRE_NO_FAIL(con3.Query("COMMIT"));
+		RequireValue(con2, "SELECT SUM(i) FROM tbl", 6);
+		REQUIRE_NO_FAIL(con2.Query("COMMIT"));
+		RequireValue(con1, "SELECT SUM(i) FROM tbl", 6);
+	}
+	SECTION("a rollback by any participant rolls the whole transaction back") {
+		REQUIRE_NO_FAIL(con1.Query("BEGIN TRANSACTION"));
+		REQUIRE_NO_FAIL(con1.Query("INSERT INTO tbl VALUES (2)"));
+		auto snapshot = ExportSnapshot(con1);
+		REQUIRE_NO_FAIL(con2.Query("BEGIN TRANSACTION"));
+		REQUIRE_NO_FAIL(con2.Query("SET TRANSACTION SNAPSHOT '" + snapshot + "'"));
+		REQUIRE_NO_FAIL(con2.Query("INSERT INTO tbl VALUES (3)"));
 		REQUIRE_NO_FAIL(con2.Query("ROLLBACK"));
-		REQUIRE_FAIL(con1.Query("SELECT 42"));
-		auto result = con3.Query("SELECT SUM(i) FROM tbl");
-		REQUIRE(CHECK_COLUMN(result, 0, {1}));
+		// the transaction is still running for the first connection
+		RequireValue(con1, "SELECT SUM(i) FROM tbl", 6);
+		// the last statement is a COMMIT, but the transaction is rolled back
+		REQUIRE_FAIL(con1.Query("COMMIT"));
+		RequireValue(con3, "SELECT SUM(i) FROM tbl", 1);
+		RequireValue(con1, "SELECT SUM(i) FROM tbl", 1);
+	}
+	SECTION("a rollback by the last participant after a commit rolls back") {
+		REQUIRE_NO_FAIL(con1.Query("BEGIN TRANSACTION"));
+		REQUIRE_NO_FAIL(con1.Query("INSERT INTO tbl VALUES (2)"));
+		auto snapshot = ExportSnapshot(con1);
+		REQUIRE_NO_FAIL(con2.Query("BEGIN TRANSACTION"));
+		REQUIRE_NO_FAIL(con2.Query("SET TRANSACTION SNAPSHOT '" + snapshot + "'"));
+		REQUIRE_NO_FAIL(con2.Query("COMMIT"));
+		REQUIRE_NO_FAIL(con1.Query("ROLLBACK"));
+		RequireValue(con3, "SELECT SUM(i) FROM tbl", 1);
 	}
 	SECTION("exporting the same transaction twice returns the same snapshot") {
 		REQUIRE_NO_FAIL(con1.Query("BEGIN TRANSACTION"));
@@ -80,19 +111,22 @@ TEST_CASE("Test sharing a transaction between connections", "[api][transaction]"
 		REQUIRE(snapshot == ExportSnapshot(con1));
 		REQUIRE_NO_FAIL(con1.Query("COMMIT"));
 	}
-	SECTION("the owner closing the connection rolls the transaction back") {
+	SECTION("the owner closing the connection counts as a rollback, the others keep working") {
 		auto owner = make_uniq<Connection>(db);
 		REQUIRE_NO_FAIL(owner->Query("BEGIN TRANSACTION"));
 		REQUIRE_NO_FAIL(owner->Query("INSERT INTO tbl VALUES (2)"));
+		REQUIRE_NO_FAIL(owner->Query("CREATE TEMPORARY TABLE tmp AS SELECT 7 AS i"));
 		auto snapshot = ExportSnapshot(*owner);
 		REQUIRE_NO_FAIL(con2.Query("BEGIN TRANSACTION"));
 		REQUIRE_NO_FAIL(con2.Query("SET TRANSACTION SNAPSHOT '" + snapshot + "'"));
 		owner.reset();
-		REQUIRE_FAIL(con2.Query("SELECT 42"));
-		auto result = con3.Query("SELECT SUM(i) FROM tbl");
-		REQUIRE(CHECK_COLUMN(result, 0, {1}));
+		RequireValue(con2, "SELECT SUM(i) FROM tbl", 3);
+		RequireValue(con2, "SELECT SUM(i) FROM tmp", 7);
+		REQUIRE_NO_FAIL(con2.Query("INSERT INTO tbl VALUES (3)"));
+		REQUIRE_FAIL(con2.Query("COMMIT"));
+		RequireValue(con3, "SELECT SUM(i) FROM tbl", 1);
 	}
-	SECTION("a joined connection closing leaves the transaction running") {
+	SECTION("a joined connection closing counts as a rollback") {
 		REQUIRE_NO_FAIL(con1.Query("BEGIN TRANSACTION"));
 		REQUIRE_NO_FAIL(con1.Query("INSERT INTO tbl VALUES (2)"));
 		auto snapshot = ExportSnapshot(con1);
@@ -101,9 +135,9 @@ TEST_CASE("Test sharing a transaction between connections", "[api][transaction]"
 		REQUIRE_NO_FAIL(joined->Query("SET TRANSACTION SNAPSHOT '" + snapshot + "'"));
 		REQUIRE_NO_FAIL(joined->Query("INSERT INTO tbl VALUES (3)"));
 		joined.reset();
-		REQUIRE_NO_FAIL(con1.Query("COMMIT"));
-		auto result = con3.Query("SELECT SUM(i) FROM tbl");
-		REQUIRE(CHECK_COLUMN(result, 0, {6}));
+		RequireValue(con1, "SELECT SUM(i) FROM tbl", 6);
+		REQUIRE_FAIL(con1.Query("COMMIT"));
+		RequireValue(con3, "SELECT SUM(i) FROM tbl", 1);
 	}
 	SECTION("concurrent inserts into a shared transaction") {
 		REQUIRE_NO_FAIL(con1.Query("BEGIN TRANSACTION"));
@@ -121,11 +155,10 @@ TEST_CASE("Test sharing a transaction between connections", "[api][transaction]"
 		thread t2([&]() { insert(con2, 2000); });
 		t1.join();
 		t2.join();
-		auto result = con1.Query("SELECT COUNT(*) FROM tbl");
-		REQUIRE(CHECK_COLUMN(result, 0, {Value::BIGINT(1 + 2 * ROWS_PER_THREAD)}));
+		RequireValue(con1, "SELECT COUNT(*) FROM tbl", 1 + 2 * ROWS_PER_THREAD);
 		REQUIRE_NO_FAIL(con1.Query("COMMIT"));
-		result = con3.Query("SELECT COUNT(*) FROM tbl");
-		REQUIRE(CHECK_COLUMN(result, 0, {Value::BIGINT(1 + 2 * ROWS_PER_THREAD)}));
+		REQUIRE_NO_FAIL(con2.Query("COMMIT"));
+		RequireValue(con3, "SELECT COUNT(*) FROM tbl", 1 + 2 * ROWS_PER_THREAD);
 	}
 	SECTION("concurrent reads and writes on a shared transaction") {
 		REQUIRE_NO_FAIL(con1.Query("BEGIN TRANSACTION"));
@@ -144,9 +177,9 @@ TEST_CASE("Test sharing a transaction between connections", "[api][transaction]"
 		thread t2([&]() { work(con2, 1000); });
 		t1.join();
 		t2.join();
-		auto result = con1.Query("SELECT COUNT(*) FROM tmp");
-		REQUIRE(CHECK_COLUMN(result, 0, {Value::BIGINT(100)}));
+		RequireValue(con1, "SELECT COUNT(*) FROM tmp", 100);
 		REQUIRE_NO_FAIL(con2.Query("ROLLBACK"));
+		REQUIRE_NO_FAIL(con1.Query("ROLLBACK"));
 	}
 	SECTION("errors") {
 		// exporting requires a transaction

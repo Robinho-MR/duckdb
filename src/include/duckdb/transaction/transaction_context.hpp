@@ -36,8 +36,9 @@ public:
 		return *current_transaction;
 	}
 
-	//! Whether there is a transaction that did not end yet (a shared transaction can be ended by another connection)
-	bool HasActiveTransaction() const;
+	bool HasActiveTransaction() const {
+		return current_transaction.get();
+	}
 
 	void BeginTransaction();
 	void Commit();
@@ -56,16 +57,10 @@ public:
 	string ExportSnapshot();
 	//! Replaces the (still unused) current transaction by the exported transaction with the given identifier
 	void ImportSnapshot(const string &snapshot_id);
-	//! Called when a query starts: registers the query on a shared transaction
-	void OnQueryBegin();
-	//! Called when a query ended
-	void OnQueryEnd();
-	//! Blocks until no other connection runs queries on the shared transaction
-	void WaitForOtherUsers();
-	//! Drops a shared transaction that was created by a different connection without ending it
-	bool DetachSharedTransaction();
-	//! Whether the current transaction is shared and was created by a different connection
-	bool IsJoinedTransaction() const;
+	//! Whether the current transaction is shared with other connections
+	bool IsSharedTransaction() const;
+	//! Leaves the shared transaction (voting to roll back), if any
+	void LeaveSharedTransaction();
 
 	idx_t GetActiveQuery();
 	void ResetActiveQuery();
@@ -89,13 +84,13 @@ private:
 	bool auto_rollback = false;
 
 	shared_ptr<MetaTransaction> current_transaction;
-	//! The shared transaction on which this connection currently runs a query
-	shared_ptr<MetaTransaction> joined_transaction;
 	//! The query id of the current query of this connection
 	transaction_t active_query_id = MAXIMUM_QUERY_ID;
 	ErrorData autocheckpoint_error;
 
-	void EndSharedTransaction();
+	//! Leaves the transaction. Returns true if the caller is the last participant and has to end it
+	bool LeaveTransaction(MetaTransaction &transaction, bool commit, bool &commit_result);
+	void RollbackTransaction(shared_ptr<MetaTransaction> transaction, optional_ptr<ErrorData> error);
 
 	TransactionContext(const TransactionContext &) = delete;
 };

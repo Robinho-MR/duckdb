@@ -41,8 +41,6 @@ void ClientContext::BeginQueryInternal(ClientContextLock &lock, PreprocessedStat
 	if (ValidChecker::IsInvalidated(db_inst)) {
 		throw ErrorManager::InvalidatedDatabase(*this, ValidChecker::InvalidatedMessage(db_inst));
 	}
-	// serialize with the other connections that use the same shared transaction
-	transaction.OnQueryBegin();
 	auto query = statements.statements[0]->query;
 	active_query = make_uniq<ActiveQueryContext>(std::move(statements));
 	active_query->format = parameters.format;
@@ -150,7 +148,6 @@ ErrorData ClientContext::EndQueryInternal(ClientContextLock &lock, bool success,
 	} catch (...) { // LCOV_EXCL_START
 		error = ErrorData("Unhandled exception!");
 	} // LCOV_EXCL_STOP
-	transaction.OnQueryEnd();
 
 	EndQueryProfiling(error);
 

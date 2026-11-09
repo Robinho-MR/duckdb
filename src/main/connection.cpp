@@ -62,6 +62,8 @@ Connection::~Connection() {
 	if (!context) {
 		return;
 	}
+	// leave a shared transaction while the context is still alive for the other participants
+	context->transaction.LeaveSharedTransaction();
 	ConnectionManager::Get(*context->db).RemoveConnection(*context);
 }
 
