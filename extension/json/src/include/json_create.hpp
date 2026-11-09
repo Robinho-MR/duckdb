@@ -36,6 +36,9 @@ void RegisterCreateFunctions(Extension &extension, Context &context);
 //! The options of a client: the geometry format comes from the json_geometry_format setting
 JSONCreateOptions ClientJSONCreateOptions(Context &context);
 
+//! Installs the conversion from a GEOMETRY value (its WKB) to GeoJSON that ClientJSONCreateOptions hands out
+void SetGeometryToGeoJSON(yyjson_mut_val *(*converter)(yyjson_mut_doc *, blob_t));
+
 //! Creates one JSON value per row for rows [0, count) of `input` (of any type) in the document, into `vals`. The rows
 //! that are NULL (of nested values too) become JSON null. `input` may be flattened.
 void CreateJSONValues(Context &context, yyjson_mut_doc *doc, yyjson_mut_val *vals[], Vector &input, idx_t count,
