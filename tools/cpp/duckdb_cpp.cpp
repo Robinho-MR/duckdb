@@ -6280,6 +6280,30 @@ auto CastFunction::SetTargetType(const LogicalType &type) & -> CastFunction & {
 	return *this;
 }
 
+#define CHECK_WILDCARD_KIND(member)                                                                                    \
+	static_assert(static_cast<DUCKDB_V2_CAST_WILDCARD_KIND>(CastWildcardKind::member) ==                               \
+	                  DUCKDB_V2_CAST_WILDCARD_KIND_##member,                                                           \
+	              "CastWildcardKind::" #member " must mirror DUCKDB_V2_CAST_WILDCARD_KIND_" #member)
+CHECK_WILDCARD_KIND(DECIMAL);
+CHECK_WILDCARD_KIND(ENUM);
+CHECK_WILDCARD_KIND(LIST);
+CHECK_WILDCARD_KIND(STRUCT);
+CHECK_WILDCARD_KIND(TUPLE);
+CHECK_WILDCARD_KIND(MAP);
+CHECK_WILDCARD_KIND(UNION);
+CHECK_WILDCARD_KIND(ARRAY);
+#undef CHECK_WILDCARD_KIND
+
+auto CastFunction::SetSourceKind(CastWildcardKind kind) & -> CastFunction & {
+	CheckedAPICall(duckdb_v2_cast_function_set_source_kind, handle(), static_cast<DUCKDB_V2_CAST_WILDCARD_KIND>(kind));
+	return *this;
+}
+
+auto CastFunction::SetTargetKind(CastWildcardKind kind) & -> CastFunction & {
+	CheckedAPICall(duckdb_v2_cast_function_set_target_kind, handle(), static_cast<DUCKDB_V2_CAST_WILDCARD_KIND>(kind));
+	return *this;
+}
+
 auto CastFunction::SetImplicitCastCost(int64_t cost) & -> CastFunction & {
 	CheckedAPICall(duckdb_v2_cast_function_set_implicit_cast_cost, handle(), cost);
 	return *this;

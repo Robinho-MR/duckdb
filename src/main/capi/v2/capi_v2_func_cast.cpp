@@ -95,10 +95,10 @@ public:
 	//! Validates the configuration and builds the cast to register on `target`.
 	BoundCastInfo Build(DatabaseInstance &target) {
 		CheckRegistrationTarget(db, target, "cast function");
-		if (!source_type.IsComplete()) {
+		if (!source_is_wildcard && !source_type.IsComplete()) {
 			throw InvalidInputException("Source type must be set to a fully defined concrete type");
 		}
-		if (!target_type.IsComplete()) {
+		if (!target_is_wildcard && !target_type.IsComplete()) {
 			throw InvalidInputException("Target type must be set to a fully defined concrete type");
 		}
 		if (!exec_cb) {
@@ -114,10 +114,37 @@ public:
 	DatabaseInstance &db;
 	LogicalType source_type;
 	LogicalType target_type;
+	//! Whether the type is the key the engine matches every type of its kind against.
+	bool source_is_wildcard = false;
+	bool target_is_wildcard = false;
 	int64_t implicit_cast_cost = -1;
 	duckdb_v2_cast_function_exec_callback_fn exec_cb = nullptr;
 	shared_ptr<CV2UserData> user_data = nullptr;
 };
+
+//! The key CastFunctionSet matches every type of the kind against (see RelaxedTypeMatch).
+static auto WildcardCastType(DUCKDB_V2_CAST_WILDCARD_KIND kind) -> LogicalType {
+	switch (kind) {
+	case DUCKDB_V2_CAST_WILDCARD_KIND_DECIMAL:
+		return LogicalType(LogicalTypeId::DECIMAL);
+	case DUCKDB_V2_CAST_WILDCARD_KIND_ENUM:
+		return LogicalType(LogicalTypeId::ENUM);
+	case DUCKDB_V2_CAST_WILDCARD_KIND_LIST:
+		return LogicalType::LIST(LogicalType::ANY);
+	case DUCKDB_V2_CAST_WILDCARD_KIND_STRUCT:
+		return LogicalType::STRUCT({{"any", LogicalType::ANY}});
+	case DUCKDB_V2_CAST_WILDCARD_KIND_TUPLE:
+		return LogicalType::TUPLE({LogicalType::ANY});
+	case DUCKDB_V2_CAST_WILDCARD_KIND_MAP:
+		return LogicalType::MAP(LogicalType::ANY, LogicalType::ANY);
+	case DUCKDB_V2_CAST_WILDCARD_KIND_UNION:
+		return LogicalType::UNION({{"any", LogicalType::ANY}});
+	case DUCKDB_V2_CAST_WILDCARD_KIND_ARRAY:
+		return LogicalType::ARRAY(LogicalType::ANY, optional_idx());
+	default:
+		throw InvalidInputException("Unknown wildcard cast kind");
+	}
+}
 
 static auto Convert(duckdb_v2_cast_function_handle func) -> CV2CastFunction * {
 	return reinterpret_cast<CV2CastFunction *>(func);
@@ -154,6 +181,29 @@ DUCKDB_V2_ERROR duckdb_v2_cast_function_set_source_type(duckdb_v2_cast_function_
 	return WithErrorHandler(err, [&]() {
 		auto type = Convert(source_type);
 		Convert(function)->source_type = *type;
+		Convert(function)->source_is_wildcard = false;
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_cast_function_set_source_kind(duckdb_v2_cast_function_handle function,
+                                                        DUCKDB_V2_CAST_WILDCARD_KIND kind,
+                                                        duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() {
+		auto type = WildcardCastType(kind);
+		Convert(function)->source_type = std::move(type);
+		Convert(function)->source_is_wildcard = true;
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_cast_function_set_target_kind(duckdb_v2_cast_function_handle function,
+                                                        DUCKDB_V2_CAST_WILDCARD_KIND kind,
+                                                        duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() {
+		auto type = WildcardCastType(kind);
+		Convert(function)->target_type = std::move(type);
+		Convert(function)->target_is_wildcard = true;
 	});
 }
 
@@ -165,6 +215,7 @@ DUCKDB_V2_ERROR duckdb_v2_cast_function_set_target_type(duckdb_v2_cast_function_
 	return WithErrorHandler(err, [&]() {
 		auto type = Convert(target_type);
 		Convert(function)->target_type = *type;
+		Convert(function)->target_is_wildcard = false;
 	});
 }
 

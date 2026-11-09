@@ -820,6 +820,37 @@ typedef enum DUCKDB_V2_CAST_MODE {
 	DUCKDB_V2_CAST_MODE_MAX_ENUM = 0x7FFFFFFF,
 } DUCKDB_V2_CAST_MODE;
 
+/*!
+ * A kind of parameterized type, used to register a cast for every type of that kind at once instead of for one concrete
+ * type. See `duckdb_v2_cast_function_set_source_kind()` and `duckdb_v2_cast_function_set_target_kind()`.
+ */
+typedef enum DUCKDB_V2_CAST_WILDCARD_KIND {
+	//! Every DECIMAL, whatever its width and scale.
+	DUCKDB_V2_CAST_WILDCARD_KIND_DECIMAL = 0,
+
+	//! Every ENUM, whatever its entries.
+	DUCKDB_V2_CAST_WILDCARD_KIND_ENUM = 1,
+
+	//! Every LIST, whatever its child type.
+	DUCKDB_V2_CAST_WILDCARD_KIND_LIST = 2,
+
+	//! Every named STRUCT, whatever its fields.
+	DUCKDB_V2_CAST_WILDCARD_KIND_STRUCT = 3,
+
+	//! Every unnamed struct (TUPLE), whatever its fields.
+	DUCKDB_V2_CAST_WILDCARD_KIND_TUPLE = 4,
+
+	//! Every MAP, whatever its key and value types.
+	DUCKDB_V2_CAST_WILDCARD_KIND_MAP = 5,
+
+	//! Every UNION, whatever its members.
+	DUCKDB_V2_CAST_WILDCARD_KIND_UNION = 6,
+
+	//! Every ARRAY, whatever its child type and size.
+	DUCKDB_V2_CAST_WILDCARD_KIND_ARRAY = 7,
+	DUCKDB_V2_CAST_WILDCARD_KIND_MAX_ENUM = 0x7FFFFFFF,
+} DUCKDB_V2_CAST_WILDCARD_KIND;
+
 /* --- Struct forward declarations for cast --- */
 
 /* --- Types for cast --- */
@@ -885,7 +916,8 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_create(duckdb_v2_factory_ha
  * Sets the type the cast converts from.
  *
  * The type is borrowed and copied. Calling this again replaces the previous source type. A source type must be set
- * before registration, and it must be a fully defined concrete type.
+ * before registration, and it must be a fully defined concrete type. To cast from every type of one kind, use
+ * `duckdb_v2_cast_function_set_source_kind()` instead.
  *
  * history:
  * - unstable: v2.0.0
@@ -903,10 +935,43 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_set_source_type(duckdb_v2_c
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
+ * Sets the cast to convert from every type of one kind, rather than from one concrete type.
+ *
+ * A wildcard source matches every type of the given kind regardless of its parameters: DECIMAL matches every DECIMAL(w,
+ * s), ENUM every enum, LIST every list, and so on, whatever the child types and sizes. This is the registration form of
+ * the engine's own nested-type casts, such as the casts to JSON. A value that is not one of the `CAST_WILDCARD_KIND`
+ * values fails with `DUCKDB_V2_ERROR_INPUT_INVALID`.
+ *
+ * When the engine looks up a cast for a concrete source type, a cast registered for exactly that type wins over a
+ * wildcard of its kind. The implicit cast cost and the target type work as for a concrete source type, and the exec
+ * callback receives the concrete input vector, so it can read the actual type with
+ * `duckdb_v2_vector_get_logical_type()`.
+ *
+ * This is the only way to express a wildcard source: `duckdb_v2_cast_function_set_source_type()` still requires a fully
+ * defined concrete type, and ANY (also as a child type) is still rejected by the value and data chunk APIs. Calling
+ * this replaces any source type set before, and setting a source type afterwards replaces the wildcard.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the source type of.
+ * @param kind The kind of type to cast from.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_set_source_kind(duckdb_v2_cast_function_handle function,
+                                                                     DUCKDB_V2_CAST_WILDCARD_KIND kind,
+                                                                     duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
  * Sets the type the cast converts to.
  *
  * The type is borrowed and copied. Calling this again replaces the previous target type. A target type must be set
- * before registration, and it must be a fully defined concrete type.
+ * before registration, and it must be a fully defined concrete type. To cast to every type of one kind, use
+ * `duckdb_v2_cast_function_set_target_kind()` instead.
  *
  * history:
  * - unstable: v2.0.0
@@ -919,6 +984,30 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_set_source_type(duckdb_v2_c
  */
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_set_target_type(duckdb_v2_cast_function_handle function,
                                                                      duckdb_v2_logical_type_handle target_type,
+                                                                     duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the cast to convert to every type of one kind, rather than to one concrete type.
+ *
+ * The target-side twin of `duckdb_v2_cast_function_set_source_kind()`, with the same matching rules: the cast applies
+ * to every type of the given kind regardless of its parameters, and a cast registered for exactly the requested target
+ * type wins over a wildcard of its kind. The exec callback writes into an output vector of the concrete requested type,
+ * readable with `duckdb_v2_vector_get_logical_type()`. Calling this replaces any target type set before, and setting a
+ * target type afterwards replaces the wildcard.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the target type of.
+ * @param kind The kind of type to cast to.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_set_target_kind(duckdb_v2_cast_function_handle function,
+                                                                     DUCKDB_V2_CAST_WILDCARD_KIND kind,
                                                                      duckdb_v2_error_info_handle *err);
 #endif
 
