@@ -866,11 +866,15 @@ static void RegisterCreateCasts(Extension &extension, Factory &factory) {
 	}
 	// The nested types and the types with parameters
 	auto nested = [&](LogicalTypeId id, const char *name, idx_t params) {
-		vector<cxx::TypeParam> type_params;
-		for (idx_t i = 0; i < params; i++) {
-			type_params.emplace_back(name, factory.CreateValue(any));
+		try {
+			vector<cxx::TypeParam> type_params;
+			for (idx_t i = 0; i < params; i++) {
+				type_params.emplace_back(name, factory.CreateValue(any));
+			}
+			sources.emplace_back(factory.CreateType(id, type_params), 0);
+		} catch (cxx::Exception &) {
+			// API gap: a wildcard type parameter cannot be built
 		}
-		sources.emplace_back(factory.CreateType(id, type_params), 0);
 	};
 	nested(LogicalTypeId::STRUCT, "any", 1);
 	nested(LogicalTypeId::TUPLE, "", 1);
@@ -878,10 +882,10 @@ static void RegisterCreateCasts(Extension &extension, Factory &factory) {
 	nested(LogicalTypeId::MAP, "", 2);
 	nested(LogicalTypeId::UNION, "any", 1);
 	{
-		vector<cxx::TypeParam> array_params;
-		array_params.emplace_back(factory.CreateValue(any));
-		array_params.emplace_back(factory.CreateValue(int64_t(0)));
 		try {
+			vector<cxx::TypeParam> array_params;
+			array_params.emplace_back(factory.CreateValue(any));
+			array_params.emplace_back(factory.CreateValue(int64_t(0)));
 			sources.emplace_back(factory.CreateType(LogicalTypeId::ARRAY, array_params), 0);
 		} catch (cxx::Exception &) {
 			// API gap: no ARRAY type of any size

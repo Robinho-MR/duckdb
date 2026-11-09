@@ -220,10 +220,14 @@ static void RegisterTransformCasts(Extension &extension, Factory &factory) {
 		// (cast_rules.cpp) allow VARCHAR to nothing, except to a UNION that has a member VARCHAR is castable to: the
 		// cost of the ANY member, 5
 		const int64_t cost = id == LogicalTypeId::UNION ? 5 : -1;
-		auto cast = CastFunction::Create(factory);
-		cast.SetSourceType(json).SetTargetType(CastTargetType(factory, id)).SetImplicitCastCost(cost);
-		cast.SetExecCallback(CastJSONToAny);
-		extension.Register(cast);
+		try {
+			auto cast = CastFunction::Create(factory);
+			cast.SetSourceType(json).SetTargetType(CastTargetType(factory, id)).SetImplicitCastCost(cost);
+			cast.SetExecCallback(CastJSONToAny);
+			extension.Register(cast);
+		} catch (cxx::Exception &) {
+			// API gap: wildcard target types (nested types, DECIMAL, ENUM) cannot be built without wildcard support
+		}
 	}
 }
 
