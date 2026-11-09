@@ -162,39 +162,6 @@ static void CastJSONToAny(CastFunction::ExecInput &input) {
 	}
 }
 
-//! The type a cast from JSON is registered for: casts to nested types are registered for the type with ANY children
-//! (the engine matches every nested type against it)
-static LogicalType CastTargetType(Factory &factory, LogicalTypeId id) {
-	auto make_any = [&]() {
-		return Value::Create(factory, factory.CreateType(LogicalTypeId::ANY));
-	};
-	vector<cxx::TypeParam> params;
-	switch (id) {
-	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::UNION:
-		params.emplace_back("any", make_any());
-		break;
-	case LogicalTypeId::TUPLE:
-	case LogicalTypeId::LIST:
-		params.emplace_back(make_any());
-		break;
-	case LogicalTypeId::ARRAY:
-		// An ARRAY of any size
-		params.emplace_back(make_any());
-		params.emplace_back(Value::Create(factory, static_cast<int64_t>(0)));
-		break;
-	case LogicalTypeId::MAP:
-		params.emplace_back(make_any());
-		params.emplace_back(make_any());
-		break;
-	case LogicalTypeId::GEOMETRY:
-		return factory.ParseType("GEOMETRY");
-	default:
-		return factory.CreateType(id);
-	}
-	return factory.CreateType(id, params);
-}
-
 // There is no cast to VARIANT: the legacy registration for it never matched a VARIANT, which is cast by the engine
 static void RegisterTransformCasts(Extension &extension, Factory &factory) {
 	static const LogicalTypeId TARGETS[] = {LogicalTypeId::BOOLEAN,      LogicalTypeId::TINYINT,
@@ -222,14 +189,42 @@ static void RegisterTransformCasts(Extension &extension, Factory &factory) {
 		// (cast_rules.cpp) allow VARCHAR to nothing, except to a UNION that has a member VARCHAR is castable to: the
 		// cost of the ANY member, 5
 		const int64_t cost = id == LogicalTypeId::UNION ? 5 : -1;
-		try {
-			auto cast = CastFunction::Create(factory);
-			cast.SetSourceType(json).SetTargetType(CastTargetType(factory, id)).SetImplicitCastCost(cost);
-			cast.SetExecCallback(CastJSONToAny);
-			extension.Register(cast);
-		} catch (cxx::Exception &) {
-			// API gap: wildcard target types (nested types, DECIMAL, ENUM) cannot be built without wildcard support
+		auto cast = CastFunction::Create(factory);
+		cast.SetSourceType(json).SetImplicitCastCost(cost).SetExecCallback(CastJSONToAny);
+		// The nested types and the types with parameters are registered once per kind, as a wildcard target
+		switch (id) {
+		case LogicalTypeId::STRUCT:
+			cast.SetTargetKind(cxx::CastWildcardKind::STRUCT);
+			break;
+		case LogicalTypeId::TUPLE:
+			cast.SetTargetKind(cxx::CastWildcardKind::TUPLE);
+			break;
+		case LogicalTypeId::LIST:
+			cast.SetTargetKind(cxx::CastWildcardKind::LIST);
+			break;
+		case LogicalTypeId::MAP:
+			cast.SetTargetKind(cxx::CastWildcardKind::MAP);
+			break;
+		case LogicalTypeId::UNION:
+			cast.SetTargetKind(cxx::CastWildcardKind::UNION);
+			break;
+		case LogicalTypeId::ARRAY:
+			cast.SetTargetKind(cxx::CastWildcardKind::ARRAY);
+			break;
+		case LogicalTypeId::DECIMAL:
+			cast.SetTargetKind(cxx::CastWildcardKind::DECIMAL);
+			break;
+		case LogicalTypeId::ENUM:
+			cast.SetTargetKind(cxx::CastWildcardKind::ENUM);
+			break;
+		case LogicalTypeId::GEOMETRY:
+			cast.SetTargetType(factory.ParseType("GEOMETRY"));
+			break;
+		default:
+			cast.SetTargetType(factory.CreateType(id));
+			break;
 		}
+		extension.Register(cast);
 	}
 }
 
