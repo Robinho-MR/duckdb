@@ -67,7 +67,9 @@ set(JSON_READER_SOURCES
 set(JSON_TABLE_INOUT_SOURCES src/functions/register_table_inout.cpp)
 
 # COPY ... (FORMAT json), GeoJSON
-set(JSON_COPY_SOURCES src/functions/register_copy.cpp)
+set(JSON_COPY_SOURCES
+    src/functions/register_copy.cpp src/functions/json_copy.cpp
+    src/functions/json_geojson.cpp)
 
 # json_serialize_sql, json_deserialize_sql, json_execute_serialized_sql, json_serialize_plan
 set(JSON_SERIALIZE_SOURCES src/functions/register_serialize.cpp)
