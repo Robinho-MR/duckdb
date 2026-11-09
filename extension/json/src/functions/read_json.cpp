@@ -827,8 +827,12 @@ static void ReadJSONExec(TableFunction::ExecInput &input) {
 }
 
 static void ReadJSONProgress(TableFunction::ProgressInput &input) {
-	auto &gstate = input.GetGlobalState<JSONScanGlobalState>();
-	input.SetProgress(gstate.reader->GetProgress());
+	// A file the scan has not started on has no state yet
+	try {
+		input.SetProgress(input.GetGlobalState<JSONScanGlobalState>().reader->GetProgress());
+	} catch (cxx::Exception &) {
+		input.SetProgress(0);
+	}
 }
 
 //! The named parameters of the scan functions: unspecified ones are NULL

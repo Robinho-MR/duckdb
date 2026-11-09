@@ -416,6 +416,21 @@ static idx_t TryGetFileSize(FileHandle &handle) {
 void JSONReader::Open(Context &context, const Value &file, bool allow_partial) {
 	handle.emplace(OpenFileHandle(context, file, file_name));
 	file_size = TryGetFileSize(*handle);
+	if (file_size >= 4) {
+		// The stable file system cannot decompress a file it opens
+		unsigned char magic[4];
+		handle->ReadAt(magic, 4, 0);
+		if (magic[0] == 0x1F && magic[1] == 0x8B) {
+			throw NotImplementedException("Cannot read the gzip compressed file \"%s\": the stable C++ API cannot "
+			                              "decompress a file it opens",
+			                              file_name);
+		}
+		if (magic[0] == 0x28 && magic[1] == 0xB5 && magic[2] == 0x2F && magic[3] == 0xFD) {
+			throw NotImplementedException("Cannot read the zstd compressed file \"%s\": the stable C++ API cannot "
+			                              "decompress a file it opens",
+			                              file_name);
+		}
+	}
 	partial = allow_partial && format == JSONFormat::NEWLINE_DELIMITED && file_size != 0 &&
 	          options.compression != JSONCompression::GZIP && options.compression != JSONCompression::ZSTD &&
 	          !HasCompressedExtension(file_name);
