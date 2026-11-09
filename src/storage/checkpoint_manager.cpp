@@ -771,7 +771,7 @@ void SingleFileCheckpointWriter::WriteTable(TableCatalogEntry &table, Serializer
 
 	// Explicit checkpoints bind indexes before serialization, so that buffered index operations are replayed
 	// and not lost on a restart. Only explicit checkpoints have a client context.
-	if (TryGetClientContext() && checkpoint_context) {
+	if (client_context && checkpoint_context) {
 		D_ASSERT(checkpoint_context->transaction.HasActiveTransaction());
 		// Bind indexes with checkpoint transaction, which is already running and read-only, so any transaction the
 		// binder still starts skips start_transaction_lock.

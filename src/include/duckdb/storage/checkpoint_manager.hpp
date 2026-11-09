@@ -84,10 +84,6 @@ public:
 	Context &GetContext() const {
 		return context;
 	}
-	//! The client that triggered an explicit checkpoint (null for checkpoints on commit and on shutdown)
-	optional_ptr<ClientContext> TryGetClientContext() const {
-		return client_context;
-	}
 
 	virtual void CreateCheckpoint() = 0;
 	virtual MetadataManager &GetMetadataManager() = 0;
@@ -97,9 +93,11 @@ public:
 private:
 	shared_ptr<Context> owned_context;
 	Context &context;
-	optional_ptr<ClientContext> client_context;
 
 protected:
+	//! The client that triggered an explicit checkpoint (null for checkpoints on commit and on shutdown)
+	optional_ptr<ClientContext> client_context;
+
 	virtual void WriteEntry(CatalogEntry &entry, Serializer &serializer);
 	virtual void WriteSchema(SchemaCatalogEntry &schema, Serializer &serializer);
 	virtual void WriteTable(TableCatalogEntry &table, Serializer &serializer) = 0;
