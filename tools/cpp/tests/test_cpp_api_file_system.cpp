@@ -291,3 +291,78 @@ TEST_CASE("Stable C++API: file system glob, move and remove", "[cpp_api]") {
 	REQUIRE(fs.Remove(second));
 	REQUIRE(fs.Glob(pattern).empty());
 }
+
+TEST_CASE("Stable C++API: file compression on open", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	auto fs = conn.GetFileSystem();
+	const std::string text = "hello hello hello hello compression";
+
+	auto write = [&](const std::string &path, FileCompression compression) {
+		auto options = fs.CreateOpenOptions();
+		options.SetFlag(FileFlags::WRITE).SetFlag(FileFlags::FILE_CREATE_NEW).SetCompression(compression);
+		auto file = fs.OpenFile(path, options);
+		WriteAll(file, text);
+	};
+	auto read = [&](const std::string &path, FileCompression compression) {
+		auto options = fs.CreateOpenOptions();
+		options.SetFlag(FileFlags::READ).SetCompression(compression);
+		auto file = fs.OpenFile(path, options);
+		return ReadAll(file, 128);
+	};
+	auto read_raw = [&](const std::string &path) {
+		auto file = fs.OpenFile(path, {FileFlags::READ});
+		return ReadAll(file, 128);
+	};
+	auto is_gzip = [](const std::string &raw) {
+		return raw.size() > 2 && static_cast<uint8_t>(raw[0]) == 0x1f && static_cast<uint8_t>(raw[1]) == 0x8b;
+	};
+
+	// Explicit gzip, whatever the name of the file: written compressed, read back decompressed.
+	auto gzip_path = duckdb::TestCreatePath("cpp_fs_compression_explicit.bin");
+	write(gzip_path, FileCompression::GZIP);
+	REQUIRE(is_gzip(read_raw(gzip_path)));
+	REQUIRE(read(gzip_path, FileCompression::GZIP) == text);
+	// Detected from the extension only.
+	REQUIRE(read_raw(gzip_path) != text);
+
+	auto detect_path = duckdb::TestCreatePath("cpp_fs_compression_detect.txt.gz");
+	write(detect_path, FileCompression::AUTO_DETECT);
+	REQUIRE(is_gzip(read_raw(detect_path)));
+	REQUIRE(read(detect_path, FileCompression::AUTO_DETECT) == text);
+
+	// No compression is the default, and AUTO_DETECT leaves a file without a compression extension alone.
+	auto none_path = duckdb::TestCreatePath("cpp_fs_compression_none.txt.gz");
+	write(none_path, FileCompression::NONE);
+	REQUIRE(read_raw(none_path) == text);
+	auto plain_path = duckdb::TestCreatePath("cpp_fs_compression_plain.txt");
+	write(plain_path, FileCompression::AUTO_DETECT);
+	REQUIRE(read_raw(plain_path) == text);
+	REQUIRE(read(plain_path, FileCompression::AUTO_DETECT) == text);
+
+	// Compression set again replaces the previous one.
+	auto replaced_path = duckdb::TestCreatePath("cpp_fs_compression_replaced.bin");
+	{
+		auto options = fs.CreateOpenOptions();
+		options.SetFlag(FileFlags::WRITE)
+		    .SetFlag(FileFlags::FILE_CREATE_NEW)
+		    .SetCompression(FileCompression::GZIP)
+		    .SetCompression(FileCompression::NONE);
+		auto file = fs.OpenFile(replaced_path, options);
+		WriteAll(file, text);
+	}
+	REQUIRE(read_raw(replaced_path) == text);
+
+	// Zstandard comes with the parquet extension, which this build links in.
+	auto zstd_path = duckdb::TestCreatePath("cpp_fs_compression_zstd.bin");
+	write(zstd_path, FileCompression::ZSTD);
+	auto raw = read_raw(zstd_path);
+	REQUIRE(raw != text);
+	REQUIRE(static_cast<uint8_t>(raw[0]) == 0x28);
+	REQUIRE(read(zstd_path, FileCompression::ZSTD) == text);
+
+	// Not a compression at all.
+	auto options = fs.CreateOpenOptions();
+	REQUIRE_THROWS_MATCHES(options.SetCompression(static_cast<FileCompression>(99)), Exception,
+	                       HasErrorCode(DUCKDB_V2_ERROR_INPUT_INVALID));
+}

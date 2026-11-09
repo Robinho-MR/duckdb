@@ -30,6 +30,8 @@ public:
 
 	vector<LogicalType> column_types;
 	vector<Identifier> column_names;
+	//! The virtual columns the bind callback declared, by identifier
+	virtual_column_map_t virtual_columns;
 
 	auto Copy() const -> unique_ptr<FunctionData> override {
 		auto copy = make_uniq<CV2TableFunctionData>();
@@ -40,6 +42,7 @@ public:
 		copy->cardinality_set = cardinality_set;
 		copy->column_types = column_types;
 		copy->column_names = column_names;
+		copy->virtual_columns = virtual_columns;
 		return std::move(copy);
 	}
 
@@ -134,6 +137,9 @@ public:
 	bool out_cardinality_is_exact = false;
 	bool out_cardinality_set = false;
 	OrderPreservationType out_order_preservation = OrderPreservationType::INSERTION_ORDER;
+	//! Whether the function supports projection pushdown, which virtual columns need
+	bool in_projection_pushdown = false;
+	virtual_column_map_t out_virtual_columns;
 };
 
 static auto Convert(duckdb_v2_table_function_bind_info_handle info) -> CV2TableBindInfo * {
@@ -193,6 +199,29 @@ static auto Convert(duckdb_v2_table_function_exec_info_handle info) -> CV2TableE
 }
 static auto Convert(CV2TableExecInfo *info) -> duckdb_v2_table_function_exec_info_handle {
 	return reinterpret_cast<duckdb_v2_table_function_exec_info_handle>(info);
+}
+
+class CV2TableInOutInfo {
+public:
+	void *in_user_data = nullptr;
+	void *in_bind_data = nullptr;
+	void *in_global_state = nullptr;
+	void *in_local_state = nullptr;
+	const vector<column_t> *in_scan_columns = nullptr;
+	//! Null for the in-out final callback
+	DataChunk *input = nullptr;
+	DataChunk *output = nullptr;
+	bool is_final = false;
+
+	//! What the callback reported, if anything
+	optional_idx out_result;
+};
+
+static auto Convert(duckdb_v2_table_function_in_out_info_handle info) -> CV2TableInOutInfo * {
+	return reinterpret_cast<CV2TableInOutInfo *>(info);
+}
+static auto Convert(CV2TableInOutInfo *info) -> duckdb_v2_table_function_in_out_info_handle {
+	return reinterpret_cast<duckdb_v2_table_function_in_out_info_handle>(info);
 }
 
 class CV2TableProgressInfo {
@@ -256,6 +285,7 @@ public:
 	const OperatorPartitionInfo *in_partition_info = nullptr;
 	const vector<column_t> *in_partition_columns = nullptr;
 	const vector<LogicalType> *in_column_types = nullptr;
+	const virtual_column_map_t *in_virtual_columns = nullptr;
 
 	optional_idx out_batch_index;
 	vector<bool> out_partition_value_set;
@@ -325,6 +355,20 @@ static auto CV2ConvertPartitionInfo(DUCKDB_V2_TABLE_PARTITION_INFO value) -> Tab
 	return static_cast<TablePartitionInfo>(value);
 }
 
+static_assert(static_cast<int>(OperatorResultType::NEED_MORE_INPUT) == DUCKDB_V2_TABLE_IN_OUT_RESULT_NEED_MORE_INPUT,
+              "OperatorResultType::NEED_MORE_INPUT mismatch");
+static_assert(static_cast<int>(OperatorResultType::HAVE_MORE_OUTPUT) == DUCKDB_V2_TABLE_IN_OUT_RESULT_HAVE_MORE_OUTPUT,
+              "OperatorResultType::HAVE_MORE_OUTPUT mismatch");
+static_assert(static_cast<int>(OperatorResultType::FINISHED) == DUCKDB_V2_TABLE_IN_OUT_RESULT_FINISHED,
+              "OperatorResultType::FINISHED mismatch");
+
+static auto CV2ConvertInOutResult(DUCKDB_V2_TABLE_IN_OUT_RESULT value) -> OperatorResultType {
+	if (static_cast<uint32_t>(value) > DUCKDB_V2_TABLE_IN_OUT_RESULT_FINISHED) {
+		throw duckdb::InvalidInputException("Invalid value in duckdb_v2_table_function_in_out_set_result");
+	}
+	return static_cast<OperatorResultType>(value);
+}
+
 static_assert(static_cast<int>(OrderPreservationType::NO_ORDER) == DUCKDB_V2_ORDER_PRESERVATION_NO_ORDER,
               "OrderPreservationType::NO_ORDER mismatch");
 static_assert(static_cast<int>(OrderPreservationType::INSERTION_ORDER) == DUCKDB_V2_ORDER_PRESERVATION_INSERTION_ORDER,
@@ -345,6 +389,8 @@ public:
 	duckdb_v2_table_function_init_global_callback_fn init_global_cb = nullptr;
 	duckdb_v2_table_function_init_local_callback_fn init_local_cb = nullptr;
 	duckdb_v2_table_function_exec_callback_fn exec_cb = nullptr;
+	duckdb_v2_table_function_in_out_callback_fn in_out_cb = nullptr;
+	duckdb_v2_table_function_in_out_callback_fn in_out_final_cb = nullptr;
 	duckdb_v2_table_function_progress_callback_fn progress_cb = nullptr;
 	duckdb_v2_table_function_filter_pushdown_callback_fn filter_pushdown_cb = nullptr;
 	duckdb_v2_table_function_partition_data_callback_fn partition_data_cb = nullptr;
@@ -409,10 +455,14 @@ static auto CV2TableBind(ClientContext &context, TableFunctionBindInput &input, 
 	const auto &info = input.info->Cast<CV2TableFunctionInfo>();
 
 	// the binder places every argument in its signature slot, defaults included, so the call reads them as-is
+	// an in-out function called with columns of its input has no constant positional arguments, only their types
+	const bool input_columns =
+	    info.in_out_cb && input.inputs.size() < input.table_function.GetPositionalArgumentCount();
 	CV2ConstantBindInfo bind_info(input.table_function, input.table_function.GetSignature(),
 	                              info.user_data ? info.user_data->GetData() : nullptr, input.inputs,
-	                              input.named_parameters);
+	                              input.named_parameters, input_columns ? &input.input_table_types : nullptr);
 	CV2TableBindInfo args = {};
+	args.in_projection_pushdown = info.projection_pushdown;
 
 	CV2ErrorInfo err = {};
 	auto err_ptr = Convert(&err);
@@ -441,6 +491,7 @@ static auto CV2TableBind(ClientContext &context, TableFunctionBindInput &input, 
 
 	result->column_types = args.out_column_types;
 	result->column_names = args.out_column_names;
+	result->virtual_columns = std::move(args.out_virtual_columns);
 	return_types = std::move(args.out_column_types);
 	names = std::move(args.out_column_names);
 	return std::move(result);
@@ -571,6 +622,15 @@ static auto CV2TableClaimBatch(ClientContext &context, TableFunctionInput &input
 	return CV2TableClaimNextBatch(context, input);
 }
 
+//! The empty column carries no values: the engine gets it as a constant NULL of the batch's size
+static void CV2SetEmptyColumns(DataChunk &output, const vector<column_t> &scan_columns, idx_t row_count) {
+	for (idx_t i = 0; i < scan_columns.size() && i < output.ColumnCount(); i++) {
+		if (scan_columns[i] == COLUMN_IDENTIFIER_EMPTY) {
+			ConstantVector::SetNull(output.data[i], count_t(row_count));
+		}
+	}
+}
+
 static auto CV2TableExecBatch(ClientContext &context, TableFunctionInput &input, DataChunk &output) -> void;
 
 static auto CV2TableExec(ClientContext &context, TableFunctionInput &input, DataChunk &output) -> void {
@@ -641,7 +701,75 @@ static auto CV2TableExecBatch(ClientContext &context, TableFunctionInput &input,
 		output.SetCardinalityUnsafe(row_count);
 		return;
 	}
+	if (args.in_scan_columns) {
+		CV2SetEmptyColumns(output, *args.in_scan_columns, row_count);
+	}
 	output.SetChildCardinality(row_count);
+}
+
+//! Calls the in-out callback (or the in-out final callback) and takes the batch it wrote into the output chunk
+static auto CV2TableInOutCall(ExecutionContext &context, TableFunctionInput &input, optional_ptr<DataChunk> in,
+                              DataChunk &output, bool is_final) -> OperatorResultType {
+	const auto &bind_data = input.bind_data->Cast<CV2TableFunctionData>();
+	const auto &info = *bind_data.info;
+
+	CV2TableInOutInfo args = {};
+	args.in_user_data = info.user_data ? info.user_data->GetData() : nullptr;
+	args.in_bind_data = bind_data.handle ? bind_data.handle->GetData() : nullptr;
+	if (input.global_state) {
+		auto &global_state = input.global_state->Cast<CV2TableGlobalState>();
+		args.in_global_state = global_state.handle.GetData();
+		args.in_scan_columns = &global_state.scan_columns;
+	}
+	if (input.local_state) {
+		args.in_local_state = input.local_state->Cast<CV2TableLocalState>().handle.GetData();
+	}
+	args.input = in.get();
+	args.output = &output;
+	args.is_final = is_final;
+
+	CV2ErrorInfo err = {};
+	auto err_ptr = Convert(&err);
+	CV2CallbackContext callback_context(context.client);
+	(is_final ? info.in_out_final_cb : info.in_out_cb)(Convert(&args), Convert(&callback_context), &err_ptr);
+
+	if (err.HasError()) {
+		err.ThrowAsException();
+	}
+
+	// As for the exec callback, the first vector's size is the row count of the batch
+	if (output.ColumnCount() > 0) {
+		const auto row_count = output.data[0].size();
+		if (args.in_scan_columns) {
+			CV2SetEmptyColumns(output, *args.in_scan_columns, row_count);
+		}
+		output.SetChildCardinality(row_count);
+	}
+	if (!args.out_result.IsValid()) {
+		return is_final ? OperatorResultType::FINISHED : OperatorResultType::NEED_MORE_INPUT;
+	}
+	return static_cast<OperatorResultType>(args.out_result.GetIndex());
+}
+
+static auto CV2TableInOut(ExecutionContext &context, TableFunctionInput &input, DataChunk &in, DataChunk &output)
+    -> OperatorResultType {
+	return CV2TableInOutCall(context, input, &in, output, false);
+}
+
+static auto CV2TableInOutFinal(ExecutionContext &context, TableFunctionInput &input, DataChunk &output)
+    -> OperatorFinalizeResultType {
+	auto result = CV2TableInOutCall(context, input, nullptr, output, true);
+	return result == OperatorResultType::HAVE_MORE_OUTPUT ? OperatorFinalizeResultType::HAVE_MORE_OUTPUT
+	                                                      : OperatorFinalizeResultType::FINISHED;
+}
+
+//! The virtual columns the bind callback declared for the call
+static auto CV2TableGetVirtualColumns(ClientContext &context, optional_ptr<FunctionData> bind_data)
+    -> virtual_column_map_t {
+	if (!bind_data) {
+		return virtual_column_map_t();
+	}
+	return bind_data->Cast<CV2TableFunctionData>().virtual_columns;
 }
 
 //! An exact estimate also pins the maximum; otherwise only the estimate is known.
@@ -790,6 +918,7 @@ static auto CV2TableGetPartitionData(ClientContext &context, TableFunctionGetPar
 	// columns; the callback is promised declared columns in both.
 	args.in_partition_columns = &local_state.PartitionColumns(input.partition_info, global_state.scan_columns);
 	args.in_column_types = &bind_data.column_types;
+	args.in_virtual_columns = &bind_data.virtual_columns;
 	args.out_partition_value_set.resize(args.in_partition_columns->size(), false);
 	args.out_partition_values.resize(args.in_partition_columns->size());
 
@@ -843,8 +972,18 @@ public:
 		if (!info.bind_cb) {
 			throw InvalidInputException("Bind callback must be set for the function.");
 		}
-		if (!info.exec_cb) {
-			throw InvalidInputException("Exec callback must be set for the function.");
+		if (info.exec_cb && info.in_out_cb) {
+			throw InvalidInputException("A table function cannot have both an exec callback and an in-out callback.");
+		}
+		if (!info.exec_cb && !info.in_out_cb) {
+			throw InvalidInputException("Exec callback or in-out callback must be set for the function.");
+		}
+		if (info.in_out_final_cb && !info.in_out_cb) {
+			throw InvalidInputException("In-out callback must be set when the in-out final callback is set.");
+		}
+		if (info.in_out_cb && (info.claim_batch_cb || info.partition_data_cb || info.partitioning_cb)) {
+			throw InvalidInputException(
+			    "The claim batch, partition data and partitioning callbacks do not apply to an in-out function.");
 		}
 		// The engine calls get_partition_data without a null check once get_partition_info claims partitions.
 		if (info.partitioning_cb && !info.partition_data_cb) {
@@ -858,8 +997,17 @@ public:
 		signature.Verify();
 
 		// A table function holds a signature of its own, so the declared one is handed over as-is
-		TableFunction function(name, {}, CV2TableExec, CV2TableBind, CV2TableInitGlobal, CV2TableInitLocal);
+		TableFunction function(name, {}, info.in_out_cb ? nullptr : CV2TableExec, CV2TableBind, CV2TableInitGlobal,
+		                       CV2TableInitLocal);
 		function.GetSignature() = signature;
+		if (info.in_out_cb) {
+			function.in_out_function = CV2TableInOut;
+			if (info.in_out_final_cb) {
+				function.in_out_function_final = CV2TableInOutFinal;
+			}
+		}
+		// Always wired: it serves the virtual columns a bind callback may declare, which are not known at registration.
+		function.get_virtual_columns = CV2TableGetVirtualColumns;
 
 		// Always wired: it serves the estimate a bind callback may set, which is not known at registration. It
 		// reports no estimate when the bind callback sets none.
@@ -957,6 +1105,9 @@ private:
 			                            single_file_function);
 		}
 		for (auto &function : overloads->functions) {
+			if (function->in_out_function) {
+				continue;
+			}
 			auto &signature = function->GetSignature();
 			if (signature.GetRequiredParameterCount() != 1 || !signature.GetParameter(0).AcceptsPosition()) {
 				continue;
@@ -1132,6 +1283,68 @@ DUCKDB_V2_ERROR duckdb_v2_table_function_bind_add_result_column(duckdb_v2_table_
 		auto &bind_info = *Convert(info);
 		bind_info.out_column_names.emplace_back(ConvertIdentifierName(name));
 		bind_info.out_column_types.push_back(column_type);
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_set_in_out_callback(duckdb_v2_table_function_handle function,
+                                                             duckdb_v2_table_function_in_out_callback_fn callback,
+                                                             duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() { Convert(function)->info.in_out_cb = callback; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_set_in_out_final_callback(duckdb_v2_table_function_handle function,
+                                                                   duckdb_v2_table_function_in_out_callback_fn callback,
+                                                                   duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() { Convert(function)->info.in_out_final_cb = callback; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_bind_add_virtual_column(duckdb_v2_table_function_bind_info_handle info,
+                                                                 idx_t identifier, const char *name, idx_t name_length,
+                                                                 duckdb_v2_logical_type_handle type,
+                                                                 duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_STR_ARG(name, name_length);
+	DUCKDB_CHECK_ARG(type);
+	return WithErrorHandler(err, [&]() {
+		auto &bind_info = *Convert(info);
+		if (!duckdb::IsVirtualColumn(identifier)) {
+			throw duckdb::InvalidInputException("The identifier %llu of a virtual column must be at least %llu",
+			                                    identifier, duckdb::VIRTUAL_COLUMN_START);
+		}
+		if (!bind_info.in_projection_pushdown) {
+			throw duckdb::InvalidInputException("A virtual column needs projection pushdown: call "
+			                                    "duckdb_v2_table_function_set_projection_pushdown on the function");
+		}
+		auto column_type_ref = Convert(type);
+		const auto &column_type = *column_type_ref;
+		if (!column_type.IsComplete()) {
+			throw duckdb::InvalidInputException("Virtual column type must be a fully defined concrete type");
+		}
+		duckdb::Identifier column_name(ConvertIdentifierName(name, name_length));
+		if (column_name.empty() && identifier != duckdb::COLUMN_IDENTIFIER_EMPTY) {
+			throw duckdb::InvalidInputException("The name of a virtual column cannot be empty");
+		}
+		if (bind_info.out_virtual_columns.find(identifier) != bind_info.out_virtual_columns.end()) {
+			throw duckdb::InvalidInputException("A virtual column with identifier %llu was already declared",
+			                                    identifier);
+		}
+		if (!column_name.empty()) {
+			for (auto &entry : bind_info.out_virtual_columns) {
+				if (entry.second.name == column_name) {
+					throw duckdb::InvalidInputException("A virtual column named \"%s\" was already declared",
+					                                    column_name.GetIdentifierName());
+				}
+			}
+			for (auto &declared : bind_info.out_column_names) {
+				if (declared == column_name) {
+					throw duckdb::InvalidInputException("The virtual column \"%s\" has the name of a result column",
+					                                    column_name.GetIdentifierName());
+				}
+			}
+		}
+		bind_info.out_virtual_columns.emplace(identifier, duckdb::TableColumn(std::move(column_name), column_type));
 	});
 }
 
@@ -1427,7 +1640,7 @@ duckdb_v2_table_function_filter_pushdown_get_column_index(duckdb_v2_table_functi
 			throw duckdb::InvalidInputException(
 			    "Index out of bounds in duckdb_v2_table_function_filter_pushdown_get_column_index");
 		}
-		// A function registered here declares no virtual columns, so every entry is a declared column.
+		// the index of a declared column, or the identifier of a virtual one
 		*column_index = columns[index].GetPrimaryIndex();
 	});
 }
@@ -1529,7 +1742,22 @@ duckdb_v2_table_function_partition_data_set_partition_value(duckdb_v2_table_func
 			throw duckdb::InvalidInputException(
 			    "Index out of bounds in duckdb_v2_table_function_partition_data_set_partition_value");
 		}
-		const auto &expected_type = (*args.in_column_types)[(*args.in_partition_columns)[index]];
+		const auto column = (*args.in_partition_columns)[index];
+		duckdb::optional_ptr<const duckdb::LogicalType> expected_type_ptr;
+		if (duckdb::IsVirtualColumn(column)) {
+			auto entry = args.in_virtual_columns->find(column);
+			if (entry != args.in_virtual_columns->end()) {
+				expected_type_ptr = entry->second.type;
+			}
+		} else {
+			expected_type_ptr = (*args.in_column_types)[column];
+		}
+		if (!expected_type_ptr) {
+			throw duckdb::InvalidInputException("duckdb_v2_table_function_partition_data_set_partition_value: the "
+			                                    "partitioning column at index %llu is not declared",
+			                                    index);
+		}
+		const auto &expected_type = *expected_type_ptr;
 		const auto &actual = *Convert(value);
 		if (actual.type() != expected_type) {
 			throw duckdb::InvalidInputException(
@@ -1663,6 +1891,93 @@ DUCKDB_V2_ERROR duckdb_v2_table_function_destroy(duckdb_v2_table_function_handle
 			delete Convert(*function);
 			*function = nullptr;
 		}
+	});
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// In-out functions
+//----------------------------------------------------------------------------------------------------------------------
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_in_out_get_user_data(duckdb_v2_table_function_in_out_info_handle info,
+                                                              void **data, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->in_user_data; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_in_out_get_bind_data(duckdb_v2_table_function_in_out_info_handle info,
+                                                              void **data, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->in_bind_data; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_in_out_get_global_state(duckdb_v2_table_function_in_out_info_handle info,
+                                                                 void **data, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->in_global_state; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_in_out_get_local_state(duckdb_v2_table_function_in_out_info_handle info,
+                                                                void **data, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->in_local_state; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_in_out_get_input_chunk(duckdb_v2_table_function_in_out_info_handle info,
+                                                                duckdb_v2_data_chunk_handle *chunk,
+                                                                duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(chunk);
+	*chunk = nullptr;
+	return WithErrorHandler(err, [&]() { *chunk = Convert(Convert(info)->input); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_in_out_get_output_chunk(duckdb_v2_table_function_in_out_info_handle info,
+                                                                 duckdb_v2_data_chunk_handle *chunk,
+                                                                 duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(chunk);
+	*chunk = nullptr;
+	return WithErrorHandler(err, [&]() { *chunk = Convert(Convert(info)->output); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_in_out_get_column_count(duckdb_v2_table_function_in_out_info_handle info,
+                                                                 idx_t *count, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(count);
+	return WithErrorHandler(err, [&]() { *count = Convert(info)->in_scan_columns->size(); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_in_out_get_column_index(duckdb_v2_table_function_in_out_info_handle info,
+                                                                 idx_t index, idx_t *column_index,
+                                                                 duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(column_index);
+	return WithErrorHandler(err, [&]() {
+		const auto &columns = *Convert(info)->in_scan_columns;
+		if (index >= columns.size()) {
+			throw duckdb::InvalidInputException(
+			    "Index out of bounds in duckdb_v2_table_function_in_out_get_column_index");
+		}
+		*column_index = columns[index];
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_in_out_set_result(duckdb_v2_table_function_in_out_info_handle info,
+                                                           DUCKDB_V2_TABLE_IN_OUT_RESULT result,
+                                                           duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	return WithErrorHandler(err, [&]() {
+		auto &args = *Convert(info);
+		auto converted = CV2ConvertInOutResult(result);
+		if (args.is_final && converted == duckdb::OperatorResultType::NEED_MORE_INPUT) {
+			throw duckdb::InvalidInputException(
+			    "The in-out final callback cannot report TABLE_IN_OUT_RESULT_NEED_MORE_INPUT");
+		}
+		args.out_result = static_cast<duckdb::idx_t>(converted);
 	});
 }
 

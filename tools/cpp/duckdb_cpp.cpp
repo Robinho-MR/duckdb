@@ -4254,6 +4254,8 @@ struct TableFunctionInfo {
 	TableFunction::InitGlobalCallback init_global_callback = nullptr;
 	TableFunction::InitLocalCallback init_local_callback = nullptr;
 	TableFunction::ExecCallback exec_callback = nullptr;
+	TableFunction::InOutCallback in_out_callback = nullptr;
+	TableFunction::InOutCallback in_out_final_callback = nullptr;
 	TableFunction::ProgressCallback progress_callback = nullptr;
 	TableFunction::FilterPushdownCallback filter_pushdown_callback = nullptr;
 	TableFunction::PartitionDataCallback partition_data_callback = nullptr;
@@ -4265,6 +4267,7 @@ struct TableFunctionInfo {
 
 	TableFunctionInfo(TableFunction::BindCallback bind_callback, TableFunction::InitGlobalCallback init_global_callback,
 	                  TableFunction::InitLocalCallback init_local_callback, TableFunction::ExecCallback exec_callback,
+	                  TableFunction::InOutCallback in_out_callback, TableFunction::InOutCallback in_out_final_callback,
 	                  TableFunction::ProgressCallback progress_callback,
 	                  TableFunction::FilterPushdownCallback filter_pushdown_callback,
 	                  TableFunction::PartitionDataCallback partition_data_callback,
@@ -4273,7 +4276,8 @@ struct TableFunctionInfo {
 	                  TableFunction::GetBindInfoCallback get_bind_info_callback,
 	                  TableFunction::StatsCallback stats_callback, detail::UserData user_data)
 	    : bind_callback(bind_callback), init_global_callback(init_global_callback),
-	      init_local_callback(init_local_callback), exec_callback(exec_callback), progress_callback(progress_callback),
+	      init_local_callback(init_local_callback), exec_callback(exec_callback), in_out_callback(in_out_callback),
+	      in_out_final_callback(in_out_final_callback), progress_callback(progress_callback),
 	      filter_pushdown_callback(filter_pushdown_callback), partition_data_callback(partition_data_callback),
 	      partitioning_callback(partitioning_callback), claim_batch_callback(claim_batch_callback),
 	      get_bind_info_callback(get_bind_info_callback), stats_callback(stats_callback),
@@ -4283,6 +4287,7 @@ struct TableFunctionInfo {
 	bool operator==(const TableFunctionInfo &other) const {
 		return bind_callback == other.bind_callback && init_global_callback == other.init_global_callback &&
 		       init_local_callback == other.init_local_callback && exec_callback == other.exec_callback &&
+		       in_out_callback == other.in_out_callback && in_out_final_callback == other.in_out_final_callback &&
 		       progress_callback == other.progress_callback &&
 		       filter_pushdown_callback == other.filter_pushdown_callback &&
 		       partition_data_callback == other.partition_data_callback &&
@@ -4466,6 +4471,56 @@ auto TableFunction::SetExecCallback(ExecCallback callback) & -> TableFunction & 
 
 	CheckedAPICall(duckdb_v2_table_function_set_exec_callback, handle(), trampoline);
 	exec_callback = callback;
+	return *this;
+}
+
+auto TableFunction::SetInOutCallback(InOutCallback callback) & -> TableFunction & {
+	if (!callback) {
+		CheckedAPICall(duckdb_v2_table_function_set_in_out_callback, handle(), nullptr);
+		in_out_callback = nullptr;
+		return *this;
+	}
+
+	static auto trampoline = [](duckdb_v2_table_function_in_out_info_handle info, duckdb_v2_context_handle context,
+	                            duckdb_v2_error_info_handle *err) {
+		WithExceptionGuard(err, [&]() {
+			void *user_data = nullptr;
+			CheckedAPICall(duckdb_v2_table_function_in_out_get_user_data, info, &user_data);
+			const auto &function = *static_cast<TableFunctionInfo *>(user_data);
+
+			auto input =
+			    detail::HandleFactory::Make<InOutInput>(static_cast<void *>(info), static_cast<void *>(context));
+			function.in_out_callback(input);
+		});
+	};
+
+	CheckedAPICall(duckdb_v2_table_function_set_in_out_callback, handle(), trampoline);
+	in_out_callback = callback;
+	return *this;
+}
+
+auto TableFunction::SetInOutFinalCallback(InOutCallback callback) & -> TableFunction & {
+	if (!callback) {
+		CheckedAPICall(duckdb_v2_table_function_set_in_out_final_callback, handle(), nullptr);
+		in_out_final_callback = nullptr;
+		return *this;
+	}
+
+	static auto trampoline = [](duckdb_v2_table_function_in_out_info_handle info, duckdb_v2_context_handle context,
+	                            duckdb_v2_error_info_handle *err) {
+		WithExceptionGuard(err, [&]() {
+			void *user_data = nullptr;
+			CheckedAPICall(duckdb_v2_table_function_in_out_get_user_data, info, &user_data);
+			const auto &function = *static_cast<TableFunctionInfo *>(user_data);
+
+			auto input =
+			    detail::HandleFactory::Make<InOutInput>(static_cast<void *>(info), static_cast<void *>(context));
+			function.in_out_final_callback(input);
+		});
+	};
+
+	CheckedAPICall(duckdb_v2_table_function_set_in_out_final_callback, handle(), trampoline);
+	in_out_final_callback = callback;
 	return *this;
 }
 
@@ -4653,14 +4708,42 @@ auto TableFunction::PrepareRegistration() -> void {
 	// The callback table rides the C user_data slot so the trampolines can find
 	// it; the user's own data (SetUserData, moved out here) rides inside it.
 	auto info = std::unique_ptr<TableFunctionInfo>(new TableFunctionInfo(
-	    bind_callback, init_global_callback, init_local_callback, exec_callback, progress_callback,
-	    filter_pushdown_callback, partition_data_callback, partitioning_callback, claim_batch_callback,
-	    get_bind_info_callback, stats_callback, std::move(user_data)));
+	    bind_callback, init_global_callback, init_local_callback, exec_callback, in_out_callback, in_out_final_callback,
+	    progress_callback, filter_pushdown_callback, partition_data_callback, partitioning_callback,
+	    claim_batch_callback, get_bind_info_callback, stats_callback, std::move(user_data)));
 	duckdb_v2_opaque opaque {info.get(), detail::TypedDelete<TableFunctionInfo>,
 	                         detail::TypedEquals<TableFunctionInfo>};
 	CheckedAPICall(duckdb_v2_table_function_set_user_data, handle(), &opaque);
 	// The function owns the table now.
 	info.release(); // NOLINT(bugprone-unused-return-value)
+}
+
+constexpr idx_t TableFunction::VIRTUAL_COLUMN_START;
+constexpr idx_t TableFunction::COLUMN_IDENTIFIER_ROW_ID;
+constexpr idx_t TableFunction::COLUMN_IDENTIFIER_EMPTY;
+
+static_assert(TableFunction::VIRTUAL_COLUMN_START == DUCKDB_V2_VIRTUAL_COLUMN_START,
+              "TableFunction::VIRTUAL_COLUMN_START mismatch");
+static_assert(TableFunction::COLUMN_IDENTIFIER_ROW_ID == DUCKDB_V2_COLUMN_IDENTIFIER_ROW_ID,
+              "TableFunction::COLUMN_IDENTIFIER_ROW_ID mismatch");
+static_assert(TableFunction::COLUMN_IDENTIFIER_EMPTY == DUCKDB_V2_COLUMN_IDENTIFIER_EMPTY,
+              "TableFunction::COLUMN_IDENTIFIER_EMPTY mismatch");
+
+static_assert(static_cast<uint8_t>(TableFunction::InOutResult::NEED_MORE_INPUT) ==
+                  DUCKDB_V2_TABLE_IN_OUT_RESULT_NEED_MORE_INPUT,
+              "TableFunction::InOutResult::NEED_MORE_INPUT mismatch");
+static_assert(static_cast<uint8_t>(TableFunction::InOutResult::HAVE_MORE_OUTPUT) ==
+                  DUCKDB_V2_TABLE_IN_OUT_RESULT_HAVE_MORE_OUTPUT,
+              "TableFunction::InOutResult::HAVE_MORE_OUTPUT mismatch");
+static_assert(static_cast<uint8_t>(TableFunction::InOutResult::FINISHED) == DUCKDB_V2_TABLE_IN_OUT_RESULT_FINISHED,
+              "TableFunction::InOutResult::FINISHED mismatch");
+
+auto TableFunction::BindInput::AddVirtualColumn(idx_t identifier, const std::string &name, const LogicalType &type)
+    -> void {
+	auto name_str = std::string_view(name.data(), name.size());
+	CheckedAPICall(duckdb_v2_table_function_bind_add_virtual_column,
+	               static_cast<duckdb_v2_table_function_bind_info_handle>(result), identifier, name_str.data(),
+	               name_str.size(), type.handle());
 }
 
 auto TableFunction::BindInput::AddResultColumn(const std::string &name, const LogicalType &type) -> void {
@@ -4835,6 +4918,78 @@ auto TableFunction::ExecInput::GetColumnIndex(idx_t index) const -> idx_t {
 	CheckedAPICall(duckdb_v2_table_function_exec_get_column_index,
 	               static_cast<duckdb_v2_table_function_exec_info_handle>(args), index, &column_index);
 	return column_index;
+}
+
+void *TableFunction::InOutInput::GetBindDataInternal() const {
+	void *bind_data = nullptr;
+	CheckedAPICall(duckdb_v2_table_function_in_out_get_bind_data,
+	               static_cast<duckdb_v2_table_function_in_out_info_handle>(args), &bind_data);
+	return RequireTableBindData(bind_data);
+}
+
+void *TableFunction::InOutInput::GetGlobalStateInternal() const {
+	void *global_state = nullptr;
+	CheckedAPICall(duckdb_v2_table_function_in_out_get_global_state,
+	               static_cast<duckdb_v2_table_function_in_out_info_handle>(args), &global_state);
+	return RequireGlobalState(global_state);
+}
+
+void *TableFunction::InOutInput::GetLocalStateInternal() const {
+	void *local_state = nullptr;
+	CheckedAPICall(duckdb_v2_table_function_in_out_get_local_state,
+	               static_cast<duckdb_v2_table_function_in_out_info_handle>(args), &local_state);
+	return RequireLocalState(local_state);
+}
+
+void *TableFunction::InOutInput::GetUserDataInternal() const {
+	void *user_data = nullptr;
+	CheckedAPICall(duckdb_v2_table_function_in_out_get_user_data,
+	               static_cast<duckdb_v2_table_function_in_out_info_handle>(args), &user_data);
+	const auto &function = *static_cast<const TableFunctionInfo *>(user_data);
+	return RequireTableUserData(function.user_data);
+}
+
+auto TableFunction::InOutInput::GetInputChunk() const -> DataChunk {
+	duckdb_v2_data_chunk_handle chunk = nullptr;
+	CheckedAPICall(duckdb_v2_table_function_in_out_get_input_chunk,
+	               static_cast<duckdb_v2_table_function_in_out_info_handle>(args), &chunk);
+	if (!chunk) {
+		throw InvalidInputException("the in-out final callback has no input chunk");
+	}
+	// Borrowed: the engine owns the chunk.
+	return detail::HandleFactory::Make<DataChunk>(chunk, false);
+}
+
+auto TableFunction::InOutInput::GetOutputChunk() const -> DataChunk {
+	duckdb_v2_data_chunk_handle chunk = nullptr;
+	CheckedAPICall(duckdb_v2_table_function_in_out_get_output_chunk,
+	               static_cast<duckdb_v2_table_function_in_out_info_handle>(args), &chunk);
+	// Borrowed: the engine owns the chunk and reuses it across invocations.
+	return detail::HandleFactory::Make<DataChunk>(chunk, false);
+}
+
+auto TableFunction::InOutInput::GetColumnCount() const -> idx_t {
+	idx_t count = 0;
+	CheckedAPICall(duckdb_v2_table_function_in_out_get_column_count,
+	               static_cast<duckdb_v2_table_function_in_out_info_handle>(args), &count);
+	return count;
+}
+
+auto TableFunction::InOutInput::GetColumnIndex(idx_t index) const -> idx_t {
+	idx_t column_index = 0;
+	CheckedAPICall(duckdb_v2_table_function_in_out_get_column_index,
+	               static_cast<duckdb_v2_table_function_in_out_info_handle>(args), index, &column_index);
+	return column_index;
+}
+
+auto TableFunction::InOutInput::SetResult(InOutResult result) -> void {
+	CheckedAPICall(duckdb_v2_table_function_in_out_set_result,
+	               static_cast<duckdb_v2_table_function_in_out_info_handle>(args),
+	               static_cast<DUCKDB_V2_TABLE_IN_OUT_RESULT>(result));
+}
+
+auto TableFunction::InOutInput::GetContext() -> Context & {
+	return context;
 }
 
 void *TableFunction::ProgressInput::GetBindDataInternal() const {
@@ -6827,6 +6982,21 @@ auto FileOpenOptions::Create(const FileSystem &fs) -> FileOpenOptions {
 
 auto FileOpenOptions::SetFlag(FileFlags flag) & -> FileOpenOptions & {
 	CheckedAPICall(duckdb_v2_file_open_options_set_flag, handle(), static_cast<DUCKDB_V2_FILE_FLAG>(flag));
+	return *this;
+}
+
+static_assert(static_cast<uint8_t>(FileCompression::AUTO_DETECT) == DUCKDB_V2_FILE_COMPRESSION_AUTO_DETECT,
+              "FileCompression::AUTO_DETECT mismatch");
+static_assert(static_cast<uint8_t>(FileCompression::NONE) == DUCKDB_V2_FILE_COMPRESSION_NONE,
+              "FileCompression::NONE mismatch");
+static_assert(static_cast<uint8_t>(FileCompression::GZIP) == DUCKDB_V2_FILE_COMPRESSION_GZIP,
+              "FileCompression::GZIP mismatch");
+static_assert(static_cast<uint8_t>(FileCompression::ZSTD) == DUCKDB_V2_FILE_COMPRESSION_ZSTD,
+              "FileCompression::ZSTD mismatch");
+
+auto FileOpenOptions::SetCompression(FileCompression compression) & -> FileOpenOptions & {
+	CheckedAPICall(duckdb_v2_file_open_options_set_compression, handle(),
+	               static_cast<DUCKDB_V2_FILE_COMPRESSION>(compression));
 	return *this;
 }
 

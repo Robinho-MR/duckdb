@@ -4582,6 +4582,7 @@ public:
 	class InitGlobalInput;
 	class InitLocalInput;
 	class ExecInput;
+	class InOutInput;
 	class ProgressInput;
 	class FilterPushdownInput;
 	class PartitionDataInput;
@@ -4589,6 +4590,27 @@ public:
 	class ClaimBatchInput;
 	class GetBindInfoInput;
 	class StatsInput;
+
+	/// What an in-out function tells the engine to do next. Reported from the in-out callbacks.
+	enum class InOutResult : uint8_t {
+		/// The input chunk is fully consumed: the callback is invoked with the next one. Not valid from the in-out
+		/// final
+		/// callback.
+		NEED_MORE_INPUT = 0,
+		/// The function has more output for the current input (or, from the in-out final callback, more buffered
+		/// output): the callback is invoked again with the same input.
+		HAVE_MORE_OUTPUT = 1,
+		/// The function wants no more input: the pipeline it runs in stops on the thread, like a satisfied `LIMIT`.
+		FINISHED = 2,
+	};
+
+	/// The first identifier of a virtual column, 2^63: see `BindInput::AddVirtualColumn`. Unstable API.
+	static constexpr idx_t VIRTUAL_COLUMN_START = 0x8000000000000000ULL;
+	/// The identifier of a row id column, a virtual column with a meaning of its own to the engine. Unstable API.
+	static constexpr idx_t COLUMN_IDENTIFIER_ROW_ID = 0xFFFFFFFFFFFFFFFFULL;
+	/// The identifier of the empty column, a virtual column the engine requests when the query needs the rows but none
+	/// of their values, e.g. `SELECT count(*)`. Unstable API.
+	static constexpr idx_t COLUMN_IDENTIFIER_EMPTY = 0xFFFFFFFFFFFFFFFEULL;
 
 	/// Whether, and how, the scan is partitioned by a set of columns. Reported from the partitioning callback.
 	enum class PartitionInfo : uint8_t {
@@ -4608,8 +4630,12 @@ public:
 	using InitGlobalCallback = void (*)(InitGlobalInput &input);
 	/// Called once per scanning thread, before the first `ExecCallback` on it. Optional.
 	using InitLocalCallback = void (*)(InitLocalInput &input);
-	/// Called repeatedly to produce the next batch of rows; an empty batch ends the scan. Required.
+	/// Called repeatedly to produce the next batch of rows; an empty batch ends the scan. Required, unless the function
+	/// is an in-out function.
 	using ExecCallback = void (*)(ExecInput &input);
+	/// Called instead of an `ExecCallback` to make the function an in-out function: see `SetInOutCallback`. Unstable
+	/// API.
+	using InOutCallback = void (*)(InOutInput &input);
 	/// Called on demand during execution to report how far the scan has advanced. Optional.
 	using ProgressCallback = void (*)(ProgressInput &input);
 	/// Called while the query is optimized, possibly more than once, with the predicates the query applies to the
@@ -4685,6 +4711,23 @@ public:
 	auto SetInitGlobalCallback(InitGlobalCallback callback) & -> TableFunction &;
 	auto SetInitLocalCallback(InitLocalCallback callback) & -> TableFunction &;
 	auto SetExecCallback(ExecCallback callback) & -> TableFunction &;
+	/// Makes the function an in-out function, which consumes an input chunk instead of scanning a source: the kind of
+	/// function used with a lateral join, e.g. `SELECT * FROM t, my_function(t.col)`. The callback is invoked with a
+	/// chunk of input rows (`InOutInput::GetInputChunk`, a vector per positional argument) and writes the rows it
+	/// produces to the output chunk; it reports `InOutResult::HAVE_MORE_OUTPUT` when the output chunk is full, and is
+	/// invoked again with the same input, so it keeps its position in the input in its local state, and
+	/// `InOutResult::NEED_MORE_INPUT` when it has consumed the input. A call whose arguments are all constants runs the
+	/// function as a source instead: the input is a single row holding the constants, the callback is invoked again for
+	/// as long as it produces rows, and an empty output ends the scan whatever result it reports. At the bind
+	/// callback, the types of the arguments are known (`FunctionBindInput::GetArgType`), but their values only when
+	/// all arguments of the call are constants. Projection pushdown works as for an exec callback. The progress
+	/// callback is only consulted when the function runs as a source. Mutually exclusive with the exec callback, and
+	/// with the claim batch, partition data and partitioning callbacks: registration fails otherwise. Unstable API.
+	auto SetInOutCallback(InOutCallback callback) & -> TableFunction &;
+	/// Sets the callback invoked once there is no more input, so that an in-out function that buffers rows can flush
+	/// them: it reports `InOutResult::HAVE_MORE_OUTPUT` while it has more, and `InOutResult::FINISHED` when it is done.
+	/// Requires an in-out callback. Unstable API.
+	auto SetInOutFinalCallback(InOutCallback callback) & -> TableFunction &;
 	auto SetProgressCallback(ProgressCallback callback) & -> TableFunction &;
 	auto SetFilterPushdownCallback(FilterPushdownCallback callback) & -> TableFunction &;
 	auto SetPartitionDataCallback(PartitionDataCallback callback) & -> TableFunction &;
@@ -4714,6 +4757,8 @@ private:
 	InitGlobalCallback init_global_callback = nullptr;
 	InitLocalCallback init_local_callback = nullptr;
 	ExecCallback exec_callback = nullptr;
+	InOutCallback in_out_callback = nullptr;
+	InOutCallback in_out_final_callback = nullptr;
 	ProgressCallback progress_callback = nullptr;
 	FilterPushdownCallback filter_pushdown_callback = nullptr;
 	PartitionDataCallback partition_data_callback = nullptr;
@@ -4741,6 +4786,22 @@ public:
 		auto GetUserData() const -> T & {
 			return *static_cast<T *>(GetUserDataInternal());
 		}
+
+		/// Declares a virtual column of this call of the function. A virtual column is not one of the columns the
+		/// function returns: it is not part of `SELECT *`, and the query asks for it by name. The function only
+		/// produces it when it is asked for, as a vector of the output chunk like any other column the scan produces,
+		/// and finds it by its identifier: the `GetColumnIndex` of the init, exec and in-out inputs returns the
+		/// identifier for the vectors that stand for the column. Requires projection pushdown
+		/// (`TableFunction::SetProjectionPushdown`). Unstable API.
+		/// @param identifier The identifier of the column, at least `VIRTUAL_COLUMN_START` and unique among the
+		/// virtual columns of the call. `COLUMN_IDENTIFIER_ROW_ID` and `COLUMN_IDENTIFIER_EMPTY` have a meaning of
+		/// their own to the engine; the latter, if declared, is the only column requested when the query needs the
+		/// rows but none of their values (e.g. `SELECT count(*)`), and its vector is only sized.
+		/// @param name The column's name. May be empty only for `COLUMN_IDENTIFIER_EMPTY`.
+		/// @param type The column's type. Must be a fully defined concrete type.
+		/// @throws InvalidInputException When projection pushdown is not enabled, the identifier is below
+		/// `VIRTUAL_COLUMN_START` or already declared, or the name is empty or already taken.
+		auto AddVirtualColumn(idx_t identifier, const std::string &name, const LogicalType &type) -> void;
 
 		/// Hints how many rows the scan will produce, for the optimizer. Producing a different number of rows is not
 		/// an error.
@@ -4930,6 +4991,84 @@ public:
 
 	private:
 		ExecInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+
+		void *args;
+		Context context;
+
+		void *GetBindDataInternal() const;
+		void *GetGlobalStateInternal() const;
+		void *GetLocalStateInternal() const;
+		void *GetUserDataInternal() const;
+	};
+
+	/// What the in-out callbacks work with. Borrowed, valid only for the callback duration.
+	class InOutInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// The bind data set via `BindInput::SetBindData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetBindData() const -> const T & {
+			return *static_cast<const T *>(GetBindDataInternal());
+		}
+
+		/// The global state set via `InitGlobalInput::SetGlobalState`. Shared with every other thread running the
+		/// function; access must be synchronized.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetGlobalState() const -> T & {
+			return *static_cast<T *>(GetGlobalStateInternal());
+		}
+
+		/// The local state set via `InitLocalInput::SetLocalState`, private to this thread. This is where the
+		/// function keeps its position in the input chunk while it reports `InOutResult::HAVE_MORE_OUTPUT`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetLocalState() const -> T & {
+			return *static_cast<T *>(GetLocalStateInternal());
+		}
+
+		/// The user data set via `TableFunction::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// The chunk of input rows to process, with a vector per positional argument of the call. Read-only, and the
+		/// same from one invocation to the next while the function reports `InOutResult::HAVE_MORE_OUTPUT`.
+		/// @return A borrowed chunk, valid only for the callback duration.
+		/// @throws InvalidInputException In the in-out final callback, which has no input.
+		auto GetInputChunk() const -> DataChunk;
+
+		/// The chunk to write the rows to produce into: its first `GetColumnCount` vectors are the columns the scan
+		/// produces, any further vectors belong to the engine. It starts out empty on every invocation: write the
+		/// rows, then give them a row count with `Vector::SetSize` on the chunk's first vector, which the engine
+		/// propagates to the others. An empty output is valid, e.g. for an input row that produces no rows.
+		/// @return A borrowed chunk, valid only for the callback duration.
+		auto GetOutputChunk() const -> DataChunk;
+
+		/// How many columns the scan produces, the leading vectors of the output chunk; see
+		/// `InitGlobalInput::GetColumnCount`.
+		auto GetColumnCount() const -> idx_t;
+		/// Which column the output chunk's vector at `index` must be filled with: the index of a declared column, or
+		/// the identifier of a virtual one (at least `VIRTUAL_COLUMN_START`); see `InitGlobalInput::GetColumnIndex`.
+		/// @throws InvalidInputException When the index is out of bounds.
+		auto GetColumnIndex(idx_t index) const -> idx_t;
+
+		/// Tells the engine what to do next. A callback that does not call it reports `InOutResult::NEED_MORE_INPUT`,
+		/// the in-out final callback `InOutResult::FINISHED`.
+		/// @throws InvalidInputException When the result is `InOutResult::NEED_MORE_INPUT` in the in-out final
+		/// callback.
+		auto SetResult(InOutResult result) -> void;
+
+		/// The execution context. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context &;
+
+	private:
+		InOutInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
 		}
 
 		void *args;
@@ -6684,6 +6823,19 @@ enum class FileFlags : uint8_t {
 	EXTERNAL_FILE_CACHE = 8,
 };
 
+/// How the contents of a file are compressed, as set with `FileOpenOptions::SetCompression`.
+enum class FileCompression : uint8_t {
+	/// Determine the compression from the extension of the file (e.g. `.gz`, `.zst`). A file without such an
+	/// extension is read and written as it is, whatever its contents.
+	AUTO_DETECT = 0,
+	/// The file is not compressed, whatever its name. This is what a file opened without a compression gets.
+	NONE = 1,
+	/// The file is gzip compressed.
+	GZIP = 2,
+	/// The file is Zstandard compressed. The implementation is provided by the `parquet` extension.
+	ZSTD = 3,
+};
+
 /// An open file, obtained from `FileSystem::OpenFile`. Closes on destruction.
 /// Only usable while the `FileSystem` it came from is still valid.
 class FileHandle final : public detail::Handle<FileHandle> {
@@ -6759,6 +6911,13 @@ public:
 	/// Attaches a named value, a hint for whichever file system ends up handling the path. What a name means is that
 	/// file system's business, and one it does not recognize is ignored. Setting the same name again replaces it.
 	auto SetValue(std::string_view name, const Value &value) & -> FileOpenOptions &;
+
+	/// Sets the compression of the files opened with the options, for reading as well as for writing: the engine
+	/// decompresses what is read and compresses what is written. Without it files are opened with
+	/// `FileCompression::NONE`. A compressed file can only be read and written sequentially, so `FileHandle::ReadAt`,
+	/// `FileHandle::WriteAt` and `FileHandle::Seek` can fail on it. Unstable API.
+	/// @throws InvalidInputException When the value is not a `FileCompression`.
+	auto SetCompression(FileCompression compression) & -> FileOpenOptions &;
 
 	/// Attaches the options a file is specified with, as table functions that read files take it: a STRUCT holding
 	/// the path of the file in its `filename` field, and an option to open the file with in every other field - e.g.

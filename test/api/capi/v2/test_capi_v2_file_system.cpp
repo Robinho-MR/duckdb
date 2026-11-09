@@ -568,4 +568,52 @@ TEST_CASE("V2 file system: glob, move and remove", "[capi_v2][file_system]") {
 	REQUIRE(duckdb_v2_file_system_path_remove(nullptr, &moved_str, nullptr, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
 }
 
+TEST_CASE("V2 file system: open options carry a compression", "[capi_v2][file_system]") {
+	EnvFixture fx;
+	auto fs = FsOf(fx.conn);
+	const std::string text = "hello hello hello hello compression";
+	auto path = duckdb::TestCreatePath("v2_fs_compression.bin");
+
+	{
+		auto options = FsOptions(fs, {DUCKDB_V2_FILE_FLAG_WRITE, DUCKDB_V2_FILE_FLAG_CREATE_NEW});
+		REQUIRE(duckdb_v2_file_open_options_set_compression(options, DUCKDB_V2_FILE_COMPRESSION_GZIP, nullptr) ==
+		        DUCKDB_V2_ERROR_NONE);
+		duckdb_v2_file_handle handle = nullptr;
+		REQUIRE(duckdb_v2_file_system_open(fs, path.data(), path.size(), options, &handle, nullptr) ==
+		        DUCKDB_V2_ERROR_NONE);
+		FsWrite(handle, text);
+		duckdb_v2_file_destroy(&handle);
+		duckdb_v2_file_open_options_destroy(&options);
+	}
+
+	// Without a compression the file reads as written to disk: gzip bytes.
+	{
+		auto handle = FsOpen(fs, path, {DUCKDB_V2_FILE_FLAG_READ});
+		auto raw = FsReadAll(handle, 128);
+		REQUIRE(raw.size() > 2);
+		REQUIRE(static_cast<uint8_t>(raw[0]) == 0x1f);
+		REQUIRE(static_cast<uint8_t>(raw[1]) == 0x8b);
+		duckdb_v2_file_destroy(&handle);
+	}
+	// With it, decompressed.
+	for (auto compression : {DUCKDB_V2_FILE_COMPRESSION_GZIP}) {
+		auto options = FsOptions(fs, {DUCKDB_V2_FILE_FLAG_READ});
+		REQUIRE(duckdb_v2_file_open_options_set_compression(options, compression, nullptr) == DUCKDB_V2_ERROR_NONE);
+		duckdb_v2_file_handle handle = nullptr;
+		REQUIRE(duckdb_v2_file_system_open(fs, path.data(), path.size(), options, &handle, nullptr) ==
+		        DUCKDB_V2_ERROR_NONE);
+		REQUIRE(FsReadAll(handle, 128) == text);
+		duckdb_v2_file_destroy(&handle);
+		duckdb_v2_file_open_options_destroy(&options);
+	}
+
+	// Invalid arguments.
+	auto options = FsOptions(fs, {DUCKDB_V2_FILE_FLAG_READ});
+	REQUIRE(duckdb_v2_file_open_options_set_compression(nullptr, DUCKDB_V2_FILE_COMPRESSION_GZIP, nullptr) ==
+	        DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_file_open_options_set_compression(options, static_cast<DUCKDB_V2_FILE_COMPRESSION>(99),
+	                                                    nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	duckdb_v2_file_open_options_destroy(&options);
+}
+
 } // namespace test_capi_v2
