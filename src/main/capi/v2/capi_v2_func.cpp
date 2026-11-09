@@ -34,16 +34,21 @@ Value CV2ExpressionBindInfo::GetArgValue(idx_t index) const {
 
 CV2ConstantBindInfo::CV2ConstantBindInfo(const BoundSimpleFunction &function, const FunctionSignature &signature,
                                          void *user_data, const vector<Value> &positional,
-                                         const named_argument_map_t &named)
-    : CV2FunctionBindInfo(function, signature, user_data), positional(positional), named(named) {
-	D_ASSERT(function.GetPositionalArgumentCount() == positional.size());
+                                         const named_argument_map_t &named, const vector<LogicalType> *input_types)
+    : CV2FunctionBindInfo(function, signature, user_data), positional(positional), named(named),
+      input_types(input_types) {
+	D_ASSERT(input_types || function.GetPositionalArgumentCount() == positional.size());
+}
+
+bool CV2ConstantBindInfo::IsInputColumn(idx_t index) const {
+	return input_types && index >= positional.size() && index < function.GetPositionalArgumentCount();
 }
 
 const Value &CV2ConstantBindInfo::GetArg(idx_t index) const {
 	if (index < positional.size()) {
 		return positional[index];
 	}
-	const auto &name = function.GetNamedArguments()[index - positional.size()];
+	const auto &name = function.GetNamedArguments()[index - function.GetPositionalArgumentCount()];
 	auto entry = named.find(name);
 	if (entry == named.end()) {
 		throw InternalException("Named argument %s of a function call has no value", name);
@@ -52,10 +57,18 @@ const Value &CV2ConstantBindInfo::GetArg(idx_t index) const {
 }
 
 LogicalType CV2ConstantBindInfo::GetArgType(idx_t index) const {
+	if (IsInputColumn(index)) {
+		return index < input_types->size() ? (*input_types)[index] : function.GetArguments()[index];
+	}
 	return GetArg(index).type();
 }
 
 Value CV2ConstantBindInfo::GetArgValue(idx_t index) const {
+	if (IsInputColumn(index)) {
+		throw InvalidInputException("Argument %llu is a column of the input of the function, so it has no constant "
+		                            "value at bind",
+		                            index);
+	}
 	return GetArg(index);
 }
 
