@@ -8,10 +8,9 @@
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/planner/logical_plan_verifier.hpp"
 #include "duckdb/planner/planner.hpp"
-#include "json_common.hpp"
-#include "json_deserializer.hpp"
-#include "json_functions.hpp"
-#include "json_serializer.hpp"
+#include "duckdb/common/serializer/json_serializer.hpp"
+#include "duckdb/function/scalar/serialize_functions.hpp"
+#include "duckdb/function/scalar_function.hpp"
 
 namespace duckdb {
 
@@ -106,8 +105,6 @@ static bool OperatorSupportsSerialization(LogicalOperator &op, string &operator_
 }
 
 static void JsonSerializePlanFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	auto &local_state = JSONFunctionLocalState::ResetAndGet(state);
-	auto alc = local_state.json_allocator->GetYYAlc();
 	const auto &inputs = args.data[0];
 
 	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
@@ -120,7 +117,8 @@ static void JsonSerializePlanFunction(DataChunk &args, ExpressionState &state, V
 
 	auto &heap = StringVector::GetStringHeap(result);
 	UnaryExecutor::Execute<string_t, string_t>(inputs, result, [&](string_t input) {
-		auto doc = JSONCommon::CreateDocument(alc);
+		yyjson_mut_doc_ptr doc_holder(yyjson_mut_doc_new(nullptr));
+		auto doc = doc_holder.get();
 		auto result_obj = yyjson_mut_obj(doc);
 		yyjson_mut_doc_set_root(doc, result_obj);
 
@@ -167,45 +165,19 @@ static void JsonSerializePlanFunction(DataChunk &args, ExpressionState &state, V
 			yyjson_mut_obj_add_false(doc, result_obj, "error");
 			yyjson_mut_obj_add_val(doc, result_obj, "plans", plans_arr);
 
-			size_t len_size_t;
-			auto data = yyjson_mut_val_write_opts(result_obj,
-			                                      info.format ? JSONCommon::WRITE_PRETTY_FLAG : JSONCommon::WRITE_FLAG,
-			                                      alc, &len_size_t, nullptr);
-			idx_t len = len_size_t;
-			if (data == nullptr) {
-				throw SerializationException(
-				    "Failed to serialize json, perhaps the query contains invalid utf8 characters?");
-			}
-
-			return heap.AddString(data, len);
+			return heap.AddString(JSONSerializeFunctions::WriteDocument(result_obj, info.format));
 
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
-			yyjson_mut_obj_add_true(doc, result_obj, "error");
-			// error type and message
-			yyjson_mut_obj_add_strcpy(doc, result_obj, "error_type",
-			                          StringUtil::Lower(Exception::ExceptionTypeToString(error.Type())).c_str());
-			yyjson_mut_obj_add_strcpy(doc, result_obj, "error_message", error.RawMessage().c_str());
-			// add extra info
-			for (auto &entry : error.ExtraInfo()) {
-				yyjson_mut_obj_add_strcpy(doc, result_obj, entry.first.c_str(), entry.second.c_str());
-			}
-
-			size_t len_size_t;
-			auto data = yyjson_mut_val_write_opts(result_obj,
-			                                      info.format ? JSONCommon::WRITE_PRETTY_FLAG : JSONCommon::WRITE_FLAG,
-			                                      alc, &len_size_t, nullptr);
-			idx_t len = len_size_t;
-			return heap.AddString(data, len);
+			return heap.AddString(JSONSerializeFunctions::WriteError(doc, result_obj, error, info.format));
 		}
 	});
 }
 
-ScalarFunctionSet JSONFunctions::GetSerializePlanFunction() {
+ScalarFunctionSet JSONSerializeFunctions::GetSerializePlanFunction() {
 	ScalarFunctionSet set("json_serialize_plan");
 
-	ScalarFunction func({}, LogicalType::JSON(), JsonSerializePlanFunction, JsonSerializePlanBind, nullptr,
-	                    JSONFunctionLocalState::Init);
+	ScalarFunction func({}, LogicalType::JSON(), JsonSerializePlanFunction, JsonSerializePlanBind);
 	func.GetProperties().SetRequiresExpressionNames(true);
 
 	func.GetSignature()
