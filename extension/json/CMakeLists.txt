@@ -51,7 +51,9 @@ set(JSON_CREATE_SOURCES
 set(JSON_TRANSFORM_SOURCES src/functions/register_transform.cpp src/functions/json_transform.cpp)
 
 # json_structure, json_group_structure, schema inference
-set(JSON_STRUCTURE_SOURCES src/functions/register_structure.cpp)
+set(JSON_STRUCTURE_SOURCES
+    src/functions/register_structure.cpp src/functions/json_structure.cpp
+    src/functions/json_schema_inference.cpp)
 
 # read_json and friends, the replacement scan, the settings
 set(JSON_READER_SOURCES src/functions/register_reader.cpp)

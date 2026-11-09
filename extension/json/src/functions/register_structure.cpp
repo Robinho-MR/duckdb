@@ -1,14 +1,16 @@
-// JSON structure and schema inference.
-//
-// To port: legacy/json_functions/json_structure.cpp (json_structure and the json_group_structure macro),
-// legacy/json_schema_inference.cpp and legacy/include/json_schema_inference.hpp (the schema inference the reader uses).
+// json_structure, json_group_structure. The schema inference of read_json (json_schema_inference.cpp) is a library
+// used by the reader and registers nothing.
 
 #include "json_functions.hpp"
 
 namespace duckdb {
 namespace json {
 
+//! functions/json_structure.cpp
+void RegisterJSONStructure(Extension &extension, Context &context);
+
 void RegisterStructure(Extension &extension, Context &context) {
+	RegisterJSONStructure(extension, context);
 }
 
 } // namespace json
