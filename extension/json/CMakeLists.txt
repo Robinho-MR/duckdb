@@ -33,7 +33,9 @@ set(JSON_SCALAR_READ_SOURCES
 set(JSON_SCALAR_MODIFY_SOURCES src/functions/register_scalar_modify.cpp)
 
 # json_create/to_json/json_object/json_array, json_group_array/json_group_object and their casts
-set(JSON_CREATE_SOURCES src/functions/register_create.cpp)
+set(JSON_CREATE_SOURCES
+    src/functions/register_create.cpp src/functions/json_create.cpp
+    src/functions/json_strftime.cpp)
 
 # json_transform/from_json and the casts from JSON to nested types
 set(JSON_TRANSFORM_SOURCES src/functions/register_transform.cpp)
