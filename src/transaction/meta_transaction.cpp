@@ -81,7 +81,6 @@ Transaction &MetaTransaction::GetTransaction(AttachedDatabase &db) {
 
 		return new_transaction;
 	} else {
-		D_ASSERT(entry->second.transaction.active_query == active_query);
 		return entry->second.transaction;
 	}
 }
@@ -194,11 +193,11 @@ void MetaTransaction::Rollback() {
 	}
 }
 
-void MetaTransaction::ShareAndLockForQuery(const string &snapshot_id_p) {
-	unique_lock<mutex> guard(shared_lock);
+void MetaTransaction::Share(const string &snapshot_id_p) {
+	lock_guard<mutex> guard(shared_lock);
 	shared = true;
 	snapshot_id = snapshot_id_p;
-	query_locked = true;
+	users = 1;
 }
 
 bool MetaTransaction::IsShared() {
@@ -211,18 +210,36 @@ string MetaTransaction::GetSnapshotId() {
 	return snapshot_id;
 }
 
-void MetaTransaction::LockForQuery() {
-	unique_lock<mutex> guard(shared_lock);
-	shared_cv.wait(guard, [&]() { return !query_locked; });
-	query_locked = true;
+bool MetaTransaction::TryJoin() {
+	lock_guard<mutex> guard(shared_lock);
+	if (finished) {
+		return false;
+	}
+	users++;
+	return true;
 }
 
-void MetaTransaction::UnlockForQuery() {
+void MetaTransaction::Leave() {
 	{
 		lock_guard<mutex> guard(shared_lock);
-		query_locked = false;
+		D_ASSERT(users > 0);
+		users--;
 	}
-	shared_cv.notify_one();
+	shared_cv.notify_all();
+}
+
+bool MetaTransaction::TryFinish(idx_t own_users) {
+	lock_guard<mutex> guard(shared_lock);
+	if (users > own_users) {
+		return false;
+	}
+	finished = true;
+	return true;
+}
+
+void MetaTransaction::WaitForOtherUsers(idx_t own_users) {
+	unique_lock<mutex> guard(shared_lock);
+	shared_cv.wait(guard, [&]() { return users <= own_users; });
 }
 
 void MetaTransaction::Finalize() {

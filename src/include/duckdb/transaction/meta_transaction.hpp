@@ -67,15 +67,19 @@ public:
 		return temporary_objects;
 	}
 
-	//! Marks the transaction as shared: it can be joined by other connections, which then serialize their queries
-	//! with the connection holding the query lock. The caller must be the connection that currently runs a query.
-	void ShareAndLockForQuery(const string &snapshot_id);
+	//! Marks the transaction as shared. The calling connection is running a query on it (it counts as a user).
+	void Share(const string &snapshot_id);
 	bool IsShared();
 	//! The identifier under which a shared transaction was exported (empty if not exported)
 	string GetSnapshotId();
-	//! Blocks until no other connection runs a query on this transaction, then claims the right to do so
-	void LockForQuery();
-	void UnlockForQuery();
+	//! Registers a query of another connection on the transaction. Returns false if the transaction ended.
+	bool TryJoin();
+	//! Unregisters a query of a connection
+	void Leave();
+	//! Ends the transaction if no other connection runs queries on it, own_users is the number of users of the caller
+	bool TryFinish(idx_t own_users);
+	//! Blocks until only the users of the caller are left
+	void WaitForOtherUsers(idx_t own_users);
 	//! Whether the transaction was committed or rolled back
 	bool IsFinished() const {
 		return finished;
@@ -139,10 +143,10 @@ private:
 	//! Guards the shared state below
 	mutex shared_lock;
 	std::condition_variable shared_cv;
+	//! The number of queries currently running on the shared transaction
+	idx_t users = 0;
 	//! Whether the transaction is shared with other connections
 	bool shared = false;
-	//! Whether a connection currently runs a query on the (shared) transaction
-	bool query_locked = false;
 	//! The identifier the transaction was exported under
 	string snapshot_id;
 	//! Secrets that only live for the duration of this transaction.

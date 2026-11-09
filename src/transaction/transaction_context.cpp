@@ -77,8 +77,8 @@ void TransactionContext::Commit() {
 		throw TransactionException("failed to commit: no transaction active");
 	}
 	autocheckpoint_error = ErrorData();
+	EndSharedTransaction();
 	auto transaction = std::move(current_transaction);
-	EndSharedTransaction(*transaction);
 	ClearTransaction();
 	auto error = transaction->Commit();
 	// Notify any registered state of transaction commit
@@ -118,8 +118,8 @@ void TransactionContext::Rollback(optional_ptr<ErrorData> error) {
 	if (!current_transaction) {
 		throw TransactionException("failed to rollback: no transaction active");
 	}
+	EndSharedTransaction();
 	auto transaction = std::move(current_transaction);
-	EndSharedTransaction(*transaction);
 	ClearTransaction();
 
 	ErrorData rollback_error;
@@ -144,8 +144,15 @@ void TransactionContext::Rollback(optional_ptr<ErrorData> error) {
 	transaction->Finalize();
 }
 
-void TransactionContext::EndSharedTransaction(MetaTransaction &transaction) {
-	transaction.MarkFinished();
+void TransactionContext::EndSharedTransaction() {
+	auto &transaction = *current_transaction;
+	if (transaction.IsShared()) {
+		if (!transaction.TryFinish(joined_transaction ? 1 : 0)) {
+			throw TransactionException("cannot end the transaction: other connections are running queries on it");
+		}
+	} else {
+		transaction.MarkFinished();
+	}
 	auto snapshot_id = transaction.GetSnapshotId();
 	if (!snapshot_id.empty()) {
 		context.db->GetDatabaseManager().RemoveExportedTransaction(snapshot_id);
@@ -165,9 +172,9 @@ string TransactionContext::ExportSnapshot() {
 		return snapshot_id;
 	}
 	snapshot_id = context.db->GetDatabaseManager().ExportTransaction(current_transaction);
-	// from now on other connections can use the transaction: this connection holds the query lock until its query ends
-	current_transaction->ShareAndLockForQuery(snapshot_id);
-	query_locked_transaction = current_transaction;
+	// from now on other connections can use the transaction, this connection is running a query on it
+	current_transaction->Share(snapshot_id);
+	joined_transaction = current_transaction;
 	return snapshot_id;
 }
 
@@ -182,16 +189,13 @@ void TransactionContext::ImportSnapshot(const string &snapshot_id) {
 	if (!source || source->IsFinished()) {
 		throw TransactionException("invalid snapshot identifier: \"%s\"", snapshot_id);
 	}
-	// wait until the other connection is done with its current query
-	source->LockForQuery();
-	if (source->IsFinished()) {
-		source->UnlockForQuery();
+	if (!source->TryJoin()) {
 		throw TransactionException("invalid snapshot identifier: \"%s\"", snapshot_id);
 	}
 	// discard our own (empty) transaction and continue in the shared one
 	auto previous = std::move(current_transaction);
 	current_transaction = source;
-	query_locked_transaction = source;
+	joined_transaction = source;
 	previous->MarkFinished();
 	previous->Rollback();
 	for (auto const &s : context.GetContext().GetRegisteredState().States()) {
@@ -204,28 +208,30 @@ void TransactionContext::ImportSnapshot(const string &snapshot_id) {
 }
 
 void TransactionContext::OnQueryBegin() {
-	if (!current_transaction || !current_transaction->IsShared()) {
+	if (!current_transaction || !current_transaction->IsShared() || joined_transaction) {
 		return;
 	}
-	if (!query_locked_transaction) {
-		current_transaction->LockForQuery();
-		query_locked_transaction = current_transaction;
-	}
-	if (current_transaction->IsFinished()) {
+	if (!current_transaction->TryJoin()) {
 		// another connection ended the shared transaction
 		current_transaction.reset();
 		auto_commit = true;
-		OnQueryEnd();
 		throw TransactionException("the shared transaction was ended by another connection");
 	}
+	joined_transaction = current_transaction;
 }
 
 void TransactionContext::OnQueryEnd() {
-	if (!query_locked_transaction) {
+	if (!joined_transaction) {
 		return;
 	}
-	auto transaction = std::move(query_locked_transaction);
-	transaction->UnlockForQuery();
+	auto transaction = std::move(joined_transaction);
+	transaction->Leave();
+}
+
+void TransactionContext::WaitForOtherUsers() {
+	if (joined_transaction) {
+		joined_transaction->WaitForOtherUsers(1);
+	}
 }
 
 bool TransactionContext::DetachSharedTransaction() {
@@ -246,7 +252,7 @@ idx_t TransactionContext::GetActiveQuery() {
 	if (!current_transaction) {
 		throw InternalException("GetActiveQuery called without active transaction");
 	}
-	return current_transaction->GetActiveQuery();
+	return active_query_id;
 }
 
 void TransactionContext::ResetActiveQuery() {
@@ -259,6 +265,7 @@ void TransactionContext::SetActiveQuery(transaction_t query_number) {
 	if (!current_transaction) {
 		throw InternalException("SetActiveQuery called without active transaction");
 	}
+	active_query_id = query_number;
 	current_transaction->SetActiveQuery(query_number);
 }
 

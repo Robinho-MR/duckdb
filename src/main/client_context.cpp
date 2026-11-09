@@ -218,14 +218,15 @@ void ClientContext::Destroy() {
 	// a transaction that belongs to another connection is left to that connection
 	if (!transaction.DetachSharedTransaction() && transaction.HasActiveTransaction()) {
 		try {
-			// wait for the other connections that use the transaction
 			transaction.OnQueryBegin();
 		} catch (...) { // NOLINT
 		}
 	}
 	if (transaction.HasActiveTransaction()) {
 		transaction.ResetActiveQuery();
-		if (!transaction.IsAutoCommit()) {
+		while (!transaction.IsAutoCommit() && transaction.HasActiveTransaction()) {
+			// the transaction cannot end while other connections run queries on it
+			transaction.WaitForOtherUsers();
 			// a destructor cannot throw: once the database is invalidated, the rollback can fail as well
 			try {
 				transaction.Rollback(nullptr);

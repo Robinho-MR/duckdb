@@ -105,7 +105,7 @@ TEST_CASE("Test sharing a transaction between connections", "[api][transaction]"
 		auto result = con3.Query("SELECT SUM(i) FROM tbl");
 		REQUIRE(CHECK_COLUMN(result, 0, {6}));
 	}
-	SECTION("concurrent use of a shared transaction is serialized") {
+	SECTION("concurrent inserts into a shared transaction") {
 		REQUIRE_NO_FAIL(con1.Query("BEGIN TRANSACTION"));
 		auto snapshot = ExportSnapshot(con1);
 		REQUIRE_NO_FAIL(con2.Query("BEGIN TRANSACTION"));
@@ -126,6 +126,27 @@ TEST_CASE("Test sharing a transaction between connections", "[api][transaction]"
 		REQUIRE_NO_FAIL(con1.Query("COMMIT"));
 		result = con3.Query("SELECT COUNT(*) FROM tbl");
 		REQUIRE(CHECK_COLUMN(result, 0, {Value::BIGINT(1 + 2 * ROWS_PER_THREAD)}));
+	}
+	SECTION("concurrent reads and writes on a shared transaction") {
+		REQUIRE_NO_FAIL(con1.Query("BEGIN TRANSACTION"));
+		REQUIRE_NO_FAIL(con1.Query("CREATE TEMPORARY TABLE tmp(i INTEGER)"));
+		auto snapshot = ExportSnapshot(con1);
+		REQUIRE_NO_FAIL(con2.Query("BEGIN TRANSACTION"));
+		REQUIRE_NO_FAIL(con2.Query("SET TRANSACTION SNAPSHOT '" + snapshot + "'"));
+		auto work = [&](Connection &con, int64_t base) {
+			for (int64_t i = 0; i < 50; i++) {
+				REQUIRE_NO_FAIL(*con.Query("INSERT INTO tmp VALUES (" + to_string(base + i) + ")"));
+				REQUIRE_NO_FAIL(*con.Query("SELECT COUNT(*), SUM(i) FROM tmp"));
+				REQUIRE_NO_FAIL(*con.Query("SELECT COUNT(*) FROM tbl"));
+			}
+		};
+		thread t1([&]() { work(con1, 0); });
+		thread t2([&]() { work(con2, 1000); });
+		t1.join();
+		t2.join();
+		auto result = con1.Query("SELECT COUNT(*) FROM tmp");
+		REQUIRE(CHECK_COLUMN(result, 0, {Value::BIGINT(100)}));
+		REQUIRE_NO_FAIL(con2.Query("ROLLBACK"));
 	}
 	SECTION("errors") {
 		// exporting requires a transaction

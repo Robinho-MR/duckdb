@@ -56,10 +56,12 @@ public:
 	string ExportSnapshot();
 	//! Replaces the (still unused) current transaction by the exported transaction with the given identifier
 	void ImportSnapshot(const string &snapshot_id);
-	//! Called when a query starts: serializes with the other connections using the same shared transaction
+	//! Called when a query starts: registers the query on a shared transaction
 	void OnQueryBegin();
 	//! Called when a query ended
 	void OnQueryEnd();
+	//! Blocks until no other connection runs queries on the shared transaction
+	void WaitForOtherUsers();
 	//! Drops a shared transaction that was created by a different connection without ending it
 	bool DetachSharedTransaction();
 	//! Whether the current transaction is shared and was created by a different connection
@@ -87,11 +89,13 @@ private:
 	bool auto_rollback = false;
 
 	shared_ptr<MetaTransaction> current_transaction;
-	//! The shared transaction on which this connection currently holds the query lock
-	shared_ptr<MetaTransaction> query_locked_transaction;
+	//! The shared transaction on which this connection currently runs a query
+	shared_ptr<MetaTransaction> joined_transaction;
+	//! The query id of the current query of this connection
+	transaction_t active_query_id = MAXIMUM_QUERY_ID;
 	ErrorData autocheckpoint_error;
 
-	void EndSharedTransaction(MetaTransaction &transaction);
+	void EndSharedTransaction();
 
 	TransactionContext(const TransactionContext &) = delete;
 };
