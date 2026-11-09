@@ -339,7 +339,6 @@ unique_ptr<GlobalSinkState> PhysicalBatchInsert::GetGlobalSinkState(ClientContex
 		table = &created_table->Cast<DuckTableEntry>();
 	} else {
 		D_ASSERT(insert_table);
-		D_ASSERT(insert_table->IsDuckTable());
 		table = insert_table;
 	}
 	// heuristic - we start off by allocating 4MB of cache space per column

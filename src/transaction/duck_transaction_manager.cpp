@@ -59,10 +59,6 @@ DuckTransactionManager::DuckTransactionManager(AttachedDatabase &db) : Transacti
 	current_transaction_id = TRANSACTION_ID_START;
 	lowest_visibility_bound = VisibilityBound::IncludingUncommitted();
 	active_checkpoint = 0;
-	if (!db.GetCatalog().IsDuckCatalog()) {
-		// Specifically the StorageManager of the DuckCatalog is relied on, with `db.GetStorageManager`
-		throw InternalException("DuckTransactionManager should only be created together with a DuckCatalog");
-	}
 }
 
 DuckTransactionManager::~DuckTransactionManager() {

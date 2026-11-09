@@ -66,11 +66,23 @@ public:
 
 	TableStorageInfo GetStorageInfo(ClientContext &context) override;
 
-	bool IsDuckTable() const override {
+	bool SupportsIndexes() const override {
 		return true;
 	}
-	optional_ptr<DuckTableEntry> TryGetDuckTableEntry() override {
-		return this;
+	bool ControlsFilterEvaluation() const override {
+		return true;
+	}
+	bool EnforcesConstraints() const override {
+		return true;
+	}
+	bool SupportsDeleteScanColumns() const override {
+		return true;
+	}
+	bool HasSnapshotStableSchema() const override {
+		return true;
+	}
+	bool SupportsOptimisticWrites() const override {
+		return true;
 	}
 
 	//! Returns the virtual columns for this table

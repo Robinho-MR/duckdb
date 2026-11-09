@@ -51,7 +51,7 @@ void FilterPushdown::PushdownBarrierFilters(LogicalGet &get, vector<unique_ptr<F
 	// only push into a table scan we control the filter order of - external scans may evaluate a pushed-down
 	// expression against values (e.g. partition constants) that no surviving row ever has
 	auto table = get.GetTable();
-	if (!table || !table->IsDuckTable()) {
+	if (!table || !table->ControlsFilterEvaluation()) {
 		return;
 	}
 	for (idx_t i = 0; i < barrier_filters.size(); i++) {

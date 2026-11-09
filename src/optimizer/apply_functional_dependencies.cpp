@@ -20,7 +20,7 @@ void ApplyFunctionalDependencies::VisitLogicalGet(LogicalGet &get) {
 	result.clear();
 
 	auto table = get.GetTable();
-	if (!table || !table->IsDuckTable() || !get.children.empty() || get.GetColumnIds().empty()) {
+	if (!table || !table->EnforcesConstraints() || !get.children.empty() || get.GetColumnIds().empty()) {
 		return;
 	}
 	unordered_map<idx_t, ColumnBinding> column_bindings;

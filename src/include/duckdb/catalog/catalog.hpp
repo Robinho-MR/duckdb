@@ -57,6 +57,7 @@ class Transaction;
 class AggregateFunctionCatalogEntry;
 class CollateCatalogEntry;
 class SchemaCatalogEntry;
+class StorageManager;
 class TableCatalogEntry;
 class ViewCatalogEntry;
 class SequenceCatalogEntry;
@@ -133,9 +134,8 @@ public:
 	DUCKDB_API const AttachedDatabase &GetAttached() const;
 	DUCKDB_API DatabaseInstance &GetDatabase();
 
-	virtual bool IsDuckCatalog() {
-		return false;
-	}
+	//! Creates the storage manager of an attached database, or nullptr if this catalog does not use one
+	virtual unique_ptr<StorageManager> CreateStorageManager(AttachedDatabase &db, string path, AttachOptions &options);
 
 	virtual void Initialize(bool load_builtin) = 0;
 	virtual void Initialize(optional_ptr<ClientContext> context, bool load_builtin);

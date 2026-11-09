@@ -110,15 +110,29 @@ public:
 	virtual TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data,
 	                                      const EntryLookupInfo &lookup_info);
 
-	//! Whether this table should be bound like a DuckDB table. Entries that are not a DuckTableEntry can also
-	//! return true (e.g. to have DML bound with the DuckDB table layout), so use TryGetDuckTableEntry() instead of
-	//! casting.
-	virtual bool IsDuckTable() const {
+	//! Whether indexes (and foreign key indexes) can be created on and maintained for this table
+	virtual bool SupportsIndexes() const {
 		return false;
 	}
-	//! Returns this entry as a DuckTableEntry, or nullptr if it is not one
-	virtual optional_ptr<DuckTableEntry> TryGetDuckTableEntry() {
-		return nullptr;
+	//! Whether the filter evaluation order of scans over this table is controlled by DuckDB
+	virtual bool ControlsFilterEvaluation() const {
+		return false;
+	}
+	//! Whether the table constraints are enforced (and can be relied on) by this table
+	virtual bool EnforcesConstraints() const {
+		return false;
+	}
+	//! Whether DELETE can add its row ids and returning/index columns directly to the table scan
+	virtual bool SupportsDeleteScanColumns() const {
+		return false;
+	}
+	//! Whether the table schema is fixed by the catalog snapshot (i.e. it cannot change outside of the catalog)
+	virtual bool HasSnapshotStableSchema() const {
+		return false;
+	}
+	//! Whether data can be written directly to the table storage (e.g. by optimistic writers)
+	virtual bool SupportsOptimisticWrites() const {
+		return false;
 	}
 
 	DUCKDB_API static string ColumnsToSQL(const ColumnList &columns, const vector<unique_ptr<Constraint>> &constraints);

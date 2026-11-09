@@ -46,8 +46,9 @@ void DuckCatalog::Initialize(bool load_builtin) {
 	Verify();
 }
 
-bool DuckCatalog::IsDuckCatalog() {
-	return true;
+unique_ptr<StorageManager> DuckCatalog::CreateStorageManager(AttachedDatabase &db, string path,
+                                                             AttachOptions &options) {
+	return make_uniq<SingleFileStorageManager>(db, std::move(path), options);
 }
 
 bool DuckCatalog::SupportsMultipleDMLCTEs() const {

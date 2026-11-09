@@ -20,7 +20,7 @@ namespace duckdb {
 //! Warn when a DuckLake metadata catalog is attached as a plain DuckDB database
 static void WarnIfDuckLakeMetadata(ClientContext &context, AttachedDatabase &attached_db, const string &path) {
 	auto &catalog = attached_db.GetCatalog();
-	if (!catalog.IsDuckCatalog()) {
+	if (catalog.GetCatalogType() != "duckdb") {
 		return;
 	}
 	auto default_schema = catalog.GetDefaultSchema();

@@ -213,13 +213,13 @@ unique_ptr<FunctionData> IndexKeyBind(INPUT &input) {
 
 	auto qualified_table = path.table.ToString(QualifiedNameToStringMode::HIDE_DEFAULT_SCHEMA);
 	auto &table_entry = Catalog::GetEntry<TableCatalogEntry>(context, path.table);
-	auto duck_table = table_entry.TryGetDuckTableEntry();
-	if (!duck_table) {
+	if (!table_entry.SupportsOptimisticWrites()) {
 		throw BinderException("index_key: table '%s' is not a DuckDB table", qualified_table);
 	}
+	auto &duck_table = table_entry.Cast<DuckTableEntry>();
 
 	RegisterIndexKeyRead(input, table_entry);
-	auto &data_table = duck_table->GetStorage();
+	auto &data_table = duck_table.GetStorage();
 	auto &data_table_info = *data_table.GetDataTableInfo();
 
 	// Note: It may come up in testing that we don't want to force binding here, e.g. if the test should explicitly

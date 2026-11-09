@@ -74,7 +74,7 @@ BoundStatement Binder::BindNode(DeleteQueryNode &node) {
 	auto del = make_uniq<LogicalDelete>(table, GenerateTableIndex());
 	del->bound_constraints = BindConstraints(table);
 
-	auto is_duck_table = table.IsDuckTable();
+	auto is_duck_table = table.SupportsDeleteScanColumns();
 	if (is_duck_table) {
 		// Bind the row id before the table columns so it remains the first delete expression.
 		BindRowIdColumns(table, get, del->expressions);

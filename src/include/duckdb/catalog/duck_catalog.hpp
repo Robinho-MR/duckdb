@@ -20,7 +20,7 @@ public:
 	~DuckCatalog() override;
 
 public:
-	bool IsDuckCatalog() override;
+	unique_ptr<StorageManager> CreateStorageManager(AttachedDatabase &db, string path, AttachOptions &options) override;
 	bool SupportsNestedSchemas() const override {
 		return true;
 	}

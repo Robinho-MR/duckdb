@@ -1,3 +1,4 @@
+#include "duckdb/storage/storage_manager.hpp"
 #include "duckdb/common/exception/parser_exception.hpp"
 #include "duckdb/catalog/catalog.hpp"
 
@@ -52,6 +53,11 @@
 #include <algorithm>
 
 namespace duckdb {
+
+unique_ptr<StorageManager> Catalog::CreateStorageManager(AttachedDatabase &db, string path, AttachOptions &options) {
+	return nullptr;
+}
+
 
 Catalog::Catalog(AttachedDatabase &db) : db(db) {
 }

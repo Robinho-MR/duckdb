@@ -108,7 +108,7 @@ PhysicalOperator &PhysicalPlanGenerator::CreatePlan(LogicalCreateIndex &op) {
 		}
 	}
 
-	if (!op.table.IsDuckTable()) {
+	if (!op.table.SupportsIndexes()) {
 		throw BinderException("Indexes can only be created on DuckDB tables.");
 	}
 

@@ -173,7 +173,7 @@ unique_ptr<BoundConstraint> BindCheckConstraint(Binder &binder, const Constraint
 }
 
 void Binder::VerifyConstraintCheckModeStorageVersion(const Constraint &constraint, Catalog &catalog, bool temporary) {
-	if (constraint.type != ConstraintType::UNIQUE || temporary || !catalog.IsDuckCatalog() || catalog.InMemory()) {
+	if (constraint.type != ConstraintType::UNIQUE || temporary || !catalog.GetAttached().HasStorageManager() || catalog.InMemory()) {
 		return;
 	}
 	auto &unique = constraint.Cast<UniqueConstraint>();
@@ -622,7 +622,7 @@ static void BindCreateTableConstraints(CreateTableInfo &create_info, CatalogEntr
 		FindMatchingPrimaryKeyColumns(pk_table_entry_ptr.GetColumns(), pk_table_entry_ptr.GetConstraints(), fk);
 		FindForeignKeyIndexes(pk_table_entry_ptr.GetColumns(), fk.pk_columns, fk.info.pk_keys);
 		CheckForeignKeyTypes(pk_table_entry_ptr.GetColumns(), create_info.columns, fk);
-		if (pk_table_entry_ptr.IsDuckTable()) {
+		if (pk_table_entry_ptr.SupportsIndexes()) {
 			auto &storage = pk_table_entry_ptr.GetStorage();
 
 			if (!storage.HasForeignKeyIndex(fk.info.pk_keys, ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE)) {
@@ -649,7 +649,7 @@ unique_ptr<BoundCreateTableInfo> Binder::BindCreateTableInfo(unique_ptr<CreateIn
 	dependencies.AddDependency(schema);
 	auto &catalog = schema.ParentCatalog();
 	optional_ptr<StorageManager> storage_manager;
-	if (catalog.IsDuckCatalog() && !catalog.InMemory()) {
+	if (catalog.GetAttached().HasStorageManager() && !catalog.InMemory()) {
 		storage_manager = StorageManager::Get(catalog);
 	}
 

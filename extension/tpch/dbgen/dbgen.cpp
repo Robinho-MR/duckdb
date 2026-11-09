@@ -1004,8 +1004,7 @@ public:
 			}
 			if (parameters.tables[i]) {
 				auto &tbl_catalog = *parameters.tables[i];
-				auto duck_table = tbl_catalog.TryGetDuckTableEntry();
-				if (!duck_table) {
+				if (!tbl_catalog.SupportsOptimisticWrites()) {
 					throw InvalidInputException("dbgen is only supported for DuckDB database files");
 				}
 				switch (append_mode) {
@@ -1015,7 +1014,7 @@ public:
 				case TPCHAppendMode::OPTIMISTIC: {
 					auto partial_manager_type =
 					    i == LINE ? OptimisticWritePartialManagers::GLOBAL : OptimisticWritePartialManagers::PER_COLUMN;
-					append_info[i].InitializeOptimistic(context, *duck_table, partial_manager_type);
+					append_info[i].InitializeOptimistic(context, tbl_catalog.Cast<DuckTableEntry>(), partial_manager_type);
 					break;
 				}
 				default:

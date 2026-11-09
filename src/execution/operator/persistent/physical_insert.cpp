@@ -121,7 +121,6 @@ unique_ptr<GlobalSinkState> PhysicalInsert::GetGlobalSinkState(ClientContext &co
 		table = &catalog.CreateTable(catalog.GetCatalogTransaction(context), *schema, *info)->Cast<DuckTableEntry>();
 	} else {
 		D_ASSERT(insert_table);
-		D_ASSERT(insert_table->IsDuckTable());
 		table = insert_table;
 	}
 	auto result = make_uniq<InsertGlobalState>(context, GetTypes(), *table);

@@ -125,7 +125,6 @@ void WALWriteState::WriteCatalogEntry(CatalogEntry &entry, data_ptr_t dataptr) {
 		switch (entry.type) {
 		case CatalogType::TABLE_ENTRY: {
 			auto &table_entry = entry.Cast<DuckTableEntry>();
-			D_ASSERT(table_entry.IsDuckTable());
 			log.WriteDropTable(table_entry);
 			break;
 		}

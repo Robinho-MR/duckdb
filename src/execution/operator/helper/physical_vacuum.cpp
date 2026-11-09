@@ -96,7 +96,7 @@ SinkCombineResultType PhysicalVacuum::Combine(ExecutionContext &context, Operato
 SinkFinalizeType PhysicalVacuum::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
 	auto &sink = input.global_state.Cast<VacuumGlobalSinkState>();
-	if (!table->IsDuckTable()) {
+	if (!table->SupportsIndexes()) {
 		throw NotImplementedException("Vacuum is only implemented for DuckDB tables");
 	}
 

@@ -197,9 +197,6 @@ static catalog_entry_vector_t GetCatalogEntries(vector<reference<DuckSchemaEntry
 		// Scan triggers from each table directly (triggers are nested under their table)
 		for (auto &table_entry : tables) {
 			auto &table = table_entry.get().Cast<TableCatalogEntry>();
-			if (!table.IsDuckTable()) {
-				continue;
-			}
 			auto &duck_table = table.Cast<DuckTableEntry>();
 			duck_table.ScanTriggers(bound, [&](CatalogEntry &entry) {
 				if (!entry.internal) {
@@ -307,8 +304,6 @@ void SingleFileCheckpointWriter::CreateCheckpoint() {
 	// write the catalog as of the bound: later commits are in the WAL that outlives this checkpoint
 	auto &catalog = Catalog::GetCatalog(db).Cast<DuckCatalog>();
 	catalog.ScanSchemas(options.visibility_bound, [&](DuckSchemaEntry &entry) { schemas.push_back(entry); });
-
-	D_ASSERT(catalog.IsDuckCatalog());
 
 	auto &dependency_manager = *catalog.GetDependencyManager();
 	catalog_entries = GetCatalogEntries(schemas, options.visibility_bound);

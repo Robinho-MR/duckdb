@@ -21,7 +21,7 @@ namespace duckdb {
 
 struct ConstraintEntry {
 	ConstraintEntry(ClientContext &context, TableCatalogEntry &table) : table(table) {
-		if (!table.IsDuckTable()) {
+		if (!table.EnforcesConstraints()) {
 			return;
 		}
 		auto binder = Binder::CreateBinder(context);

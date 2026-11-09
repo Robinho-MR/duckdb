@@ -178,7 +178,7 @@ static unique_ptr<FunctionData> PragmaTableInfoBind(ClientContext &context, Tabl
 	qname = Binder::BindTableName(retriever, qname);
 	auto &entry = Catalog::GetEntry(context, CatalogType::TABLE_ENTRY, qname);
 	Binder::RegisterEntryRead(input.binder, context, entry);
-	if (entry.type != CatalogType::TABLE_ENTRY || !entry.Cast<TableCatalogEntry>().IsDuckTable()) {
+	if (entry.type != CatalogType::TABLE_ENTRY || !entry.Cast<TableCatalogEntry>().HasSnapshotStableSchema()) {
 		// views are rebound during execution, and non-native tables are not fixed by the catalog snapshot
 		input.table_function.stability = FunctionStability::VOLATILE;
 	}

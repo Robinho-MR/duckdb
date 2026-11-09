@@ -192,7 +192,6 @@ void CommitState::CommitEntryDrop(CatalogEntry &entry, data_ptr_t dataptr, Commi
 				if (!column_name.empty()) {
 					D_ASSERT(entry.type != CatalogType::RENAMED_ENTRY);
 					auto &table_entry = entry.Cast<DuckTableEntry>();
-					D_ASSERT(table_entry.IsDuckTable());
 					// write the alter table in the log
 					table_entry.CommitAlter(column_name, drop_state);
 				}
@@ -234,7 +233,6 @@ void CommitState::CommitEntryDrop(CatalogEntry &entry, data_ptr_t dataptr, Commi
 		switch (entry.type) {
 		case CatalogType::TABLE_ENTRY: {
 			auto &table_entry = entry.Cast<DuckTableEntry>();
-			D_ASSERT(table_entry.IsDuckTable());
 
 			// If the table was renamed, we do not need to drop the DataTable.
 			table_entry.CommitDrop(drop_state);
@@ -277,7 +275,6 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info)
 		D_ASSERT(old_entry.HasParent());
 
 		auto &catalog = old_entry.ParentCatalog();
-		D_ASSERT(catalog.IsDuckCatalog());
 
 		auto &new_entry = old_entry.Parent();
 		if (old_entry.type == CatalogType::TABLE_ENTRY && new_entry.type == CatalogType::TABLE_ENTRY) {

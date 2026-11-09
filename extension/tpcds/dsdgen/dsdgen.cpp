@@ -304,7 +304,7 @@ struct TPCDSDSDGenParameters {
 			auto table_name = string(table_def.name) + suffix;
 			auto &table_entry = catalog.GetEntry<TableCatalogEntry>(
 			    context, QualifiedName(catalog.GetName(), schema, Identifier(table_name)));
-			if (!table_entry.IsDuckTable()) {
+			if (!table_entry.SupportsOptimisticWrites()) {
 				throw InvalidInputException("dsdgen is only supported for DuckDB database files");
 			}
 			tables[table_id] = table_entry;
@@ -654,7 +654,7 @@ private:
 			auto &table_entry = catalog.GetEntry<TableCatalogEntry>(
 			    context, QualifiedName(catalog.GetName(), schema, Identifier(table_name)));
 
-			if (!table_entry.IsDuckTable()) {
+			if (!table_entry.SupportsOptimisticWrites()) {
 				throw InvalidInputException("dsdgen is only supported for DuckDB database files");
 			}
 

@@ -192,10 +192,7 @@ AttachedDatabase::AttachedDatabase(DatabaseInstance &db, Catalog &catalog_p, Sto
 	if (!catalog) {
 		throw InternalException("AttachedDatabase - attach function did not return a catalog");
 	}
-	if (catalog->IsDuckCatalog()) {
-		// The attached database uses the DuckCatalog.
-		storage = make_uniq<SingleFileStorageManager>(*this, info.path, options);
-	}
+	storage = catalog->CreateStorageManager(*this, info.path, options);
 	transaction_manager = storage_extension->create_transaction_manager(storage_info, *this, *catalog);
 	if (!transaction_manager) {
 		throw InternalException(
