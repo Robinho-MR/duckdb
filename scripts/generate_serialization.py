@@ -31,7 +31,7 @@ def get_file_list():
                 "target": "src/storage/serialization",
             },
             {"source": "extension/parquet/include/", "target": "extension/parquet"},
-            {"source": "extension/json/include/", "target": "extension/json"},
+            {"source": "extension/json/legacy/include/", "target": "extension/json/legacy"},
         ]
     else:
         targets = [

@@ -2,7 +2,7 @@ import os
 import json
 import re
 
-targets = [{'source': 'extension/json/include/', 'target': 'extension/json'}]
+targets = [{'source': 'extension/json/legacy/include/', 'target': 'extension/json/legacy'}]
 
 file_list = []
 for target in targets:
