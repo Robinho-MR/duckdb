@@ -1,6 +1,7 @@
 #include "duckdb/main/capi_v2/capi_v2_internal.hpp"
 #include "duckdb/main/capi_v2/capi_v2_function_internal.hpp"
 #include "duckdb/catalog/catalog.hpp"
+#include "duckdb/parser/parsed_data/create_collation_info.hpp"
 #include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 
@@ -666,6 +667,66 @@ DUCKDB_V2_ERROR duckdb_v2_extension_register_scalar_function(duckdb_v2_extension
 		self.docs.AddTo(self.signature, info);
 		info.on_conflict = duckdb::OnCreateConflict::ALTER_ON_CONFLICT;
 		loader.RegisterFunction(std::move(info));
+	});
+}
+
+static auto BuildCollationFunction(duckdb::capiv2::CV2ScalarFunction &self, duckdb::DatabaseInstance &target)
+    -> duckdb::ScalarFunction {
+	auto function = self.Build(target);
+	const auto &signature = function.GetSignature();
+	if (signature.GetParameterCount() != 1 || signature.IsVariadic() ||
+	    signature.GetParameter(0).GetType().id() != duckdb::LogicalTypeId::VARCHAR) {
+		throw duckdb::InvalidInputException("A collation function must take exactly one VARCHAR argument.");
+	}
+	const auto return_id = signature.GetReturnType().id();
+	if (return_id != duckdb::LogicalTypeId::VARCHAR && return_id != duckdb::LogicalTypeId::BLOB) {
+		throw duckdb::InvalidInputException("A collation function must return VARCHAR or BLOB.");
+	}
+	return function;
+}
+
+DUCKDB_V2_ERROR duckdb_v2_connection_register_collation(duckdb_v2_connection_handle conn,
+                                                        const duckdb_v2_identifier_t *name,
+                                                        duckdb_v2_scalar_function_handle function, bool combinable,
+                                                        bool not_required_for_equality,
+                                                        duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(conn);
+	DUCKDB_CHECK_ARG(name);
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() {
+		auto &context = *Convert(conn)->context;
+		context.RunFunctionInTransaction([&]() {
+			auto &self = *Convert(function);
+			duckdb::CreateCollationInfo info(duckdb::Identifier(ConvertIdentifierName(name)),
+			                                 BuildCollationFunction(self, *context.db), combinable,
+			                                 not_required_for_equality);
+			info.on_conflict = duckdb::OnCreateConflict::IGNORE_ON_CONFLICT;
+			auto &catalog = duckdb::Catalog::GetSystemCatalog(context);
+			catalog.CreateCollation(context, info);
+
+			// The binder resolves the pushed collation function by name, so it is a catalog function as well
+			duckdb::CreateScalarFunctionInfo function_info(info.function);
+			function_info.on_conflict = duckdb::OnCreateConflict::IGNORE_ON_CONFLICT;
+			catalog.CreateFunction(context, function_info);
+		});
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_extension_register_collation(duckdb_v2_extension_handle extension,
+                                                       const duckdb_v2_identifier_t *name,
+                                                       duckdb_v2_scalar_function_handle function, bool combinable,
+                                                       bool not_required_for_equality,
+                                                       duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(extension);
+	DUCKDB_CHECK_ARG(name);
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() {
+		auto &self = *Convert(function);
+		auto &loader = GetExtensionLoader(extension);
+		duckdb::CreateCollationInfo info(duckdb::Identifier(ConvertIdentifierName(name)),
+		                                 BuildCollationFunction(self, loader.GetDatabaseInstance()), combinable,
+		                                 not_required_for_equality);
+		loader.RegisterCollation(info);
 	});
 }
 

@@ -280,7 +280,7 @@ namespace {
 }
 
 template <class F, class... ARGS>
-auto CheckedAPICall(F &&func, ARGS &&... args) -> void {
+auto CheckedAPICall(F &&func, ARGS &&...args) -> void {
 	duckdb_v2_error_info_handle err = nullptr;
 	const auto code = func(std::forward<ARGS>(args)..., &err);
 	if (code != DUCKDB_V2_ERROR_NONE) {
@@ -422,7 +422,7 @@ auto ExecutePreparedArrow(duckdb_v2_prepared_statement_handle prepared, const Pa
 // then a buffer with room for the terminator receives the text. The library
 // never allocates, so there is nothing to free.
 template <class F, class... ARGS>
-auto RenderText(F &&func, ARGS &&... args) -> std::string {
+auto RenderText(F &&func, ARGS &&...args) -> std::string {
 	idx_t length = 0;
 	CheckedAPICall(func, args..., static_cast<char *>(nullptr), static_cast<idx_t>(0), &length);
 	std::string out;
@@ -1251,6 +1251,22 @@ auto Extension::Register(CopyFunction &copy_function) -> void {
 	CheckedAPICall(duckdb_v2_extension_register_copy_function, handle(), copy_function.handle());
 }
 
+auto Connection::RegisterCollation(std::string_view name, ScalarFunction &scalar_function, bool combinable,
+                                   bool not_required_for_equality) -> void {
+	scalar_function.PrepareRegistration();
+	const duckdb_v2_identifier_t name_str = {name.data(), name.size()};
+	CheckedAPICall(duckdb_v2_connection_register_collation, handle(), &name_str, scalar_function.handle(), combinable,
+	               not_required_for_equality);
+}
+
+auto Extension::RegisterCollation(std::string_view name, ScalarFunction &scalar_function, bool combinable,
+                                  bool not_required_for_equality) -> void {
+	scalar_function.PrepareRegistration();
+	const duckdb_v2_identifier_t name_str = {name.data(), name.size()};
+	CheckedAPICall(duckdb_v2_extension_register_collation, handle(), &name_str, scalar_function.handle(), combinable,
+	               not_required_for_equality);
+}
+
 auto Connection::Register(CastFunction &cast_function) -> void {
 	cast_function.PrepareRegistration();
 	CheckedAPICall(duckdb_v2_connection_register_cast_function, handle(), cast_function.handle());
@@ -1362,6 +1378,12 @@ auto Factory::CreateType(std::string_view name) const -> LogicalType {
 
 auto Factory::CreateType(std::string_view name, const std::vector<TypeParam> &params) const -> LogicalType {
 	return CreateType(QualifiedName::Create({std::string(name)}), params);
+}
+
+auto Context::GetTransactionStartTimestamp() const -> timestamp_t {
+	timestamp_t result;
+	CheckedAPICall(duckdb_v2_context_get_transaction_start_timestamp, handle(), &result.micros);
+	return result;
 }
 
 auto Context::GetFileSystem() const -> FileSystem {

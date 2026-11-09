@@ -1546,6 +1546,15 @@ typedef struct {
 	(duckdb_v2_sql_statement_handle statement, const duckdb_v2_identifier_t *name,
 	 duckdb_v2_column_data_collection_handle collection, const duckdb_v2_identifier_t *column_names, idx_t column_count,
 	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_connection_register_collation)
+	(duckdb_v2_connection_handle conn, const duckdb_v2_identifier_t *name, duckdb_v2_scalar_function_handle function,
+	 bool combinable, bool not_required_for_equality, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_context_get_transaction_start_timestamp)
+	(duckdb_v2_context_handle ctx, int64_t *out_micros, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_extension_register_collation)
+	(duckdb_v2_extension_handle extension, const duckdb_v2_identifier_t *name,
+	 duckdb_v2_scalar_function_handle function, bool combinable, bool not_required_for_equality,
+	 duckdb_v2_error_info_handle *err);
 #endif
 	// capigen:end appended
 } duckdb_ext_api_v2;
@@ -3516,6 +3525,16 @@ typedef struct {
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_statement_add_collection duckdb_ext_api.duckdb_v2_statement_add_collection
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_connection_register_collation duckdb_ext_api.duckdb_v2_connection_register_collation
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_context_get_transaction_start_timestamp                                                              \
+	duckdb_ext_api.duckdb_v2_context_get_transaction_start_timestamp
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_extension_register_collation duckdb_ext_api.duckdb_v2_extension_register_collation
 #endif
 // capigen:end appended
 #endif // DUCKDB_BUILD_STATIC_EXTENSION

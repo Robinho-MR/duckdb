@@ -2048,6 +2048,29 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_connection_progress_get(duckdb_v2_connect
                                                                duckdb_v2_error_info_handle *err);
 #endif
 
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Reads the start time of the context's current transaction, the instant `current_timestamp` and friends report.
+ *
+ * The payload is microseconds since 1970-01-01, the same unit a TIMESTAMP vector exposes. The instant is the same for
+ * every call within the transaction, which is what functions with a consistent-within-query stability need. Within a
+ * function callback a transaction is already active; outside one, the call joins the connection's transaction or runs
+ * in one of its own.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param ctx The context.
+ * @param out_micros Receives the start timestamp in microseconds since the epoch.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_context_get_transaction_start_timestamp(duckdb_v2_context_handle ctx,
+                                                                               int64_t *out_micros,
+                                                                               duckdb_v2_error_info_handle *err);
+#endif
+
 /* --- Struct definitions for connection --- */
 
 /* ============================================================================
@@ -11265,6 +11288,79 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_connection_register_scalar_function(duckd
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_extension_register_scalar_function(duckdb_v2_extension_handle extension,
                                                                           duckdb_v2_scalar_function_handle function,
                                                                           duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Registers the scalar function as a collation, making it available to COLLATE and as a column collation.
+ *
+ * The collation is registered on the connection's database and takes effect immediately for every connection; it is not
+ * part of the connection's transaction, so a rollback does not undo it.
+ *
+ * The function turns a string into the sort key its comparisons are performed on: it must take exactly one VARCHAR
+ * argument and return VARCHAR or BLOB. Where a collated string is compared or sorted, the engine wraps it in a call to
+ * the function and compares the results. Per-collation configuration can live in the function's user data. An existing
+ * collation of the same name is kept. The scalar function must have been created through a factory of the same
+ * database. The caller still owns the handle after registration and must destroy it with
+ * `duckdb_v2_scalar_function_destroy()`, which does not affect the registered collation.
+ *
+ * `combinable` allows the collation to be combined with other collations on the same expression.
+ * `not_required_for_equality` lets the engine compare equality on the raw strings, skipping the function, which is only
+ * correct when equal strings always have equal sort keys and vice versa.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param conn The connection to register on.
+ * @param name The name of the collation, as used in COLLATE.
+ * @param function The scalar function that computes the sort key.
+ * @param combinable Whether the collation can be combined with other collations.
+ * @param not_required_for_equality Whether equality comparisons can skip the collation.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_connection_register_collation(duckdb_v2_connection_handle conn,
+                                                                     const duckdb_v2_identifier_t *name,
+                                                                     duckdb_v2_scalar_function_handle function,
+                                                                     bool combinable, bool not_required_for_equality,
+                                                                     duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Registers the scalar function as a collation, making it available to COLLATE and as a column collation.
+ *
+ * The collation is registered on the loading extension's database. Use this from the extension's load callback.
+ *
+ * The function turns a string into the sort key its comparisons are performed on: it must take exactly one VARCHAR
+ * argument and return VARCHAR or BLOB. Where a collated string is compared or sorted, the engine wraps it in a call to
+ * the function and compares the results. Per-collation configuration can live in the function's user data. An existing
+ * collation of the same name is kept. The scalar function must have been created through a factory of the same
+ * database. The caller still owns the handle after registration and must destroy it with
+ * `duckdb_v2_scalar_function_destroy()`, which does not affect the registered collation.
+ *
+ * `combinable` allows the collation to be combined with other collations on the same expression.
+ * `not_required_for_equality` lets the engine compare equality on the raw strings, skipping the function, which is only
+ * correct when equal strings always have equal sort keys and vice versa.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param extension The loading extension.
+ * @param name The name of the collation, as used in COLLATE.
+ * @param function The scalar function that computes the sort key.
+ * @param combinable Whether the collation can be combined with other collations.
+ * @param not_required_for_equality Whether equality comparisons can skip the collation.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_extension_register_collation(duckdb_v2_extension_handle extension,
+                                                                    const duckdb_v2_identifier_t *name,
+                                                                    duckdb_v2_scalar_function_handle function,
+                                                                    bool combinable, bool not_required_for_equality,
+                                                                    duckdb_v2_error_info_handle *err);
 #endif
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE

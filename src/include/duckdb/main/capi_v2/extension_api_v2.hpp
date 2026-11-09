@@ -1474,6 +1474,15 @@ typedef struct {
 	(duckdb_v2_sql_statement_handle statement, const duckdb_v2_identifier_t *name,
 	 duckdb_v2_column_data_collection_handle collection, const duckdb_v2_identifier_t *column_names, idx_t column_count,
 	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_connection_register_collation)
+	(duckdb_v2_connection_handle conn, const duckdb_v2_identifier_t *name, duckdb_v2_scalar_function_handle function,
+	 bool combinable, bool not_required_for_equality, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_context_get_transaction_start_timestamp)
+	(duckdb_v2_context_handle ctx, int64_t *out_micros, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_extension_register_collation)
+	(duckdb_v2_extension_handle extension, const duckdb_v2_identifier_t *name,
+	 duckdb_v2_scalar_function_handle function, bool combinable, bool not_required_for_equality,
+	 duckdb_v2_error_info_handle *err);
 } duckdb_ext_api_v2;
 
 //===--------------------------------------------------------------------===//
@@ -2155,6 +2164,9 @@ inline duckdb_ext_api_v2 CreateAPIv2(void) {
 	result.duckdb_v2_query_metrics_node_get_metric_value = duckdb_v2_query_metrics_node_get_metric_value;
 	result.duckdb_v2_query_metrics_node_get_name = duckdb_v2_query_metrics_node_get_name;
 	result.duckdb_v2_statement_add_collection = duckdb_v2_statement_add_collection;
+	result.duckdb_v2_connection_register_collation = duckdb_v2_connection_register_collation;
+	result.duckdb_v2_context_get_transaction_start_timestamp = duckdb_v2_context_get_transaction_start_timestamp;
+	result.duckdb_v2_extension_register_collation = duckdb_v2_extension_register_collation;
 	return result;
 }
 
