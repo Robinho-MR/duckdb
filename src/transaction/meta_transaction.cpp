@@ -3,6 +3,7 @@
 #include "duckdb/common/exception/transaction_exception.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/main/client_data.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/transaction/transaction_manager.hpp"
 #include "duckdb/catalog/catalog.hpp"
@@ -14,7 +15,7 @@ MetaTransaction::MetaTransaction(ClientContext &context_p, timestamp_t start_tim
                                  transaction_t transaction_id_p)
     : context(context_p), start_timestamp(start_timestamp_p), global_transaction_id(transaction_id_p),
       transaction_validity(*context_p.db), active_query(MAXIMUM_QUERY_ID), modified_database(nullptr),
-      is_read_only(false) {
+      is_read_only(false), temporary_objects(context_p.client_data->temporary_objects), finished(false) {
 }
 
 MetaTransaction::~MetaTransaction() = default;
@@ -193,12 +194,49 @@ void MetaTransaction::Rollback() {
 	}
 }
 
+void MetaTransaction::ShareAndLockForQuery(const string &snapshot_id_p) {
+	unique_lock<mutex> guard(shared_lock);
+	shared = true;
+	snapshot_id = snapshot_id_p;
+	query_locked = true;
+}
+
+bool MetaTransaction::IsShared() {
+	lock_guard<mutex> guard(shared_lock);
+	return shared;
+}
+
+string MetaTransaction::GetSnapshotId() {
+	lock_guard<mutex> guard(shared_lock);
+	return snapshot_id;
+}
+
+void MetaTransaction::LockForQuery() {
+	unique_lock<mutex> guard(shared_lock);
+	shared_cv.wait(guard, [&]() { return !query_locked; });
+	query_locked = true;
+}
+
+void MetaTransaction::UnlockForQuery() {
+	{
+		lock_guard<mutex> guard(shared_lock);
+		query_locked = false;
+	}
+	shared_cv.notify_one();
+}
+
 void MetaTransaction::Finalize() {
 	// Try to checkpoint any attached databases potentially still held by this transaction.
 	for (auto &database : referenced_databases) {
 		// If the use count is down to one, then we already detached the database.
 		// That means new transactions can no longer obtain a shared pointer to it.
 		AttachedDatabase::InvokeCloseIfLastReference(database.second, context);
+	}
+	if (IsShared()) {
+		// other connections may keep the finished transaction around until their next query
+		lock_guard<mutex> guard(referenced_database_lock);
+		referenced_databases.clear();
+		used_databases.clear();
 	}
 }
 

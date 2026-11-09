@@ -16,6 +16,7 @@
 #include "duckdb/transaction/duck_transaction_manager.hpp"
 #include "duckdb/common/enums/on_entry_not_found.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
+#include "duckdb/common/types/uuid.hpp"
 
 namespace duckdb {
 
@@ -62,7 +63,7 @@ optional_ptr<AttachedDatabase> DatabaseManager::GetDatabase(ClientContext &conte
 	lock_guard<mutex> guard(databases_lock);
 	shared_ptr<AttachedDatabase> db;
 	if (name == TEMP_CATALOG) {
-		db = context.client_data->temporary_objects;
+		db = meta_transaction.GetTemporaryObjectsPtr();
 	} else {
 		db = GetDatabaseInternal(guard, name);
 	}
@@ -577,7 +578,11 @@ vector<shared_ptr<AttachedDatabase>> DatabaseManager::GetDatabases(ClientContext
 		result.push_back(system);
 	}
 	if (!max_db_count.IsValid() || max_db_count.GetIndex() >= 2) {
-		result.push_back(context.client_data->temporary_objects);
+		if (context.transaction.HasActiveTransaction()) {
+			result.push_back(context.transaction.ActiveTransaction().GetTemporaryObjectsPtr());
+		} else {
+			result.push_back(context.client_data->temporary_objects);
+		}
 	}
 
 	return result;
@@ -605,6 +610,35 @@ void DatabaseManager::ResetDatabases() {
 Catalog &DatabaseManager::GetSystemCatalog() {
 	D_ASSERT(system);
 	return system->GetCatalog();
+}
+
+string DatabaseManager::ExportTransaction(const shared_ptr<MetaTransaction> &transaction) {
+	lock_guard<mutex> guard(exported_transactions_lock);
+	// drop the transactions that have ended
+	for (auto entry = exported_transactions.begin(); entry != exported_transactions.end();) {
+		if (entry->second.expired()) {
+			entry = exported_transactions.erase(entry);
+		} else {
+			++entry;
+		}
+	}
+	auto snapshot_id = UUID::ToString(UUID::GenerateRandomUUID());
+	exported_transactions[snapshot_id] = transaction;
+	return snapshot_id;
+}
+
+shared_ptr<MetaTransaction> DatabaseManager::GetExportedTransaction(const string &snapshot_id) {
+	lock_guard<mutex> guard(exported_transactions_lock);
+	auto entry = exported_transactions.find(snapshot_id);
+	if (entry == exported_transactions.end()) {
+		return nullptr;
+	}
+	return entry->second.lock();
+}
+
+void DatabaseManager::RemoveExportedTransaction(const string &snapshot_id) {
+	lock_guard<mutex> guard(exported_transactions_lock);
+	exported_transactions.erase(snapshot_id);
 }
 
 } // namespace duckdb

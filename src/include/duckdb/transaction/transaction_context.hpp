@@ -30,15 +30,14 @@ public:
 	~TransactionContext();
 
 	MetaTransaction &ActiveTransaction() {
-		if (!current_transaction) {
+		if (!HasActiveTransaction()) {
 			throw InternalException("TransactionContext::ActiveTransaction called without active transaction");
 		}
 		return *current_transaction;
 	}
 
-	bool HasActiveTransaction() const {
-		return current_transaction.get();
-	}
+	//! Whether there is a transaction that did not end yet (a shared transaction can be ended by another connection)
+	bool HasActiveTransaction() const;
 
 	void BeginTransaction();
 	void Commit();
@@ -52,6 +51,19 @@ public:
 	}
 
 	void SetReadOnly();
+
+	//! Exports the current transaction so that other connections can join it, returns its snapshot identifier
+	string ExportSnapshot();
+	//! Replaces the (still unused) current transaction by the exported transaction with the given identifier
+	void ImportSnapshot(const string &snapshot_id);
+	//! Called when a query starts: serializes with the other connections using the same shared transaction
+	void OnQueryBegin();
+	//! Called when a query ended
+	void OnQueryEnd();
+	//! Drops a shared transaction that was created by a different connection without ending it
+	bool DetachSharedTransaction();
+	//! Whether the current transaction is shared and was created by a different connection
+	bool IsJoinedTransaction() const;
 
 	idx_t GetActiveQuery();
 	void ResetActiveQuery();
@@ -74,8 +86,12 @@ private:
 	TransactionInvalidationPolicy invalidation_policy = TransactionInvalidationPolicy::STANDARD_POLICY;
 	bool auto_rollback = false;
 
-	unique_ptr<MetaTransaction> current_transaction;
+	shared_ptr<MetaTransaction> current_transaction;
+	//! The shared transaction on which this connection currently holds the query lock
+	shared_ptr<MetaTransaction> query_locked_transaction;
 	ErrorData autocheckpoint_error;
+
+	void EndSharedTransaction(MetaTransaction &transaction);
 
 	TransactionContext(const TransactionContext &) = delete;
 };

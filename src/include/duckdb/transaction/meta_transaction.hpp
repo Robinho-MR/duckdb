@@ -16,6 +16,10 @@
 #include "duckdb/common/error_data.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/main/attached_database.hpp"
+#include "duckdb/common/mutex.hpp"
+#include "duckdb/common/atomic.hpp"
+
+#include <condition_variable>
 
 namespace duckdb {
 class AttachedDatabase;
@@ -55,6 +59,30 @@ public:
 
 public:
 	DUCKDB_API static MetaTransaction &Get(ClientContext &context);
+	//! The temporary objects (temp catalog) the transaction operates on: those of the connection that created it
+	AttachedDatabase &GetTemporaryObjects() const {
+		return *temporary_objects;
+	}
+	const shared_ptr<AttachedDatabase> &GetTemporaryObjectsPtr() const {
+		return temporary_objects;
+	}
+
+	//! Marks the transaction as shared: it can be joined by other connections, which then serialize their queries
+	//! with the connection holding the query lock. The caller must be the connection that currently runs a query.
+	void ShareAndLockForQuery(const string &snapshot_id);
+	bool IsShared();
+	//! The identifier under which a shared transaction was exported (empty if not exported)
+	string GetSnapshotId();
+	//! Blocks until no other connection runs a query on this transaction, then claims the right to do so
+	void LockForQuery();
+	void UnlockForQuery();
+	//! Whether the transaction was committed or rolled back
+	bool IsFinished() const {
+		return finished;
+	}
+	void MarkFinished() {
+		finished = true;
+	}
 	timestamp_t GetCurrentTransactionStartTimestamp() const {
 		return start_timestamp;
 	}
@@ -104,6 +132,19 @@ private:
 	reference_map_t<AttachedDatabase, shared_ptr<AttachedDatabase>> referenced_databases;
 	//! Map of name -> database for databases that are in-use by this transaction.
 	identifier_map_t<reference<AttachedDatabase>> used_databases;
+	//! The temporary objects of the connection that created the transaction
+	shared_ptr<AttachedDatabase> temporary_objects;
+	//! Whether the transaction ended (committed or rolled back)
+	atomic<bool> finished;
+	//! Guards the shared state below
+	mutex shared_lock;
+	std::condition_variable shared_cv;
+	//! Whether the transaction is shared with other connections
+	bool shared = false;
+	//! Whether a connection currently runs a query on the (shared) transaction
+	bool query_locked = false;
+	//! The identifier the transaction was exported under
+	string snapshot_id;
 	//! Secrets that only live for the duration of this transaction.
 	unique_ptr<SecretStorage> transaction_secret_storage;
 };

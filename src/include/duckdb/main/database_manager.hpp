@@ -24,6 +24,7 @@ class CatalogEntryRetriever;
 class CatalogSet;
 class ClientContext;
 class DatabaseInstance;
+class MetaTransaction;
 class ResourceDeleter;
 class TaskScheduler;
 struct AttachOptions;
@@ -137,6 +138,12 @@ public:
 
 	shared_ptr<AttachedDatabase> GetDatabaseInternal(const lock_guard<mutex> &, const Identifier &name);
 
+	//! Registers a transaction under a new snapshot identifier so that other connections can join it
+	string ExportTransaction(const shared_ptr<MetaTransaction> &transaction);
+	//! Returns the exported transaction with the given identifier (null if there is none)
+	shared_ptr<MetaTransaction> GetExportedTransaction(const string &snapshot_id);
+	void RemoveExportedTransaction(const string &snapshot_id);
+
 private:
 	optional_ptr<AttachedDatabase> FinalizeAttach(ClientContext &context, AttachInfo &info,
 	                                              shared_ptr<AttachedDatabase> database);
@@ -159,6 +166,10 @@ private:
 	atomic<transaction_t> current_transaction_id;
 	//! Count of remote catalogs currently attached; used to skip the remote pushdown optimizer when zero
 	atomic<CheckedInteger<idx_t, InternalException>> remote_catalog_count;
+	//! Lock for exported_transactions
+	mutex exported_transactions_lock;
+	//! The transactions exported through pg_export_snapshot, by snapshot identifier
+	unordered_map<string, weak_ptr<MetaTransaction>> exported_transactions;
 	//! Lock for pending_teardowns
 	mutex pending_teardowns_lock;
 	//! External-resource teardowns queued from contexts that cannot run SQL (see AddPendingTeardown);

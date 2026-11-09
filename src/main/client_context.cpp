@@ -215,6 +215,14 @@ static unique_ptr<SQLStatement> WrapAsSelect(unique_ptr<TableRef> from_ref) {
 
 void ClientContext::Destroy() {
 	auto lock = LockContext();
+	// a transaction that belongs to another connection is left to that connection
+	if (!transaction.DetachSharedTransaction() && transaction.HasActiveTransaction()) {
+		try {
+			// wait for the other connections that use the transaction
+			transaction.OnQueryBegin();
+		} catch (...) { // NOLINT
+		}
+	}
 	if (transaction.HasActiveTransaction()) {
 		transaction.ResetActiveQuery();
 		if (!transaction.IsAutoCommit()) {
@@ -225,6 +233,7 @@ void ClientContext::Destroy() {
 			}
 		}
 	}
+	transaction.OnQueryEnd();
 	CleanupInternal(*lock);
 }
 
@@ -1262,6 +1271,9 @@ void ClientContext::RunTransactionStatementInternal(const TransactionInfo &info)
 		}
 		break;
 	}
+	case TransactionType::SET_SNAPSHOT:
+		transaction.ImportSnapshot(info.snapshot_id);
+		break;
 	case TransactionType::COMMIT:
 		if (transaction.IsAutoCommit()) {
 			throw TransactionException("cannot commit - no transaction is active");
