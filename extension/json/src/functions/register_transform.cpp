@@ -174,19 +174,26 @@ static LogicalType CastTargetType(Factory &factory, LogicalTypeId id) {
 		break;
 	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::LIST:
-	case LogicalTypeId::ARRAY:
 		params.emplace_back(std::move(any));
+		break;
+	case LogicalTypeId::ARRAY:
+		// An ARRAY of any size
+		params.emplace_back(std::move(any));
+		params.emplace_back(Value::Create(factory, static_cast<int64_t>(0)));
 		break;
 	case LogicalTypeId::MAP:
 		params.emplace_back(Value::Create(factory, factory.CreateType(LogicalTypeId::ANY)));
 		params.emplace_back(std::move(any));
 		break;
+	case LogicalTypeId::GEOMETRY:
+		return factory.ParseType("GEOMETRY");
 	default:
 		return factory.CreateType(id);
 	}
 	return factory.CreateType(id, params);
 }
 
+// There is no cast to VARIANT: the legacy registration for it never matched a VARIANT, which is cast by the engine
 static void RegisterTransformCasts(Extension &extension, Factory &factory) {
 	static const LogicalTypeId TARGETS[] = {LogicalTypeId::BOOLEAN,      LogicalTypeId::TINYINT,
 	                                        LogicalTypeId::SMALLINT,     LogicalTypeId::INTEGER,
@@ -206,7 +213,7 @@ static void RegisterTransformCasts(Extension &extension, Factory &factory) {
 	                                        LogicalTypeId::STRUCT,       LogicalTypeId::TUPLE,
 	                                        LogicalTypeId::LIST,         LogicalTypeId::MAP,
 	                                        LogicalTypeId::ENUM,         LogicalTypeId::UNION,
-	                                        LogicalTypeId::ARRAY,        LogicalTypeId::VARIANT};
+	                                        LogicalTypeId::ARRAY};
 	const auto json = JSONType(factory);
 	for (auto id : TARGETS) {
 		// Going from JSON to another type has the same cost as going from VARCHAR to that type. The implicit cast rules

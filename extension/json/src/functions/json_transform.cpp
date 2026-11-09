@@ -47,6 +47,15 @@ static inline yyjson_val *ResolveRaw(yyjson_val *val, yyjson_val &number) {
 	return val;
 }
 
+//! The error of a failed cast comes back rendered ("Conversion Error: ..."); the callers add their own prefix
+static string StripConversionPrefix(const string &message) {
+	static const string PREFIX = "Conversion Error: ";
+	if (message.compare(0, PREFIX.size(), PREFIX) == 0) {
+		return message.substr(PREFIX.size());
+	}
+	return message;
+}
+
 static LogicalType MakeType(JSONTransformOptions &options, LogicalTypeId id) {
 	return options.factory.CreateType(id);
 }
@@ -329,11 +338,13 @@ static bool TransformNumeric(yyjson_val *vals[], Vector &result, const idx_t cou
 		auto view = result.GetView();
 		for (idx_t i = 0; i < count; i++) {
 			if (!IsNullVal(vals[i]) && !view.IsValid(i)) {
+				// The message is the one of the last failing value, the index the one of the first
 				options.error_message = Format("Failed to cast value to %s: %s", decimal ? "decimal" : "numerical",
 				                               JSONCommon::ValToString(vals[i], 50));
-				options.object_index = i;
+				if (success) {
+					options.object_index = i;
+				}
 				success = false;
-				break;
 			}
 		}
 	}
@@ -390,7 +401,7 @@ static bool TransformFromString(yyjson_val *vals[], Vector &result, const idx_t 
 
 	string cast_error;
 	if (!string_vector.Get().TryCast(options.factory, result, &cast_error) && options.strict_cast) {
-		options.error_message = cast_error;
+		options.error_message = StripConversionPrefix(cast_error);
 		options.object_index = 0; // Can't get line number information here
 		options.error_message +=
 		    "\n If this error occurred during read_json, line/object number information is approximate";
@@ -550,7 +561,7 @@ static bool TransformToBlob(yyjson_val *vals[], yyjson_alc *alc, Vector &result,
 		auto view = decoded->Get().GetView();
 		for (idx_t i = 0; i < count; i++) {
 			if (strings[i] && !view.IsValid(i) && success && options.strict_cast) {
-				options.error_message = cast_error;
+				options.error_message = StripConversionPrefix(cast_error);
 				options.object_index = i;
 				success = false;
 			}
