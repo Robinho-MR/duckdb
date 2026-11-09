@@ -94,6 +94,8 @@ void TableFunctionFileReader::BindFunction(ClientContext &context, const TableFu
 	vector<Identifier> input_table_names;
 	TableFunctionRef empty_ref;
 	BoundTableFunction bound_function(function);
+	// the wrapped function may read its arguments from the call itself
+	bound_function.SetCallArguments(inputs, parameters);
 	TableFunctionBindInput bind_input(inputs, parameters, input_table_types, input_table_names,
 	                                  function.function_info.get(), nullptr, bound_function, empty_ref);
 	TableFunctionFileBindInput file_input;
@@ -933,8 +935,22 @@ TableFunction TableFunctionMultiFileWrapper::CreateFunction(TableFunction single
 	// forward the options and the pushdown capabilities of the wrapped function
 	auto &signature = result.GetSignature();
 	auto wrapped_options = single_file_function.GetSignature().GetTypedKwargs();
-	if (wrapped_options) {
-		signature.ExtendTypedKwargs([&](TypedKwargs &options) { options = options.Merge(*wrapped_options); });
+	// the keyword-only parameters of the wrapped function are options too
+	vector<pair<Identifier, LogicalType>> keyword_only;
+	for (auto &param : wrapped_signature.GetParameters()) {
+		if (param.GetKind() == FunctionParameterKind::KEYWORD_ONLY) {
+			keyword_only.emplace_back(param.GetName(), param.GetType());
+		}
+	}
+	if (wrapped_options || !keyword_only.empty()) {
+		signature.ExtendTypedKwargs([&](TypedKwargs &options) {
+			if (wrapped_options) {
+				options = options.Merge(*wrapped_options);
+			}
+			for (auto &entry : keyword_only) {
+				options.Add(entry.first, entry.second);
+			}
+		});
 	}
 	result.projection_pushdown = single_file_function.projection_pushdown;
 	result.filter_pushdown = single_file_function.filter_pushdown;
