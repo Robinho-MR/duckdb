@@ -145,6 +145,22 @@ idx_t BoundIndex::GetInMemorySize() const {
 }
 
 void BoundIndex::ExecuteExpressions(DataChunk &input, DataChunk &result) const {
+	// plain column indexes only need to reference the input columns
+	bool only_columns = true;
+	for (auto &expr : bound_expressions) {
+		if (expr->GetExpressionClass() != ExpressionClass::BOUND_REF) {
+			only_columns = false;
+			break;
+		}
+	}
+	if (only_columns) {
+		for (idx_t i = 0; i < bound_expressions.size(); i++) {
+			auto &ref = bound_expressions[i]->Cast<BoundReferenceExpression>();
+			result.data[i].Reference(input.data[ref.Index()]);
+		}
+		result.SetChildCardinality(input.size());
+		return;
+	}
 	// index expressions run outside of any client, so use a temporary one
 	ClientContext context(db.GetDatabase().shared_from_this());
 	ExpressionExecutor executor(context, bound_expressions);
