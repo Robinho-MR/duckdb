@@ -1,0 +1,167 @@
+#include "catch.hpp"
+#include "test_helpers.hpp"
+
+using namespace duckdb;
+
+#ifdef __linux__
+
+namespace {
+
+void CreateSnapshotDatabase(Connection &con) {
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE small AS SELECT range AS i FROM range(10)"));
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE big AS SELECT range AS i, range::VARCHAR || 'x' AS s FROM range(1000000)"));
+	REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
+}
+
+void VerifyBigTable(Connection &con, const string &prefix) {
+	auto result = con.Query("SELECT COUNT(*), SUM(i), SUM(LENGTH(s)) FROM " + prefix + "big");
+	REQUIRE_NO_FAIL(*result);
+	REQUIRE(CHECK_COLUMN(result, 0, {1000000}));
+	REQUIRE(CHECK_COLUMN(result, 1, {Value::HUGEINT(499999500000)}));
+	REQUIRE(CHECK_COLUMN(result, 2, {Value::HUGEINT(6888890)}));
+}
+
+idx_t FreeBlocks(Connection &con) {
+	auto result = con.Query("SELECT free_blocks FROM pragma_database_size() WHERE database_name = current_database()");
+	REQUIRE_NO_FAIL(*result);
+	return result->Collection().GetValue(0, 0).GetValue<idx_t>();
+}
+
+void ChurnBlocks(Connection &con) {
+	// free the blocks of "big" and write new data, which re-uses free blocks when allowed
+	REQUIRE_NO_FAIL(con.Query("DROP TABLE big"));
+	REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
+	for (idx_t i = 0; i < 3; i++) {
+		REQUIRE_NO_FAIL(con.Query("CREATE OR REPLACE TABLE churn AS SELECT range * 7 AS i, 'yyyyyyyyyy' || range AS s "
+		                          "FROM range(1000000)"));
+		REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
+	}
+}
+
+} // namespace
+
+TEST_CASE("Snapshot readers can attach while a writer is active", "[storage][snapshot]") {
+	auto path = TestCreatePath("snapshot_read.db");
+	DeleteDatabase(path);
+
+	DuckDB writer_db(path);
+	Connection writer(writer_db);
+	CreateSnapshotDatabase(writer);
+	// committed, but only in the WAL
+	REQUIRE_NO_FAIL(writer.Query("INSERT INTO small VALUES (100)"));
+
+	DuckDB reader_db(nullptr);
+	Connection reader(reader_db);
+	// a snapshot attach must be read-only
+	REQUIRE_FAIL(reader.Query("ATTACH '" + path + "' AS s (SNAPSHOT)"));
+	REQUIRE_NO_FAIL(reader.Query("ATTACH '" + path + "' AS s (READ_ONLY, SNAPSHOT)"));
+
+	// the snapshot contains the last checkpoint, but not the WAL
+	auto result = reader.Query("SELECT COUNT(*), MAX(i) FROM s.small");
+	REQUIRE(CHECK_COLUMN(result, 0, {10}));
+	REQUIRE(CHECK_COLUMN(result, 1, {9}));
+	VerifyBigTable(reader, "s.");
+	REQUIRE_FAIL(reader.Query("INSERT INTO s.small VALUES (1)"));
+
+	// the writer keeps working and checkpointing
+	REQUIRE_NO_FAIL(writer.Query("INSERT INTO small VALUES (101)"));
+	REQUIRE_NO_FAIL(writer.Query("CHECKPOINT"));
+	result = writer.Query("SELECT COUNT(*) FROM small");
+	REQUIRE(CHECK_COLUMN(result, 0, {12}));
+
+	// a new snapshot reader sees the new checkpoint
+	REQUIRE_NO_FAIL(reader.Query("ATTACH '" + path + "' AS s2 (READ_ONLY, SNAPSHOT)"));
+	result = reader.Query("SELECT COUNT(*) FROM s2.small");
+	REQUIRE(CHECK_COLUMN(result, 0, {12}));
+	result = reader.Query("SELECT COUNT(*) FROM s.small");
+	REQUIRE(CHECK_COLUMN(result, 0, {10}));
+}
+
+TEST_CASE("Writers do not re-use blocks of attached snapshot readers", "[storage][snapshot]") {
+	auto path = TestCreatePath("snapshot_reuse.db");
+	DeleteDatabase(path);
+
+	DuckDB writer_db(path);
+	Connection writer(writer_db);
+	CreateSnapshotDatabase(writer);
+	auto initial_free_blocks = FreeBlocks(writer);
+
+	DuckDB reader_db(nullptr);
+	Connection reader(reader_db);
+	REQUIRE_NO_FAIL(reader.Query("ATTACH '" + path + "' AS s (READ_ONLY, SNAPSHOT)"));
+
+	// the blocks of "big" are freed and other data is written, but the blocks are held for the reader
+	ChurnBlocks(writer);
+	REQUIRE(FreeBlocks(writer) <= initial_free_blocks);
+	// the reader only reads the data blocks of "big" now
+	VerifyBigTable(reader, "s.");
+
+	// once the reader is gone, the next checkpoint releases the blocks
+	REQUIRE_NO_FAIL(reader.Query("DETACH s"));
+	REQUIRE_NO_FAIL(writer.Query("INSERT INTO small VALUES (1)"));
+	REQUIRE_NO_FAIL(writer.Query("CHECKPOINT"));
+	REQUIRE(FreeBlocks(writer) > initial_free_blocks);
+	auto result = writer.Query("SELECT COUNT(*), SUM(i) FROM churn");
+	REQUIRE(CHECK_COLUMN(result, 0, {1000000}));
+	REQUIRE(CHECK_COLUMN(result, 1, {Value::HUGEINT(3499996500000)}));
+}
+
+TEST_CASE("A restarted writer does not re-use blocks of attached snapshot readers", "[storage][snapshot]") {
+	auto path = TestCreatePath("snapshot_restart.db");
+	DeleteDatabase(path);
+
+	auto writer_db = make_uniq<DuckDB>(path);
+	auto writer = make_uniq<Connection>(*writer_db);
+	CreateSnapshotDatabase(*writer);
+
+	DuckDB reader_db(nullptr);
+	Connection reader(reader_db);
+	REQUIRE_NO_FAIL(reader.Query("ATTACH '" + path + "' AS s (READ_ONLY, SNAPSHOT)"));
+
+	// the first writer frees the blocks of "big" and exits, a new writer then writes other data
+	REQUIRE_NO_FAIL(writer->Query("DROP TABLE big"));
+	REQUIRE_NO_FAIL(writer->Query("CHECKPOINT"));
+	writer.reset();
+	writer_db.reset();
+
+	writer_db = make_uniq<DuckDB>(path);
+	writer = make_uniq<Connection>(*writer_db);
+	REQUIRE(FreeBlocks(*writer) == 0);
+	for (idx_t i = 0; i < 3; i++) {
+		REQUIRE_NO_FAIL(writer->Query("CREATE OR REPLACE TABLE churn AS SELECT range * 7 AS i, 'yyyyyyyyyy' || range "
+		                              "AS s FROM range(1000000)"));
+		REQUIRE_NO_FAIL(writer->Query("CHECKPOINT"));
+	}
+	VerifyBigTable(reader, "s.");
+}
+
+TEST_CASE("Snapshot readers with a regular writer and reader", "[storage][snapshot]") {
+	auto path = TestCreatePath("snapshot_modes.db");
+	DeleteDatabase(path);
+	{
+		DuckDB db(path);
+		Connection con(db);
+		CreateSnapshotDatabase(con);
+	}
+
+	// snapshot readers can attach without a writer, also next to each other
+	DuckDB reader_db(nullptr);
+	Connection reader(reader_db);
+	REQUIRE_NO_FAIL(reader.Query("ATTACH '" + path + "' AS s1 (READ_ONLY, SNAPSHOT)"));
+	REQUIRE_NO_FAIL(reader.Query("ATTACH '" + path + "' AS s2 (READ_ONLY, SNAPSHOT TRUE)"));
+	VerifyBigTable(reader, "s1.");
+	VerifyBigTable(reader, "s2.");
+	REQUIRE_NO_FAIL(reader.Query("DETACH s2"));
+
+	// a writer can start while snapshot readers are attached
+	DuckDB writer_db(path);
+	Connection writer(writer_db);
+	REQUIRE_NO_FAIL(writer.Query("INSERT INTO small VALUES (100)"));
+	REQUIRE_NO_FAIL(writer.Query("CHECKPOINT"));
+	VerifyBigTable(reader, "s1.");
+
+	// SNAPSHOT FALSE is a regular attach
+	REQUIRE_NO_FAIL(reader.Query("ATTACH '" + path + ".other' AS other (SNAPSHOT FALSE)"));
+}
+
+#endif

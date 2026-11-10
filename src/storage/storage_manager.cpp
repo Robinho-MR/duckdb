@@ -144,6 +144,8 @@ void StorageOptions::Initialize(Context &context, unordered_map<string, Value> &
 				throw BinderException("MMAP_RESERVE_SIZE \"%s\" is out of range", entry.second.ToString());
 			}
 			mmap_reserve_size = reserve_size;
+		} else if (entry.first == "snapshot") {
+			snapshot = BooleanValue::Get(entry.second.CastAs(context, LogicalType::BOOLEAN));
 		} else {
 			throw BinderException("Unrecognized option for attach \"%s\"", entry.first);
 		}
@@ -436,6 +438,10 @@ void SingleFileStorageManager::LoadDatabase(QueryContext context) {
 
 	StorageManagerOptions options;
 	options.read_only = read_only;
+	if (storage_options.snapshot && !read_only) {
+		throw InvalidInputException("SNAPSHOT can only be used together with READ_ONLY");
+	}
+	options.snapshot = storage_options.snapshot;
 	// MMAP + encryption would corrupt the file (in-place decryption); demote to BUFFERED_IO.
 	auto resolved_io_mode = storage_options.io_mode ? *storage_options.io_mode : FileIOMode::BUFFERED_IO;
 	if (storage_options.encryption && resolved_io_mode == FileIOMode::MMAP) {
@@ -591,9 +597,11 @@ void SingleFileStorageManager::LoadDatabase(QueryContext context) {
 			timer = make_uniq<MetricsTimer>(profiler->StartTimer<MetricStorageAttachReplayWALLatency>());
 		}
 
-		// Replay the WAL.
+		// Replay the WAL. A snapshot reader only reads the last checkpoint: the WAL may be written concurrently.
 		wal_path = GetWALPath();
-		wal = WriteAheadLog::Replay(context, *this, wal_path);
+		if (!storage_options.snapshot) {
+			wal = WriteAheadLog::Replay(context, *this, wal_path);
+		}
 
 		// Timer will go out of scope here, if set.
 	}

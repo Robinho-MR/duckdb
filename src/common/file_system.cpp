@@ -68,6 +68,7 @@ const FileOpenFlags FileFlags::FILE_FLAGS_MULTI_CLIENT_ACCESS =
 const FileOpenFlags FileFlags::FILE_FLAGS_DISABLE_LOGGING = FileOpenFlags(FileOpenFlags::FILE_FLAGS_DISABLE_LOGGING);
 const FileOpenFlags FileFlags::FILE_FLAGS_ENABLE_EXTENSION_INSTALL =
     FileOpenFlags(FileOpenFlags::FILE_FLAGS_ENABLE_EXTENSION_INSTALL);
+const FileOpenFlags FileFlags::FILE_FLAGS_DATABASE_LOCK = FileOpenFlags(FileOpenFlags::FILE_FLAGS_DATABASE_LOCK);
 
 void FileOpenFlags::Verify() {
 #ifdef DEBUG
@@ -866,6 +867,22 @@ int64_t FileHandle::Read(QueryContext context, void *buffer, idx_t nr_bytes) {
 	}
 
 	return bytes_read;
+}
+
+bool FileHandle::SupportsRangeLocks() {
+	return false;
+}
+
+void FileHandle::LockRange(idx_t start, idx_t length, FileLockType type) {
+	throw NotImplementedException("Byte-range locks are not supported for file \"%s\"", path);
+}
+
+void FileHandle::UnlockRange(idx_t start, idx_t length) {
+	throw NotImplementedException("Byte-range locks are not supported for file \"%s\"", path);
+}
+
+bool FileHandle::RangeIsLocked(idx_t start, idx_t length) {
+	throw NotImplementedException("Byte-range locks are not supported for file \"%s\"", path);
 }
 
 bool FileHandle::Trim(idx_t offset_bytes, idx_t length_bytes) {

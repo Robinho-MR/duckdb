@@ -43,6 +43,8 @@ struct StorageOptions {
 	optional<FileIOMode> io_mode;
 	//! MMAP_RESERVE_SIZE attach option; empty uses the StorageManager default.
 	optional_idx mmap_reserve_size;
+	//! SNAPSHOT attach option: read the last checkpoint, also while a writer is active
+	bool snapshot = false;
 
 	//! Whether the database is encrypted
 	bool encryption = false;

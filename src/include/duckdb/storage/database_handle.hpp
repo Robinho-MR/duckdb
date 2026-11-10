@@ -40,6 +40,12 @@ struct DatabaseHandle {
 
 	FileHandle &GetFileHandle();
 
+	//! Whether the database file uses byte-range locks, so that snapshot readers can coexist with a writer
+	bool SupportsRangeLocks();
+	void LockRange(idx_t start, idx_t length, FileLockType type);
+	void UnlockRange(idx_t start, idx_t length);
+	bool RangeIsLocked(idx_t start, idx_t length);
+
 private:
 	//! Throws if a write at [required_size] would exceed the mmap reserve. No-op otherwise.
 	void EnsureMappedSize(idx_t required_size) const;

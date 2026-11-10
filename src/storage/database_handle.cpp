@@ -38,8 +38,13 @@ unique_ptr<DatabaseHandle> DatabaseHandle::OpenFile(QueryContext context, Attach
 	if (options.read_only) {
 		D_ASSERT(open_mode == DatabaseOpenMode::OPEN_EXISTING_FILE);
 		file_flags = FileFlags::FILE_FLAGS_READ | FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS | FileLockType::READ_LOCK;
+		if (options.snapshot) {
+			file_flags |= FileFlags::FILE_FLAGS_DATABASE_LOCK;
+		}
 	} else {
-		file_flags = FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_READ | FileLockType::WRITE_LOCK;
+		// the writer only locks the writer range, so that snapshot readers can attach while it is active
+		file_flags = FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_READ | FileLockType::WRITE_LOCK |
+		             FileFlags::FILE_FLAGS_DATABASE_LOCK;
 		if (open_mode == DatabaseOpenMode::CREATE_NEW_FILE) {
 			file_flags |= FileFlags::FILE_FLAGS_FILE_CREATE;
 		}
@@ -57,10 +62,16 @@ unique_ptr<DatabaseHandle> DatabaseHandle::OpenFile(QueryContext context, Attach
 		// this can only happen in read-only mode - as that is when we set FILE_FLAGS_NULL_IF_NOT_EXISTS
 		throw IOException("Cannot open database \"%s\" in read-only mode: database does not exist", path);
 	}
+	if (options.snapshot && !file_handle->SupportsRangeLocks()) {
+		throw NotImplementedException("Cannot open database \"%s\" in snapshot mode: the file system does not support "
+		                              "the required byte-range locks",
+		                              path);
+	}
 
 	auto result = make_uniq<DatabaseHandle>(std::move(file_handle));
-	// Adopt the prefetched header bytes (if any) to serve the initial header reads from memory.
-	if (options.prefetched.HasHeader()) {
+	// Adopt the prefetched header bytes (if any) to serve the initial header reads from memory. A snapshot reader
+	// must read the headers after taking its lock, so it does not use them.
+	if (options.prefetched.HasHeader() && !options.snapshot) {
 		result->prefetched_header = options.prefetched.header;
 	}
 	return result;
@@ -75,6 +86,9 @@ unique_ptr<DatabaseHandle> DatabaseHandle::OpenMemoryMap(QueryContext context, A
 	}
 	// Default reserve covers the bulk of analytical databases; users override via MMAP_RESERVE_SIZE.
 	static constexpr idx_t MMAP_DEFAULT_RESERVE_SIZE = idx_t(256) * 1024 * 1024 * 1024; // 256 GiB
+	if (options.snapshot) {
+		throw NotImplementedException("Snapshot mode is not supported with IO_MODE 'MMAP'");
+	}
 	MMapOptions mmap_options;
 	mmap_options.reserve_size =
 	    options.mmap_reserve_size.IsValid() ? options.mmap_reserve_size.GetIndex() : MMAP_DEFAULT_RESERVE_SIZE;
@@ -177,6 +191,26 @@ idx_t DatabaseHandle::GetFileSize() {
 
 FileHandle &DatabaseHandle::GetFileHandle() {
 	return *handle;
+}
+
+bool DatabaseHandle::SupportsRangeLocks() {
+	// in MMAP mode the database is locked as a whole
+	return handle && handle->SupportsRangeLocks();
+}
+
+void DatabaseHandle::LockRange(idx_t start, idx_t length, FileLockType type) {
+	D_ASSERT(handle);
+	handle->LockRange(start, length, type);
+}
+
+void DatabaseHandle::UnlockRange(idx_t start, idx_t length) {
+	D_ASSERT(handle);
+	handle->UnlockRange(start, length);
+}
+
+bool DatabaseHandle::RangeIsLocked(idx_t start, idx_t length) {
+	D_ASSERT(handle);
+	return handle->RangeIsLocked(start, length);
 }
 
 void DatabaseHandle::EnsureMappedSize(idx_t required_size) const {

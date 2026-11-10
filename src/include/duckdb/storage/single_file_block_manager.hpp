@@ -48,6 +48,8 @@ struct EncryptionOptions {
 
 struct StorageManagerOptions {
 	bool read_only = false;
+	//! Read the last checkpoint while a writer may be active (requires read_only)
+	bool snapshot = false;
 	FileIOMode io_mode = FileIOMode::BUFFERED_IO;
 	//! Reserve size for MMAP mode; empty uses the built-in default.
 	optional_idx mmap_reserve_size;
@@ -199,6 +201,8 @@ private:
 	void ReleaseFreeBlockInUse(unique_lock<mutex> &lock, block_id_t id);
 	//! Returns true, if the block is in the free list. Takes the lock (verification only).
 	bool BlockIsFreeListed(block_id_t block_id);
+	//! Whether snapshot readers might be reading an older checkpoint of the file
+	bool SnapshotReadersAttached();
 
 private:
 	AttachedDatabase &db;
@@ -222,6 +226,11 @@ private:
 	unordered_map<block_id_t, uint32_t> multi_use_blocks;
 	//! The list of blocks that are no longer in-use, but cannot be re-used until the next checkpoint
 	unordered_set<block_id_t> modified_blocks;
+	//! Blocks freed while snapshot readers were attached. These readers may still read them, so they are only
+	//! re-used after a checkpoint at which no reader is attached
+	set<block_id_t> reader_held_blocks;
+	//! Whether snapshot readers can attach while this writer is active
+	bool snapshot_readers_possible = false;
 	//! The current meta block id
 	idx_t meta_block;
 	//! The current maximum block id, this id will be given away first after the free_list runs out

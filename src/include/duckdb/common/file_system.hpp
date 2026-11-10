@@ -154,6 +154,14 @@ public:
 
 	DUCKDB_API void TryAddLogger(FileOpener &opener);
 
+	//! Whether this handle supports byte-range locks that conflict between handles, also within one process
+	DUCKDB_API virtual bool SupportsRangeLocks();
+	//! Lock [start, start + length), waiting until no conflicting lock is held
+	DUCKDB_API virtual void LockRange(idx_t start, idx_t length, FileLockType type);
+	DUCKDB_API virtual void UnlockRange(idx_t start, idx_t length);
+	//! Whether another handle holds a lock overlapping [start, start + length)
+	DUCKDB_API virtual bool RangeIsLocked(idx_t start, idx_t length);
+
 	//! Closes the file handle.
 	DUCKDB_API virtual void Close() = 0;
 
