@@ -25,5 +25,8 @@ void RegisterArithmeticFunctions(duckdb::cxx::Extension &extension, duckdb::cxx:
 void RegisterTruncBucketFunctions(duckdb::cxx::Extension &extension, duckdb::cxx::Factory &factory);
 void RegisterRangeFunctions(duckdb::cxx::Extension &extension, duckdb::cxx::Factory &factory);
 void RegisterStrptimeFunctions(duckdb::cxx::Extension &extension, duckdb::cxx::Factory &factory);
+//! Returns the offset (in seconds) when it fits a TIME WITH TIME ZONE, throws an out of range error otherwise
+int32_t CheckedTimeTZOffset(int64_t offset);
+void RegisterTimeZoneFunctions(duckdb::cxx::Extension &extension, duckdb::cxx::Factory &factory);
 
 } // namespace icu_stable

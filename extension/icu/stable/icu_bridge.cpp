@@ -4,9 +4,13 @@
 #include "collation_collator.hpp"
 #include "duckdb/common/error_data.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/types/date.hpp"
+#include "duckdb/common/types/time.hpp"
+#include "duckdb/common/types/timestamp.hpp"
 #include "timezone.hpp"
 
 #include <cstdio>
+#include <limits>
 #include <stdexcept>
 
 namespace icu_bridge {
@@ -224,33 +228,42 @@ static void CivilFromDays(int64_t days, int64_t &year, int32_t &month, int32_t &
 
 bool Calendar::FromLocal(int64_t local, int64_t &instant) {
 	auto &cal = *impl->calendar;
-	const auto days = FloorDiv(local, MICROS_PER_DAY);
-	const auto time_of_day = FloorMod(local, MICROS_PER_DAY);
-	int64_t year;
+	// Discard the fields (and the era) a previous conversion left behind
+	cal.SetTime(0);
+
+	duckdb::date_t local_date;
+	duckdb::dtime_t local_time;
+	duckdb::Timestamp::Convert(duckdb::timestamp_t(local), local_date, local_time);
+	int32_t year;
 	int32_t month;
 	int32_t day;
-	CivilFromDays(days, year, month, day);
-	if (year > INT32_MAX || year < INT32_MIN) {
-		return false;
-	}
-	const auto micros_of_second = time_of_day % 1000000;
-	const auto seconds = time_of_day / 1000000;
-	cal.Set(CAL_YEAR, static_cast<int32_t>(year));
+	duckdb::Date::Convert(local_date, year, month, day);
+	int32_t hour;
+	int32_t minute;
+	int32_t second;
+	int32_t fraction;
+	duckdb::Time::Convert(local_time, hour, minute, second, fraction);
+	const auto millis_of_second = fraction / static_cast<int32_t>(MICROS_PER_MILLI);
+	const auto micros = static_cast<int64_t>(fraction % MICROS_PER_MILLI);
+
+	cal.Set(CAL_YEAR, year);
 	cal.Set(CAL_MONTH, month - 1);
 	cal.Set(CAL_DATE, day);
-	cal.Set(CAL_HOUR_OF_DAY, static_cast<int32_t>(seconds / 3600));
-	cal.Set(CAL_MINUTE, static_cast<int32_t>(seconds / 60 % 60));
-	cal.Set(CAL_SECOND, static_cast<int32_t>(seconds % 60));
-	cal.Set(CAL_MILLISECOND, static_cast<int32_t>(micros_of_second / MICROS_PER_MILLI));
+	cal.Set(CAL_HOUR_OF_DAY, hour);
+	cal.Set(CAL_MINUTE, minute);
+	cal.Set(CAL_SECOND, second);
+	cal.Set(CAL_MILLISECOND, millis_of_second);
 	const auto millis = cal.GetTime();
 	if (cal.HasFailed()) {
 		return false;
 	}
-	int64_t scaled;
-	if (__builtin_mul_overflow(millis, MICROS_PER_MILLI, &scaled)) {
+	// The scaled milliseconds alone may be out of range for the smallest instants, the sum is not
+	const auto combined = static_cast<__int128>(millis) * MICROS_PER_MILLI + micros;
+	if (combined > std::numeric_limits<int64_t>::max() || combined < std::numeric_limits<int64_t>::min()) {
 		return false;
 	}
-	return !__builtin_add_overflow(scaled, micros_of_second % MICROS_PER_MILLI, &instant);
+	instant = static_cast<int64_t>(combined);
+	return true;
 }
 
 bool Calendar::GetPart(int64_t instant, Part part, int64_t &result) {

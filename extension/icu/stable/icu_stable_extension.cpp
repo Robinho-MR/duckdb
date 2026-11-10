@@ -55,25 +55,31 @@ void UpdateCalendar(cxx::CustomOption::UpdateInput &input) {
 	input.SetValue(cxx::Value::Create(input.GetContext().GetFactory(), cxx::varchar_t(calendar)));
 }
 
-void RegisterOptions(cxx::Extension &extension, cxx::Factory &factory) {
+void RegisterOptions(cxx::Extension &extension, cxx::Context &context) {
+	auto &factory = context.GetFactory();
 	const auto varchar = factory.ParseType("VARCHAR");
 
 	const auto host = icu_bridge::HostTimeZone();
-	auto time_zone = cxx::CustomOption::Create(factory);
-	time_zone.SetName("TimeZone")
-	    .SetType(varchar)
-	    .SetDescription("The current time zone")
-	    .SetDefaultValue(cxx::Value::Create(factory, cxx::varchar_t(host)))
-	    .SetUpdateCallback(UpdateTimeZone);
-	extension.Register(time_zone);
+	// A configuration that is reused for a new database (restart) already holds the options
+	if (!context.GetConfig().TryGetOption("TimeZone")) {
+		auto time_zone = cxx::CustomOption::Create(factory);
+		time_zone.SetName("TimeZone")
+		    .SetType(varchar)
+		    .SetDescription("The current time zone")
+		    .SetDefaultValue(cxx::Value::Create(factory, cxx::varchar_t(host)))
+		    .SetUpdateCallback(UpdateTimeZone);
+		extension.Register(time_zone);
+	}
 
-	auto calendar = cxx::CustomOption::Create(factory);
-	calendar.SetName("Calendar")
-	    .SetType(varchar)
-	    .SetDescription("The current calendar")
-	    .SetDefaultValue(cxx::Value::Create(factory, cxx::varchar_t(std::string("gregorian"))))
-	    .SetUpdateCallback(UpdateCalendar);
-	extension.Register(calendar);
+	if (!context.GetConfig().TryGetOption("Calendar")) {
+		auto calendar = cxx::CustomOption::Create(factory);
+		calendar.SetName("Calendar")
+		    .SetType(varchar)
+		    .SetDescription("The current calendar")
+		    .SetDefaultValue(cxx::Value::Create(factory, cxx::varchar_t(std::string("gregorian"))))
+		    .SetUpdateCallback(UpdateCalendar);
+		extension.Register(calendar);
+	}
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -282,180 +288,15 @@ void RegisterCollations(cxx::Extension &extension, cxx::Factory &factory) {
 }
 
 //----------------------------------------------------------------------------------------------------------------------
-// Casts between TIMESTAMP and TIMESTAMPTZ
+// Cast from TIMESTAMPTZ to VARCHAR
 //----------------------------------------------------------------------------------------------------------------------
-void CastFromNaive(cxx::CastFunction::ExecInput &input) {
-	auto &calendar = SettingsCalendar(ReadSettings(input.GetContext()));
-	const auto in = input.GetInput().GetView();
-	auto out = input.GetOutput();
-	auto *data = out.GetDataMutable<cxx::timestamp_tz_t>();
-	const auto try_mode = input.GetMode() == cxx::CastMode::TRY;
-	for (idx_t i = 0; i < input.GetRowCount(); i++) {
-		if (!in.IsValid(i)) {
-			out.SetNull(i);
-			continue;
-		}
-		const auto naive = in.Data<cxx::timestamp_t>()[in.SelAt(i)].micros;
-		if (!IsFinite(naive)) {
-			data[i].micros = naive;
-			continue;
-		}
-		int64_t instant;
-		if (!calendar.FromLocal(naive, instant)) {
-			if (!try_mode) {
-				ThrowConversion("ICU date overflows timestamp range");
-			}
-			out.SetNull(i);
-			continue;
-		}
-		data[i].micros = instant;
-	}
-}
-
-void CastToNaive(cxx::CastFunction::ExecInput &input) {
-	auto &context = input.GetContext();
-	auto disabled = context.GetConfig().TryGetOption("disable_timestamptz_casts");
-	if (disabled && !disabled->value.IsNull() && disabled->value.Get<bool>()) {
-		throw cxx::Exception(DUCKDB_V2_ERROR_INPUT_INVALID,
-		                     "Casting from TIMESTAMP WITH TIME ZONE to TIMESTAMP without an explicit time zone has "
-		                     "been disabled  - use \"AT TIME ZONE ...\"");
-	}
-	auto &calendar = SettingsCalendar(ReadSettings(context));
-	const auto in = input.GetInput().GetView();
-	auto out = input.GetOutput();
-	auto *data = out.GetDataMutable<cxx::timestamp_t>();
-	const auto try_mode = input.GetMode() == cxx::CastMode::TRY;
-	for (idx_t i = 0; i < input.GetRowCount(); i++) {
-		if (!in.IsValid(i)) {
-			out.SetNull(i);
-			continue;
-		}
-		const auto instant = in.Data<cxx::timestamp_tz_t>()[in.SelAt(i)].micros;
-		if (!IsFinite(instant)) {
-			data[i].micros = instant;
-			continue;
-		}
-		int64_t local;
-		if (!calendar.ToLocal(instant, local)) {
-			if (!try_mode) {
-				ThrowConversion("ICU date overflows timestamp range");
-			}
-			out.SetNull(i);
-			continue;
-		}
-		data[i].micros = local;
-	}
-}
-
-//! TIMESTAMPTZ -> VARCHAR renders the instant in the session's time zone
-void CastToVarchar(cxx::CastFunction::ExecInput &input) {
-	auto &calendar = SettingsCalendar(ReadSettings(input.GetContext()));
-	const auto in = input.GetInput().GetView();
-	auto out = input.GetOutput();
-	const auto try_mode = input.GetMode() == cxx::CastMode::TRY;
-	std::string text;
-	for (idx_t i = 0; i < input.GetRowCount(); i++) {
-		if (!in.IsValid(i)) {
-			out.SetNull(i);
-			continue;
-		}
-		const auto instant = in.Data<cxx::timestamp_tz_t>()[in.SelAt(i)].micros;
-		if (instant == std::numeric_limits<int64_t>::max()) {
-			out.AssignString(i, "infinity");
-		} else if (instant == -std::numeric_limits<int64_t>::max()) {
-			out.AssignString(i, "-infinity");
-		} else if (calendar.Format(instant, text)) {
-			out.AssignString(i, text);
-		} else if (try_mode) {
-			out.SetNull(i);
-		} else {
-			ThrowConversion("Unable to render the timestamp in the current time zone");
-		}
-	}
-}
-
 void RegisterCasts(cxx::Extension &extension, cxx::Factory &factory) {
-	const auto timestamp = factory.ParseType("TIMESTAMP");
 	const auto timestamp_tz = factory.ParseType("TIMESTAMP WITH TIME ZONE");
-
-	// The implicit cost is the one the engine gives TIMESTAMP -> TIMESTAMPTZ
-	auto from_naive = cxx::CastFunction::Create(factory);
-	from_naive.SetSourceType(timestamp)
-	    .SetTargetType(timestamp_tz)
-	    .SetImplicitCastCost(123)
-	    .SetExecCallback(CastFromNaive);
-	extension.Register(from_naive);
-
-	auto to_naive = cxx::CastFunction::Create(factory);
-	to_naive.SetSourceType(timestamp_tz).SetTargetType(timestamp).SetExecCallback(CastToNaive);
-	extension.Register(to_naive);
-
-	auto to_varchar = cxx::CastFunction::Create(factory);
-	to_varchar.SetSourceType(timestamp_tz).SetTargetType(factory.ParseType("VARCHAR")).SetExecCallback(CastToVarchar);
-	extension.Register(to_varchar);
 }
 
 //----------------------------------------------------------------------------------------------------------------------
 // Time zone conversion and current date and time
 //----------------------------------------------------------------------------------------------------------------------
-//! timezone(zone, timestamptz) -> timestamp: the wall clock of the instant in the zone
-void ZoneToNaiveExec(cxx::ScalarFunction::ExecInput &input) {
-	const auto settings = ReadSettings(input.GetContext());
-	const auto zone = input.GetArg(0).GetView();
-	const auto in = input.GetArg(1).GetView();
-	auto result = input.GetResult();
-	result.SetSize(input.GetRowCount());
-	auto *out = result.GetDataMutable<cxx::timestamp_t>();
-	for (idx_t i = 0; i < input.GetRowCount(); i++) {
-		if (!zone.IsValid(i) || !in.IsValid(i)) {
-			result.SetNull(i);
-			continue;
-		}
-		std::string error;
-		auto *calendar = ZoneCalendar(settings, std::string(zone.Data<cxx::varchar_t>()[zone.SelAt(i)].view()), error);
-		if (!calendar) {
-			throw cxx::Exception(DUCKDB_V2_ERROR_QUERY_NOT_IMPLEMENTED, error);
-		}
-		const auto instant = in.Data<cxx::timestamp_tz_t>()[in.SelAt(i)].micros;
-		if (!IsFinite(instant)) {
-			out[i].micros = instant;
-			continue;
-		}
-		if (!calendar->ToLocal(instant, out[i].micros)) {
-			ThrowConversion("ICU date overflows timestamp range");
-		}
-	}
-}
-
-//! timezone(zone, timestamp) -> timestamptz: the instant the wall clock shows in the zone
-void ZoneFromNaiveExec(cxx::ScalarFunction::ExecInput &input) {
-	const auto settings = ReadSettings(input.GetContext());
-	const auto zone = input.GetArg(0).GetView();
-	const auto in = input.GetArg(1).GetView();
-	auto result = input.GetResult();
-	result.SetSize(input.GetRowCount());
-	auto *out = result.GetDataMutable<cxx::timestamp_tz_t>();
-	for (idx_t i = 0; i < input.GetRowCount(); i++) {
-		if (!zone.IsValid(i) || !in.IsValid(i)) {
-			result.SetNull(i);
-			continue;
-		}
-		std::string error;
-		auto *calendar = ZoneCalendar(settings, std::string(zone.Data<cxx::varchar_t>()[zone.SelAt(i)].view()), error);
-		if (!calendar) {
-			throw cxx::Exception(DUCKDB_V2_ERROR_QUERY_NOT_IMPLEMENTED, error);
-		}
-		const auto naive = in.Data<cxx::timestamp_t>()[in.SelAt(i)].micros;
-		if (!IsFinite(naive)) {
-			out[i].micros = naive;
-			continue;
-		}
-		if (!calendar->FromLocal(naive, out[i].micros)) {
-			ThrowConversion("ICU date overflows timestamp range");
-		}
-	}
-}
-
 //! The date and the time of day (with the zone's offset) of the transaction start in the session's time zone
 void CurrentDateExec(cxx::ScalarFunction::ExecInput &input) {
 	auto &context = input.GetContext();
@@ -488,31 +329,15 @@ void CurrentTimeExec(cxx::ScalarFunction::ExecInput &input) {
 	if (time_of_day < 0) {
 		time_of_day += MICROS_PER_DAY;
 	}
-	if (offset < -cxx::dtime_tz_t::MAX_OFFSET || offset > cxx::dtime_tz_t::MAX_OFFSET) {
-		throw cxx::Exception(DUCKDB_V2_ERROR_INPUT_OUT_OF_RANGE, "Time zone offset is out of range");
-	}
+	const auto checked_offset = CheckedTimeTZOffset(offset);
 	auto result = input.GetResult();
 	auto *out = result.GetDataMutable<cxx::dtime_tz_t>();
 	for (idx_t i = 0; i < input.GetRowCount(); i++) {
-		out[i] = cxx::dtime_tz_t(time_of_day, static_cast<int32_t>(offset));
+		out[i] = cxx::dtime_tz_t(time_of_day, checked_offset);
 	}
 }
 
 void RegisterScalars(cxx::Extension &extension, cxx::Factory &factory) {
-	const auto varchar = factory.ParseType("VARCHAR");
-	const auto timestamp = factory.ParseType("TIMESTAMP");
-	const auto timestamp_tz = factory.ParseType("TIMESTAMP WITH TIME ZONE");
-
-	auto to_naive = cxx::ScalarFunction::Create(factory);
-	to_naive.SetName("timezone").SetExecCallback(ZoneToNaiveExec);
-	to_naive.GetSignature().AddParameter("zone", varchar).AddParameter("ts", timestamp_tz).SetReturnType(timestamp);
-	extension.Register(to_naive);
-
-	auto from_naive = cxx::ScalarFunction::Create(factory);
-	from_naive.SetName("timezone").SetExecCallback(ZoneFromNaiveExec);
-	from_naive.GetSignature().AddParameter("zone", varchar).AddParameter("ts", timestamp).SetReturnType(timestamp_tz);
-	extension.Register(from_naive);
-
 	for (const char *name : {"current_date", "today"}) {
 		auto current_date = cxx::ScalarFunction::Create(factory);
 		current_date.SetName(name)
@@ -534,7 +359,7 @@ void RegisterScalars(cxx::Extension &extension, cxx::Factory &factory) {
 
 DUCKDB_CPP_EXTENSION_ENTRYPOINT(cxx::Extension &extension, cxx::Context &context) {
 	auto &factory = context.GetFactory();
-	RegisterOptions(extension, factory);
+	RegisterOptions(extension, context);
 	RegisterTableFunctions(extension, factory);
 	RegisterCollations(extension, factory);
 	RegisterCasts(extension, factory);
@@ -544,4 +369,5 @@ DUCKDB_CPP_EXTENSION_ENTRYPOINT(cxx::Extension &extension, cxx::Context &context
 	RegisterTruncBucketFunctions(extension, factory);
 	RegisterRangeFunctions(extension, factory);
 	RegisterStrptimeFunctions(extension, factory);
+	RegisterTimeZoneFunctions(extension, factory);
 }
