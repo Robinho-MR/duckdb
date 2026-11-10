@@ -1,5 +1,35 @@
 module: scalar
 #-----------------------------------------------------------------------------------------------------------------------
+# Enums
+#-----------------------------------------------------------------------------------------------------------------------
+enums:
+  MONOTONICITY:
+    description: |
+      How the result of a scalar function changes with one of its arguments, with the other arguments held constant.
+      Declare it with `[[scalar_function_set_argument_monotonicity]]` or `[[scalar_function_bind_set_argument_monotonicity]]`;
+      the engine uses it to turn conditions on the result into conditions on the argument.
+    # The values match duckdb::Monotonicity
+    values:
+      MONOTONICITY_UNKNOWN:
+        value: 0
+        description: "Nothing is known (the default)."
+      MONOTONICITY_CONSTANT:
+        value: 1
+        description: "The result does not depend on the argument."
+      MONOTONICITY_NON_DECREASING:
+        value: 2
+        description: "A larger argument never gives a smaller result."
+      MONOTONICITY_STRICTLY_INCREASING:
+        value: 3
+        description: "A larger argument always gives a larger result."
+      MONOTONICITY_NON_INCREASING:
+        value: 4
+        description: "A larger argument never gives a larger result."
+      MONOTONICITY_STRICTLY_DECREASING:
+        value: 5
+        description: "A larger argument always gives a smaller result."
+
+#-----------------------------------------------------------------------------------------------------------------------
 # Handles
 #-----------------------------------------------------------------------------------------------------------------------
 handles:
@@ -125,7 +155,7 @@ callbacks:
         description: Borrowed opaque handle providing access to the information available to the callback.
       context:
         type: context
-        description: Borrowed handle to the context of the query currently executing the callback.
+        description: Borrowed handle to the context of the query currently executing the callback. Null when the function runs without a client context, for example while an index is built.
       err:
         type: error_info
         indirection: 1
@@ -139,7 +169,7 @@ callbacks:
         description: Borrowed opaque handle providing access to the information available to the callback.
       context:
         type: context
-        description: Borrowed handle to the context of the query currently executing the callback.
+        description: Borrowed handle to the context of the query currently executing the callback. Null when the function runs without a client context, for example while an index is built.
       err:
         type: error_info
         indirection: 1
@@ -321,6 +351,35 @@ functions:
       value:
         type: FUNCTION_PROPERTY_VALUE
         description: The value to set for the property. Must belong to `key`.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  scalar_function_set_argument_monotonicity:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Declares how the result of the function changes with one of its arguments.
+
+      The monotonicity is that of the function in the argument at `argument_index`, with the other arguments held
+      constant. Together with the `FUNCTION_PROPERTY_STATISTICS_PROPAGATION_FINITE_MONOTONE_BOUNDS` property (see
+      `[[scalar_function_set_property]]`) it lets the engine derive statistics of the result, and rewrite a filter on
+      the result into a filter on the argument. The index is the position of the parameter in the signature; an index
+      beyond the signature is rejected when the function is registered. A bind callback can override the declaration
+      for a call with `[[scalar_function_bind_set_argument_monotonicity]]`. Declaring it again for the same argument
+      replaces the earlier declaration.
+    parameters:
+      function:
+        type: scalar_function
+        description: The function to declare the monotonicity of.
+      argument_index:
+        type: idx
+        description: The position of the argument in the signature.
+      monotonicity:
+        type: MONOTONICITY
+        description: The monotonicity of the function in the argument.
       err:
         type: error_info
         indirection: 1
@@ -520,6 +579,59 @@ functions:
         description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
     return_type: ERROR
 
+  scalar_function_bind_set_stability:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Sets the stability of the call site being bound, overriding the stability set on the function.
+
+      Use it when the stability depends on the arguments, e.g. a function that is `CONSISTENT_WITHIN_QUERY` in
+      general but `CONSISTENT` for one constant argument, which makes the call usable in an index key. The value must be
+      one of the `DUCKDB_V2_FUNCTION_PROPERTY_STABILITY_*` entries of `[[FUNCTION_PROPERTY_VALUE]]`; any other value is
+      an error. It can be combined with `[[scalar_function_bind_set_bind_data]]`. It cannot be combined with
+      `[[scalar_function_bind_replace_call]]` (in either order): the replacement has its own stability, and using both
+      is an error.
+    parameters:
+      info:
+        type: scalar_function_bind_info
+        description: The bind info handle.
+      value:
+        type: FUNCTION_PROPERTY_VALUE
+        description: The stability to set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  scalar_function_bind_set_argument_monotonicity:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Overrides the monotonicity of the function in one argument for the call site being bound.
+
+      It replaces what `[[scalar_function_set_argument_monotonicity]]` declared for the argument; `MONOTONICITY_UNKNOWN`
+      clears it. Use it when the monotonicity depends on the arguments, e.g. on a constant part name. The index must
+      be below the number of arguments of the call, which is checked when the bind callback returns. It can be
+      combined with `[[scalar_function_bind_set_bind_data]]` and `[[scalar_function_bind_set_stability]]`. It cannot be
+      combined with `[[scalar_function_bind_replace_call]]` (in either order): the replacement has its own
+      properties, and using both is an error.
+    parameters:
+      info:
+        type: scalar_function_bind_info
+        description: The bind info handle.
+      argument_index:
+        type: idx
+        description: The position of the argument in the arguments of the call.
+      monotonicity:
+        type: MONOTONICITY
+        description: The monotonicity of the function in the argument for this call.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
   scalar_function_bind_replace_call:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-11-10" ]
@@ -533,8 +645,9 @@ functions:
       and callbacks. It replaces the function, the arguments and the bind data of the call site.
 
       This must be the only thing the bind callback does: using it together with `[[scalar_function_bind_set_bind_data]]`
-      is an error. The replacement must return the type the original call resolved to (set by the resolve types
-      callback or declared in the signature): the engine reports an error when it does not.
+      is an error. The return type of the replacement becomes the type of the call, whether or not it equals the
+      type the original function declared (in its signature or its resolve types callback). The declared type is
+      only used where the call is never bound, e.g. when a NULL argument folds the call before binding.
     parameters:
       info:
         type: scalar_function_bind_info

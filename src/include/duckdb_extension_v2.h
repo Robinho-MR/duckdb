@@ -1618,6 +1618,12 @@ typedef struct {
 	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_bind_replace_call)
 	(duckdb_v2_scalar_function_bind_info_handle info, const duckdb_v2_identifier_t *function_name,
 	 const idx_t *argument_indices, idx_t argument_count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_bind_set_argument_monotonicity)
+	(duckdb_v2_scalar_function_bind_info_handle info, idx_t argument_index, DUCKDB_V2_MONOTONICITY monotonicity,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_bind_set_stability)
+	(duckdb_v2_scalar_function_bind_info_handle info, DUCKDB_V2_FUNCTION_PROPERTY_VALUE value,
+	 duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_deserialize_get_data)
 	(duckdb_v2_scalar_function_deserialize_info_handle info, const void **data, idx_t *size,
 	 duckdb_v2_error_info_handle *err);
@@ -1631,6 +1637,9 @@ typedef struct {
 	(duckdb_v2_scalar_function_serialize_info_handle info, void **data, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_serialize_write)
 	(duckdb_v2_scalar_function_serialize_info_handle info, const void *data, idx_t size,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_set_argument_monotonicity)
+	(duckdb_v2_scalar_function_handle function, idx_t argument_index, DUCKDB_V2_MONOTONICITY monotonicity,
 	 duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_set_serialize_callbacks)
 	(duckdb_v2_scalar_function_handle function, duckdb_v2_scalar_function_serialize_callback_fn serialize_callback,
@@ -3700,6 +3709,13 @@ typedef struct {
 #define duckdb_v2_scalar_function_bind_replace_call duckdb_ext_api.duckdb_v2_scalar_function_bind_replace_call
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_scalar_function_bind_set_argument_monotonicity                                                       \
+	duckdb_ext_api.duckdb_v2_scalar_function_bind_set_argument_monotonicity
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_scalar_function_bind_set_stability duckdb_ext_api.duckdb_v2_scalar_function_bind_set_stability
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_scalar_function_deserialize_get_data duckdb_ext_api.duckdb_v2_scalar_function_deserialize_get_data
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
@@ -3720,6 +3736,10 @@ typedef struct {
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_scalar_function_serialize_write duckdb_ext_api.duckdb_v2_scalar_function_serialize_write
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_scalar_function_set_argument_monotonicity                                                            \
+	duckdb_ext_api.duckdb_v2_scalar_function_set_argument_monotonicity
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_scalar_function_set_serialize_callbacks                                                              \

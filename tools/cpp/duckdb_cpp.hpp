@@ -3593,6 +3593,31 @@ enum class FunctionFallibility : uint8_t {
 	FALLIBLE = 1,
 };
 
+/// How the statistics of the result of a scalar function are derived.
+enum class StatisticsPropagation : uint8_t {
+	/// No statistics are derived, unless a stats callback is set (default).
+	NONE = 0,
+	/// Derived from the finite bounds of the arguments through the declared argument monotonicity; an infinite
+	/// argument gives a NULL result. Cannot be combined with a stats callback.
+	FINITE_MONOTONE_BOUNDS = 1,
+};
+
+/// How the result of a scalar function changes with one argument, the other arguments held constant.
+enum class Monotonicity : uint8_t {
+	/// Nothing is known (default).
+	UNKNOWN = 0,
+	/// The result does not depend on the argument.
+	CONSTANT = 1,
+	/// A larger argument never gives a smaller result.
+	NON_DECREASING = 2,
+	/// A larger argument always gives a larger result.
+	STRICTLY_INCREASING = 3,
+	/// A larger argument never gives a larger result.
+	NON_INCREASING = 4,
+	/// A larger argument always gives a smaller result.
+	STRICTLY_DECREASING = 5,
+};
+
 /// How a function interacts with collations on its arguments.
 enum class FunctionCollationHandling : uint8_t {
 	/// Combines collations from its inputs and propagates them to its result (default).
@@ -3762,6 +3787,13 @@ public:
 	/// Whether the function can raise a runtime error. Defaults to `FALLIBLE`; declaring `INFALLIBLE` promises the
 	/// callbacks never throw.
 	auto SetFallibility(FunctionFallibility value) & -> ScalarFunction &;
+	/// How the statistics of the result are derived. Defaults to `NONE`; `FINITE_MONOTONE_BOUNDS` uses the
+	/// monotonicity set with `SetArgumentMonotonicity` and cannot be combined with a stats callback (rejected at
+	/// registration).
+	auto SetStatisticsPropagation(StatisticsPropagation value) & -> ScalarFunction &;
+	/// Declares how the result changes with the argument at `index` of the signature, the other arguments held
+	/// constant. An index beyond the signature is rejected at registration.
+	auto SetArgumentMonotonicity(idx_t index, Monotonicity value) & -> ScalarFunction &;
 	/// How the function interacts with collations on its arguments. Defaults to `PROPAGATE`.
 	auto SetCollationHandling(FunctionCollationHandling value) & -> ScalarFunction &;
 
@@ -3829,10 +3861,24 @@ public:
 		/// Replaces the call being bound by a call to the scalar function `function_name`, looked up in the schema of
 		/// the function being bound, with the overload picked by the argument types. The replacement takes the
 		/// arguments of the current call listed in `argument_indices`, in that order. It must be the only thing the
-		/// bind callback does (not combinable with `SetBindData`), and it must return the type the original call
-		/// resolved to.
-		/// @throws InvalidInputException When bind data was set, the call was replaced already, or an index is invalid.
+		/// bind callback does (not combinable with `SetBindData` or `SetStability`). The return type of the replacement
+		/// becomes the type of the call.
+		/// @throws InvalidInputException When bind data or the stability was set, the call was replaced already, or an
+		/// index is invalid.
 		void ReplaceCall(const std::string &function_name, const std::vector<idx_t> &argument_indices);
+
+		/// Sets the stability of the call being bound, overriding the stability set on the function; e.g. `CONSISTENT`
+		/// for the arguments that make the function deterministic, which lets the call appear in an index key. May be
+		/// combined with `SetBindData`, not with `ReplaceCall`.
+		/// @throws InvalidInputException When the call was replaced already.
+		void SetStability(FunctionStability value);
+
+		/// Overrides the monotonicity of the function in the argument at `index` of the call being bound; `UNKNOWN`
+		/// clears the declaration of `ScalarFunction::SetArgumentMonotonicity`. May be combined with `SetBindData` and
+		/// `SetStability`, not with `ReplaceCall`. An index beyond the arguments of the call is rejected when the
+		/// bind callback returns.
+		/// @throws InvalidInputException When the call was replaced already.
+		void SetArgumentMonotonicity(idx_t index, Monotonicity value);
 
 		/// The user data set via `ScalarFunction::SetUserData`.
 		/// @throws InvalidInputException When none was set.
@@ -3879,14 +3925,19 @@ public:
 		}
 
 		/// The context the function is initialized in. Borrowed, valid only for the callback duration.
+		/// @throws InvalidInputException When the function runs without a client context, e.g. while an index is built.
 		auto GetContext() -> Context &;
+		/// Whether the function runs with a client context.
+		auto HasContext() const -> bool;
 
 	private:
-		InitInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		InitInput(void *args, void *context)
+		    : args(args),
+		      context(context ? std::optional<Context>(detail::HandleFactory::Make<Context>(context)) : std::nullopt) {
 		}
 
 		void *args;
-		Context context;
+		std::optional<Context> context;
 
 		void SetInitDataInternal(void *data, void (*destructor)(void *));
 		void *GetBindDataInternal() const;
@@ -3939,14 +3990,19 @@ public:
 		auto GetResult() const -> Vector;
 
 		/// The execution context. Borrowed, valid only for the callback duration.
+		/// @throws InvalidInputException When the function runs without a client context, e.g. while an index is built.
 		auto GetContext() -> Context &;
+		/// Whether the function runs with a client context.
+		auto HasContext() const -> bool;
 
 	private:
-		ExecInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		ExecInput(void *args, void *context)
+		    : args(args),
+		      context(context ? std::optional<Context>(detail::HandleFactory::Make<Context>(context)) : std::nullopt) {
 		}
 
 		void *args;
-		Context context;
+		std::optional<Context> context;
 
 		void *GetBindDataInternal() const;
 		void *GetInitDataInternal() const;
@@ -6594,14 +6650,19 @@ public:
 		auto GetMode() const -> CastMode;
 
 		/// The execution context. Borrowed, valid only for the callback duration.
+		/// @throws InvalidInputException When the cast runs without a client context, e.g. while an index is built.
 		auto GetContext() -> Context &;
+		/// Whether the cast runs with a client context.
+		auto HasContext() const -> bool;
 
 	private:
-		ExecInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		ExecInput(void *args, void *context)
+		    : args(args),
+		      context(context ? std::optional<Context>(detail::HandleFactory::Make<Context>(context)) : std::nullopt) {
 		}
 
 		void *args;
-		Context context;
+		std::optional<Context> context;
 
 		void *GetUserDataInternal() const;
 		void *GetBindDataInternal() const;

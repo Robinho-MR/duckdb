@@ -3,6 +3,7 @@
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
 #include "duckdb/function/function_binder.hpp"
+#include "duckdb/optimizer/statistics_propagator.hpp"
 #include "duckdb/common/serializer/serializer.hpp"
 #include "duckdb/common/serializer/deserializer.hpp"
 #include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
@@ -61,6 +62,10 @@ public:
 	//! The bind data the callback set, or nullptr
 	shared_ptr<CV2UserData> out_bind_data;
 	//! Whether the callback replaced the call, and by what
+	//! The monotonicity overrides of the call, by argument index
+	vector<pair<idx_t, Monotonicity>> monotonicity;
+	bool has_stability = false;
+	FunctionStability stability = FunctionStability::CONSISTENT;
 	bool replace_call = false;
 	Identifier replace_name;
 	vector<idx_t> replace_arguments;
@@ -241,11 +246,6 @@ static auto ReplaceCall(BindScalarFunctionInput &input, const CV2BindInfo &resul
 		                            result_info.replace_name.GetIdentifierName(), bound_function.GetName());
 	}
 	auto &replaced = expression->Cast<BoundFunctionExpression>();
-	if (replaced.GetReturnType() != bound_function.GetReturnType()) {
-		throw InvalidInputException("The replacement %s of function %s returns %s, but the call resolved to return %s",
-		                            result_info.replace_name.GetIdentifierName(), bound_function.GetName(),
-		                            replaced.GetReturnType().ToString(), bound_function.GetReturnType().ToString());
-	}
 	bound_function = std::move(replaced.FunctionMutable());
 	arguments = std::move(replaced.GetChildrenMutable());
 	return std::move(replaced.BindInfoMutable());
@@ -277,6 +277,19 @@ static auto CV2ScalarBind(BindScalarFunctionInput &input) -> unique_ptr<Function
 	}
 	if (result_info.replace_call) {
 		return ReplaceCall(input, result_info);
+	}
+	if (result_info.has_stability) {
+		bound_function.SetStability(result_info.stability);
+	}
+	for (auto &entry : result_info.monotonicity) {
+		if (entry.first >= input.GetArguments().size()) {
+			throw InvalidInputException("Argument index %llu of the monotonicity of function %s is out of bounds: the "
+			                            "call has %llu arguments",
+			                            entry.first, bound_function.GetName(), input.GetArguments().size());
+		}
+		ArgProperties props;
+		props.monotonicity = entry.second;
+		bound_function.SetArgProperties(entry.first, props);
 	}
 
 	return result;
@@ -344,8 +357,12 @@ static auto CV2ScalarInit(ExpressionState &state, const BoundFunctionExpression 
 
 	CV2ErrorInfo err = {};
 	auto err_ptr = Convert(&err);
-	CV2CallbackContext callback_context(state.GetContext());
-	info.init_cb(Convert(&args), Convert(&callback_context), &err_ptr);
+	// Without a client context (e.g. while an index is built) the callback receives a NULL context
+	unique_ptr<CV2CallbackContext> callback_context;
+	if (state.HasContext()) {
+		callback_context = make_uniq<CV2CallbackContext>(state.GetContext());
+	}
+	info.init_cb(Convert(&args), Convert(callback_context.get()), &err_ptr);
 
 	unique_ptr<FunctionLocalState> result = nullptr;
 	if (args.out_init_data.ptr) {
@@ -388,8 +405,11 @@ static auto CV2ScalarExec(DataChunk &input, ExpressionState &state, Vector &resu
 	CV2ErrorInfo err = {};
 	auto err_ptr = Convert(&err);
 
-	CV2CallbackContext callback_context(state.GetContext());
-	info.exec_cb(Convert(&args), Convert(&callback_context), &err_ptr);
+	unique_ptr<CV2CallbackContext> callback_context;
+	if (state.HasContext()) {
+		callback_context = make_uniq<CV2CallbackContext>(state.GetContext());
+	}
+	info.exec_cb(Convert(&args), Convert(callback_context.get()), &err_ptr);
 
 	if (err.HasError()) {
 		err.ThrowAsException();
@@ -475,8 +495,24 @@ public:
 		if (info.init_cb) {
 			function.SetInitStateCallback(CV2ScalarInit);
 		}
+		if (info.stats_cb && finite_monotone_bounds) {
+			throw InvalidInputException("The finite monotone bounds statistics propagation cannot be combined with a "
+			                            "stats callback.");
+		}
 		if (info.stats_cb) {
 			function.SetStatisticsCallback(CV2ScalarStats);
+		} else if (finite_monotone_bounds) {
+			function.SetStatisticsCallback(StatisticsPropagator::PropagateFiniteMonotoneBounds);
+		}
+		for (auto &entry : monotonicity) {
+			if (entry.first >= signature.GetParameterCount()) {
+				throw InvalidInputException("Argument index %llu of the monotonicity is out of bounds: the signature "
+				                            "has %llu parameters.",
+				                            entry.first, signature.GetParameterCount());
+			}
+			ArgProperties props;
+			props.monotonicity = entry.second;
+			function.SetArgProperties(entry.first, props);
 		}
 		if (info.serialize_cb) {
 			function.SetSerializeCallback(CV2ScalarSerialize);
@@ -495,6 +531,9 @@ public:
 	CV2ScalarFunctionInfo info;
 	Identifier name;
 	FunctionProperties properties;
+	bool finite_monotone_bounds = false;
+	//! The declared monotonicity per argument index
+	vector<pair<idx_t, Monotonicity>> monotonicity;
 };
 
 static auto Convert(duckdb_v2_scalar_function_handle func) -> CV2ScalarFunction * {
@@ -562,7 +601,68 @@ DUCKDB_V2_ERROR duckdb_v2_scalar_function_set_property(duckdb_v2_scalar_function
                                                        DUCKDB_V2_FUNCTION_PROPERTY_VALUE value,
                                                        duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(function);
-	return WithErrorHandler(err, [&]() { SetScalarFunctionProperty(Convert(function)->properties, key, value); });
+	return WithErrorHandler(err, [&]() {
+		auto &self = *Convert(function);
+		if (!TrySetScalarStatisticsPropagation(key, value, self.finite_monotone_bounds)) {
+			SetScalarFunctionProperty(self.properties, key, value);
+		}
+	});
+}
+
+static auto ConvertMonotonicity(DUCKDB_V2_MONOTONICITY value) -> duckdb::Monotonicity {
+	switch (value) {
+	case DUCKDB_V2_MONOTONICITY_UNKNOWN:
+		return duckdb::Monotonicity::UNKNOWN;
+	case DUCKDB_V2_MONOTONICITY_CONSTANT:
+		return duckdb::Monotonicity::CONSTANT;
+	case DUCKDB_V2_MONOTONICITY_NON_DECREASING:
+		return duckdb::Monotonicity::NON_DECREASING;
+	case DUCKDB_V2_MONOTONICITY_STRICTLY_INCREASING:
+		return duckdb::Monotonicity::STRICTLY_INCREASING;
+	case DUCKDB_V2_MONOTONICITY_NON_INCREASING:
+		return duckdb::Monotonicity::NON_INCREASING;
+	case DUCKDB_V2_MONOTONICITY_STRICTLY_DECREASING:
+		return duckdb::Monotonicity::STRICTLY_DECREASING;
+	default:
+		throw duckdb::InvalidInputException("Unknown monotonicity %d", static_cast<int>(value));
+	}
+}
+
+//! Records the monotonicity of an argument, replacing an earlier one of the same argument
+static auto RecordMonotonicity(duckdb::vector<duckdb::pair<duckdb::idx_t, duckdb::Monotonicity>> &list,
+                               duckdb::idx_t index, duckdb::Monotonicity value) -> void {
+	for (auto &entry : list) {
+		if (entry.first == index) {
+			entry.second = value;
+			return;
+		}
+	}
+	list.emplace_back(index, value);
+}
+
+DUCKDB_V2_ERROR duckdb_v2_scalar_function_set_argument_monotonicity(duckdb_v2_scalar_function_handle function,
+                                                                    idx_t argument_index,
+                                                                    DUCKDB_V2_MONOTONICITY monotonicity,
+                                                                    duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() {
+		RecordMonotonicity(Convert(function)->monotonicity, argument_index, ConvertMonotonicity(monotonicity));
+	});
+}
+
+DUCKDB_V2_ERROR
+duckdb_v2_scalar_function_bind_set_argument_monotonicity(duckdb_v2_scalar_function_bind_info_handle info,
+                                                         idx_t argument_index, DUCKDB_V2_MONOTONICITY monotonicity,
+                                                         duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	return WithErrorHandler(err, [&]() {
+		auto &bind_info = *Convert(info);
+		if (bind_info.replace_call) {
+			throw duckdb::InvalidInputException("The argument monotonicity cannot be set after the call was replaced: "
+			                                    "the replacement has its own properties");
+		}
+		RecordMonotonicity(bind_info.monotonicity, argument_index, ConvertMonotonicity(monotonicity));
+	});
 }
 
 DUCKDB_V2_ERROR
@@ -647,9 +747,34 @@ DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_replace_call(duckdb_v2_scalar_fun
 		if (bind_info.replace_call) {
 			throw duckdb::InvalidInputException("The call can only be replaced once");
 		}
+		if (bind_info.has_stability) {
+			throw duckdb::InvalidInputException(
+			    "The call cannot be replaced after its stability was set: the replacement has its own stability");
+		}
+		if (!bind_info.monotonicity.empty()) {
+			throw duckdb::InvalidInputException("The call cannot be replaced after its argument monotonicity was set: "
+			                                    "the replacement has its own properties");
+		}
 		bind_info.replace_call = true;
 		bind_info.replace_name = duckdb::Identifier(ConvertIdentifierName(function_name));
 		bind_info.replace_arguments.assign(argument_indices, argument_indices + argument_count);
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_set_stability(duckdb_v2_scalar_function_bind_info_handle info,
+                                                             DUCKDB_V2_FUNCTION_PROPERTY_VALUE value,
+                                                             duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	return WithErrorHandler(err, [&]() {
+		auto &bind_info = *Convert(info);
+		if (bind_info.replace_call) {
+			throw duckdb::InvalidInputException(
+			    "The stability cannot be set after the call was replaced: the replacement has its own stability");
+		}
+		duckdb::FunctionProperties properties;
+		SetScalarFunctionProperty(properties, DUCKDB_V2_FUNCTION_PROPERTY_STABILITY, value);
+		bind_info.has_stability = true;
+		bind_info.stability = properties.stability;
 	});
 }
 

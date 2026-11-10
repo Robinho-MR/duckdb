@@ -464,4 +464,14 @@ TEST_CASE("V2 cast: null arguments and destroy null-safety", "[capi_v2][cast_fun
 	duckdb_v2_logical_type_destroy(&integer);
 }
 
+TEST_CASE("V2 cast: scalar-only properties are rejected", "[capi_v2][cast_function]") {
+	EnvFixture fx;
+	duckdb_v2_cast_function_handle function = nullptr;
+	REQUIRE(duckdb_v2_cast_function_create(fx.factory, &function, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_cast_function_set_property(function, DUCKDB_V2_FUNCTION_PROPERTY_STATISTICS_PROPAGATION,
+	                                             DUCKDB_V2_FUNCTION_PROPERTY_STATISTICS_PROPAGATION_NONE,
+	                                             nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	duckdb_v2_cast_function_destroy(&function);
+}
+
 } // namespace test_capi_v2

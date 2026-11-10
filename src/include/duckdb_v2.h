@@ -710,6 +710,12 @@ typedef enum DUCKDB_V2_FUNCTION_PROPERTY_KEY {
 	DUCKDB_V2_FUNCTION_PROPERTY_COLLATION_HANDLING = 66304,
 
 	/*!
+	 * Scalar only. How the statistics of the result are derived. Accepts the
+	 * `FUNCTION_PROPERTY_STATISTICS_PROPAGATION_*` values. Defaults to `NONE`.
+	 */
+	DUCKDB_V2_FUNCTION_PROPERTY_STATISTICS_PROPAGATION = 131072,
+
+	/*!
 	 * Aggregate only. Whether the aggregate's result depends on the order in which rows are aggregated. Accepts the
 	 * `FUNCTION_PROPERTY_AGG_ORDER_DEPENDENT_*` values. Defaults to `YES`.
 	 */
@@ -762,6 +768,16 @@ typedef enum DUCKDB_V2_FUNCTION_PROPERTY_VALUE {
 
 	//! Collations are ignored by the function.
 	DUCKDB_V2_FUNCTION_PROPERTY_COLLATION_HANDLING_IGNORE = 66306,
+
+	//! The engine derives no statistics of the result, unless a stats callback is set (default).
+	DUCKDB_V2_FUNCTION_PROPERTY_STATISTICS_PROPAGATION_NONE = 131072,
+
+	/*!
+	 * The statistics of the result are derived from the finite bounds of the arguments through the declared argument
+	 * monotonicity (see `duckdb_v2_scalar_function_set_argument_monotonicity()`); an infinite argument gives a NULL
+	 * result. It is an error to combine it with a stats callback.
+	 */
+	DUCKDB_V2_FUNCTION_PROPERTY_STATISTICS_PROPAGATION_FINITE_MONOTONE_BOUNDS = 131073,
 
 	//! The aggregate's result depends on the order in which rows are aggregated (default).
 	DUCKDB_V2_FUNCTION_PROPERTY_AGG_ORDER_DEPENDENT_YES = 196608,
@@ -10991,6 +11007,33 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_replacement_scan_destroy(duckdb_v2_replac
 
 /* --- Enums for scalar --- */
 
+/*!
+ * How the result of a scalar function changes with one of its arguments, with the other arguments held constant.
+ * Declare it with `duckdb_v2_scalar_function_set_argument_monotonicity()` or
+ * `duckdb_v2_scalar_function_bind_set_argument_monotonicity()`; the engine uses it to turn conditions on the result
+ * into conditions on the argument.
+ */
+typedef enum DUCKDB_V2_MONOTONICITY {
+	//! Nothing is known (the default).
+	DUCKDB_V2_MONOTONICITY_UNKNOWN = 0,
+
+	//! The result does not depend on the argument.
+	DUCKDB_V2_MONOTONICITY_CONSTANT = 1,
+
+	//! A larger argument never gives a smaller result.
+	DUCKDB_V2_MONOTONICITY_NON_DECREASING = 2,
+
+	//! A larger argument always gives a larger result.
+	DUCKDB_V2_MONOTONICITY_STRICTLY_INCREASING = 3,
+
+	//! A larger argument never gives a larger result.
+	DUCKDB_V2_MONOTONICITY_NON_INCREASING = 4,
+
+	//! A larger argument always gives a smaller result.
+	DUCKDB_V2_MONOTONICITY_STRICTLY_DECREASING = 5,
+	DUCKDB_V2_MONOTONICITY_MAX_ENUM = 0x7FFFFFFF,
+} DUCKDB_V2_MONOTONICITY;
+
 /* --- Struct forward declarations for scalar --- */
 
 /* --- Types for scalar --- */
@@ -11244,6 +11287,33 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_set_property(duckdb_v2_sc
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
+ * Declares how the result of the function changes with one of its arguments.
+ *
+ * The monotonicity is that of the function in the argument at `argument_index`, with the other arguments held constant.
+ * Together with the `FUNCTION_PROPERTY_STATISTICS_PROPAGATION_FINITE_MONOTONE_BOUNDS` property (see
+ * `duckdb_v2_scalar_function_set_property()`) it lets the engine derive statistics of the result, and rewrite a filter
+ * on the result into a filter on the argument. The index is the position of the parameter in the signature; an index
+ * beyond the signature is rejected when the function is registered. A bind callback can override the declaration for a
+ * call with `duckdb_v2_scalar_function_bind_set_argument_monotonicity()`. Declaring it again for the same argument
+ * replaces the earlier declaration.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to declare the monotonicity of.
+ * @param argument_index The position of the argument in the signature.
+ * @param monotonicity The monotonicity of the function in the argument.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_set_argument_monotonicity(
+    duckdb_v2_scalar_function_handle function, idx_t argument_index, DUCKDB_V2_MONOTONICITY monotonicity,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
  * Sets the optional resolve types callback of the scalar function.
  *
  * The resolve types callback is invoked during query planning for each call site of the function, before the arguments
@@ -11424,6 +11494,58 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_set_bind_data(
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
+ * Sets the stability of the call site being bound, overriding the stability set on the function.
+ *
+ * Use it when the stability depends on the arguments, e.g. a function that is `CONSISTENT_WITHIN_QUERY` in general but
+ * `CONSISTENT` for one constant argument, which makes the call usable in an index key. The value must be one of the
+ * `DUCKDB_V2_FUNCTION_PROPERTY_STABILITY_*` entries of `DUCKDB_V2_FUNCTION_PROPERTY_VALUE`; any other value is an
+ * error. It can be combined with `duckdb_v2_scalar_function_bind_set_bind_data()`. It cannot be combined with
+ * `duckdb_v2_scalar_function_bind_replace_call()` (in either order): the replacement has its own stability, and using
+ * both is an error.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind info handle.
+ * @param value The stability to set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR
+duckdb_v2_scalar_function_bind_set_stability(duckdb_v2_scalar_function_bind_info_handle info,
+                                             DUCKDB_V2_FUNCTION_PROPERTY_VALUE value, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Overrides the monotonicity of the function in one argument for the call site being bound.
+ *
+ * It replaces what `duckdb_v2_scalar_function_set_argument_monotonicity()` declared for the argument;
+ * `MONOTONICITY_UNKNOWN` clears it. Use it when the monotonicity depends on the arguments, e.g. on a constant part
+ * name. The index must be below the number of arguments of the call, which is checked when the bind callback returns.
+ * It can be combined with `duckdb_v2_scalar_function_bind_set_bind_data()` and
+ * `duckdb_v2_scalar_function_bind_set_stability()`. It cannot be combined with
+ * `duckdb_v2_scalar_function_bind_replace_call()` (in either order): the replacement has its own properties, and using
+ * both is an error.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind info handle.
+ * @param argument_index The position of the argument in the arguments of the call.
+ * @param monotonicity The monotonicity of the function in the argument for this call.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_set_argument_monotonicity(
+    duckdb_v2_scalar_function_bind_info_handle info, idx_t argument_index, DUCKDB_V2_MONOTONICITY monotonicity,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
  * Replaces the call site being bound by a call to another scalar function.
  *
  * The call becomes a call to the scalar function `function_name`, looked up in the schema of the function being bound;
@@ -11433,9 +11555,10 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_set_bind_data(
  * function, the arguments and the bind data of the call site.
  *
  * This must be the only thing the bind callback does: using it together with
- * `duckdb_v2_scalar_function_bind_set_bind_data()` is an error. The replacement must return the type the original call
- * resolved to (set by the resolve types callback or declared in the signature): the engine reports an error when it
- * does not.
+ * `duckdb_v2_scalar_function_bind_set_bind_data()` is an error. The return type of the replacement becomes the type of
+ * the call, whether or not it equals the type the original function declared (in its signature or its resolve types
+ * callback). The declared type is only used where the call is never bound, e.g. when a NULL argument folds the call
+ * before binding.
  *
  * history:
  * - unstable: v2.0.0

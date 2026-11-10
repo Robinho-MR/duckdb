@@ -3145,6 +3145,24 @@ auto ToCValue(FunctionStability value) -> DUCKDB_V2_FUNCTION_PROPERTY_VALUE {
 	return DUCKDB_V2_FUNCTION_PROPERTY_STABILITY_CONSISTENT;
 }
 
+auto ToCMonotonicity(Monotonicity value) -> DUCKDB_V2_MONOTONICITY {
+	switch (value) {
+	case Monotonicity::UNKNOWN:
+		return DUCKDB_V2_MONOTONICITY_UNKNOWN;
+	case Monotonicity::CONSTANT:
+		return DUCKDB_V2_MONOTONICITY_CONSTANT;
+	case Monotonicity::NON_DECREASING:
+		return DUCKDB_V2_MONOTONICITY_NON_DECREASING;
+	case Monotonicity::STRICTLY_INCREASING:
+		return DUCKDB_V2_MONOTONICITY_STRICTLY_INCREASING;
+	case Monotonicity::NON_INCREASING:
+		return DUCKDB_V2_MONOTONICITY_NON_INCREASING;
+	case Monotonicity::STRICTLY_DECREASING:
+		return DUCKDB_V2_MONOTONICITY_STRICTLY_DECREASING;
+	}
+	return DUCKDB_V2_MONOTONICITY_UNKNOWN;
+}
+
 auto ToCValue(FunctionNullHandling value) -> DUCKDB_V2_FUNCTION_PROPERTY_VALUE {
 	switch (value) {
 	case FunctionNullHandling::DEFAULT:
@@ -3500,6 +3518,20 @@ auto ScalarFunction::SetSerializeCallbacks(SerializeCallback serialize,
 	return *this;
 }
 
+auto ScalarFunction::SetStatisticsPropagation(StatisticsPropagation value) & -> ScalarFunction & {
+	const auto c_value = value == StatisticsPropagation::FINITE_MONOTONE_BOUNDS
+	                         ? DUCKDB_V2_FUNCTION_PROPERTY_STATISTICS_PROPAGATION_FINITE_MONOTONE_BOUNDS
+	                         : DUCKDB_V2_FUNCTION_PROPERTY_STATISTICS_PROPAGATION_NONE;
+	CheckedAPICall(duckdb_v2_scalar_function_set_property, handle(), DUCKDB_V2_FUNCTION_PROPERTY_STATISTICS_PROPAGATION,
+	               c_value);
+	return *this;
+}
+
+auto ScalarFunction::SetArgumentMonotonicity(idx_t index, Monotonicity value) & -> ScalarFunction & {
+	CheckedAPICall(duckdb_v2_scalar_function_set_argument_monotonicity, handle(), index, ToCMonotonicity(value));
+	return *this;
+}
+
 auto ScalarFunction::SetStability(FunctionStability value) & -> ScalarFunction & {
 	CheckedAPICall(duckdb_v2_scalar_function_set_property, handle(), DUCKDB_V2_FUNCTION_PROPERTY_STABILITY,
 	               ToCValue(value));
@@ -3557,6 +3589,16 @@ void ScalarFunction::BindInput::SetBindDataInternal(void *data, bool (*equals)(v
 void *ScalarFunction::BindInput::GetUserDataInternal() const {
 	const auto &function = *static_cast<const ScalarFunctionInfo *>(GetFunctionInfo());
 	return RequireUserData(function.user_data);
+}
+
+void ScalarFunction::BindInput::SetArgumentMonotonicity(idx_t index, Monotonicity value) {
+	CheckedAPICall(duckdb_v2_scalar_function_bind_set_argument_monotonicity,
+	               static_cast<duckdb_v2_scalar_function_bind_info_handle>(result), index, ToCMonotonicity(value));
+}
+
+void ScalarFunction::BindInput::SetStability(FunctionStability value) {
+	CheckedAPICall(duckdb_v2_scalar_function_bind_set_stability,
+	               static_cast<duckdb_v2_scalar_function_bind_info_handle>(result), ToCValue(value));
 }
 
 void ScalarFunction::BindInput::ReplaceCall(const std::string &function_name,
@@ -3640,7 +3682,14 @@ void *ScalarFunction::InitInput::GetUserDataInternal() const {
 }
 
 auto ScalarFunction::InitInput::GetContext() -> Context & {
-	return context;
+	if (!context) {
+		throw InvalidInputException("the function runs without a client context");
+	}
+	return *context;
+}
+
+auto ScalarFunction::InitInput::HasContext() const -> bool {
+	return context.has_value();
 }
 
 void *ScalarFunction::ExecInput::GetBindDataInternal() const {
@@ -3699,7 +3748,14 @@ auto ScalarFunction::ExecInput::GetResult() const -> Vector {
 }
 
 auto ScalarFunction::ExecInput::GetContext() -> Context & {
-	return context;
+	if (!context) {
+		throw InvalidInputException("the function runs without a client context");
+	}
+	return *context;
+}
+
+auto ScalarFunction::ExecInput::HasContext() const -> bool {
+	return context.has_value();
 }
 
 void *ScalarFunction::StatsInput::GetBindDataInternal() const {
@@ -6698,7 +6754,14 @@ auto CastFunction::ExecInput::GetMode() const -> CastMode {
 }
 
 auto CastFunction::ExecInput::GetContext() -> Context & {
-	return context;
+	if (!context) {
+		throw InvalidInputException("the cast runs without a client context");
+	}
+	return *context;
+}
+
+auto CastFunction::ExecInput::HasContext() const -> bool {
+	return context.has_value();
 }
 
 //----------------------------------------------------------------------------------------------------------------------

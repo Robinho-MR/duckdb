@@ -74,11 +74,10 @@ static auto Convert(CV2CastExecInfo *info) -> duckdb_v2_cast_function_exec_info_
 static auto CV2CastInitLocalState(CastLocalStateParameters &parameters) -> unique_ptr<FunctionLocalState> {
 	auto state = make_uniq<CV2CastLocalState>();
 
-	if (!parameters.context) {
-		throw InvalidInputException("Cannot initialize local state for extension cast function without a context");
+	// Without a client context (e.g. while an index is built) the exec callback receives a NULL context
+	if (parameters.context) {
+		state->context = make_uniq<CV2CallbackContext>(*parameters.context);
 	}
-
-	state->context = make_uniq<CV2CallbackContext>(*parameters.context);
 	return std::move(state);
 }
 
