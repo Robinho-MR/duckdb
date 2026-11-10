@@ -143,7 +143,7 @@ string ExtensionRepository::ToReadableString() {
 	return path;
 }
 
-unique_ptr<ExtensionInstallInfo> ExtensionInstallInfo::TryReadInfoFile(FileSystem &fs,
+unique_ptr<ExtensionInstallInfo> ExtensionInstallInfo::TryReadInfoFile(Context &context, FileSystem &fs,
                                                                        const std::string &info_file_path,
                                                                        const std::string &extension_name) {
 	unique_ptr<ExtensionInstallInfo> result;
@@ -155,7 +155,7 @@ unique_ptr<ExtensionInstallInfo> ExtensionInstallInfo::TryReadInfoFile(FileSyste
 		return make_uniq<ExtensionInstallInfo>();
 	}
 
-	BufferedFileReader file_reader(fs, info_file_path.c_str());
+	BufferedFileReader file_reader(fs, context, info_file_path.c_str());
 	if (!file_reader.Finished()) {
 		try {
 			result = BinaryDeserializer::Deserialize<ExtensionInstallInfo>(file_reader);

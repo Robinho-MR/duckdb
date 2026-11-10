@@ -308,7 +308,7 @@ void AttachedDatabase::Initialize(optional_ptr<ClientContext> context) {
 		catalog->Initialize(context, false);
 	}
 	if (storage) {
-		storage->Initialize(context);
+		storage->Initialize(context ? context->GetContext() : GetDatabase().GetServices());
 	}
 }
 
@@ -417,7 +417,7 @@ void AttachedDatabase::Close(const DatabaseCloseAction action) {
 			if (should_checkpoint) {
 				CheckpointOptions options;
 				options.wal_action = CheckpointWALAction::DELETE_WAL;
-				storage->CreateCheckpoint(QueryContext(), options);
+				storage->CreateCheckpoint(GetDatabase().GetServices(), options);
 			}
 		}
 	} catch (std::exception &ex) {

@@ -8,11 +8,10 @@
 
 namespace duckdb {
 
-BufferedFileReader::BufferedFileReader(FileSystem &fs, const char *path, FileLockType lock_type,
-                                       optional_ptr<FileOpener> opener)
+BufferedFileReader::BufferedFileReader(FileSystem &fs, Context &context, const char *path, FileLockType lock_type)
     : fs(fs), data(make_unsafe_uniq_array_uninitialized<data_t>(FILE_BUFFER_SIZE)), offset(0), read_data(0),
       total_read(0) {
-	handle = fs.OpenFile(path, FileFlags::FILE_FLAGS_READ | lock_type, opener.get());
+	handle = fs.OpenFile(context, path, FileFlags::FILE_FLAGS_READ | lock_type);
 	file_size = NumericCast<idx_t>(fs.GetFileSize(*handle));
 }
 
@@ -23,10 +22,6 @@ BufferedFileReader::BufferedFileReader(FileSystem &fs, unique_ptr<FileHandle> ha
 }
 
 void BufferedFileReader::ReadData(data_ptr_t target_buffer, uint64_t read_size) {
-	ReadData(QueryContext(), target_buffer, read_size);
-}
-
-void BufferedFileReader::ReadData(QueryContext context, data_ptr_t target_buffer, uint64_t read_size) {
 	// first copy anything we can from the buffer
 	data_ptr_t end_ptr = target_buffer + read_size;
 	while (true) {

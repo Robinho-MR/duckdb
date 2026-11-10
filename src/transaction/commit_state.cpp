@@ -66,7 +66,7 @@ bool CommitDropState::Empty() const {
 //===--------------------------------------------------------------------===//
 // IndexDataRemover
 //===--------------------------------------------------------------------===//
-IndexDataRemover::IndexDataRemover(DuckTransaction &transaction_p, QueryContext context, IndexRemovalType removal_type)
+IndexDataRemover::IndexDataRemover(DuckTransaction &transaction_p, Context &context, IndexRemovalType removal_type)
     : transaction(transaction_p), context(context), removal_type(removal_type) {
 }
 

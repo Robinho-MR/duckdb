@@ -26,8 +26,8 @@ class HTTPUtil;
 class HTTPRetryBudget;
 class HTTPTransportManager;
 class HTTPTransportManagerState;
-class FileOpener;
-struct FileOpenerInfo;
+class Context;
+struct FileLookupInfo;
 
 struct HTTPParams {
 	explicit HTTPParams(HTTPUtil &http_util) : http_util(http_util) {
@@ -65,7 +65,7 @@ struct HTTPParams {
 	shared_ptr<Logger> logger;
 
 public:
-	void Initialize(optional_ptr<FileOpener> opener);
+	void Initialize(Context &context);
 	DUCKDB_API idx_t GetTransportReuseDomain() const;
 
 	template <class TARGET>
@@ -386,8 +386,7 @@ public:
 
 	virtual unique_ptr<HTTPParams> InitializeParameters(DatabaseInstance &db, const string &path);
 	virtual unique_ptr<HTTPParams> InitializeParameters(ClientContext &context, const string &path);
-	virtual unique_ptr<HTTPParams> InitializeParameters(optional_ptr<FileOpener> opener,
-	                                                    optional_ptr<FileOpenerInfo> info);
+	virtual unique_ptr<HTTPParams> InitializeParameters(Context &context, optional_ptr<FileLookupInfo> info);
 
 	virtual unique_ptr<HTTPClient> InitializeClient(HTTPParams &http_params, const string &proto_host_port);
 	DUCKDB_API virtual unique_ptr<HTTPClient> InitializeClientExtended(HTTPParams &http_params,

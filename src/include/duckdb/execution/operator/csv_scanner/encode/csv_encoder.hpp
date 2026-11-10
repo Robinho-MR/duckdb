@@ -61,7 +61,7 @@ public:
 	string encoding_name;
 
 private:
-	QueryContext context;
+	Context &context;
 
 	//! The actual encoded buffer
 	CSVEncoderBuffer encoded_buffer;

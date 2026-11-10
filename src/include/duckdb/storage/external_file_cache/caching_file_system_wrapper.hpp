@@ -9,7 +9,6 @@
 #pragma once
 
 #include "duckdb/common/enable_shared_from_this_ipp.hpp"
-#include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/winapi.hpp"
 #include "duckdb/storage/external_file_cache/caching_file_system.hpp"
@@ -51,16 +50,14 @@ class CachingFileSystemWrapper : public FileSystem, public enable_shared_from_th
 public:
 	DUCKDB_API CachingFileSystemWrapper(FileSystem &file_system, DatabaseInstance &db,
 	                                    CachingMode mode = CachingMode::CACHE_REMOTE_ONLY);
-	DUCKDB_API CachingFileSystemWrapper(FileSystem &file_system, optional_ptr<FileOpener> file_opener,
+	DUCKDB_API CachingFileSystemWrapper(FileSystem &file_system, Context &context,
 	                                    CachingMode mode = CachingMode::CACHE_REMOTE_ONLY);
 	DUCKDB_API ~CachingFileSystemWrapper() override;
 
 	DUCKDB_API std::string GetName() const override;
 
-	DUCKDB_API unique_ptr<FileHandle> OpenFile(const string &path, FileOpenFlags flags,
-	                                           optional_ptr<FileOpener> opener = nullptr) override;
-	DUCKDB_API unique_ptr<FileHandle> OpenFile(const OpenFileInfo &path, FileOpenFlags flags,
-	                                           optional_ptr<FileOpener> opener = nullptr);
+	DUCKDB_API unique_ptr<FileHandle> OpenFile(Context &context, const string &path, FileOpenFlags flags) override;
+	DUCKDB_API unique_ptr<FileHandle> OpenFile(Context &context, const OpenFileInfo &path, FileOpenFlags flags);
 
 	DUCKDB_API void Read(FileHandle &handle, void *buffer, int64_t nr_bytes, idx_t location) override;
 	DUCKDB_API void Write(FileHandle &handle, void *buffer, int64_t nr_bytes, idx_t location) override;
@@ -73,35 +70,33 @@ public:
 	DUCKDB_API string GetVersionTag(FileHandle &handle) override;
 	DUCKDB_API FileType GetFileType(FileHandle &handle) override;
 	DUCKDB_API FileMetadata Stats(FileHandle &handle) override;
-	DUCKDB_API optional<FileMetadata> GetStatsIfExists(const OpenFileInfo &file,
-	                                                   optional_ptr<FileOpener> opener = nullptr) override;
+	DUCKDB_API optional<FileMetadata> GetStatsIfExists(Context &context, const OpenFileInfo &file) override;
 	DUCKDB_API void Truncate(FileHandle &handle, int64_t new_size) override;
 	DUCKDB_API void FileSync(FileHandle &handle) override;
 
-	DUCKDB_API bool DirectoryExists(const string &directory, optional_ptr<FileOpener> opener = nullptr) override;
-	DUCKDB_API void CreateDirectory(const string &directory, optional_ptr<FileOpener> opener = nullptr) override;
-	DUCKDB_API bool CreateDirectoryExtended(const string &directory, const CreateDirectoryOptions &options,
-	                                        optional_ptr<FileOpener> opener = nullptr) override;
-	DUCKDB_API void CreateDirectoriesRecursive(const string &path, optional_ptr<FileOpener> opener = nullptr) override;
-	DUCKDB_API void RemoveDirectory(const string &directory, optional_ptr<FileOpener> opener = nullptr) override;
-	DUCKDB_API bool RemoveDirectoryExtended(const string &directory, const RemoveDirectoryOptions &options,
-	                                        optional_ptr<FileOpener> opener = nullptr) override;
+	DUCKDB_API bool DirectoryExists(Context &context, const string &directory) override;
+	DUCKDB_API void CreateDirectory(Context &context, const string &directory) override;
+	DUCKDB_API bool CreateDirectoryExtended(Context &context, const string &directory,
+	                                        const CreateDirectoryOptions &options) override;
+	DUCKDB_API void CreateDirectoriesRecursive(Context &context, const string &path) override;
+	DUCKDB_API void RemoveDirectory(Context &context, const string &directory) override;
+	DUCKDB_API bool RemoveDirectoryExtended(Context &context, const string &directory,
+	                                        const RemoveDirectoryOptions &options) override;
 
-	DUCKDB_API bool ListFiles(const string &directory, const std::function<void(const string &, bool)> &callback,
-	                          FileOpener *opener = nullptr) override;
+	DUCKDB_API bool ListFiles(Context &context, const string &directory,
+	                          const std::function<void(const string &, bool)> &callback) override;
 
-	DUCKDB_API void MoveFile(const string &source, const string &target,
-	                         optional_ptr<FileOpener> opener = nullptr) override;
-	DUCKDB_API bool FileExists(const string &filename, optional_ptr<FileOpener> opener = nullptr) override;
-	DUCKDB_API bool IsPipe(const string &filename, optional_ptr<FileOpener> opener = nullptr) override;
-	DUCKDB_API void RemoveFile(const string &filename, optional_ptr<FileOpener> opener = nullptr) override;
-	DUCKDB_API bool TryRemoveFile(const string &filename, optional_ptr<FileOpener> opener = nullptr) override;
+	DUCKDB_API void MoveFile(Context &context, const string &source, const string &target) override;
+	DUCKDB_API bool FileExists(Context &context, const string &filename) override;
+	DUCKDB_API bool IsPipe(Context &context, const string &filename) override;
+	DUCKDB_API void RemoveFile(Context &context, const string &filename) override;
+	DUCKDB_API bool TryRemoveFile(Context &context, const string &filename) override;
 
 	DUCKDB_API string GetHomeDirectory() override;
 	DUCKDB_API string ExpandPath(const string &path) override;
 	DUCKDB_API string PathSeparator(const string &path) override;
 
-	DUCKDB_API vector<OpenFileInfo> Glob(const string &path, FileOpener *opener = nullptr) override;
+	DUCKDB_API vector<OpenFileInfo> Glob(Context &context, const string &path) override;
 
 	DUCKDB_API void RegisterSubSystem(unique_ptr<FileSystem> sub_fs) override;
 	DUCKDB_API void RegisterCompressionFilesystem(unique_ptr<CompressedFileSystem> fs) override;
@@ -118,7 +113,7 @@ public:
 	DUCKDB_API bool CanSeek() override;
 	DUCKDB_API bool OnDiskFile(FileHandle &handle) override;
 
-	DUCKDB_API unique_ptr<FileHandle> OpenCompressedFile(QueryContext context, unique_ptr<FileHandle> handle,
+	DUCKDB_API unique_ptr<FileHandle> OpenCompressedFile(Context &context, unique_ptr<FileHandle> handle,
 	                                                     bool write) override;
 
 	DUCKDB_API void SetDisabledFileSystems(const vector<string> &names) override;
@@ -126,11 +121,11 @@ public:
 	DUCKDB_API bool IsDisabledForPath(const string &path) override;
 
 protected:
-	DUCKDB_API unique_ptr<FileHandle> OpenFileExtended(const OpenFileInfo &path, FileOpenFlags flags,
-	                                                   optional_ptr<FileOpener> opener) override;
+	DUCKDB_API unique_ptr<FileHandle> OpenFileExtended(Context &context, const OpenFileInfo &path,
+	                                                   FileOpenFlags flags) override;
 	DUCKDB_API bool SupportsOpenFileExtended() const override;
-	DUCKDB_API bool ListFilesExtended(const string &directory, const std::function<void(OpenFileInfo &info)> &callback,
-	                                  optional_ptr<FileOpener> opener) override;
+	DUCKDB_API bool ListFilesExtended(Context &context, const string &directory,
+	                                  const std::function<void(OpenFileInfo &info)> &callback) override;
 	DUCKDB_API bool SupportsListFilesExtended() const override;
 
 private:

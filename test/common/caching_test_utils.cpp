@@ -1,3 +1,4 @@
+#include "test_helpers.hpp"
 #include "caching_test_utils.hpp"
 
 #include "duckdb/common/algorithm.hpp"
@@ -8,15 +9,19 @@ namespace duckdb {
 
 CachingTestFileGuard::CachingTestFileGuard(const string &filename, const string &content)
     : file_path(TestCreatePath(filename)) {
-	auto local_fs = FileSystem::CreateLocal();
-	auto handle = local_fs->OpenFile(file_path, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE);
-	handle->Write(QueryContext(), const_cast<char *>(content.data()), content.size(), 0);
+	DuckDB db(nullptr);
+	auto &context = db.instance->GetServices();
+	auto local_fs = TestCreateLocalFileSystem();
+	auto handle =
+	    local_fs->OpenFile(context, file_path, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE);
+	handle->Write(context, const_cast<char *>(content.data()), content.size(), 0);
 	handle->Sync();
 }
 
 CachingTestFileGuard::~CachingTestFileGuard() {
-	auto local_fs = FileSystem::CreateLocal();
-	local_fs->TryRemoveFile(file_path);
+	DuckDB db(nullptr);
+	auto local_fs = TestCreateLocalFileSystem();
+	local_fs->TryRemoveFile(db.instance->GetServices(), file_path);
 }
 
 const string &CachingTestFileGuard::GetPath() const {
@@ -47,12 +52,11 @@ FileMetadata SimpleTrackingFileSystem::Stats(FileHandle &handle) {
 	return metadata;
 }
 
-unique_ptr<FileHandle> SimpleTrackingFileSystem::OpenFile(const string &path, FileOpenFlags flags,
-                                                          optional_ptr<FileOpener> opener) {
+unique_ptr<FileHandle> SimpleTrackingFileSystem::OpenFile(Context &context, const string &path, FileOpenFlags flags) {
 	if (!StringUtil::StartsWith(path, CACHING_TEST_REMOTE_PREFIX)) {
-		return LocalFileSystem::OpenFile(path, flags, opener);
+		return LocalFileSystem::OpenFile(context, path, flags);
 	}
-	auto handle = LocalFileSystem::OpenFile(path.substr(CACHING_TEST_REMOTE_PREFIX.size()), flags, opener);
+	auto handle = LocalFileSystem::OpenFile(context, path.substr(CACHING_TEST_REMOTE_PREFIX.size()), flags);
 	handle->path = path;
 	return handle;
 }

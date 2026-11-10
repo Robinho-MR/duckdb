@@ -102,10 +102,9 @@ optional_ptr<ClientContext> ActiveCheckpointWrapper::GetCheckpointContext() cons
 	return checkpoint_context;
 }
 
-CheckpointWriter::CheckpointWriter(AttachedDatabase &db_p, QueryContext query_context,
+CheckpointWriter::CheckpointWriter(AttachedDatabase &db_p, Context &query_context,
                                    optional_ptr<ClientContext> client_context_p)
-    : db(db_p), owned_context(query_context.Valid() ? nullptr : db_p.GetDatabase().Services()),
-      context(query_context.Valid() ? *query_context.GetContext() : *owned_context), client_context(client_context_p) {
+    : db(db_p), context(query_context), client_context(client_context_p) {
 }
 
 CheckpointWriter::~CheckpointWriter() {
@@ -113,7 +112,7 @@ CheckpointWriter::~CheckpointWriter() {
 
 void ReorderTableEntries(catalog_entry_vector_t &tables);
 
-SingleFileCheckpointWriter::SingleFileCheckpointWriter(QueryContext context, AttachedDatabase &db,
+SingleFileCheckpointWriter::SingleFileCheckpointWriter(Context &context, AttachedDatabase &db,
                                                        BlockManager &block_manager, CheckpointOptions options_p,
                                                        optional_ptr<ClientContext> client_context)
     : CheckpointWriter(db, context, client_context),
@@ -348,7 +347,7 @@ void SingleFileCheckpointWriter::CreateCheckpoint() {
 	header.meta_block = meta_block.block_pointer;
 	header.block_alloc_size = block_manager.GetBlockAllocSize();
 	header.vector_size = STANDARD_VECTOR_SIZE;
-	block_manager.WriteHeader(QueryContext(GetContext()), header);
+	block_manager.WriteHeader(GetContext(), header);
 
 	auto debug_verify_blocks = Settings::Get<DebugVerifyBlocksSetting>(db.GetDatabase());
 	if (debug_verify_blocks) {
@@ -364,7 +363,7 @@ void SingleFileCheckpointWriter::CreateCheckpoint() {
 			}
 			auto &table = entry.Cast<DuckTableEntry>();
 			auto &storage = table.GetStorage();
-			auto segment_info = storage.GetColumnSegmentInfo(QueryContext(GetContext()));
+			auto segment_info = storage.GetColumnSegmentInfo(GetContext());
 			for (auto &segment : segment_info) {
 				verify_block_usage_count[segment.block_id]++;
 				if (StringUtil::Contains(segment.segment_info, "Overflow String Block Ids: ")) {
@@ -456,7 +455,7 @@ void SingleFileCheckpointReader::LoadFromStorage() {
 		auto metadata_blocks = metadata_manager.GetBlocks();
 		auto &buffer_manager = BufferManager::GetBufferManager(storage.GetDatabase());
 		// Database load happens before any query is running, so there is no query context to attribute to.
-		buffer_manager.Prefetch(QueryContext(), metadata_blocks);
+		buffer_manager.Prefetch(storage.GetDatabase().GetServices(), metadata_blocks);
 	}
 
 	// create the MetadataReader to read from the storage

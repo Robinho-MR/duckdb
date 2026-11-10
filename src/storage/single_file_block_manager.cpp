@@ -196,7 +196,7 @@ void MainHeader::Write(WriteStream &ser) {
 	SerializeTag(ser, canary_tag, encryption_enabled);
 }
 
-void MainHeader::CheckMagicBytes(QueryContext context, FileHandle &handle) {
+void MainHeader::CheckMagicBytes(Context &context, FileHandle &handle) {
 	data_t magic_bytes[MAGIC_BYTE_SIZE];
 	if (handle.GetFileSize() < MainHeader::MAGIC_BYTE_SIZE + MainHeader::MAGIC_BYTE_OFFSET) {
 		throw IOException("The file \"%s\" exists, but it is not a valid DuckDB database file!", handle.path);
@@ -524,7 +524,7 @@ void SingleFileBlockManager::CheckAndAddEncryptionKey(MainHeader &main_header) {
 	return CheckAndAddEncryptionKey(main_header, *options.encryption_options.user_key);
 }
 
-void SingleFileBlockManager::CreateNewDatabase(QueryContext context) {
+void SingleFileBlockManager::CreateNewDatabase(Context &context) {
 	auto encryption_enabled = options.encryption_options.encryption_enabled;
 	if (encryption_enabled) {
 		// Check if we can read/write the encrypted database
@@ -634,7 +634,7 @@ void SingleFileBlockManager::CreateNewDatabase(QueryContext context) {
 	max_block = 0;
 }
 
-void SingleFileBlockManager::LoadExistingDatabase(QueryContext context) {
+void SingleFileBlockManager::LoadExistingDatabase(Context &context) {
 	handle = DatabaseHandle::Open(context, db, path, options, DatabaseOpenMode::OPEN_EXISTING_FILE);
 	handle->CheckMagicBytes(context);
 
@@ -777,7 +777,7 @@ void SingleFileBlockManager::CheckChecksum(FileBuffer &block, uint64_t location,
 	}
 }
 
-void SingleFileBlockManager::ReadAndChecksum(QueryContext context, FileBuffer &block, uint64_t location,
+void SingleFileBlockManager::ReadAndChecksum(Context &context, FileBuffer &block, uint64_t location,
                                              bool skip_block_header) const {
 	// read the buffer from disk
 	handle->Read(context, block, location);
@@ -793,7 +793,7 @@ void SingleFileBlockManager::ReadAndChecksum(QueryContext context, FileBuffer &b
 	CheckChecksum(block, location, delta, skip_block_header);
 }
 
-void SingleFileBlockManager::ChecksumAndWrite(QueryContext context, FileBuffer &block, uint64_t location,
+void SingleFileBlockManager::ChecksumAndWrite(Context &context, FileBuffer &block, uint64_t location,
                                               bool skip_block_header) const {
 	auto delta = GetBlockHeaderSize() - Storage::DEFAULT_BLOCK_HEADER_SIZE;
 	uint64_t checksum;
@@ -873,7 +873,7 @@ void SingleFileBlockManager::Initialize(const DatabaseHeader &header, const opti
 	SetBlockAllocSize(header.block_alloc_size);
 }
 
-void SingleFileBlockManager::RewriteMainHeader(QueryContext &context, StorageVersion version_number) {
+void SingleFileBlockManager::RewriteMainHeader(Context &context, StorageVersion version_number) {
 	MainHeader main_header = ConstructMainHeader(version_number);
 	SerializeHeaderStructure<MainHeader>(main_header, header_buffer.GetDataMutable());
 	// now write the header to the file
@@ -883,7 +883,7 @@ void SingleFileBlockManager::RewriteMainHeader(QueryContext &context, StorageVer
 	handle->Sync();
 }
 
-void SingleFileBlockManager::LoadFreeList(QueryContext context) {
+void SingleFileBlockManager::LoadFreeList(Context &context) {
 	MetaBlockPointer free_pointer(free_list_id, 0);
 	if (!free_pointer.IsValid()) {
 		// no free list
@@ -1190,7 +1190,7 @@ void SingleFileBlockManager::ReadBlock(data_ptr_t internal_buffer, uint64_t bloc
 void SingleFileBlockManager::ReadBlock(Block &block, bool skip_block_header) const {
 	// read the buffer from disk
 	auto location = GetBlockLocation(block.id);
-	handle->Read(QueryContext(), block, location);
+	handle->Read(db.GetDatabase().GetServices(), block, location);
 
 	//! calculate delta header bytes (if any)
 	uint64_t delta = GetBlockHeaderSize() - Storage::DEFAULT_BLOCK_HEADER_SIZE;
@@ -1203,7 +1203,7 @@ void SingleFileBlockManager::ReadBlock(Block &block, bool skip_block_header) con
 	CheckChecksum(block, location, delta, skip_block_header);
 }
 
-void SingleFileBlockManager::Read(QueryContext context, Block &block) {
+void SingleFileBlockManager::Read(Context &context, Block &block) {
 	D_ASSERT(block.id >= 0);
 	D_ASSERT(!BlockIsFreeListed(block.id));
 	ReadAndChecksum(context, block, GetBlockLocation(block.id));
@@ -1214,7 +1214,7 @@ bool SingleFileBlockManager::BlockIsFreeListed(block_id_t block_id) {
 	return free_list.find(block_id) != free_list.end();
 }
 
-void SingleFileBlockManager::ReadBlocks(QueryContext context, FileBuffer &buffer, block_id_t start_block,
+void SingleFileBlockManager::ReadBlocks(Context &context, FileBuffer &buffer, block_id_t start_block,
                                         idx_t block_count) {
 	D_ASSERT(start_block >= 0);
 	D_ASSERT(block_count >= 1);
@@ -1232,10 +1232,10 @@ void SingleFileBlockManager::ReadBlocks(QueryContext context, FileBuffer &buffer
 }
 
 void SingleFileBlockManager::Write(FileBuffer &buffer, block_id_t block_id) {
-	Write(QueryContext(), buffer, block_id);
+	Write(db.GetDatabase().GetServices(), buffer, block_id);
 }
 
-void SingleFileBlockManager::Write(QueryContext context, FileBuffer &buffer, block_id_t block_id) {
+void SingleFileBlockManager::Write(Context &context, FileBuffer &buffer, block_id_t block_id) {
 	D_ASSERT(block_id >= 0);
 	ChecksumAndWrite(context, buffer, BLOCK_START + NumericCast<idx_t>(block_id) * GetBlockAllocSize());
 }
@@ -1338,7 +1338,7 @@ bool SingleFileBlockManager::AddFreeBlock(unique_lock<mutex> &lock, block_id_t b
 	lock.lock();
 	return false;
 }
-void SingleFileBlockManager::WriteHeader(QueryContext context, DatabaseHeader header) {
+void SingleFileBlockManager::WriteHeader(Context &context, DatabaseHeader header) {
 	auto free_list_blocks = GetFreeListBlocks();
 
 	// now handle the free list

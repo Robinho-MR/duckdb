@@ -91,14 +91,14 @@ static idx_t ParseMemoryLimitOrPercentage(const string &input, BASE &&get_base) 
 	return LossyNumericCast<idx_t>(result);
 }
 
-//! The available system memory. The config's filesystem is not set until the database starts, but
-//! options can be configured before that, so fall back to a temporary local filesystem.
-static idx_t GetAvailableSystemMemory(DBConfig &config) {
-	if (config.file_system) {
-		return DBConfig::GetSystemAvailableMemory(*config.file_system);
+//! The available system memory. Options can be configured before the database starts: without a database there is
+//! no Context to read the cgroup limits with, so only the physical memory is used.
+static idx_t GetAvailableSystemMemory(optional_ptr<DatabaseInstance> db) {
+	if (db) {
+		return DBConfig::GetSystemAvailableMemory(db->GetServices(), *db->config.file_system);
 	}
-	auto local_fs = FileSystem::CreateLocal();
-	return DBConfig::GetSystemAvailableMemory(*local_fs);
+	auto memory = FileSystem::GetAvailableMemory();
+	return memory.IsValid() ? memory.GetIndex() : DBConfigOptions().maximum_memory;
 }
 
 } // namespace
@@ -328,14 +328,14 @@ void AllowedDirectoriesSetting::SetGlobal(DatabaseInstance *db, DBConfig &config
 	if (!Settings::Get<EnableExternalAccessSetting>(config)) {
 		throw InvalidInputException("Cannot change allowed_directories when enable_external_access is disabled");
 	}
-	if (!config.file_system) {
+	if (!config.file_system || !db) {
 		throw InvalidInputException("Cannot change/set allowed_directories before the database is started");
 	}
 	vector<string> directories;
 	for (auto &val : ListValue::GetChildren(input)) {
 		directories.push_back(val.GetValue<string>());
 	}
-	config.SetAllowedDirectories(directories);
+	config.SetAllowedDirectories(*db->Services(), directories);
 }
 
 void AllowedDirectoriesSetting::ResetGlobal(DatabaseInstance *db, DBConfig &config) {
@@ -364,7 +364,7 @@ void AllowedPathsSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, cons
 	if (!Settings::Get<EnableExternalAccessSetting>(config)) {
 		throw InvalidInputException("Cannot change allowed_paths when enable_external_access is disabled");
 	}
-	if (!config.file_system) {
+	if (!config.file_system || !db) {
 		throw InvalidInputException("Cannot change/set allowed_paths before the database is started");
 	}
 
@@ -372,7 +372,7 @@ void AllowedPathsSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, cons
 	for (auto &val : ListValue::GetChildren(input)) {
 		paths.push_back(val.GetValue<string>());
 	}
-	config.SetAllowedPaths(paths);
+	config.SetAllowedPaths(*db->Services(), paths);
 }
 
 void AllowedPathsSetting::ResetGlobal(DatabaseInstance *db, DBConfig &config) {
@@ -762,20 +762,21 @@ void EnableExternalAccessSetting::OnSet(SettingCallbackInfo &info, Value &input)
 		throw InvalidInputException("Cannot enable external access while database is running");
 	}
 	auto &config = info.config;
+	auto services = info.db->Services();
 	if (info.db && Settings::Get<EnableExternalAccessSetting>(*info.db)) {
 		// we are turning off external access - add any already attached databases to the list of accepted paths
 		auto &db_manager = DatabaseManager::Get(*info.db);
 		auto attached_paths = db_manager.GetAttachedDatabasePaths();
 		for (auto &path : attached_paths) {
-			config.AddAllowedPath(path);
-			config.AddAllowedPath(path + ".wal");
-			config.AddAllowedPath(path + ".wal.checkpoint");
-			config.AddAllowedPath(path + ".wal.recovery");
+			config.AddAllowedPath(*services, path);
+			config.AddAllowedPath(*services, path + ".wal");
+			config.AddAllowedPath(*services, path + ".wal.checkpoint");
+			config.AddAllowedPath(*services, path + ".wal.recovery");
 		}
 	}
 	if (config.options.use_temporary_directory && !config.options.temporary_directory.empty()) {
 		// if temp directory is enabled we can also write there
-		config.AddAllowedDirectory(config.options.temporary_directory);
+		config.AddAllowedDirectory(*services, config.options.temporary_directory);
 	}
 }
 
@@ -1294,8 +1295,9 @@ void LogQueryPathSetting::OnSet(SettingCallbackInfo &info, Value &input) {
 		// empty path: clean up query writer
 		client_data.log_query_writer = nullptr;
 	} else {
-		client_data.log_query_writer = make_uniq<BufferedFileWriter>(FileSystem::GetFileSystem(*info.context), path,
-		                                                             BufferedFileWriter::DEFAULT_OPEN_FLAGS);
+		client_data.log_query_writer =
+		    make_uniq<BufferedFileWriter>(FileSystem::GetFileSystem(*info.context), info.context->GetContext(), path,
+		                                  BufferedFileWriter::DEFAULT_OPEN_FLAGS);
 	}
 }
 
@@ -1305,7 +1307,7 @@ void LogQueryPathSetting::OnSet(SettingCallbackInfo &info, Value &input) {
 void MaxMemorySetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
 	// a percentage is relative to the system memory, since resolving it against maximum_memory would be circular
 	auto maximum_memory =
-	    ParseMemoryLimitOrPercentage(input.ToString(), [&]() { return GetAvailableSystemMemory(config); });
+	    ParseMemoryLimitOrPercentage(input.ToString(), [&]() { return GetAvailableSystemMemory(db); });
 	if (db) {
 		BufferManager::GetBufferManager(*db).SetMemoryLimit(maximum_memory);
 	}
@@ -1314,7 +1316,7 @@ void MaxMemorySetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const V
 
 void MaxMemorySetting::ResetGlobal(DatabaseInstance *db, DBConfig &config) {
 	auto old_memory = config.options.maximum_memory;
-	config.SetDefaultMaxMemory();
+	config.SetDefaultMaxMemory(db);
 	auto new_memory = config.options.maximum_memory;
 	config.options.maximum_memory = old_memory;
 	if (db) {
@@ -1841,7 +1843,7 @@ void ThreadsSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Val
 }
 
 void ThreadsSetting::ResetGlobal(DatabaseInstance *db, DBConfig &config) {
-	idx_t new_maximum_threads = config.GetSystemMaxThreads(*config.file_system);
+	idx_t new_maximum_threads = config.GetSystemMaxThreads(db->GetServices(), *config.file_system);
 	if (db) {
 		TaskScheduler::GetScheduler(*db).SetThreads(new_maximum_threads, Settings::Get<ExternalThreadsSetting>(config));
 	}
@@ -1857,7 +1859,7 @@ static void ResizeAutomaticHTTPClientPool(optional_ptr<DatabaseInstance> db, DBC
 	if (!db || config.options.http_client_pool_capacity != DConstants::INVALID_INDEX) {
 		return;
 	}
-	config.GetHTTPTransportManager().SetCapacity(HTTPTransportManager::AutomaticCapacity(config));
+	config.GetHTTPTransportManager().SetCapacity(HTTPTransportManager::AutomaticCapacity(config, db->GetServices()));
 }
 
 //===----------------------------------------------------------------------===//
@@ -1880,7 +1882,7 @@ void AsyncThreadsSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, cons
 }
 
 void AsyncThreadsSetting::ResetGlobal(DatabaseInstance *db, DBConfig &config) {
-	idx_t new_async_threads = config.GetSystemMaxAsyncThreads(*config.file_system);
+	idx_t new_async_threads = config.GetSystemMaxAsyncThreads(db->GetServices(), *config.file_system);
 	if (db) {
 		TaskScheduler::GetScheduler(*db).SetAsyncThreads(new_async_threads);
 	}
@@ -1911,7 +1913,8 @@ void HTTPClientPoolCapacitySetting::SetGlobal(DatabaseInstance *db, DBConfig &co
 
 void HTTPClientPoolCapacitySetting::ResetGlobal(DatabaseInstance *db, DBConfig &config) {
 	if (db) {
-		config.GetHTTPTransportManager().SetCapacity(HTTPTransportManager::AutomaticCapacity(config));
+		config.GetHTTPTransportManager().SetCapacity(
+		    HTTPTransportManager::AutomaticCapacity(config, db->GetServices()));
 	}
 	config.options.http_client_pool_capacity = DConstants::INVALID_INDEX;
 }

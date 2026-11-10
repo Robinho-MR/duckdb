@@ -32,7 +32,7 @@ public:
 	//! Borrow the source pin and copy its bytes into the packing buffer.
 	BlockPointer Store(BlockPackable &packable, const BufferHandle &source, uint32_t byte_size);
 	//! Flush the block to disk and zero-initialize any tail free space.
-	void Flush(QueryContext context, PartialBlockType type);
+	void Flush(Context &context, PartialBlockType type);
 	//! Merge packables before either block has a persistent block ID.
 	void Merge(PartialBlock &other);
 	//! Remove all packables and the associated backing block.
@@ -172,7 +172,7 @@ BlockPointer PartialBlock::FinishStore(BlockPackable &packable, BufferHandle des
 	return block_ptr;
 }
 
-void PartialBlock::Flush(QueryContext context, PartialBlockType type) {
+void PartialBlock::Flush(Context &context, PartialBlockType type) {
 	if (!block_handle) {
 		throw InternalException("Flush called on partial block that was already flushed");
 	}
@@ -302,7 +302,7 @@ void PartialBlockManager::ClearBlocks() {
 
 void PartialBlockManager::FlushPartialBlocks() {
 	for (auto &e : partially_filled_blocks) {
-		e.second->Flush(GetQueryContext(), partial_block_type);
+		e.second->Flush(GetContext(), partial_block_type);
 	}
 	partially_filled_blocks.clear();
 }
@@ -365,18 +365,18 @@ void PartialBlockManager::RetainOrFlush(unique_ptr<PartialBlock> partial_block) 
 	auto available_space = partial_block->AvailableSpace();
 
 	if (partial_block->UseCount() >= max_use_count) {
-		partial_block->Flush(GetQueryContext(), partial_block_type);
+		partial_block->Flush(GetContext(), partial_block_type);
 		return;
 	}
 	if (available_space < min_reusable_space) {
-		partial_block->Flush(GetQueryContext(), partial_block_type);
+		partial_block->Flush(GetContext(), partial_block_type);
 		return;
 	}
 
 	partially_filled_blocks.insert(make_pair(partial_block->AvailableSpace(), std::move(partial_block)));
 
 	if (auto pruned_block = PruneFreeList()) {
-		pruned_block->Flush(GetQueryContext(), partial_block_type);
+		pruned_block->Flush(GetContext(), partial_block_type);
 	}
 }
 
@@ -416,8 +416,8 @@ BlockManager &PartialBlockManager::GetBlockManager() const {
 	return block_manager;
 }
 
-QueryContext PartialBlockManager::GetQueryContext() const {
-	return QueryContext(context);
+Context &PartialBlockManager::GetContext() const {
+	return context;
 }
 
 } // namespace duckdb

@@ -1,6 +1,5 @@
 #include "duckdb/execution/operator/persistent/physical_copy_to_file.hpp"
 
-#include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/path.hpp"
 #include "duckdb/common/optional.hpp"

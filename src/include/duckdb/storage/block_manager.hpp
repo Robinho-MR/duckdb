@@ -14,7 +14,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/unordered_map.hpp"
-#include "duckdb/common/query_context.hpp"
+#include "duckdb/main/context.hpp"
 #include "duckdb/storage/block.hpp"
 #include "duckdb/storage/storage_info.hpp"
 
@@ -69,19 +69,19 @@ public:
 	//! Get the first meta block id
 	virtual idx_t GetMetaBlock() = 0;
 	//! Read the content of the block from disk
-	virtual void Read(QueryContext context, Block &block) = 0;
+	virtual void Read(Context &context, Block &block) = 0;
 
 	//! Read the content of the block from disk
-	virtual void ReadBlocks(QueryContext context, FileBuffer &buffer, block_id_t start_block, idx_t block_count) = 0;
+	virtual void ReadBlocks(Context &context, FileBuffer &buffer, block_id_t start_block, idx_t block_count) = 0;
 	//! Writes the block to disk.
 	virtual void Write(FileBuffer &block, block_id_t block_id) = 0;
-	virtual void Write(QueryContext context, FileBuffer &block, block_id_t block_id);
+	virtual void Write(Context &context, FileBuffer &block, block_id_t block_id);
 	//! Writes the block to disk.
 	void Write(Block &block) {
 		Write(block, block.id);
 	}
 	//! Write the header; should be the final step of a checkpoint
-	virtual void WriteHeader(QueryContext context, DatabaseHeader header) = 0;
+	virtual void WriteHeader(Context &context, DatabaseHeader header) = 0;
 
 	//! Returns the number of total blocks
 	virtual idx_t TotalBlocks() = 0;
@@ -110,11 +110,11 @@ public:
 	//! This can only be safely used when there is no other (lingering) usage of old_block
 	//! If there is concurrent usage of the block elsewhere - use the THREAD_SAFE mode which creates an extra copy
 	//! Unless a tag is given, keep old_block's tag, except IN_MEMORY_TABLE becomes BASE_TABLE.
-	shared_ptr<BlockHandle> ConvertToPersistent(QueryContext context, block_id_t block_id,
+	shared_ptr<BlockHandle> ConvertToPersistent(Context &context, block_id_t block_id,
 	                                            shared_ptr<BlockHandle> old_block, BufferHandle old_handle,
 	                                            ConvertToPersistentMode mode = ConvertToPersistentMode::DESTRUCTIVE,
 	                                            optional<MemoryTag> tag = nullopt);
-	shared_ptr<BlockHandle> ConvertToPersistent(QueryContext context, block_id_t block_id,
+	shared_ptr<BlockHandle> ConvertToPersistent(Context &context, block_id_t block_id,
 	                                            shared_ptr<BlockHandle> old_block,
 	                                            ConvertToPersistentMode mode = ConvertToPersistentMode::DESTRUCTIVE,
 	                                            optional<MemoryTag> tag = nullopt);

@@ -32,9 +32,9 @@ data_ptr_t MemoryMappedFile::GetDataMutable(idx_t location, idx_t nr_bytes) {
 	return data + location;
 }
 
-unique_ptr<MemoryMappedFile> FileSystem::MemoryMapFile(const OpenFileInfo &path,
+unique_ptr<MemoryMappedFile> FileSystem::MemoryMapFile(Context &context, const OpenFileInfo &path,
                                                        FileOpenFlags flags, // NOLINT: signature fixed by virtual API
-                                                       const MMapOptions &options, optional_ptr<FileOpener> opener) {
+                                                       const MMapOptions &options) {
 	throw NotImplementedException("Memory-mapped file access is not supported by this file system (%s) for path \"%s\"",
 	                              GetName(), path.path);
 }

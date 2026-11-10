@@ -1,3 +1,4 @@
+#include "test_helpers.hpp"
 #include "catch.hpp"
 #include "caching_test_utils.hpp"
 #include "duckdb/common/mutex.hpp"
@@ -19,6 +20,12 @@ namespace duckdb {
 //===----------------------------------------------------------------------===//
 
 using TestFileGuard = CachingTestFileGuard;
+
+//! The database-wide Context used for the file system calls of the tests
+static Context &CfsTestContext() {
+	static DuckDB db(nullptr);
+	return db.instance->GetServices();
+}
 
 constexpr idx_t TEST_BUFFER_SIZE = 200;
 
@@ -116,11 +123,10 @@ public:
 		return "CountingFileSystem";
 	}
 
-	unique_ptr<FileHandle> OpenFile(const string &path, FileOpenFlags flags,
-	                                optional_ptr<FileOpener> opener = nullptr) override {
+	unique_ptr<FileHandle> OpenFile(Context &context, const string &path, FileOpenFlags flags) override {
 		const annotated_lock_guard<annotated_mutex> lock(mu);
 		open_count++;
-		return LocalFileSystem::OpenFile(path, flags, opener);
+		return LocalFileSystem::OpenFile(context, path, flags);
 	}
 
 	size_t GetOpenCount() const {
@@ -178,7 +184,7 @@ TEST_CASE("CachingFileSystemWrapper write operations not allowed", "[file_system
 	OpenFileInfo file_info(test_file.GetPath());
 	file_info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
 	file_info.extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
-	auto handle = caching_wrapper->OpenFile(file_info, FileFlags::FILE_FLAGS_READ);
+	auto handle = caching_wrapper->OpenFile(CfsTestContext(), file_info, FileFlags::FILE_FLAGS_READ);
 
 	// Test that write operations are not allowed - CachingFileSystemWrapper is read-only
 	const string write_data = "Attempted write data";
@@ -201,11 +207,11 @@ TEST_CASE("CachingFileSystemWrapper write operations not allowed", "[file_system
 	handle.reset();
 
 	// Test that opening file with write flags is rejected
-	REQUIRE_THROWS_AS(caching_wrapper->OpenFile(test_file.GetPath(), FileFlags::FILE_FLAGS_WRITE),
+	REQUIRE_THROWS_AS(caching_wrapper->OpenFile(CfsTestContext(), test_file.GetPath(), FileFlags::FILE_FLAGS_WRITE),
 	                  NotImplementedException);
-	REQUIRE_THROWS_AS(
-	    caching_wrapper->OpenFile(test_file.GetPath(), FileFlags::FILE_FLAGS_READ | FileFlags::FILE_FLAGS_WRITE),
-	    NotImplementedException);
+	REQUIRE_THROWS_AS(caching_wrapper->OpenFile(CfsTestContext(), test_file.GetPath(),
+	                                            FileFlags::FILE_FLAGS_READ | FileFlags::FILE_FLAGS_WRITE),
+	                  NotImplementedException);
 }
 
 TEST_CASE("CachingFileSystemWrapper caches reads", "[file_system][caching]") {
@@ -229,21 +235,21 @@ TEST_CASE("CachingFileSystemWrapper caches reads", "[file_system][caching]") {
 		file_info.extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
 
 		// First read
-		auto handle1 = caching_wrapper->OpenFile(file_info, FileFlags::FILE_FLAGS_READ);
+		auto handle1 = caching_wrapper->OpenFile(CfsTestContext(), file_info, FileFlags::FILE_FLAGS_READ);
 		string buffer1(TEST_BUFFER_SIZE, '\0');
-		handle1->Read(QueryContext(), &buffer1[0], test_content.size(), /*location=*/0);
+		handle1->Read(CfsTestContext(), &buffer1[0], test_content.size(), /*location=*/0);
 		handle1.reset();
 
 		// Second read of the same location
-		auto handle2 = caching_wrapper->OpenFile(file_info, FileFlags::FILE_FLAGS_READ);
+		auto handle2 = caching_wrapper->OpenFile(CfsTestContext(), file_info, FileFlags::FILE_FLAGS_READ);
 		string buffer2(TEST_BUFFER_SIZE, '\0');
-		handle2->Read(QueryContext(), &buffer2[0], test_content.size(), /*location=*/0);
+		handle2->Read(CfsTestContext(), &buffer2[0], test_content.size(), /*location=*/0);
 		handle2.reset();
 
 		// Third read of the same location
-		auto handle3 = caching_wrapper->OpenFile(file_info, FileFlags::FILE_FLAGS_READ);
+		auto handle3 = caching_wrapper->OpenFile(CfsTestContext(), file_info, FileFlags::FILE_FLAGS_READ);
 		string buffer3(TEST_BUFFER_SIZE, '\0');
-		handle3->Read(QueryContext(), &buffer3[0], test_content.size(), /*location=*/0);
+		handle3->Read(CfsTestContext(), &buffer3[0], test_content.size(), /*location=*/0);
 		handle3.reset();
 
 		// Verify content is correct
@@ -270,20 +276,20 @@ TEST_CASE("CachingFileSystemWrapper caches reads", "[file_system][caching]") {
 		file_info.extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
 
 		const idx_t chunk_size = 20;
-		auto handle1 = caching_wrapper->OpenFile(file_info, FileFlags::FILE_FLAGS_READ);
+		auto handle1 = caching_wrapper->OpenFile(CfsTestContext(), file_info, FileFlags::FILE_FLAGS_READ);
 		string buffer1(TEST_BUFFER_SIZE, '\0');
-		handle1->Read(QueryContext(), &buffer1[0], chunk_size, /*location=*/0);
+		handle1->Read(CfsTestContext(), &buffer1[0], chunk_size, /*location=*/0);
 		handle1.reset();
 
-		auto handle2 = caching_wrapper->OpenFile(file_info, FileFlags::FILE_FLAGS_READ);
+		auto handle2 = caching_wrapper->OpenFile(CfsTestContext(), file_info, FileFlags::FILE_FLAGS_READ);
 		string buffer2(TEST_BUFFER_SIZE, '\0');
-		handle2->Read(QueryContext(), &buffer2[0], chunk_size, chunk_size);
+		handle2->Read(CfsTestContext(), &buffer2[0], chunk_size, chunk_size);
 		handle2.reset();
 
 		// Read first chunk again - should use cache
-		auto handle3 = caching_wrapper->OpenFile(file_info, FileFlags::FILE_FLAGS_READ);
+		auto handle3 = caching_wrapper->OpenFile(CfsTestContext(), file_info, FileFlags::FILE_FLAGS_READ);
 		string buffer3(TEST_BUFFER_SIZE, '\0');
-		handle3->Read(QueryContext(), &buffer3[0], chunk_size, /*location=*/0);
+		handle3->Read(CfsTestContext(), &buffer3[0], chunk_size, /*location=*/0);
 		handle3.reset();
 
 		// With block-aligned caching, both 20-byte reads fall within block 0.
@@ -307,14 +313,14 @@ TEST_CASE("CachingFileSystemWrapper sequential reads", "[file_system][caching]")
 	{
 		tracking_fs_ptr->Clear();
 
-		auto handle = caching_wrapper->OpenFile(test_file.GetPath(), FileFlags::FILE_FLAGS_READ);
+		auto handle = caching_wrapper->OpenFile(CfsTestContext(), test_file.GetPath(), FileFlags::FILE_FLAGS_READ);
 		string buffer(TEST_BUFFER_SIZE, '\0');
 
 		// First read from position 0
-		handle->Read(QueryContext(), &buffer[0], /*nr_bytes=*/10, /*location=*/0);
+		handle->Read(CfsTestContext(), &buffer[0], /*nr_bytes=*/10, /*location=*/0);
 
 		// Second read from position 10
-		handle->Read(QueryContext(), &buffer[10], /*nr_bytes=*/10, /*location=*/10);
+		handle->Read(CfsTestContext(), &buffer[10], /*nr_bytes=*/10, /*location=*/10);
 
 		// Verify content
 		REQUIRE(buffer.substr(0, 20) == test_content.substr(0, 20));
@@ -337,12 +343,12 @@ TEST_CASE("CachingFileSystemWrapper seek operations", "[file_system][caching]") 
 	OpenFileInfo file_info(test_file.GetPath());
 	file_info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
 	file_info.extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
-	auto handle = caching_wrapper->OpenFile(file_info, FileFlags::FILE_FLAGS_READ);
+	auto handle = caching_wrapper->OpenFile(CfsTestContext(), file_info, FileFlags::FILE_FLAGS_READ);
 
 	string buffer(100, '\0');
 
 	// Test 1: Basic seek and read
-	handle->Read(QueryContext(), &buffer[0], /*nr_bytes=*/5, /*location=*/0);
+	handle->Read(CfsTestContext(), &buffer[0], /*nr_bytes=*/5, /*location=*/0);
 	REQUIRE(buffer.substr(0, 5) == "01234");
 
 	// Seek to position 10
@@ -350,7 +356,7 @@ TEST_CASE("CachingFileSystemWrapper seek operations", "[file_system][caching]") 
 	REQUIRE(caching_wrapper->SeekPosition(*handle) == 10);
 
 	// Read from position 10
-	handle->Read(QueryContext(), &buffer[0], /*nr_bytes=*/5, /*location=*/10);
+	handle->Read(CfsTestContext(), &buffer[0], /*nr_bytes=*/5, /*location=*/10);
 	REQUIRE(buffer.substr(0, 5) == "ABCDE");
 
 	// Seek to position 5
@@ -358,7 +364,7 @@ TEST_CASE("CachingFileSystemWrapper seek operations", "[file_system][caching]") 
 	REQUIRE(caching_wrapper->SeekPosition(*handle) == 5);
 
 	// Read from position 5
-	handle->Read(QueryContext(), &buffer[0], /*nr_bytes=*/5, /*location=*/5);
+	handle->Read(CfsTestContext(), &buffer[0], /*nr_bytes=*/5, /*location=*/5);
 	REQUIRE(buffer.substr(0, 5) == "56789");
 
 	// Test 2: Reset.
@@ -366,7 +372,7 @@ TEST_CASE("CachingFileSystemWrapper seek operations", "[file_system][caching]") 
 	REQUIRE(caching_wrapper->SeekPosition(*handle) == 0);
 
 	// Read from beginning again
-	handle->Read(QueryContext(), &buffer[0], /*nr_bytes=*/5, /*location=*/0);
+	handle->Read(CfsTestContext(), &buffer[0], /*nr_bytes=*/5, /*location=*/0);
 	REQUIRE(buffer.substr(0, 5) == "01234");
 
 	// Test 3: Multiple seek + get offset + read operations
@@ -383,20 +389,20 @@ TEST_CASE("CachingFileSystemWrapper seek operations", "[file_system][caching]") 
 	for (const auto &test : tests) {
 		caching_wrapper->Seek(*handle, test.seek_pos);
 		REQUIRE(caching_wrapper->SeekPosition(*handle) == test.seek_pos);
-		handle->Read(QueryContext(), &buffer[0], test.read_size, test.seek_pos);
+		handle->Read(CfsTestContext(), &buffer[0], test.read_size, test.seek_pos);
 		REQUIRE(buffer.substr(0, test.read_size) == test.expected);
 	}
 
 	// Test 4: Read after seek
 	caching_wrapper->Seek(*handle, 30);
 	REQUIRE(caching_wrapper->SeekPosition(*handle) == 30);
-	handle->Read(QueryContext(), &buffer[0], /*nr_bytes=*/6, /*location=*/30);
+	handle->Read(CfsTestContext(), &buffer[0], /*nr_bytes=*/6, /*location=*/30);
 	REQUIRE(buffer.substr(0, 6) == "UVWXYZ");
 
 	// Test 5: Seek back and verify position
 	caching_wrapper->Seek(*handle, 12);
 	REQUIRE(caching_wrapper->SeekPosition(*handle) == 12);
-	handle->Read(QueryContext(), &buffer[0], /*nr_bytes=*/3, /*location=*/12);
+	handle->Read(CfsTestContext(), &buffer[0], /*nr_bytes=*/3, /*location=*/12);
 	REQUIRE(buffer.substr(0, 3) == "CDE");
 
 	handle.reset();
@@ -411,8 +417,8 @@ TEST_CASE("CachingFileSystemWrapper list operations", "[file_system][caching]") 
 
 	// Create a test directory
 	auto test_dir = TestCreatePath("test_list_dir");
-	auto local_fs = FileSystem::CreateLocal();
-	local_fs->CreateDirectory(test_dir);
+	auto local_fs = TestCreateLocalFileSystem();
+	local_fs->CreateDirectory(CfsTestContext(), test_dir);
 
 	// Create several test files in the directory.
 	vector<string> expected_files = {"file1.txt", "file2.txt", "file3.txt", "file4.txt"};
@@ -420,16 +426,17 @@ TEST_CASE("CachingFileSystemWrapper list operations", "[file_system][caching]") 
 	for (const auto &filename : expected_files) {
 		auto file_path = local_fs->JoinPath(test_dir, filename);
 		file_paths.push_back(file_path);
-		auto handle = local_fs->OpenFile(file_path, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE);
+		auto handle = local_fs->OpenFile(CfsTestContext(), file_path,
+		                                 FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE);
 		const string content = "Test content for " + filename;
-		handle->Write(QueryContext(), const_cast<char *>(content.data()), content.size(), /*location=*/0);
+		handle->Write(CfsTestContext(), const_cast<char *>(content.data()), content.size(), /*location=*/0);
 		handle->Sync();
 		handle.reset();
 	}
 
 	// List files using the caching wrapper
 	vector<string> actual_files;
-	caching_wrapper->ListFiles(test_dir, [&actual_files](const string &path, bool is_dir) {
+	caching_wrapper->ListFiles(CfsTestContext(), test_dir, [&actual_files](const string &path, bool is_dir) {
 		if (!is_dir) {
 			actual_files.emplace_back(path);
 		}
@@ -443,9 +450,9 @@ TEST_CASE("CachingFileSystemWrapper list operations", "[file_system][caching]") 
 	}
 
 	for (const auto &file_path : file_paths) {
-		local_fs->TryRemoveFile(file_path);
+		local_fs->TryRemoveFile(CfsTestContext(), file_path);
 	}
-	local_fs->RemoveDirectory(test_dir);
+	local_fs->RemoveDirectory(CfsTestContext(), test_dir);
 }
 
 TEST_CASE("CachingFileSystemWrapper read with parallel accesses", "[file_system][caching]") {
@@ -465,8 +472,8 @@ TEST_CASE("CachingFileSystemWrapper read with parallel accesses", "[file_system]
 	OpenFileInfo file_info(test_file.GetPath());
 	file_info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
 	file_info.extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
-	auto shared_handle =
-	    caching_wrapper->OpenFile(file_info, FileFlags::FILE_FLAGS_READ | FileFlags::FILE_FLAGS_PARALLEL_ACCESS);
+	auto shared_handle = caching_wrapper->OpenFile(CfsTestContext(), file_info,
+	                                               FileFlags::FILE_FLAGS_READ | FileFlags::FILE_FLAGS_PARALLEL_ACCESS);
 
 	// Use multiple threads to read from the same file handle in parallel using pread semantics
 	vector<std::thread> threads;
@@ -478,7 +485,7 @@ TEST_CASE("CachingFileSystemWrapper read with parallel accesses", "[file_system]
 		threads.emplace_back([&, idx]() {
 			const idx_t read_location = idx * chunk_size;
 			string buffer(TEST_BUFFER_SIZE, '\0');
-			shared_handle->Read(QueryContext(), &buffer[0], chunk_size, read_location);
+			shared_handle->Read(CfsTestContext(), &buffer[0], chunk_size, read_location);
 			const bool ok = (buffer.substr(0, chunk_size) == test_content.substr(read_location, chunk_size));
 			// Cannot check inside of the thread because "REQUIRE" is not thread-safe.
 			{
@@ -522,7 +529,7 @@ TEST_CASE("Open file in opener filesystem cache modes", "[file_system][caching]"
 
 		// Perform read operation and check correctness.
 		auto handle = opener_filesystem.OpenFile(test_file.GetPath(), flags);
-		handle->Read(QueryContext(), &buffer[0], test_content.length(), /*location=*/0);
+		handle->Read(CfsTestContext(), &buffer[0], test_content.length(), /*location=*/0);
 		REQUIRE(buffer.substr(0, test_content.length()) == test_content);
 
 		// Check seeability.
@@ -559,7 +566,7 @@ TEST_CASE("Request over-sized range read", "[file_system][caching]") {
 	// Perform read operation and check correctness.
 	auto handle = opener_filesystem.OpenFile(test_file.GetPath(), flags);
 	string buffer(TEST_BUFFER_SIZE, '\0');
-	const idx_t actual_read = handle->Read(QueryContext(), &buffer[0], test_content.length() + 1);
+	const idx_t actual_read = handle->Read(CfsTestContext(), &buffer[0], test_content.length() + 1);
 	REQUIRE(actual_read == test_content.length());
 	REQUIRE(buffer.substr(0, test_content.length()) == test_content);
 }
@@ -589,9 +596,9 @@ TEST_CASE("CachingFileSystemWrapper concurrent reads same block", "[file_system]
 
 	for (size_t idx = 0; idx < THREAD_COUNT; ++idx) {
 		threads.emplace_back([&, idx]() {
-			auto handle = caching_wrapper->OpenFile(file_info, FileFlags::FILE_FLAGS_READ);
+			auto handle = caching_wrapper->OpenFile(CfsTestContext(), file_info, FileFlags::FILE_FLAGS_READ);
 			string buffer(TEST_BUFFER_SIZE, '\0');
-			handle->Read(QueryContext(), &buffer[0], test_content.size(), /*location=*/0);
+			handle->Read(CfsTestContext(), &buffer[0], test_content.size(), /*location=*/0);
 			const bool ok = (buffer.substr(0, test_content.size()) == test_content);
 			// Cannot check inside of the thread because "REQUIRE" is not thread-safe.
 			{
@@ -635,9 +642,9 @@ TEST_CASE("CachingFileSystemWrapper IO error propagates to waiters", "[file_syst
 	for (size_t idx = 0; idx < THREAD_COUNT; ++idx) {
 		threads.emplace_back([&, idx]() {
 			try {
-				auto handle = caching_wrapper->OpenFile(file_info, FileFlags::FILE_FLAGS_READ);
+				auto handle = caching_wrapper->OpenFile(CfsTestContext(), file_info, FileFlags::FILE_FLAGS_READ);
 				string buffer(TEST_BUFFER_SIZE, '\0');
-				handle->Read(QueryContext(), &buffer[0], test_content.size(), /*location=*/0);
+				handle->Read(CfsTestContext(), &buffer[0], test_content.size(), /*location=*/0);
 			} catch (...) {
 				// Cannot check inside of the thread because "REQUIRE" is not thread-safe.
 				const lock_guard<mutex> lock(results_mutex);
@@ -672,17 +679,17 @@ TEST_CASE("CachingFileSystemWrapper transient IO error recovery", "[file_system]
 	// First attempt: fail
 	failing_fs_ptr->SetShouldFail(true);
 	{
-		auto handle = caching_wrapper->OpenFile(file_info, FileFlags::FILE_FLAGS_READ);
+		auto handle = caching_wrapper->OpenFile(CfsTestContext(), file_info, FileFlags::FILE_FLAGS_READ);
 		string buffer(TEST_BUFFER_SIZE, '\0');
-		REQUIRE_THROWS(handle->Read(QueryContext(), &buffer[0], test_content.size(), /*location=*/0));
+		REQUIRE_THROWS(handle->Read(CfsTestContext(), &buffer[0], test_content.size(), /*location=*/0));
 	}
 
 	// Second attempt: succeed after clearing the failure
 	failing_fs_ptr->SetShouldFail(false);
 	{
-		auto handle = caching_wrapper->OpenFile(file_info, FileFlags::FILE_FLAGS_READ);
+		auto handle = caching_wrapper->OpenFile(CfsTestContext(), file_info, FileFlags::FILE_FLAGS_READ);
 		string buffer(TEST_BUFFER_SIZE, '\0');
-		REQUIRE_NOTHROW(handle->Read(QueryContext(), &buffer[0], test_content.size(), /*location=*/0));
+		REQUIRE_NOTHROW(handle->Read(CfsTestContext(), &buffer[0], test_content.size(), /*location=*/0));
 		REQUIRE(buffer.substr(0, test_content.size()) == test_content);
 	}
 }
@@ -701,11 +708,11 @@ TEST_CASE("CachingFileSystemWrapper zero-byte read", "[file_system][caching]") {
 	file_info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
 	file_info.extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
 
-	auto handle = caching_wrapper->OpenFile(file_info, FileFlags::FILE_FLAGS_READ);
+	auto handle = caching_wrapper->OpenFile(CfsTestContext(), file_info, FileFlags::FILE_FLAGS_READ);
 	string buffer(TEST_BUFFER_SIZE, '\0');
 
-	REQUIRE_NOTHROW(handle->Read(QueryContext(), &buffer[0], /*nr_bytes=*/0, /*location=*/0));
-	REQUIRE_NOTHROW(handle->Read(QueryContext(), &buffer[0], /*nr_bytes=*/0, /*location=*/10));
+	REQUIRE_NOTHROW(handle->Read(CfsTestContext(), &buffer[0], /*nr_bytes=*/0, /*location=*/0));
+	REQUIRE_NOTHROW(handle->Read(CfsTestContext(), &buffer[0], /*nr_bytes=*/0, /*location=*/10));
 }
 
 TEST_CASE("CachingFileSystemWrapper does not overflow on ninfinity last_modified", "[file_system][caching]") {
@@ -718,9 +725,9 @@ TEST_CASE("CachingFileSystemWrapper does not overflow on ninfinity last_modified
 	const string test_content = "Test content for ninfinity last_modified overflow reproducer.";
 	TestFileGuard test_file("test_ninfinity_last_modified.txt", test_content);
 
-	auto handle = caching_wrapper->OpenFile(test_file.GetPath(), FileFlags::FILE_FLAGS_READ);
+	auto handle = caching_wrapper->OpenFile(CfsTestContext(), test_file.GetPath(), FileFlags::FILE_FLAGS_READ);
 	string buffer(200, '\0');
-	REQUIRE_NOTHROW(handle->Read(QueryContext(), &buffer[0], test_content.size(), /*location=*/0));
+	REQUIRE_NOTHROW(handle->Read(CfsTestContext(), &buffer[0], test_content.size(), /*location=*/0));
 	REQUIRE(buffer.substr(0, test_content.size()) == test_content);
 }
 
@@ -900,7 +907,7 @@ TEST_CASE("CachingFileHandle Read returns correct FileBufferHandleGroup", "[file
 	file_info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
 	file_info.extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
 
-	auto handle = cfs.OpenFile(file_info, FileFlags::FILE_FLAGS_READ);
+	auto handle = cfs.OpenFile(CfsTestContext(), file_info, FileFlags::FILE_FLAGS_READ);
 	auto &cache = db_instance.GetExternalFileCache();
 
 	// Full file read: should produce 2 handles
@@ -989,7 +996,7 @@ TEST_CASE("CachingFileHandle EOF read behavior", "[file_system][caching]") {
 
 	// Seeking Read past EOF returns partial data.
 	{
-		auto handle = cfs.OpenFile(file_info, flags);
+		auto handle = cfs.OpenFile(CfsTestContext(), file_info, flags);
 		auto group = handle->Read(100, content.size() - 10);
 		auto &handles = group.GetHandles();
 		REQUIRE(handles.size() == 1);
@@ -1002,7 +1009,7 @@ TEST_CASE("CachingFileHandle EOF read behavior", "[file_system][caching]") {
 
 	// Non-seeking Read past EOF truncates nr_bytes to remaining file size.
 	{
-		auto handle = cfs.OpenFile(file_info, flags);
+		auto handle = cfs.OpenFile(CfsTestContext(), file_info, flags);
 		idx_t requested = content.size() + 100;
 		auto group = handle->Read(requested);
 		REQUIRE(requested == content.size());
@@ -1036,7 +1043,7 @@ TEST_CASE("Fully cached read skips doesn't open file", "[file_system][caching]")
 
 	// First read: populates the cache
 	{
-		auto handle = cfs.OpenFile(make_file_info(), FileFlags::FILE_FLAGS_READ);
+		auto handle = cfs.OpenFile(CfsTestContext(), make_file_info(), FileFlags::FILE_FLAGS_READ);
 		auto group = handle->Read(FILE_SIZE, 0);
 		string result(FILE_SIZE, '\0');
 		group.CopyTo(reinterpret_cast<data_ptr_t>(&result[0]), FILE_SIZE);
@@ -1046,7 +1053,7 @@ TEST_CASE("Fully cached read skips doesn't open file", "[file_system][caching]")
 
 	// Second read: all blocks are cached, validation is off, so we should not open the underlying file
 	{
-		auto handle = cfs.OpenFile(make_file_info(), FileFlags::FILE_FLAGS_READ);
+		auto handle = cfs.OpenFile(CfsTestContext(), make_file_info(), FileFlags::FILE_FLAGS_READ);
 		auto group = handle->Read(FILE_SIZE, 0);
 		string result(FILE_SIZE, '\0');
 		group.CopyTo(reinterpret_cast<data_ptr_t>(&result[0]), FILE_SIZE);

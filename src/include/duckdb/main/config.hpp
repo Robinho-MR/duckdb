@@ -198,7 +198,7 @@ public:
 	}
 
 	template <class... ARGS>
-	void emplace_back(ARGS &&... args) { // NOLINT
+	void emplace_back(ARGS &&...args) { // NOLINT
 		auto scan = make_shared_ptr<ReplacementScan>(std::forward<ARGS>(args)...);
 		lock_guard<mutex> guard(lock);
 		scans.push_back(std::move(scan));
@@ -356,11 +356,11 @@ public:
 	DUCKDB_API TypeManager &GetTypeManager();
 	DUCKDB_API CollationBinding &GetCollationBinding();
 	DUCKDB_API IndexTypeSet &GetIndexTypes();
-	static idx_t GetSystemMaxThreads(FileSystem &fs);
-	static idx_t GetSystemMaxAsyncThreads(FileSystem &fs);
-	static idx_t GetSystemAvailableMemory(FileSystem &fs);
+	static idx_t GetSystemMaxThreads(Context &context, FileSystem &fs);
+	static idx_t GetSystemMaxAsyncThreads(Context &context, FileSystem &fs);
+	static idx_t GetSystemAvailableMemory(Context &context, FileSystem &fs);
 	static optional_idx ParseMemoryLimitSlurm(const string &arg);
-	void SetDefaultMaxMemory();
+	void SetDefaultMaxMemory(optional_ptr<DatabaseInstance> db);
 	void SetDefaultTempDirectory();
 
 	OrderType ResolveOrder(ClientContext &context, OrderType order_type) const;
@@ -374,14 +374,14 @@ public:
 	//! Returns the default value of an option
 	static SettingLookupResult TryGetDefaultValue(optional_ptr<const ConfigurationOption> option, Value &result);
 
-	//! The opener (if any) is used to expand "~" using the connection-specific home_directory
-	bool CanAccessFile(const string &path, FileType type, optional_ptr<FileOpener> opener = nullptr);
+	//! The context is used to expand "~" using the connection-specific home_directory
+	bool CanAccessFile(Context &context, const string &path, FileType type);
 	void AddAllowedConfig(const Identifier &config_name);
-	void AddAllowedDirectory(const string &path);
-	void AddAllowedPath(const string &path);
+	void AddAllowedDirectory(Context &context, const string &path);
+	void AddAllowedPath(Context &context, const string &path);
 	//! Replace / reset the allowed directories and paths as a whole (under the lock that guards them)
-	void SetAllowedDirectories(const vector<string> &paths);
-	void SetAllowedPaths(const vector<string> &paths);
+	void SetAllowedDirectories(Context &context, const vector<string> &paths);
+	void SetAllowedPaths(Context &context, const vector<string> &paths);
 	void ResetAllowedDirectories();
 	void ResetAllowedPaths();
 	//! Whether the given optimizer is disabled (disabled_optimizers)
@@ -390,10 +390,10 @@ public:
 	DUCKDB_API void SetDisabledOptimizers(set<OptimizerType> disabled_optimizers);
 	//! Allows a database file and its WAL files, so a database can be opened while external access is disabled.
 	//! Only possible through API calls, not SQL calls.
-	void AddAllowedDatabasePath(const string &database_path);
+	void AddAllowedDatabasePath(Context &context, const string &database_path);
 	vector<string> GetAllowedDirectories() const;
 	vector<string> GetAllowedPaths() const;
-	string SanitizeAllowedPath(const string &path, optional_ptr<FileOpener> opener = nullptr) const;
+	string SanitizeAllowedPath(Context &context, const string &path) const;
 	ExtensionCallbackManager &GetCallbackManager();
 	const ExtensionCallbackManager &GetCallbackManager() const;
 

@@ -30,7 +30,7 @@ public:
 		auto handle = fs.OpenFile(wal_path, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_READ);
 		auto wal_size = handle->GetFileSize();
 		auto wal_contents = make_uniq_array<data_t>(wal_size);
-		handle->Read(QueryContext(), wal_contents.get(), wal_size, 0);
+		handle->Read(wal_contents.get(), wal_size, 0);
 
 		if (target.payload_offset + sizeof(field_id_t) > target.entry_offset + target.entry_size) {
 			throw InternalException("Invalid WAL payload offset");
@@ -42,7 +42,7 @@ public:
 		auto checksum = Checksum(entry.get(), target.entry_size);
 		Store<uint64_t>(checksum, wal_contents.get() + target.checksum_offset);
 
-		handle->Write(QueryContext(), wal_contents.get(), wal_size, 0);
+		fs.Write(*handle, wal_contents.get(), UnsafeNumericCast<int64_t>(wal_size), 0);
 		handle->Sync();
 	}
 
@@ -59,7 +59,7 @@ private:
 		auto handle = fs.OpenFile(wal_path, FileFlags::FILE_FLAGS_READ);
 		auto wal_size = handle->GetFileSize();
 		auto wal_contents = make_uniq_array<data_t>(wal_size);
-		handle->Read(QueryContext(), wal_contents.get(), wal_size, 0);
+		handle->Read(wal_contents.get(), wal_size, 0);
 
 		for (idx_t start = 0; start + 2 * sizeof(uint64_t) <= wal_size; start++) {
 			idx_t offset = start;
@@ -115,7 +115,8 @@ private:
 	}
 
 private:
-	LocalFileSystem fs;
+	DuckDB fs_db {nullptr};
+	FileSystem &fs = FileSystem::GetLocal(*fs_db.instance);
 	string database_path;
 	string wal_path;
 };

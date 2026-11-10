@@ -6,11 +6,11 @@
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_context.hpp"
-#include "duckdb/main/client_context_file_opener.hpp"
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/main/database.hpp"
-#include "duckdb/main/database_file_opener.hpp"
+#include "duckdb/main/database_file_system.hpp"
 #include "duckdb/main/http/http_util.hpp"
+#include "duckdb/common/file_lookup_info.hpp"
 #include "duckdb/main/http/http_retry_budget.hpp"
 #include "duckdb/main/settings.hpp"
 
@@ -192,7 +192,8 @@ unique_ptr<HTTPResponse> HTTPUtil::Request(BaseRequest &request, unique_ptr<HTTP
 		// central check for requests that do not go through the file system (e.g. the REST catalog calls of iceberg).
 		auto &config = request.params.db->config;
 		auto &access_path = request.params.access_path.empty() ? request.url : request.params.access_path;
-		if (!config.CanAccessFile(access_path, FileType::FILE_TYPE_REGULAR)) {
+		auto services = request.params.db->Services();
+		if (!config.CanAccessFile(*services, access_path, FileType::FILE_TYPE_REGULAR)) {
 			throw PermissionException("Cannot access \"%s\" - file system operations are disabled by configuration",
 			                          access_path);
 		}
@@ -561,43 +562,37 @@ HTTPUtil::RunRequestWithRetry(const std::function<unique_ptr<HTTPResponse>(void)
 	throw IOException("%s error for HTTP %s to '%s'%s", error, method, request.url, quota_note);
 }
 
-void HTTPParams::Initialize(optional_ptr<FileOpener> opener) {
-	db = FileOpener::TryGetDatabase(opener);
-	if (db) {
-		auto &http_proxy_setting = db->config.options.http_proxy;
-		if (!http_proxy_setting.empty()) {
-			idx_t port;
-			string host;
-			HTTPUtil::ParseHTTPProxyHost(http_proxy_setting, host, port);
-			http_proxy = host;
-			http_proxy_port = port;
-		}
-		http_proxy_username = Settings::Get<HTTPProxyUsernameSetting>(*db);
-		http_proxy_password = Settings::Get<HTTPProxyPasswordSetting>(*db);
+void HTTPParams::Initialize(Context &context) {
+	db = &context.GetDatabase();
+	auto &http_proxy_setting = db->config.options.http_proxy;
+	if (!http_proxy_setting.empty()) {
+		idx_t port;
+		string host;
+		HTTPUtil::ParseHTTPProxyHost(http_proxy_setting, host, port);
+		http_proxy = host;
+		http_proxy_port = port;
 	}
+	http_proxy_username = Settings::Get<HTTPProxyUsernameSetting>(*db);
+	http_proxy_password = Settings::Get<HTTPProxyPasswordSetting>(*db);
 
-	auto context = FileOpener::TryGetContext(opener);
-	if (context && context->IsClient()) {
-		logger = context->GetLoggerPtr();
+	if (context.IsClient()) {
+		logger = context.GetLoggerPtr();
 	}
 }
 
 unique_ptr<HTTPParams> HTTPUtil::InitializeParameters(DatabaseInstance &db, const string &url) {
-	DatabaseFileOpener opener(db);
-	FileOpenerInfo info(url);
-	return InitializeParameters(&opener, &info);
+	FileLookupInfo info(url);
+	return InitializeParameters(*db.Services(), &info);
 }
 
 unique_ptr<HTTPParams> HTTPUtil::InitializeParameters(ClientContext &context, const string &url) {
-	ClientContextFileOpener opener(context.GetContext());
-	FileOpenerInfo info(url);
-	return InitializeParameters(&opener, &info);
+	FileLookupInfo info(url);
+	return InitializeParameters(context.GetContext(), &info);
 }
 
-unique_ptr<HTTPParams> HTTPUtil::InitializeParameters(optional_ptr<FileOpener> opener,
-                                                      optional_ptr<FileOpenerInfo> info) {
+unique_ptr<HTTPParams> HTTPUtil::InitializeParameters(Context &context, optional_ptr<FileLookupInfo> info) {
 	auto result = make_uniq<HTTPParams>(*this);
-	result->Initialize(opener);
+	result->Initialize(context);
 	return result;
 }
 

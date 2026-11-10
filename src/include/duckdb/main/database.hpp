@@ -72,6 +72,8 @@ public:
 	DUCKDB_API ExtensionManager &GetExtensionManager();
 	DUCKDB_API ValidChecker &GetValidChecker();
 	DUCKDB_API LogManager &GetLogManager() const;
+	//! Whether the log manager exists yet (it does not during early initialization)
+	DUCKDB_API bool HasLogManager() const;
 	DUCKDB_API OSUtil &GetOSUtil();
 	DUCKDB_API MetricsManager &GetMetricsManager();
 	DUCKDB_API ParserCache &GetParserCache();
@@ -91,8 +93,9 @@ public:
 
 	DUCKDB_API SettingLookupResult TryGetCurrentSetting(const Identifier &key, Value &result) const;
 
-	//! Creates database-wide services (settings, logging, metrics, file system)
+	//! The database-wide services (settings, logging, metrics, file system)
 	DUCKDB_API shared_ptr<Context> Services();
+	DUCKDB_API Context &GetServices();
 
 	DUCKDB_API shared_ptr<EncryptionUtil> GetEncryptionUtil(bool read_only = false);
 	shared_ptr<EncryptionUtil> GetMbedTLSUtil(bool force_mbedtls) const;
@@ -116,6 +119,8 @@ private:
 	void Configure(DBConfig &config, const char *path);
 
 private:
+	//! Declared first: destroyed last
+	shared_ptr<Context> services;
 	shared_ptr<BufferManager> buffer_manager;
 	unique_ptr<DatabaseManager> db_manager;
 	unique_ptr<ExternalResourceTypeRegistry> external_resource_type_registry;

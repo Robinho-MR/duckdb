@@ -22,6 +22,38 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include "duckdb/common/opener_file_system.hpp"
+#include "duckdb/main/database.hpp"
+#include "duckdb/main/context.hpp"
+
+namespace {
+//! A local file system that provides the Context-free calls through the database-wide Context of a static database
+class StandaloneTestFileSystem : public duckdb::OpenerFileSystem {
+public:
+	StandaloneTestFileSystem() : local_fs(duckdb::FileSystem::CreateLocal()) {
+	}
+
+	duckdb::FileSystem &GetFileSystem() const override {
+		return *local_fs;
+	}
+
+	duckdb::Context &GetContext() const override {
+		return duckdb::TestServicesContext();
+	}
+
+private:
+	duckdb::unique_ptr<duckdb::FileSystem> local_fs;
+};
+} // namespace
+
+duckdb::Context &duckdb::TestServicesContext() {
+	static duckdb::DuckDB *db = new duckdb::DuckDB(nullptr); // NOLINT: intentionally leaked
+	return db->instance->GetServices();
+}
+
+duckdb::unique_ptr<duckdb::FileSystem> duckdb::TestCreateLocalFileSystem() {
+	return duckdb::make_uniq<StandaloneTestFileSystem>();
+}
 
 #define TESTING_DIRECTORY_NAME "duckdb_unittest_tempdir"
 
@@ -99,7 +131,7 @@ bool NO_FAIL(duckdb::unique_ptr<QueryResult> result) {
 }
 
 void TestDeleteDirectory(string path) {
-	duckdb::unique_ptr<FileSystem> fs = FileSystem::CreateLocal();
+	duckdb::unique_ptr<FileSystem> fs = TestCreateLocalFileSystem();
 	try {
 		if (fs->DirectoryExists(path)) {
 			fs->RemoveDirectory(path);
@@ -109,7 +141,7 @@ void TestDeleteDirectory(string path) {
 }
 
 void TestDeleteFile(string path) {
-	duckdb::unique_ptr<FileSystem> fs = FileSystem::CreateLocal();
+	duckdb::unique_ptr<FileSystem> fs = TestCreateLocalFileSystem();
 	try {
 		fs->TryRemoveFile(path);
 	} catch (...) {
@@ -134,12 +166,12 @@ void DeleteDatabase(string path) {
 }
 
 void TestCreateDirectory(string path) {
-	duckdb::unique_ptr<FileSystem> fs = FileSystem::CreateLocal();
+	duckdb::unique_ptr<FileSystem> fs = TestCreateLocalFileSystem();
 	fs->CreateDirectory(path);
 }
 
 string TestJoinPath(string path1, string path2) {
-	duckdb::unique_ptr<FileSystem> fs = FileSystem::CreateLocal();
+	duckdb::unique_ptr<FileSystem> fs = TestCreateLocalFileSystem();
 	return fs->JoinPath(path1, path2);
 }
 
@@ -484,7 +516,7 @@ static bool DestroyFires(TempDirDestroy disposition, bool success) {
 
 // mkdir-p the local tree's $ROOT/[RUN_ID], recording what it created so destroy reclaims only that.
 static void PrepareLocalTree() {
-	duckdb::unique_ptr<FileSystem> fs = FileSystem::CreateLocal();
+	duckdb::unique_ptr<FileSystem> fs = TestCreateLocalFileSystem();
 	RecordAndCreateLevels(*fs, TreeRunIdRoot(LocalRoot()).ToString(), run_created_levels);
 }
 
@@ -505,7 +537,7 @@ static bool PrepareTempDirInternal(string &error) {
 	// would materialize $ROOT behind PrepareLocalTree's back, RecordAndCreateLevels would read it as
 	// pre-existing, and it would never be reclaimed. Unconditional -- some code errors if
 	// home_directory is set but absent.
-	duckdb::unique_ptr<FileSystem> fs = FileSystem::CreateLocal();
+	duckdb::unique_ptr<FileSystem> fs = TestCreateLocalFileSystem();
 	RecordAndCreateLevels(*fs, GetTempDirHome(), home_created_levels);
 	return true;
 }
@@ -526,7 +558,7 @@ void DestroyTempDir(bool success) {
 	if (!DestroyFires(temp_dir_destroy, success)) {
 		return;
 	}
-	duckdb::unique_ptr<FileSystem> fs = FileSystem::CreateLocal();
+	duckdb::unique_ptr<FileSystem> fs = TestCreateLocalFileSystem();
 	// HOME first: it sits under $ROOT, so leaving it would fail the emptiness check in the ancestor
 	// walk below and strand a root this run owns. Reclaimed on the same created/adopted rule --
 	// co-located batches share one HOME path, and an adopted one may be another batch's live sandbox.
@@ -549,7 +581,7 @@ void DestroyTestTempDir(bool success) {
 		active_tests.erase(it);
 	}
 	if (!entry.leaf.empty() && DestroyFires(temp_dir_destroy, success)) {
-		duckdb::unique_ptr<FileSystem> fs = FileSystem::CreateLocal();
+		duckdb::unique_ptr<FileSystem> fs = TestCreateLocalFileSystem();
 		ReclaimTestDirectoryLevels(*fs, entry.leaf, entry.created_levels);
 	}
 }
@@ -570,7 +602,7 @@ static string MaterializeLocalTestPath() {
 	}
 	ActiveTestTempDir active;
 	active.leaf = path;
-	duckdb::unique_ptr<FileSystem> fs = FileSystem::CreateLocal();
+	duckdb::unique_ptr<FileSystem> fs = TestCreateLocalFileSystem();
 	if (!fs->DirectoryExists(path)) {
 		RecordAndCreateLevels(*fs, path, active.created_levels);
 	}
@@ -625,7 +657,7 @@ void ClearTestDirectory() {
 	if (!DeleteTestPath()) {
 		return;
 	}
-	duckdb::unique_ptr<FileSystem> fs = FileSystem::CreateLocal();
+	duckdb::unique_ptr<FileSystem> fs = TestCreateLocalFileSystem();
 	auto test_dir = TestDirectoryPath();
 	// try to clear any files we created in the test directory
 	fs->ListFiles(test_dir, [&](const string &file, bool is_dir) {

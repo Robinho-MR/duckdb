@@ -121,7 +121,7 @@ shared_ptr<AttachedDatabase> DatabaseManager::AttachDatabase(ClientContext &cont
 	if (requires_tracking_attaches) {
 		// canonicalize the path to the database
 		auto &fs = FileSystem::GetFileSystem(context);
-		info.path = fs.CanonicalizePath(info.path);
+		info.path = fs.CanonicalizePath(context, info.path);
 	}
 
 	// for IGNORE / REPLACE ON CONFLICT - first look for an existing entry
@@ -431,7 +431,7 @@ InsertDatabasePathResult DatabaseManager::InsertDatabasePath(const AttachInfo &i
 bool DatabaseManager::IsAttachedDatabaseFile(ClientContext &context, const string &path) {
 	auto &fs = FileSystem::GetFileSystem(context);
 	// attached database paths are canonicalized when the database is attached
-	auto canonical_path = fs.CanonicalizePath(path);
+	auto canonical_path = fs.CanonicalizePath(context, path);
 	if (path_manager->IsDatabasePath(canonical_path)) {
 		return true;
 	}

@@ -245,7 +245,7 @@ static void WriteExtensionFile(FileSystem &fs, const string &path, void *data, i
 // Stage an extension plus a .info recording a user-provided origin, in the flat layout a bare load resolves. The
 // binary is a stub: these tests assert the origin handling, not a real load
 static void StageUserRepoExtensionFlat(DatabaseInstance &db, const string &name, const string &repository_name) {
-	auto fs = FileSystem::CreateLocal();
+	auto fs = TestCreateLocalFileSystem();
 	string dir = ExtensionHelper::ExtensionDirectory(db, *fs);
 	fs->CreateDirectoriesRecursive(dir);
 

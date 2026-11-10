@@ -1,7 +1,7 @@
 #include "duckdb/common/process_util.hpp"
 
 #include "duckdb/common/file_system.hpp"
-#include "duckdb/common/query_context.hpp"
+#include "duckdb/main/context.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/windows.hpp"
 
@@ -109,7 +109,7 @@ string ProcessUtil::GetProcessDescription(FileSystem &fs, int64_t pid) {
 
 	try {
 		auto cmdline_file = fs.OpenFile(StringUtil::Format("/proc/%d/cmdline", pid), FileFlags::FILE_FLAGS_READ);
-		auto cmdline = cmdline_file->ReadLine(QueryContext());
+		auto cmdline = cmdline_file->ReadLine();
 		process_name = basename(const_cast<char *>(cmdline.c_str())); // NOLINT: old C API does not take const
 	} catch (std::exception &) {
 		// ignore
@@ -129,7 +129,7 @@ string ProcessUtil::GetProcessDescription(FileSystem &fs, int64_t pid) {
 	// try to find out who created that process
 	try {
 		auto loginuid_file = fs.OpenFile(StringUtil::Format("/proc/%d/loginuid", pid), FileFlags::FILE_FLAGS_READ);
-		auto uid = std::stoi(loginuid_file->ReadLine(QueryContext()));
+		auto uid = std::stoi(loginuid_file->ReadLine());
 		auto pw = getpwuid(uid);
 		if (pw) {
 			process_owner = pw->pw_name;

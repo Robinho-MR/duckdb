@@ -11,7 +11,7 @@ using namespace duckdb;
 
 class FileCleaner {
 public:
-	FileCleaner(LocalFileSystem *fs, string file) : fs(*fs), file(std::move(file)) {
+	FileCleaner(FileSystem *fs, string file) : fs(*fs), file(std::move(file)) {
 	}
 
 	~FileCleaner() {
@@ -21,7 +21,7 @@ public:
 	}
 
 private:
-	LocalFileSystem &fs;
+	FileSystem &fs;
 	string file;
 };
 
@@ -174,7 +174,8 @@ TEST_CASE("Test secret_directory configuration", "[api]") {
 }
 
 TEST_CASE("Test secret creation with a custom secret_directory configuration", "[api]") {
-	LocalFileSystem fs;
+	DuckDB fs_db(nullptr);
+	auto &fs = FileSystem::GetLocal(*fs_db.instance);
 	string directory_path = TestDirectoryPath();
 	string my_secret_dir = fs.JoinPath(directory_path, "my_secret_dir");
 	string my_secret_file = fs.JoinPath(my_secret_dir, "my_secret.duckdb_secret");
@@ -200,7 +201,8 @@ TEST_CASE("Test secret creation with a custom secret_directory configuration", "
 }
 
 TEST_CASE("Test secret creation with a custom secret_directory configuration update", "[api]") {
-	LocalFileSystem fs;
+	DuckDB fs_db(nullptr);
+	auto &fs = FileSystem::GetLocal(*fs_db.instance);
 	string directory_path = TestDirectoryPath();
 	string my_secret_dir = fs.JoinPath(directory_path, "my_secret_dir");
 	string new_secret_dir = fs.JoinPath(directory_path, "new_secret_dir");
@@ -234,7 +236,8 @@ TEST_CASE("Test secret creation with a custom secret_directory configuration upd
 }
 
 TEST_CASE("Test secret_directory configuration update after secret creation", "[api]") {
-	LocalFileSystem fs;
+	DuckDB fs_db(nullptr);
+	auto &fs = FileSystem::GetLocal(*fs_db.instance);
 	string directory_path = TestDirectoryPath();
 	string my_secret_dir = fs.JoinPath(directory_path, "my_secret_dir");
 	string my_secret_file = fs.JoinPath(my_secret_dir, "my_secret.duckdb_secret");

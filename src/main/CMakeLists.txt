@@ -19,7 +19,6 @@ add_library_unity(
   appender.cpp
   attached_database.cpp
   client_config.cpp
-  client_context_file_opener.cpp
   client_context.cpp
   client_context_execution.cpp
   client_context_wrapper.cpp

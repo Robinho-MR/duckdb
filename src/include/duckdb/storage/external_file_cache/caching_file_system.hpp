@@ -10,10 +10,9 @@
 
 #include "duckdb/common/enums/cache_validation_mode.hpp"
 #include "duckdb/common/file_open_flags.hpp"
-#include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/open_file_info.hpp"
-#include "duckdb/common/query_context.hpp"
+#include "duckdb/main/context.hpp"
 #include "duckdb/common/shared_ptr.hpp"
 #include "duckdb/common/winapi.hpp"
 #include "duckdb/storage/external_file_cache/external_file_cache.hpp"
@@ -29,7 +28,7 @@ class FileOpenFlags;
 class FileSystem;
 struct FileHandle;
 struct NetworkThroughputEstimate;
-class QueryContext;
+class Context;
 class CachingFileSystem;
 
 struct ReadThroughputEstimator {
@@ -54,8 +53,8 @@ public:
 	using CachedFile = ExternalFileCache::CachedFile;
 
 public:
-	DUCKDB_API CachingFileHandle(QueryContext context, CachingFileSystem &caching_file_system, const OpenFileInfo &path,
-	                             FileOpenFlags flags, optional_ptr<FileOpener> opener);
+	DUCKDB_API CachingFileHandle(Context &context, CachingFileSystem &caching_file_system, const OpenFileInfo &path,
+	                             FileOpenFlags flags);
 	DUCKDB_API ~CachingFileHandle();
 
 public:
@@ -73,7 +72,7 @@ public:
 	//! Read [nr_bytes] bytes and sets [nr_bytes] to the actually read bytes.
 	DUCKDB_API FileBufferHandleGroup Read(idx_t &nr_bytes);
 	//! Read and record time
-	DUCKDB_API void ReadAndRecord(QueryContext context, data_ptr_t buffer, idx_t nr_bytes, idx_t location);
+	DUCKDB_API void ReadAndRecord(Context &context, data_ptr_t buffer, idx_t nr_bytes, idx_t location);
 	//! Whether responses observed by this handle prohibit sharing cached data (e.g., HTTP no-store/Vary)
 	DUCKDB_API bool IsCacheReuseProhibited();
 	//! Get some properties of the file
@@ -113,7 +112,7 @@ private:
 	void RecordReadThroughput(double total_seconds, idx_t bytes);
 
 private:
-	QueryContext context;
+	Context &context;
 
 	//! The client file system, held directly because the caching file system can be destroyed before this handle
 	FileSystem &file_system;
@@ -125,8 +124,6 @@ private:
 	OpenFileInfo path;
 	//! Flags used to open the file
 	FileOpenFlags flags;
-	//! File opener, which contains file open context.
-	optional_ptr<FileOpener> opener;
 	//! Cache validation mode for this file
 	CacheValidationMode validate;
 	//! Associated cached file.
@@ -161,11 +158,8 @@ public:
 public:
 	DUCKDB_API static CachingFileSystem Get(ClientContext &context);
 
-	DUCKDB_API unique_ptr<CachingFileHandle> OpenFile(const OpenFileInfo &path, const FileOpenFlags &flags,
-	                                                  optional_ptr<FileOpener> opener = nullptr);
-	DUCKDB_API unique_ptr<CachingFileHandle> OpenFile(QueryContext context, const OpenFileInfo &path,
-	                                                  const FileOpenFlags &flags,
-	                                                  optional_ptr<FileOpener> opener = nullptr);
+	DUCKDB_API unique_ptr<CachingFileHandle> OpenFile(Context &context, const OpenFileInfo &path,
+	                                                  const FileOpenFlags &flags);
 
 private:
 	//! The Client FileSystem (needs to be client-specific so we can do, e.g., HTTPFS profiling)
