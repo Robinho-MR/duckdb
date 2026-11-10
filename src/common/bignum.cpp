@@ -1,3 +1,4 @@
+#include "duckdb/main/context.hpp"
 #include "duckdb/common/bignum.hpp"
 #include "duckdb/common/bignum_limbs.hpp"
 #include "duckdb/common/types/bignum.hpp"

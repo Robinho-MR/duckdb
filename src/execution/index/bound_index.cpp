@@ -1,8 +1,5 @@
-#include "duckdb/execution/index/bound_index.hpp"
-
-#include "duckdb/main/client_context.hpp"
 #include "duckdb/main/attached_database.hpp"
-#include "duckdb/main/database.hpp"
+#include "duckdb/execution/index/bound_index.hpp"
 
 #include "duckdb/common/array.hpp"
 #include "duckdb/common/radix.hpp"
@@ -157,9 +154,7 @@ void BoundIndex::ExecuteExpressions(DataChunk &input, DataChunk &result) const {
 		result.SetChildCardinality(input.size());
 		return;
 	}
-	// index expressions run outside of any client, so use a temporary one
-	ClientContext context(db.GetDatabase().shared_from_this());
-	ExpressionExecutor executor(context, bound_expressions);
+	ExpressionExecutor executor(db.GetDatabase(), bound_expressions);
 	executor.Execute(input, result);
 }
 
@@ -287,6 +282,9 @@ void BoundIndex::ApplyBufferedReplays(const vector<LogicalType> &table_types, Bu
 				IndexAppendInfo append_info(IndexAppendMode::INSERT_DUPLICATES, nullptr);
 				const auto error = Append(table_chunk, row_ids, append_info);
 				if (error.HasError()) {
+					if (error.Type() != ExceptionType::CONSTRAINT) {
+						error.Throw();
+					}
 					throw InternalException("error while applying buffered appends: " + error.Message());
 				}
 				current_row += rows_to_process;

@@ -1,5 +1,9 @@
 #include "duckdb/execution/expression_executor.hpp"
 
+#include "duckdb/main/client_context.hpp"
+#include "duckdb/main/context.hpp"
+#include "duckdb/main/database.hpp"
+
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector_operations/unary_executor.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
@@ -13,22 +17,20 @@
 
 namespace duckdb {
 
-ExpressionExecutor::ExpressionExecutor(ClientContext &context) : context(context) {
+ExpressionExecutor::ExpressionExecutor(Context &context_p) : context(context_p) {
 	debug_vector_verification = Settings::Get<DebugVerifyVectorSetting>(context);
 }
 
-ExpressionExecutor::ExpressionExecutor(ClientContext &context, const Expression *expression)
-    : ExpressionExecutor(context) {
+ExpressionExecutor::ExpressionExecutor(Context &context, const Expression *expression) : ExpressionExecutor(context) {
 	D_ASSERT(expression);
 	AddExpression(*expression);
 }
 
-ExpressionExecutor::ExpressionExecutor(ClientContext &context, const Expression &expression)
-    : ExpressionExecutor(context) {
+ExpressionExecutor::ExpressionExecutor(Context &context, const Expression &expression) : ExpressionExecutor(context) {
 	AddExpression(expression);
 }
 
-ExpressionExecutor::ExpressionExecutor(ClientContext &context, const vector<unique_ptr<Expression>> &exprs)
+ExpressionExecutor::ExpressionExecutor(Context &context, const vector<unique_ptr<Expression>> &exprs)
     : ExpressionExecutor(context) {
 	D_ASSERT(exprs.size() > 0);
 	for (auto &expr : exprs) {
@@ -36,12 +38,59 @@ ExpressionExecutor::ExpressionExecutor(ClientContext &context, const vector<uniq
 	}
 }
 
-ClientContext &ExpressionExecutor::GetContext() {
+ExpressionExecutor::ExpressionExecutor(ClientContext &context) : ExpressionExecutor(context.GetContext()) {
+}
+
+ExpressionExecutor::ExpressionExecutor(ClientContext &context, const Expression *expression)
+    : ExpressionExecutor(context.GetContext(), expression) {
+}
+
+ExpressionExecutor::ExpressionExecutor(ClientContext &context, const Expression &expression)
+    : ExpressionExecutor(context.GetContext(), expression) {
+}
+
+ExpressionExecutor::ExpressionExecutor(ClientContext &context, const vector<unique_ptr<Expression>> &exprs)
+    : ExpressionExecutor(context.GetContext(), exprs) {
+}
+
+ExpressionExecutor::ExpressionExecutor(DatabaseInstance &db) : ExpressionExecutor(db.GetContext()) {
+}
+
+ExpressionExecutor::ExpressionExecutor(DatabaseInstance &db, const Expression &expression) : ExpressionExecutor(db) {
+	AddExpression(expression);
+}
+
+ExpressionExecutor::ExpressionExecutor(DatabaseInstance &db, const vector<unique_ptr<Expression>> &exprs)
+    : ExpressionExecutor(db) {
+	D_ASSERT(exprs.size() > 0);
+	for (auto &expr : exprs) {
+		AddExpression(*expr);
+	}
+}
+
+Context &ExpressionExecutor::GetContext() {
 	return context;
 }
 
+bool ExpressionExecutor::HasClientContext() {
+	return context.IsClient();
+}
+
+ClientContext &ExpressionExecutor::GetClientContext() {
+	auto client_context = context.TryGetClientContext();
+	if (!client_context) {
+		throw InternalException(
+		    "Calling ExpressionExecutor::GetClientContext on an expression executor without a client context");
+	}
+	return *client_context;
+}
+
+optional_ptr<ClientContext> ExpressionExecutor::TryGetClientContext() {
+	return context.TryGetClientContext();
+}
+
 Allocator &ExpressionExecutor::GetAllocator() {
-	return Allocator::Get(context);
+	return Allocator::Get(context.GetDatabase());
 }
 
 void ExpressionExecutor::AddExpression(const Expression &expr) {
@@ -71,7 +120,7 @@ void ExpressionExecutor::Execute(DataChunk *input, DataChunk &result) {
 		ExecuteExpression(i, result.data[i]);
 	}
 	result.SetChildCardinality(input ? input->size() : 1);
-	result.Verify(&context);
+	result.Verify(context.GetDatabase());
 }
 
 void ExpressionExecutor::ExecuteExpression(DataChunk &input, Vector &result) {
@@ -125,6 +174,10 @@ void ExpressionExecutor::ExecuteExpression(idx_t expr_idx, Vector &result, const
 }
 
 Value ExpressionExecutor::EvaluateScalar(ClientContext &context, const Expression &expr, bool allow_unfoldable) {
+	return EvaluateScalar(context.GetContext(), expr, allow_unfoldable);
+}
+
+Value ExpressionExecutor::EvaluateScalar(Context &context, const Expression &expr, bool allow_unfoldable) {
 	D_ASSERT(allow_unfoldable || expr.IsFoldable());
 	D_ASSERT(expr.IsScalar());
 	// use an ExpressionExecutor to execute the expression
@@ -140,6 +193,10 @@ Value ExpressionExecutor::EvaluateScalar(ClientContext &context, const Expressio
 }
 
 bool ExpressionExecutor::TryEvaluateScalar(ClientContext &context, const Expression &expr, Value &result) {
+	return TryEvaluateScalar(context.GetContext(), expr, result);
+}
+
+bool ExpressionExecutor::TryEvaluateScalar(Context &context, const Expression &expr, Value &result) {
 	try {
 		result = EvaluateScalar(context, expr);
 		return true;
