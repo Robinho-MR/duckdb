@@ -1537,6 +1537,47 @@ typedef struct {
 	DUCKDB_V2_ERROR(*duckdb_v2_table_function_set_property)
 	(duckdb_v2_table_function_handle function, DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
 	 DUCKDB_V2_FUNCTION_PROPERTY_VALUE value, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_multi_file_function_set_maximum_sample_files)
+	(duckdb_v2_multi_file_function_handle function, idx_t count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_multi_file_function_set_sample_files_parameter)
+	(duckdb_v2_multi_file_function_handle function, const char *name, idx_t name_length,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_bind_get_expected_bind_data)
+	(duckdb_v2_table_function_bind_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_bind_get_expected_column_count)
+	(duckdb_v2_table_function_bind_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_bind_get_expected_column_name)
+	(duckdb_v2_table_function_bind_info_handle info, idx_t index, const char **name, idx_t *name_length,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_bind_get_expected_column_type)
+	(duckdb_v2_table_function_bind_info_handle info, idx_t index, duckdb_v2_logical_type_handle *type,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_combine_schema_add_result_column)
+	(duckdb_v2_table_function_combine_schema_info_handle info, const char *name, idx_t name_length,
+	 duckdb_v2_logical_type_handle type, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_combine_schema_get_bind_data)
+	(duckdb_v2_table_function_combine_schema_info_handle info, idx_t index, void **data,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_combine_schema_get_combined_column_count)
+	(duckdb_v2_table_function_combine_schema_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_combine_schema_get_combined_column_name)
+	(duckdb_v2_table_function_combine_schema_info_handle info, idx_t index, const char **name, idx_t *name_length,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_combine_schema_get_combined_column_type)
+	(duckdb_v2_table_function_combine_schema_info_handle info, idx_t index, duckdb_v2_logical_type_handle *type,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_combine_schema_get_file_count)
+	(duckdb_v2_table_function_combine_schema_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_combine_schema_get_union_by_name)
+	(duckdb_v2_table_function_combine_schema_info_handle info, bool *union_by_name, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_combine_schema_get_user_data)
+	(duckdb_v2_table_function_combine_schema_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_combine_schema_set_bind_data)
+	(duckdb_v2_table_function_combine_schema_info_handle info, duckdb_v2_opaque *data,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_set_combine_schema_callback)
+	(duckdb_v2_table_function_handle function, duckdb_v2_table_function_combine_schema_callback_fn callback,
+	 duckdb_v2_error_info_handle *err);
 } duckdb_ext_api_v2;
 
 //===--------------------------------------------------------------------===//
@@ -2234,6 +2275,36 @@ inline duckdb_ext_api_v2 CreateAPIv2(void) {
 	result.duckdb_v2_table_function_set_in_out_callback = duckdb_v2_table_function_set_in_out_callback;
 	result.duckdb_v2_table_function_set_in_out_final_callback = duckdb_v2_table_function_set_in_out_final_callback;
 	result.duckdb_v2_table_function_set_property = duckdb_v2_table_function_set_property;
+	result.duckdb_v2_multi_file_function_set_maximum_sample_files =
+	    duckdb_v2_multi_file_function_set_maximum_sample_files;
+	result.duckdb_v2_multi_file_function_set_sample_files_parameter =
+	    duckdb_v2_multi_file_function_set_sample_files_parameter;
+	result.duckdb_v2_table_function_bind_get_expected_bind_data = duckdb_v2_table_function_bind_get_expected_bind_data;
+	result.duckdb_v2_table_function_bind_get_expected_column_count =
+	    duckdb_v2_table_function_bind_get_expected_column_count;
+	result.duckdb_v2_table_function_bind_get_expected_column_name =
+	    duckdb_v2_table_function_bind_get_expected_column_name;
+	result.duckdb_v2_table_function_bind_get_expected_column_type =
+	    duckdb_v2_table_function_bind_get_expected_column_type;
+	result.duckdb_v2_table_function_combine_schema_add_result_column =
+	    duckdb_v2_table_function_combine_schema_add_result_column;
+	result.duckdb_v2_table_function_combine_schema_get_bind_data =
+	    duckdb_v2_table_function_combine_schema_get_bind_data;
+	result.duckdb_v2_table_function_combine_schema_get_combined_column_count =
+	    duckdb_v2_table_function_combine_schema_get_combined_column_count;
+	result.duckdb_v2_table_function_combine_schema_get_combined_column_name =
+	    duckdb_v2_table_function_combine_schema_get_combined_column_name;
+	result.duckdb_v2_table_function_combine_schema_get_combined_column_type =
+	    duckdb_v2_table_function_combine_schema_get_combined_column_type;
+	result.duckdb_v2_table_function_combine_schema_get_file_count =
+	    duckdb_v2_table_function_combine_schema_get_file_count;
+	result.duckdb_v2_table_function_combine_schema_get_union_by_name =
+	    duckdb_v2_table_function_combine_schema_get_union_by_name;
+	result.duckdb_v2_table_function_combine_schema_get_user_data =
+	    duckdb_v2_table_function_combine_schema_get_user_data;
+	result.duckdb_v2_table_function_combine_schema_set_bind_data =
+	    duckdb_v2_table_function_combine_schema_set_bind_data;
+	result.duckdb_v2_table_function_set_combine_schema_callback = duckdb_v2_table_function_set_combine_schema_callback;
 	return result;
 }
 
