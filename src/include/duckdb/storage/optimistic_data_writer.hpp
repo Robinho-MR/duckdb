@@ -63,8 +63,8 @@ private:
 	//! Prepare a write to disk
 	bool PrepareWrite(Context &context);
 	//! Flushes a specific row group to disk
-	void FlushToDisk(OptimisticWriteCollection &collection, const vector<const_reference<RowGroup>> &row_groups,
-	                 const vector<int64_t> &segment_indexes);
+	void FlushToDisk(Context &context, OptimisticWriteCollection &collection,
+	                 const vector<const_reference<RowGroup>> &row_groups, const vector<int64_t> &segment_indexes);
 
 private:
 	//! The table.
