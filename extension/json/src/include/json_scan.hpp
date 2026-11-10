@@ -75,6 +75,11 @@ public:
 
 	//! The estimated number of rows of the file
 	std::optional<idx_t> estimated_cardinality;
+
+	//! The structure detected for the file, to merge with the structures of the other files of a scan
+	std::shared_ptr<JSONStructureNode> structure;
+	//! Whether the record type was auto-detected from that structure
+	bool record_type_auto_detected = false;
 };
 
 struct JSONScan {

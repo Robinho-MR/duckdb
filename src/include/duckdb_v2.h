@@ -13251,6 +13251,16 @@ typedef struct _duckdb_v2_table_function_get_bind_info_info {
 } * duckdb_v2_table_function_get_bind_info_info_handle;
 
 /*!
+ * A borrowed opaque handle to the arguments supplied to a table function when a multi-file function asks it to combine
+ * the schemas of several files it was bound for. The "combine schema" callback receives this handle and can use it to
+ * read the bind data of each file and the columns they combine to by name, and to declare the combined columns and the
+ * bind data every file of the scan is bound with.
+ */
+typedef struct _duckdb_v2_table_function_combine_schema_info {
+	void *internal_ptr;
+} * duckdb_v2_table_function_combine_schema_info_handle;
+
+/*!
  * An owned opaque handle to a multi-file table function being built. A multi-file function wraps an already registered
  * table function that reads a single file, and adds everything that is needed to read many files at once on top of it:
  * globbing, lists of files, hive partitioning, the `filename` column, `union_by_name` and the like. Created with
@@ -13326,6 +13336,10 @@ typedef void (*duckdb_v2_table_function_claim_batch_callback_fn)(duckdb_v2_table
 
 typedef void (*duckdb_v2_table_function_get_bind_info_callback_fn)(
     duckdb_v2_table_function_get_bind_info_info_handle info, duckdb_v2_context_handle context,
+    duckdb_v2_error_info_handle *err);
+
+typedef void (*duckdb_v2_table_function_combine_schema_callback_fn)(
+    duckdb_v2_table_function_combine_schema_info_handle info, duckdb_v2_context_handle context,
     duckdb_v2_error_info_handle *err);
 
 typedef void (*duckdb_v2_table_function_stats_callback_fn)(duckdb_v2_table_function_stats_info_handle info,
@@ -13900,6 +13914,101 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_bind_set_cardinality(
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_bind_set_order_preservation(
     duckdb_v2_table_function_bind_info_handle info, DUCKDB_V2_ORDER_PRESERVATION order,
     duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Returns the number of columns of the schema the scan expects this call to produce, or 0 when the schema is not known
+ * upfront.
+ *
+ * A multi-file function registered with `duckdb_v2_connection_register_multi_file_function()` or
+ * `duckdb_v2_extension_register_multi_file_function()` binds the single-file function it wraps once for every file it
+ * reads. Once the schema of the scan was determined (e.g. by sampling several files, see
+ * `duckdb_v2_table_function_set_combine_schema_callback()`) it tells the bind of the remaining files the schema, so
+ * that they can read their file using it instead of determining a schema of their own. A call that is not part of a
+ * multi-file scan, or whose scan does not know its schema yet, has no expected schema. Valid indices for
+ * `duckdb_v2_table_function_bind_get_expected_column_type()` and
+ * `duckdb_v2_table_function_bind_get_expected_column_name()` are [0, count).
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind info handle.
+ * @param count Receives the number of expected columns, 0 when there is no expected schema.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_bind_get_expected_column_count(
+    duckdb_v2_table_function_bind_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the type of the expected column at the given index.
+ *
+ * Fails if the index is out of bounds. The returned type is owned by the caller and must be destroyed via
+ * `duckdb_v2_logical_type_destroy()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind info handle.
+ * @param index The index of the expected column to get the type of.
+ * @param type Receives the column type. Owned by the caller; destroy via `duckdb_v2_logical_type_destroy()`.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_bind_get_expected_column_type(
+    duckdb_v2_table_function_bind_info_handle info, idx_t index, duckdb_v2_logical_type_handle *type,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the name of the expected column at the given index.
+ *
+ * Fails if the index is out of bounds. The name is borrowed and valid only for the duration of the callback.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind info handle.
+ * @param index The index of the expected column to get the name of.
+ * @param name Receives a borrowed pointer to the column name. Valid only for the duration of the callback.
+ * @param name_length Receives the length of `*name` in bytes. `*name` is not guaranteed to be null-terminated.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_bind_get_expected_column_name(
+    duckdb_v2_table_function_bind_info_handle info, idx_t index, const char **name, idx_t *name_length,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the bind data that determined the expected schema, when it came from this same function: either the bind
+ * data a combine schema callback returned (see `duckdb_v2_table_function_combine_schema_set_bind_data()`), or the bind
+ * data of the first file of the scan. The bind can then read its file exactly the way the schema was determined, rather
+ * than deriving that from the names and types of the expected columns alone.
+ *
+ * Null when there is no expected schema, or when the schema did not come from a bind of this function (e.g. it is the
+ * schema of the table a `COPY` loads into). The data is borrowed: it is shared with the other binds of the scan and
+ * stays valid for the duration of the callback. A bind that needs it for longer must copy it.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind info handle.
+ * @param data Receives the bind data pointer, or null if there is none.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_bind_get_expected_bind_data(
+    duckdb_v2_table_function_bind_info_handle info, void **data, duckdb_v2_error_info_handle *err);
 #endif
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
@@ -15396,6 +15505,224 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_get_bind_info_set_option(
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
+ * Sets the optional "combine schema" callback of the table function.
+ *
+ * A multi-file function registered with `duckdb_v2_connection_register_multi_file_function()` or
+ * `duckdb_v2_extension_register_multi_file_function()` binds the function it wraps for each of the first files of a
+ * scan (see `duckdb_v2_multi_file_function_set_maximum_sample_files()`) and combines the columns they bound to by name,
+ * taking the highest type of every column. It invokes the callback with the bind data of those files when it needs more
+ * than that - e.g. to determine the schema of the scan as if all sampled files had been one - and the callback can
+ * declare the combined columns and the bind data every file of the scan is bound with from then on. Without a callback
+ * the columns of the files are combined by name only, and every file is bound on its own.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the callback of.
+ * @param callback The "combine schema" callback to set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_set_combine_schema_callback(
+    duckdb_v2_table_function_handle function, duckdb_v2_table_function_combine_schema_callback_fn callback,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the user data set via `duckdb_v2_table_function_set_user_data()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The combine schema info handle.
+ * @param data Receives the user data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_combine_schema_get_user_data(
+    duckdb_v2_table_function_combine_schema_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Returns the number of files whose schemas are combined.
+ *
+ * Valid indices for `duckdb_v2_table_function_combine_schema_get_bind_data()` are [0, count). The files are in the
+ * order of the scan.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The combine schema info handle.
+ * @param count Receives the number of files.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_combine_schema_get_file_count(
+    duckdb_v2_table_function_combine_schema_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the bind data the function's bind callback set when it bound the file at the given index.
+ *
+ * Fails if the index is out of bounds. The data is borrowed and valid only for the duration of the callback.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The combine schema info handle.
+ * @param index The index of the file.
+ * @param data Receives the bind data pointer, or null if the bind callback set none.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR
+duckdb_v2_table_function_combine_schema_get_bind_data(duckdb_v2_table_function_combine_schema_info_handle info,
+                                                      idx_t index, void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Reports whether the schemas are combined because the scan unifies the columns of its files by name (`union_by_name`):
+ * the files are then expected to have different columns. Otherwise the files are expected to have the same columns, and
+ * their schemas are combined to determine the schema of the scan more accurately.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The combine schema info handle.
+ * @param union_by_name Receives whether the columns are unified by name.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_combine_schema_get_union_by_name(
+    duckdb_v2_table_function_combine_schema_info_handle info, bool *union_by_name, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Returns the number of columns the schemas of the files combine to by name, which the callback keeps unless it
+ * declares columns of its own with `duckdb_v2_table_function_combine_schema_add_result_column()`.
+ *
+ * Valid indices for `duckdb_v2_table_function_combine_schema_get_combined_column_type()` and
+ * `duckdb_v2_table_function_combine_schema_get_combined_column_name()` are [0, count).
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The combine schema info handle.
+ * @param count Receives the number of combined columns.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_combine_schema_get_combined_column_count(
+    duckdb_v2_table_function_combine_schema_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the type of the combined column at the given index.
+ *
+ * Fails if the index is out of bounds. The returned type is owned by the caller and must be destroyed via
+ * `duckdb_v2_logical_type_destroy()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The combine schema info handle.
+ * @param index The index of the combined column to get the type of.
+ * @param type Receives the column type. Owned by the caller; destroy via `duckdb_v2_logical_type_destroy()`.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_combine_schema_get_combined_column_type(
+    duckdb_v2_table_function_combine_schema_info_handle info, idx_t index, duckdb_v2_logical_type_handle *type,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the name of the combined column at the given index.
+ *
+ * Fails if the index is out of bounds. The name is borrowed and valid only for the duration of the callback.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The combine schema info handle.
+ * @param index The index of the combined column to get the name of.
+ * @param name Receives a borrowed pointer to the column name. Valid only for the duration of the callback.
+ * @param name_length Receives the length of `*name` in bytes. `*name` is not guaranteed to be null-terminated.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_combine_schema_get_combined_column_name(
+    duckdb_v2_table_function_combine_schema_info_handle info, idx_t index, const char **name, idx_t *name_length,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Declares one of the columns the files combine to, replacing the columns combined by name.
+ *
+ * Call this once per column, in order. The first call discards the columns combined by name: a callback that declares
+ * none keeps them. The type must be a fully defined concrete type; ANY is rejected. The name and type are borrowed and
+ * copied.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The combine schema info handle.
+ * @param name The name of the column. Borrowed and copied.
+ * @param name_length The length of `name` in bytes. `name` must be valid UTF-8, need not be null-terminated, and may be
+ * NULL only when this is 0.
+ * @param type The type of the column. Borrowed and copied.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_combine_schema_add_result_column(
+    duckdb_v2_table_function_combine_schema_info_handle info, const char *name, idx_t name_length,
+    duckdb_v2_logical_type_handle type, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the bind data describing the combined schema.
+ *
+ * The multi-file function binds every file of the scan with it: the bind callback finds the combined columns as its
+ * expected schema (see `duckdb_v2_table_function_bind_get_expected_column_count()`) and this data as the expected bind
+ * data (see `duckdb_v2_table_function_bind_get_expected_bind_data()`), and reads its file accordingly instead of
+ * determining a schema of its own. The files that were bound to combine their schemas are bound again. Without bind
+ * data, every file is bound on its own and its columns are reconciled with the combined schema by name. The opaque
+ * handle bundles the pointer with an optional destructor and an optional equality callback, as for
+ * `duckdb_v2_function_bind_set_bind_data()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The combine schema info handle.
+ * @param data Opaque handle bundling the bind data pointer plus optional destructor and equality callbacks.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_combine_schema_set_bind_data(
+    duckdb_v2_table_function_combine_schema_info_handle info, duckdb_v2_opaque *data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
  * Creates a new multi-file function through a factory.
  *
  * The function starts out empty: give it a name with `duckdb_v2_multi_file_function_set_name()` and the single-file
@@ -15522,6 +15849,55 @@ duckdb_v2_multi_file_function_set_reader_type(duckdb_v2_multi_file_function_hand
 DUCKDB_C_API DUCKDB_V2_ERROR
 duckdb_v2_multi_file_function_set_file_extension(duckdb_v2_multi_file_function_handle function, const char *extension,
                                                  idx_t extension_length, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets how many files the function samples by default to determine the schema of a scan.
+ *
+ * Optional: without it only the first file is sampled. The single-file function is bound for each of the sampled files
+ * and, when it has a combine schema callback (see `duckdb_v2_table_function_set_combine_schema_callback()`), the
+ * schemas of the files are combined with it. The maximum `idx_t` samples all files; the count must be at least 1. A
+ * named parameter of the single-file function can override it per call, see
+ * `duckdb_v2_multi_file_function_set_sample_files_parameter()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the number of sampled files of.
+ * @param count The number of files to sample.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_multi_file_function_set_maximum_sample_files(
+    duckdb_v2_multi_file_function_handle function, idx_t count, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the name of the named parameter of the single-file function that sets how many files are sampled to determine
+ * the schema of a scan.
+ *
+ * Optional. A call that passes the parameter samples that many files instead of the default (see
+ * `duckdb_v2_multi_file_function_set_maximum_sample_files()`); a value that is not usable as a count is left to the
+ * single-file function to report when it binds. The parameter is still forwarded to the single-file function as given.
+ * The name is borrowed and copied.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the sample files parameter of.
+ * @param name The name of the named parameter. Borrowed and copied.
+ * @param name_length The length of `name` in bytes. `name` need not be null-terminated and may be NULL only when this
+ * is 0.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_multi_file_function_set_sample_files_parameter(
+    duckdb_v2_multi_file_function_handle function, const char *name, idx_t name_length,
+    duckdb_v2_error_info_handle *err);
 #endif
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE

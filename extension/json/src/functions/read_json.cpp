@@ -589,9 +589,14 @@ void JSONScan::BindSchema(Context &context, JSONScanData &data, vector<LogicalTy
 
 	vector<string> keys;
 	if (options.auto_detect || options.record_type == JSONRecordType::AUTO_DETECT) {
+		data.record_type_auto_detected = options.record_type == JSONRecordType::AUTO_DETECT;
+		const bool keep_structure = options.name_list.empty();
 		auto node = DetectStructure(context, data);
 		StructureToColumns(context, data, *node, return_types, names, keys);
 		D_ASSERT(return_types.size() == names.size());
+		if (keep_structure) {
+			data.structure = std::move(node);
+		}
 	} else {
 		keys = names;
 	}
@@ -736,6 +741,77 @@ idx_t JSONScanToVectors(Context &context, JSONScanGlobalState &gstate, JSONScanL
 //===--------------------------------------------------------------------===//
 // The single-file table functions
 //===--------------------------------------------------------------------===//
+//! Binds a file of a scan whose schema was already determined: it is read exactly the way that schema was determined
+static void BindExpectedSchema(Context &context, TableFunction::BindInput &input, JSONScanData &data,
+                               const JSONScanData &source, vector<LogicalType> &return_types, vector<string> &names) {
+	auto &options = data.options;
+	options.record_type = source.options.record_type;
+	options.geojson = source.options.geojson;
+	options.auto_detect = false;
+	for (idx_t i = 0; i < input.GetExpectedColumnCount(); i++) {
+		names.push_back(input.GetExpectedColumnName(i));
+		return_types.push_back(input.GetExpectedColumnType(i));
+	}
+	options.name_list = names;
+	options.sql_type_list.clear();
+	for (auto &type : return_types) {
+		options.sql_type_list.push_back(type.Copy());
+	}
+	data.key_names = source.key_names;
+	data.feature_columns = source.feature_columns;
+	data.date_formats = source.date_formats;
+	data.format = options.format;
+	if (data.format == JSONFormat::AUTO_DETECT) {
+		auto record_type = options.record_type;
+		JSONReader::DetectFormat(context, *data.file, data.file_path, options, data.format, record_type,
+		                         data.skip_feature_collection_prefix);
+	}
+	JSONScan::FinalizeBind(data);
+}
+
+//! Combines the schemas of the sampled files by merging the structures that were detected for them: this gives the
+//! schema auto-detection would have found over all of the sampled files at once
+static void ReadJSONCombineSchema(TableFunction::CombineSchemaInput &input) {
+	auto &context = input.GetContext();
+	const auto file_count = input.GetFileCount();
+	if (file_count == 0) {
+		return;
+	}
+	auto &first = input.GetBindData<JSONScanData>(0);
+	JSONStructureNode merged(first.options.case_insensitive_keys);
+	for (idx_t i = 0; i < file_count; i++) {
+		auto &data = input.GetBindData<JSONScanData>(i);
+		if (!data.structure) {
+			// the schema of this file was not auto-detected: the columns are combined by name
+			return;
+		}
+		JSONStructure::MergeNodes(merged, *data.structure);
+	}
+	JSONScanData result;
+	result.options = first.options.Copy();
+	if (first.record_type_auto_detected) {
+		// the record type is detected again on the merged structure
+		result.options.record_type = JSONRecordType::AUTO_DETECT;
+	}
+	result.date_formats = first.date_formats;
+	vector<LogicalType> return_types;
+	vector<string> names;
+	vector<string> keys;
+	JSONScan::StructureToColumns(context, result, merged, return_types, names, keys);
+	result.key_names = std::move(keys);
+	JSONScan::DeduplicateColumnNames(names);
+	result.options.name_list = names;
+	for (auto &type : return_types) {
+		result.options.sql_type_list.push_back(type.Copy());
+	}
+	result.options.auto_detect = false;
+	JSONScan::FinalizeBind(result);
+	for (idx_t i = 0; i < names.size(); i++) {
+		input.AddResultColumn(names[i], return_types[i]);
+	}
+	input.SetBindData<JSONScanData>(std::move(result));
+}
+
 static void ReadJSONBind(TableFunction::BindInput &input) {
 	auto &context = input.GetContext();
 	auto &info = input.GetUserData<JSONScanInfo>();
@@ -771,12 +847,17 @@ static void ReadJSONBind(TableFunction::BindInput &input) {
 
 	vector<LogicalType> return_types;
 	vector<string> names;
-	JSONScan::BindSchema(context, data, return_types, names);
-	JSONScan::FinalizeBind(data);
-	if (options.auto_detect) {
-		// the JSON reader looks columns up by their exact key, so the keys were kept before renaming the columns
-		// that are duplicates for us (e.g. "id" and "Id")
-		JSONScan::DeduplicateColumnNames(names);
+	auto source = input.TryGetExpectedBindData<JSONScanData>();
+	if (input.GetExpectedColumnCount() > 0 && source) {
+		BindExpectedSchema(context, input, data, *source, return_types, names);
+	} else {
+		JSONScan::BindSchema(context, data, return_types, names);
+		JSONScan::FinalizeBind(data);
+		if (options.auto_detect) {
+			// the JSON reader looks columns up by their exact key, so the keys were kept before renaming the
+			// columns that are duplicates for us (e.g. "id" and "Id")
+			JSONScan::DeduplicateColumnNames(names);
+		}
 	}
 	for (idx_t i = 0; i < names.size(); i++) {
 		input.AddResultColumn(names[i], return_types[i]);
@@ -894,6 +975,7 @@ static void RegisterSingleFileFunction(Extension &extension, Context &context, J
 	});
 	function.SetUserData<JSONScanInfo>(std::move(info));
 	function.SetBindCallback(ReadJSONBind);
+	function.SetCombineSchemaCallback(ReadJSONCombineSchema);
 	function.SetInitGlobalCallback(ReadJSONInitGlobal);
 	function.SetInitLocalCallback(ReadJSONInitLocal);
 	function.SetClaimBatchCallback(ReadJSONClaimBatch);
@@ -909,6 +991,8 @@ static void RegisterMultiFileFunction(Extension &extension, Context &context, co
 	function.SetName(name);
 	function.SetSingleFileFunction(single_file_name);
 	function.SetReaderType("JSON");
+	// the schema is determined by combining the schemas of up to 32 files
+	function.SetMaximumSampleFiles(32);
 	function.SetFileExtension("json");
 	extension.Register(function);
 }

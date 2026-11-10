@@ -4538,6 +4538,7 @@ public:
 	class PartitioningInput;
 	class ClaimBatchInput;
 	class GetBindInfoInput;
+	class CombineSchemaInput;
 	class StatsInput;
 
 	/// What an in-out function tells the engine to do next. Reported from the in-out callbacks.
@@ -4607,6 +4608,14 @@ public:
 	/// identifiers, and exposes the options as the metadata of the reader of the file. May be called more than once
 	/// for the same bind data: only report what the bind already determined. Optional; unstable API.
 	using GetBindInfoCallback = void (*)(GetBindInfoInput &input);
+	/// Called when a `MultiFileFunction` wrapping the function has bound several files to sample the schema of a scan:
+	/// combines the schemas of the files into one. The callback reads the bind data of each file and can declare the
+	/// combined columns, and the bind data every file of the scan is then bound with: its bind callback finds the
+	/// combined columns and that bind data as its expected schema (`BindInput::GetExpectedColumnCount`,
+	/// `BindInput::TryGetExpectedBindData`) and reads its file accordingly instead of determining a schema of its own.
+	/// Optional; without it the columns of the files are combined by name and every file is bound on its own. Unstable
+	/// API.
+	using CombineSchemaCallback = void (*)(CombineSchemaInput &input);
 	/// Called while the query is optimized, once per declared column the query reads, to narrow that column's
 	/// statistics. Optional; without it the engine knows nothing about the columns. Unstable API.
 	using StatsCallback = void (*)(StatsInput &input);
@@ -4690,6 +4699,9 @@ public:
 	auto SetClaimBatchCallback(ClaimBatchCallback callback) & -> TableFunction &;
 	/// Lets the function describe what a bound call reads: see `GetBindInfoCallback`. Unstable API.
 	auto SetGetBindInfoCallback(GetBindInfoCallback callback) & -> TableFunction &;
+	/// Lets the function combine the schemas of the files a `MultiFileFunction` wrapping it sampled: see
+	/// `CombineSchemaCallback`. Unstable API.
+	auto SetCombineSchemaCallback(CombineSchemaCallback callback) & -> TableFunction &;
 	/// Lets the function narrow the statistics of the columns it produces: see `StatsCallback`. Unstable API.
 	auto SetStatsCallback(StatsCallback callback) & -> TableFunction &;
 
@@ -4718,6 +4730,7 @@ private:
 	PartitioningCallback partitioning_callback = nullptr;
 	ClaimBatchCallback claim_batch_callback = nullptr;
 	GetBindInfoCallback get_bind_info_callback = nullptr;
+	CombineSchemaCallback combine_schema_callback = nullptr;
 	StatsCallback stats_callback = nullptr;
 	detail::UserData user_data;
 
@@ -4769,6 +4782,29 @@ public:
 		/// @throws InvalidInputException When order is not a declared enum value.
 		auto SetOrderPreservation(OrderPreservation order) -> void;
 
+		/// The number of columns of the schema the scan expects this call to produce, 0 when it is not known upfront.
+		/// A `MultiFileFunction` wrapping the function binds it once for every file; once the schema of the scan was
+		/// determined (see `CombineSchemaCallback`) the remaining files should be read using that schema instead of
+		/// determining one of their own. Unstable API.
+		auto GetExpectedColumnCount() const -> idx_t;
+
+		/// The name of an expected column.
+		/// @throws InvalidInputException When the index is out of bounds.
+		auto GetExpectedColumnName(idx_t index) const -> std::string;
+
+		/// The type of an expected column.
+		/// @throws InvalidInputException When the index is out of bounds.
+		auto GetExpectedColumnType(idx_t index) const -> LogicalType;
+
+		/// The bind data that determined the expected schema, when it is of this function: the bind data set by a
+		/// `CombineSchemaInput::SetBindData` of this function, or the bind data of the first file of the scan.
+		/// Shared with the other binds of the scan: copy what is needed beyond the callback. Null when there is no
+		/// expected schema, or when it did not come from a bind of this function (e.g. `COPY`'s target table).
+		template <class T>
+		auto TryGetExpectedBindData() const -> const T * {
+			return static_cast<const T *>(GetExpectedBindDataInternal());
+		}
+
 	private:
 		BindInput(void *args, void *result, void *context) : FunctionBindInput(args, context), result(result) {
 		}
@@ -4776,6 +4812,7 @@ public:
 		void *result;
 
 		void *GetUserDataInternal() const;
+		void *GetExpectedBindDataInternal() const;
 	};
 
 	/// What the global init callback works with. Borrowed, valid only for the callback duration.
@@ -5376,6 +5413,76 @@ public:
 		void *GetUserDataInternal() const;
 	};
 
+	/// What the combine schema callback works with. Borrowed, valid only for the callback duration. Unstable API.
+	class CombineSchemaInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// The user data set via `TableFunction::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// The number of files whose schemas are combined, in the order of the scan.
+		auto GetFileCount() const -> idx_t;
+
+		/// The bind data set via `BindInput::SetBindData` when the file at `index` was bound.
+		/// @throws InvalidInputException When the index is out of bounds or the bind callback set no bind data.
+		template <class T>
+		auto GetBindData(idx_t index) const -> const T & {
+			return *static_cast<const T *>(GetBindDataInternal(index));
+		}
+
+		/// Whether the schemas are combined because the scan unifies the columns of its files by name
+		/// (`union_by_name`): the files are then expected to have different columns. Otherwise they are expected to
+		/// have the same columns, and are combined to determine the schema of the scan more accurately.
+		auto GetUnionByName() const -> bool;
+
+		/// The number of columns the schemas of the files combine to by name. The callback keeps these unless it
+		/// declares columns of its own with `AddResultColumn`.
+		auto GetCombinedColumnCount() const -> idx_t;
+
+		/// The name of a column the files combine to by name.
+		/// @throws InvalidInputException When the index is out of bounds.
+		auto GetCombinedColumnName(idx_t index) const -> std::string;
+
+		/// The type of a column the files combine to by name.
+		/// @throws InvalidInputException When the index is out of bounds.
+		auto GetCombinedColumnType(idx_t index) const -> LogicalType;
+
+		/// Declares one of the columns the files combine to; call it once per column, in order. The first call
+		/// discards the columns combined by name.
+		/// @param type Must be a fully defined concrete type; ANY is rejected.
+		auto AddResultColumn(const std::string &name, const LogicalType &type) -> void;
+
+		/// Constructs the bind data describing the combined schema. Every file of the scan is bound with it as the
+		/// expected bind data (`BindInput::TryGetExpectedBindData`), the files that were bound to combine their
+		/// schemas included. Without it, every file is bound on its own and reconciled with the combined schema by
+		/// name. The engine compares bind data by `operator==` when `T` has one, by identity otherwise.
+		template <class T, class... ARGS>
+		void SetBindData(ARGS &&... args) {
+			auto ptr = new T(std::forward<ARGS>(args)...);
+			SetBindDataInternal(ptr, detail::SelectEquals<T>(), detail::TypedDelete<T>);
+		}
+
+		/// The context of the query the files are bound for. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context &;
+
+	private:
+		CombineSchemaInput(void *args, void *context)
+		    : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+
+		void *args;
+		Context context;
+
+		void *GetBindDataInternal(idx_t index) const;
+		void *GetUserDataInternal() const;
+		void SetBindDataInternal(void *data, bool (*equals)(void *a, void *b), void (*destructor)(void *));
+	};
+
 	/// What the stats callback works with. Borrowed, valid only for the callback duration.
 	///
 	/// The column statistics start out unknown, with every kind of value possible, and describe every value the scan
@@ -5466,6 +5573,18 @@ public:
 	/// Sets the extension of the files the function reads, without a leading dot, e.g. "avro". A path naming a
 	/// directory then reads the files with that extension inside it.
 	auto SetFileExtension(const std::string &extension) & -> MultiFileFunction &;
+
+	/// Sets how many files are sampled by default to determine the schema of a scan. Defaults to 1. The single-file
+	/// function is bound for each of the sampled files and, when it has a combine schema callback
+	/// (`TableFunction::SetCombineSchemaCallback`), their schemas are combined with it. The maximum `idx_t` samples
+	/// all files. Unstable API.
+	/// @throws InvalidInputException When the count is 0.
+	auto SetMaximumSampleFiles(idx_t count) & -> MultiFileFunction &;
+
+	/// Sets the name of the named parameter of the single-file function that sets how many files are sampled in a
+	/// call, e.g. "maximum_sample_files" (-1 samples all files). The parameter is still forwarded to the single-file
+	/// function. Unstable API.
+	auto SetSampleFilesParameter(const std::string &name) & -> MultiFileFunction &;
 
 private:
 	explicit MultiFileFunction(void *impl);
