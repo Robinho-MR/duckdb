@@ -4,14 +4,21 @@ project(ICUExtension)
 
 # Before any subdirectory or target, which would otherwise inherit the
 # directory-wide definition
-set_extension_version_sources(icu icu_extension.cpp)
+option(ICU_STABLE_API
+       "Build the ICU extension on the stable C++ API (proof of concept)" OFF)
+
+if(ICU_STABLE_API)
+  set_extension_version_sources(icu stable/icu_stable_extension.cpp)
+else()
+  set_extension_version_sources(icu icu_extension.cpp)
+endif()
 
 include_directories(include)
 include_directories(collation/include)
 include_directories(datetime/include)
 include_directories(${CMAKE_SOURCE_DIR}/third_party/zstd/include)
 
-set(ICU_EXTENSION_FILES
+set(ICU_ENGINE_FILES
     collation/collation_collator.cpp
     collation/collation_loader.cpp
     collation/collation_normalizer.cpp
@@ -28,7 +35,10 @@ set(ICU_EXTENSION_FILES
     datetime/persian.cpp
     datetime/timezone.cpp
     datetime/tz_loader.cpp
-    datetime/generated/tz_data.cpp
+    datetime/generated/tz_data.cpp)
+
+set(ICU_EXTENSION_FILES
+    ${ICU_ENGINE_FILES}
     icu_extension.cpp
     icu-current.cpp
     icu-dateadd.cpp
@@ -43,10 +53,22 @@ set(ICU_EXTENSION_FILES
     icu-timebucket.cpp
     icu-timezone.cpp)
 
-build_extension_library(icu NO_WARNINGS ${ICU_EXTENSION_FILES})
-link_threads(icu_extension "")
-target_link_libraries(icu_extension duckdb_zstd)
-target_link_libraries(icu_loadable_extension duckdb_zstd)
+if(ICU_STABLE_API)
+  # Only the surface is written against the stable API, the calendar and
+  # collation engine is still compiled from its sources
+  set(ICU_STABLE_FILES ${ICU_ENGINE_FILES} stable/icu_bridge.cpp
+                       stable/icu_stable_extension.cpp)
+  build_static_extension_capi_unstable(icu ${ICU_STABLE_FILES})
+  disable_target_warnings(icu_extension)
+  target_include_directories(icu_extension PRIVATE stable)
+  target_link_libraries(icu_extension duckdb_cpp_api duckdb_zstd)
+  link_threads(icu_extension "")
+else()
+  build_extension_library(icu NO_WARNINGS ${ICU_EXTENSION_FILES})
+  link_threads(icu_extension "")
+  target_link_libraries(icu_extension duckdb_zstd)
+  target_link_libraries(icu_loadable_extension duckdb_zstd)
+endif()
 install(
   TARGETS icu_extension
   EXPORT "${DUCKDB_EXPORT_SET}"
