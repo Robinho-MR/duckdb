@@ -482,14 +482,9 @@ static void BignumSubtract(DataChunk &args, ExpressionState &state, Vector &resu
 	                                                      });
 }
 
-//! The client context lets long BIGNUM multiplications and divisions check for interrupts
-static optional_ptr<ClientContext> GetBignumArithmeticContext(ExpressionState &state) {
-	return &state.GetContext();
-}
-
 static void BignumMultiply(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &heap = StringVector::GetStringHeap(result);
-	BignumArithmeticState arithmetic_state(GetBignumArithmeticContext(state));
+	BignumArithmeticState arithmetic_state(state.GetContext());
 	BinaryExecutor::Execute<bignum_t, bignum_t, string_t>(
 	    args.data[0], args.data[1], result, [&](bignum_t a, bignum_t b) {
 		    const BignumIntermediate lhs(a);
@@ -1511,7 +1506,7 @@ unique_ptr<BaseStatistics> PropagateIntegerDivideStats(ClientContext &context, F
 template <bool NULL_ON_ZERO, bool MODULO>
 static void BignumDivideOperation(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &heap = StringVector::GetStringHeap(result);
-	BignumArithmeticState arithmetic_state(GetBignumArithmeticContext(state));
+	BignumArithmeticState arithmetic_state(state.GetContext());
 	BinaryExecutor::Execute<bignum_t, bignum_t, string_t>(
 	    args.data[0], args.data[1], result, [&](bignum_t a, bignum_t b) -> optional<string_t> {
 		    const BignumIntermediate lhs(a);

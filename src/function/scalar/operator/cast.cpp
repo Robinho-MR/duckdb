@@ -100,8 +100,7 @@ static unique_ptr<FunctionLocalState> CastInitLocalState(ExpressionState &state,
 	if (!cast_data.bound_cast.HasInitLocalState()) {
 		return nullptr;
 	}
-	auto context_ptr = &state.root.executor->GetContext();
-	CastLocalStateParameters parameters(context_ptr, cast_data.bound_cast.GetCastData());
+	CastLocalStateParameters parameters(state.root.executor->GetContext(), cast_data.bound_cast.GetCastData());
 	return cast_data.bound_cast.InitLocalState(parameters);
 }
 

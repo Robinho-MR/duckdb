@@ -49,10 +49,10 @@ enum AbsoluteNumberComparison : uint8_t {
 
 //! Per-vector scratch digit buffers and interrupt-check state for BIGNUM multiplication and division
 struct BignumArithmeticState {
-	explicit BignumArithmeticState(optional_ptr<ClientContext> context = nullptr) : context(context) {
+	explicit BignumArithmeticState(ClientContext &context) : context(context) {
 	}
 
-	optional_ptr<ClientContext> context;
+	ClientContext &context;
 	//! Digit operations performed since the last interrupt check
 	idx_t work_since_interrupt_check = 0;
 	unsafe_vector<bignum_digit_t> lhs_digits;

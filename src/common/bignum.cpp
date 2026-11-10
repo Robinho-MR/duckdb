@@ -495,13 +495,10 @@ constexpr bignum_twodigit_t DIGIT_MASK = BASE - 1;
 constexpr idx_t INTERRUPT_CHECK_INTERVAL = idx_t(1) << 20;
 
 void AccountWork(BignumArithmeticState &state, idx_t work) {
-	if (!state.context) {
-		return;
-	}
 	state.work_since_interrupt_check += work;
 	if (state.work_since_interrupt_check >= INTERRUPT_CHECK_INTERVAL) {
 		state.work_since_interrupt_check = 0;
-		state.context->InterruptCheck();
+		state.context.InterruptCheck();
 	}
 }
 
