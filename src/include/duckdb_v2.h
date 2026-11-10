@@ -634,6 +634,9 @@ typedef enum DUCKDB_V2_ERROR {
 	//! Serializing or deserializing a database object failed.
 	DUCKDB_V2_ERROR_DATABASE_SERIALIZATION = 6007,
 
+	//! Data corruption was detected (e.g. malformed persistent data or input that must be well formed).
+	DUCKDB_V2_ERROR_DATABASE_DATA_CORRUPTION = 6008,
+
 	//! A settings-related error occurred (e.g. setting an unknown option).
 	DUCKDB_V2_ERROR_CONFIGURATION_SETTINGS = 7001,
 
