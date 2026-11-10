@@ -67,38 +67,37 @@ int64_t Step(icu_bridge::Calendar &calendar, const RangeSpec &spec, int64_t valu
 //----------------------------------------------------------------------------------------------------------------------
 struct TableBindData {
 	Settings settings;
-	RangeSpec spec;
-	//! A NULL argument makes the range empty
-	bool has_null = false;
 };
 
+//! The bounds of the range of the most recent input row, for progress reporting of a range used as a source
 struct TableGlobalState {
-	TableGlobalState(int64_t start, int64_t end) : start(start), end(end), current(start) {
-	}
-	int64_t start;
-	int64_t end;
-	//! The next value to generate; only touched by the single scanning thread, read for progress
-	std::atomic<int64_t> current;
+	std::atomic<int64_t> start {0};
+	std::atomic<int64_t> end {0};
+	std::atomic<int64_t> current {0};
+};
+
+//! The position within the input chunk and the range of the input row being generated
+struct TableLocalState {
+	idx_t row = 0;
+	bool initialized = false;
+	bool empty = false;
+	int64_t current = 0;
+	RangeSpec spec;
 };
 
 template <bool INCLUSIVE>
 void TableBind(cxx::TableFunction::BindInput &input) {
 	input.AddResultColumn(INCLUSIVE ? "generate_series" : "range",
 	                      input.GetContext().GetFactory().ParseType("TIMESTAMP WITH TIME ZONE"));
-	TableBindData data;
-	data.settings = ReadSettings(input.GetContext());
-	cxx::Value values[3] = {input.GetConstantArgument(0), input.GetConstantArgument(1), input.GetConstantArgument(2)};
-	for (auto &value : values) {
-		if (value.IsNull()) {
-			data.has_null = true;
-		}
-	}
 	idx_t cardinality = 0;
-	if (!data.has_null) {
-		const auto start = values[0].Get<cxx::timestamp_tz_t>().micros;
-		const auto end = values[1].Get<cxx::timestamp_tz_t>().micros;
-		const auto step = values[2].Get<cxx::interval_t>();
-		data.spec = MakeSpec(start, end, step, INCLUSIVE);
+	auto start_value = input.TryGetConstantArgument(0);
+	auto end_value = input.TryGetConstantArgument(1);
+	auto step_value = input.TryGetConstantArgument(2);
+	if (start_value && end_value && step_value && !start_value->IsNull() && !end_value->IsNull() &&
+	    !step_value->IsNull()) {
+		const auto start = start_value->Get<cxx::timestamp_tz_t>().micros;
+		const auto end = end_value->Get<cxx::timestamp_tz_t>().micros;
+		const auto step = step_value->Get<cxx::interval_t>();
 		// Estimate the cardinality using microseconds
 		int64_t delta;
 		if (!step.months && !step.days && step.micros && !__builtin_sub_overflow(end, start, &delta)) {
@@ -106,18 +105,23 @@ void TableBind(cxx::TableFunction::BindInput &input) {
 		}
 	}
 	input.SetCardinality(cardinality, false);
-	input.SetBindData<TableBindData>(std::move(data));
+	input.SetBindData<TableBindData>(TableBindData {ReadSettings(input.GetContext())});
 }
 
-void TableInit(cxx::TableFunction::InitGlobalInput &input) {
-	auto &data = input.GetBindData<TableBindData>();
-	input.SetGlobalState<TableGlobalState>(data.spec.start, data.spec.end);
+void TableInitGlobal(cxx::TableFunction::InitGlobalInput &input) {
+	input.SetGlobalState<TableGlobalState>();
+	// Input rows are independent, so an in-out call can use all threads
+	input.SetMaxThreads(1024);
+}
+
+void TableInitLocal(cxx::TableFunction::InitLocalInput &input) {
+	input.SetLocalState<TableLocalState>();
 }
 
 void TableProgress(cxx::TableFunction::ProgressInput &input) {
 	auto &state = input.GetGlobalState<TableGlobalState>();
-	const auto start = static_cast<double>(state.start);
-	const auto range = static_cast<double>(state.end) - start;
+	const auto start = static_cast<double>(state.start.load(std::memory_order_relaxed));
+	const auto range = static_cast<double>(state.end.load(std::memory_order_relaxed)) - start;
 	if (range == 0) {
 		input.SetProgress(0);
 		return;
@@ -126,26 +130,73 @@ void TableProgress(cxx::TableFunction::ProgressInput &input) {
 	input.SetProgress(std::max(std::min(fraction, 1.0), 0.0));
 }
 
-void TableExec(cxx::TableFunction::ExecInput &input) {
+//! Reads the range of an input row; a NULL argument gives an empty range
+template <bool INCLUSIVE>
+void InitRow(const cxx::DataChunk &chunk, idx_t row, TableLocalState &local) {
+	local.empty = false;
+	cxx::VectorView views[3] = {chunk.GetVector(0).GetView(), chunk.GetVector(1).GetView(),
+	                            chunk.GetVector(2).GetView()};
+	for (auto &view : views) {
+		if (!view.IsValid(row)) {
+			local.empty = true;
+			return;
+		}
+	}
+	const auto start = views[0].Data<cxx::timestamp_tz_t>()[views[0].SelAt(row)].micros;
+	const auto end = views[1].Data<cxx::timestamp_tz_t>()[views[1].SelAt(row)].micros;
+	const auto step = views[2].Data<cxx::interval_t>()[views[2].SelAt(row)];
+	local.spec = MakeSpec(start, end, step, INCLUSIVE);
+	local.empty = local.spec.empty;
+	local.current = start;
+}
+
+template <bool INCLUSIVE>
+void TableInOut(cxx::TableFunction::InOutInput &input) {
 	auto &data = input.GetBindData<TableBindData>();
-	auto &state = input.GetGlobalState<TableGlobalState>();
+	auto &global = input.GetGlobalState<TableGlobalState>();
+	auto &local = input.GetLocalState<TableLocalState>();
+	auto in = input.GetInputChunk();
 	auto chunk = input.GetOutputChunk();
 	auto out = chunk.GetVector(0);
-	if (data.has_null || data.spec.empty) {
-		out.SetSize(0);
-		return;
-	}
+	const auto in_rows = in.GetRowCount();
 	auto &calendar = SettingsCalendar(data.settings);
 	auto *values = out.GetDataMutable<cxx::timestamp_tz_t>();
 	const auto capacity = chunk.GetCapacity();
-	auto current = state.current.load(std::memory_order_relaxed);
-	idx_t count = 0;
-	while (count < capacity && !data.spec.Finished(current)) {
-		values[count++].micros = current;
-		current = Step(calendar, data.spec, current);
+	while (true) {
+		if (!local.initialized) {
+			if (local.row >= in_rows) {
+				// ran out of rows
+				local.row = 0;
+				out.SetSize(0);
+				input.SetResult(cxx::TableFunction::InOutResult::NEED_MORE_INPUT);
+				return;
+			}
+			InitRow<INCLUSIVE>(in, local.row, local);
+			local.initialized = true;
+			if (!local.empty) {
+				global.start.store(local.spec.start, std::memory_order_relaxed);
+				global.end.store(local.spec.end, std::memory_order_relaxed);
+				global.current.store(local.current, std::memory_order_relaxed);
+			}
+		}
+		idx_t count = 0;
+		if (!local.empty) {
+			while (count < capacity && !local.spec.Finished(local.current)) {
+				values[count++].micros = local.current;
+				local.current = Step(calendar, local.spec, local.current);
+			}
+		}
+		if (count == 0) {
+			// move to the next row
+			local.row++;
+			local.initialized = false;
+			continue;
+		}
+		global.current.store(local.current, std::memory_order_relaxed);
+		out.SetSize(count);
+		input.SetResult(cxx::TableFunction::InOutResult::HAVE_MORE_OUTPUT);
+		return;
 	}
-	state.current.store(current, std::memory_order_relaxed);
-	out.SetSize(count);
 }
 
 template <bool INCLUSIVE>
@@ -154,8 +205,9 @@ void RegisterTable(cxx::Extension &extension, cxx::Factory &factory, const char 
 	auto function = cxx::TableFunction::Create(factory);
 	function.SetName(name)
 	    .SetBindCallback(TableBind<INCLUSIVE>)
-	    .SetInitGlobalCallback(TableInit)
-	    .SetExecCallback(TableExec)
+	    .SetInitGlobalCallback(TableInitGlobal)
+	    .SetInitLocalCallback(TableInitLocal)
+	    .SetInOutCallback(TableInOut<INCLUSIVE>)
 	    .SetProgressCallback(TableProgress);
 	function.GetSignature()
 	    .AddParameter("start", timestamp_tz, cxx::FunctionParameterKind::POSITIONAL_ONLY)
