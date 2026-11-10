@@ -68,7 +68,7 @@ static BoundCastInfo CountCastBinding(BindCastInput &, const LogicalType &, cons
 //! Casts using only the built-in SQL casts, regardless of the casts registered in the database
 static unique_ptr<Expression> DefaultCast(unique_ptr<Expression> expr, const LogicalType &target_type) {
 	CastFunctionSet default_casts;
-	GetCastFunctionInput get_input;
+	auto get_input = GetCastFunctionInput::Default();
 	auto bound_cast = default_casts.GetCastFunction(expr->GetReturnType(), target_type, get_input);
 	return BoundCastExpression::CreateDefault(std::move(expr), target_type, std::move(bound_cast), false);
 }

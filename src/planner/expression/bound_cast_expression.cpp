@@ -83,7 +83,7 @@ static unique_ptr<Expression> AddCastToTypeInternal(unique_ptr<Expression> expr,
 unique_ptr<Expression> BoundCastExpression::AddCastToType(Context &context, unique_ptr<Expression> expr,
                                                           const LogicalType &target_type, bool try_cast) {
 	auto &cast_functions = CastFunctionSet::Get(context.GetDatabase());
-	GetCastFunctionInput get_input(Context::TryGetClientContext(&context));
+	GetCastFunctionInput get_input(context);
 	get_input.query_location = expr->GetQueryLocation();
 	return AddCastToTypeInternal(std::move(expr), target_type, cast_functions, get_input, try_cast);
 }
