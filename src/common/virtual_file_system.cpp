@@ -377,7 +377,8 @@ string VirtualFileSystem::PathSeparator(const string &path) {
 }
 
 string VirtualFileSystem::CanonicalizePath(Context &context, const string &path_p) {
-	return FindFileSystem(path_p, &context).CanonicalizePath(context, path_p);
+	// canonicalizing does not need the file system extension of the path, so it is not autoloaded
+	return FindFileSystem(path_p, nullptr).CanonicalizePath(context, path_p);
 }
 
 unique_ptr<MultiFileList> VirtualFileSystem::GlobFilesExtended(Context &context, const string &path,
