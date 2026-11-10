@@ -23,7 +23,9 @@ enums:
       for every row or report an error, which aborts the query. A "try" cast
       (SQL TRY_CAST, and implicit casts the engine probes speculatively)
       tolerates per-row failures: the callback writes NULL for the rows it
-      could not convert instead of aborting. Read with
+      could not convert instead of aborting. A row with a value that is left
+      NULL counts as not converted, so the cast reports that not every row
+      converted, as the built-in try casts do. Read with
       `[[cast_function_exec_get_mode]]`, and passed to `[[vector_cast]]`.
     values:
       CAST_MODE_NORMAL:

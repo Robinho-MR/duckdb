@@ -112,6 +112,29 @@ void TextToTemp(CastFunction::ExecInput &input) {
 	}
 }
 
+// VARCHAR -> TEMPERATURE_CELSIUS that leaves a row it cannot convert NULL in a try cast, without reporting an error
+void SilentTextToTemp(CastFunction::ExecInput &input) {
+	auto view = input.GetInput().GetView();
+	auto out = input.GetOutput();
+	auto validity = out.GetValidityMutable();
+	auto *values = out.GetDataMutable<int32_t>();
+	for (idx_t i = 0; i < input.GetRowCount(); i++) {
+		if (!view.IsValid(i)) {
+			validity.SetInvalid(i);
+			continue;
+		}
+		const auto text = std::string(view.Data<varchar_t>()[view.SelAt(i)].view());
+		if (text.find("bad") != std::string::npos) {
+			if (input.GetMode() == CastMode::NORMAL) {
+				throw InvalidInputException("could not convert '" + text + "'");
+			}
+			validity.SetInvalid(i);
+			continue;
+		}
+		values[i] = std::stoi(text);
+	}
+}
+
 void NoopCast(CastFunction::ExecInput &) {
 }
 
@@ -301,4 +324,44 @@ TEST_CASE("Stable C++API: cast function registration errors", "[cpp_api]") {
 	auto other = CastFunction::Create(conn.GetFactory());
 	other.SetSourceType(varchar).SetTargetType(integer).SetExecCallback(NoopCast);
 	conn.Register(other);
+}
+
+TEST_CASE("Stable C++API: try cast reports a value left NULL as not converted", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	auto &factory = conn.GetFactory();
+	const auto varchar = factory.ParseType("VARCHAR");
+	auto temperature = RegisterTemperature(conn);
+
+	auto cast = CastFunction::Create(factory);
+	cast.SetSourceType(varchar).SetTargetType(temperature).SetExecCallback(SilentTextToTemp);
+	conn.Register(cast);
+
+	std::vector<LogicalType> types;
+	types.push_back(factory.ParseType("VARCHAR"));
+	types.push_back(std::move(temperature));
+	DataChunk chunk(factory, types);
+	auto source = chunk.GetVector(0);
+	auto target = chunk.GetVector(1);
+	// Padded past the inline string length, see the vector tests
+	const std::string pad(16, ' ');
+	source.SetSize(3);
+	source.AssignString(0, pad + "1");
+	source.AssignString(1, pad + "bad");
+	source.AssignString(2, pad + "3");
+
+	// The cast writes NULL for the second row and reports no error: the try cast still did not convert every row
+	std::string error;
+	REQUIRE_FALSE(source.TryCast(factory, target, &error));
+	auto view = target.GetView();
+	REQUIRE(view.IsValid(0));
+	REQUIRE_FALSE(view.IsValid(1));
+	REQUIRE(view.IsValid(2));
+
+	// A row that is NULL in the input is not a failure
+	source.SetNull(1);
+	error.clear();
+	REQUIRE(source.TryCast(factory, target, &error));
+	REQUIRE(error.empty());
+	REQUIRE_FALSE(target.GetView().IsValid(1));
 }

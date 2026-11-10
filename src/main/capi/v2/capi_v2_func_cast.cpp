@@ -54,6 +54,21 @@ static auto CV2CastInitLocalState(CastLocalStateParameters &parameters) -> uniqu
 	return std::move(state);
 }
 
+//! Whether a row with a value was left NULL: a try cast reports that not every row converted, like the built-in casts
+static auto HasUnconvertedRow(Vector &input, Vector &output, idx_t count) -> bool {
+	UnifiedVectorFormat input_format;
+	input.ToUnifiedFormat(count, input_format);
+	UnifiedVectorFormat output_format;
+	output.ToUnifiedFormat(count, output_format);
+	for (idx_t i = 0; i < count; i++) {
+		if (input_format.validity.RowIsValid(input_format.sel->get_index(i)) &&
+		    !output_format.validity.RowIsValid(output_format.sel->get_index(i))) {
+			return true;
+		}
+	}
+	return false;
+}
+
 static auto CV2CastExec(Vector &input, Vector &output, idx_t count, CastParameters &parameters) -> bool {
 	const auto &bound_data = parameters.cast_data->Cast<CV2CastBoundData>();
 
@@ -77,6 +92,10 @@ static auto CV2CastExec(Vector &input, Vector &output, idx_t count, CastParamete
 	bound_data.exec_cb(Convert(&args), Convert(context.get()), &err_ptr);
 
 	if (!err.HasError()) {
+		if (is_try_cast && HasUnconvertedRow(input, output, count)) {
+			HandleCastError::AssignError("Could not convert the value to the target type", parameters);
+			return false;
+		}
 		return true;
 	}
 	if (is_try_cast) {
