@@ -838,17 +838,20 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_arena_allocate(duckdb_v2_arena_handle are
 /*!
  * The mode a cast is being executed in. A normal cast must either succeed for every row or report an error, which
  * aborts the query. A "try" cast (SQL TRY_CAST, and implicit casts the engine probes speculatively) tolerates per-row
- * failures: the callback writes NULL for the rows it could not convert instead of aborting. A row with a value that is
- * left NULL counts as not converted, so the cast reports that not every row converted, as the built-in try casts do.
- * Read with `duckdb_v2_cast_function_exec_get_mode()`, and passed to `duckdb_v2_vector_cast()`.
+ * failures: the callback writes NULL for the rows it could not convert instead of aborting, and still reports the
+ * failure through the error slot once the batch is written: that makes the cast return "not every row converted", which
+ * callers that probe a cast, such as the CSV sniffer, rely on. Read with `duckdb_v2_cast_function_exec_get_mode()`, and
+ * passed to `duckdb_v2_vector_cast()`.
  */
 typedef enum DUCKDB_V2_CAST_MODE {
 	//! A regular cast. A conversion failure reported through the error slot aborts the query.
 	DUCKDB_V2_CAST_MODE_NORMAL = 0,
 
 	/*!
-	 * A "try" cast. Conversion failures should be written as NULLs into the output vector; an error reported through
-	 * the slot is swallowed and the affected rows are left NULL.
+	 * A "try" cast. Conversion failures should be written as NULLs into the output vector and reported through the
+	 * error slot once the batch is written; the error is swallowed, the rows the callback wrote stay, and the cast
+	 * reports that not every row converted. A callback that leaves a row NULL without reporting an error tells the
+	 * engine the row converted.
 	 */
 	DUCKDB_V2_CAST_MODE_TRY = 1,
 	DUCKDB_V2_CAST_MODE_MAX_ENUM = 0x7FFFFFFF,

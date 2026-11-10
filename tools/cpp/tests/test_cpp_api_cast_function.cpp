@@ -112,29 +112,6 @@ void TextToTemp(CastFunction::ExecInput &input) {
 	}
 }
 
-// VARCHAR -> TEMPERATURE_CELSIUS that leaves a row it cannot convert NULL in a try cast, without reporting an error
-void SilentTextToTemp(CastFunction::ExecInput &input) {
-	auto view = input.GetInput().GetView();
-	auto out = input.GetOutput();
-	auto validity = out.GetValidityMutable();
-	auto *values = out.GetDataMutable<int32_t>();
-	for (idx_t i = 0; i < input.GetRowCount(); i++) {
-		if (!view.IsValid(i)) {
-			validity.SetInvalid(i);
-			continue;
-		}
-		const auto text = std::string(view.Data<varchar_t>()[view.SelAt(i)].view());
-		if (text.find("bad") != std::string::npos) {
-			if (input.GetMode() == CastMode::NORMAL) {
-				throw InvalidInputException("could not convert '" + text + "'");
-			}
-			validity.SetInvalid(i);
-			continue;
-		}
-		values[i] = std::stoi(text);
-	}
-}
-
 void NoopCast(CastFunction::ExecInput &) {
 }
 
@@ -326,16 +303,12 @@ TEST_CASE("Stable C++API: cast function registration errors", "[cpp_api]") {
 	conn.Register(other);
 }
 
-TEST_CASE("Stable C++API: try cast reports a value left NULL as not converted", "[cpp_api]") {
+TEST_CASE("Stable C++API: try cast reports a failed row through the error slot", "[cpp_api]") {
 	auto db = Instance(":memory:");
 	auto conn = db.Connect();
 	auto &factory = conn.GetFactory();
-	const auto varchar = factory.ParseType("VARCHAR");
 	auto temperature = RegisterTemperature(conn);
-
-	auto cast = CastFunction::Create(factory);
-	cast.SetSourceType(varchar).SetTargetType(temperature).SetExecCallback(SilentTextToTemp);
-	conn.Register(cast);
+	RegisterTemperatureCasts(conn, temperature, -1);
 
 	std::vector<LogicalType> types;
 	types.push_back(factory.ParseType("VARCHAR"));
@@ -344,15 +317,16 @@ TEST_CASE("Stable C++API: try cast reports a value left NULL as not converted", 
 	auto source = chunk.GetVector(0);
 	auto target = chunk.GetVector(1);
 	// Padded past the inline string length, see the vector tests
-	const std::string pad(16, ' ');
+	const std::string good = std::string(16, ' ') + "5" + SUFFIX;
 	source.SetSize(3);
-	source.AssignString(0, pad + "1");
-	source.AssignString(1, pad + "bad");
-	source.AssignString(2, pad + "3");
+	source.AssignString(0, good);
+	source.AssignString(1, "not-a-temp-and-long-enough");
+	source.AssignString(2, good);
 
-	// The cast writes NULL for the second row and reports no error: the try cast still did not convert every row
+	// The row the cast could not convert is NULL and the cast reports that not every row converted
 	std::string error;
 	REQUIRE_FALSE(source.TryCast(factory, target, &error));
+	REQUIRE_THAT(error, Catch::Matchers::Contains("not-a-temp"));
 	auto view = target.GetView();
 	REQUIRE(view.IsValid(0));
 	REQUIRE_FALSE(view.IsValid(1));
