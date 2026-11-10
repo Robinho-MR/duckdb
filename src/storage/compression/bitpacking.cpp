@@ -786,18 +786,10 @@ public:
 	//! Segment row count retained for consistent group bounds.
 	idx_t segment_count;
 
-	T decompression_buffer[BITPACKING_METADATA_GROUP_SIZE];
-	//! Scratch space for dense selections, which scan the whole range before gathering the selected rows.
-	unsafe_unique_array<T> select_buffer;
-	idx_t select_buffer_capacity = 0;
-
-	T *GetSelectBuffer(idx_t count) {
-		if (count > select_buffer_capacity) {
-			select_buffer = make_unsafe_uniq_array_uninitialized<T>(count);
-			select_buffer_capacity = count;
-		}
-		return select_buffer.get();
-	}
+	//! One unpacked algorithm group.
+	T decompression_buffer[BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE];
+	//! Rows of one DELTA_FOR metadata group, scanned by select before gathering the selected ones.
+	T select_buffer[BITPACKING_METADATA_GROUP_SIZE];
 
 	//! Group count derived from the segment row count read from disk.
 	idx_t group_count;
@@ -1157,64 +1149,12 @@ void BitpackingScan(ColumnSegment &segment, ColumnScanState &state, idx_t scan_c
 //===--------------------------------------------------------------------===//
 // Select
 //===--------------------------------------------------------------------===//
-template <class T>
-static bool BitpackingSelectIsDense(BitpackingScanState<T> &scan_state, idx_t vector_count, const SelectionVector &sel,
-                                    idx_t sel_count) {
-	static constexpr idx_t GROUP_SIZE = BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE;
-	// load the group the selection starts in, so that its mode is known
-	if (scan_state.IsInitial()) {
-		scan_state.LoadGroup(0);
-	} else if (scan_state.HasCurrentGroup() && scan_state.GetCurrentGroup().AtEnd() &&
-	           scan_state.GetCurrentGroup().index + 1 < scan_state.group_count) {
-		scan_state.LoadGroup(scan_state.GetCurrentGroup().index + 1);
-	}
-	idx_t base = 0;
-	if (scan_state.HasCurrentGroup()) {
-		auto &current = scan_state.GetCurrentGroup();
-		if (!current.AtEnd() && (current.metadata.mode == BitpackingMode::CONSTANT ||
-		                         current.metadata.mode == BitpackingMode::CONSTANT_DELTA)) {
-			// constant modes compute selected rows directly
-			return false;
-		}
-		base = current.offset % GROUP_SIZE;
-	}
-	const idx_t total_groups = (base + vector_count + GROUP_SIZE - 1) / GROUP_SIZE;
-	const idx_t dense_threshold = (total_groups + 1) / 2;
-	if (sel_count < dense_threshold) {
-		return false;
-	}
-	idx_t touched_groups = 0;
-	idx_t last_group = DConstants::INVALID_INDEX;
-	for (idx_t i = 0; i < sel_count; i++) {
-		const idx_t group = (base + sel.get_index(i)) / GROUP_SIZE;
-		if (group != last_group) {
-			last_group = group;
-			if (++touched_groups >= dense_threshold) {
-				return true;
-			}
-		}
-	}
-	return false;
-}
-
 template <class T, class T_U = typename MakeUnsigned<T>::type>
 void BitpackingSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vector_count, Vector &result,
                       const SelectionVector &sel, idx_t sel_count, idx_t result_offset, ScanVectorType scan_type) {
 	auto &scan_state = state.scan_state->Cast<BitpackingScanState<T>>();
 	result.SetVectorType(VectorType::FLAT_VECTOR);
 	T *result_data = FlatVector::GetDataMutable<T>(result) + result_offset;
-
-	// selections touching most algorithm groups decode them anyway: scan the range and gather from it
-	if (BitpackingSelectIsDense(scan_state, vector_count, sel, sel_count)) {
-		auto scanned = scan_state.GetSelectBuffer(vector_count);
-		BitpackingScanData<T>(scan_state, vector_count, scanned, 0);
-		for (idx_t i = 0; i < sel_count; i++) {
-			const idx_t index = sel.get_index(i);
-			D_ASSERT(index < vector_count);
-			result_data[i] = scanned[index];
-		}
-		return;
-	}
 
 	idx_t previous_index = 0;
 	auto next_index = [&](idx_t sel_idx) {
@@ -1231,19 +1171,9 @@ void BitpackingSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vect
 	while (i < sel_count) {
 		const idx_t target = next_index(i);
 		D_ASSERT(target >= pos && target < vector_count);
-		idx_t skip_target = target;
-		if (scan_state.HasCurrentGroup()) {
-			auto &current = scan_state.GetCurrentGroup();
-			if (current.metadata.mode == BitpackingMode::DELTA_FOR && !current.AtEnd() &&
-			    target - pos < current.Remaining()) {
-				// stop at the target's algorithm group: the prefix sum below covers the rows before the target
-				const idx_t target_in_algorithm_group =
-				    (current.offset + (target - pos)) % BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE;
-				skip_target = target - MinValue<idx_t>(target_in_algorithm_group, target - pos);
-			}
+		if (scan_state.IsInitial()) {
+			scan_state.LoadGroup(0);
 		}
-		scan_state.Skip(skip_target - pos);
-		pos = skip_target;
 		if (!scan_state.HasCurrentGroup()) {
 			ThrowBitpackingReadPastEnd();
 		}
@@ -1254,8 +1184,32 @@ void BitpackingSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vect
 			scan_state.LoadGroup(scan_state.GetCurrentGroup().index + 1);
 		}
 		auto &group = scan_state.GetCurrentGroup();
+		const idx_t group_end = pos + group.Remaining();
+		if (target >= group_end) {
+			// skipping to the start of the next metadata group decodes nothing
+			scan_state.Skip(group_end - pos);
+			pos = group_end;
+			continue;
+		}
+		if (group.metadata.mode == BitpackingMode::DELTA_FOR) {
+			// DELTA_FOR has to decode every row up to the last selected one: scan them and gather
+			idx_t end = i + 1;
+			while (end < sel_count && next_index(end) < group_end) {
+				end++;
+			}
+			const idx_t scan_count = sel.get_index(end - 1) + 1 - pos;
+			D_ASSERT(scan_count <= BITPACKING_METADATA_GROUP_SIZE);
+			BitpackingScanData<T>(scan_state, scan_count, scan_state.select_buffer, 0);
+			for (; i < end; i++) {
+				result_data[i] = scan_state.select_buffer[sel.get_index(i) - pos];
+			}
+			pos += scan_count;
+			continue;
+		}
+		scan_state.Skip(target - pos);
+		pos = target;
 		// rows [pos, run_end) are served by the same (partial) decode
-		idx_t run_end = pos + group.Remaining();
+		idx_t run_end = group_end;
 		switch (group.metadata.mode) {
 		case BitpackingMode::CONSTANT:
 			for (; i < sel_count && next_index(i) < run_end; i++) {
@@ -1270,7 +1224,8 @@ void BitpackingSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vect
 				                                static_cast<T_U>(group.frame_of_reference));
 			}
 			break;
-		case BitpackingMode::FOR: {
+		default: {
+			D_ASSERT(group.metadata.mode == BitpackingMode::FOR);
 			const idx_t offset_in_algorithm_group =
 			    group.offset % BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE;
 			run_end = MinValue<idx_t>(run_end, pos + BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE -
@@ -1283,43 +1238,6 @@ void BitpackingSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vect
 				result_data[i] = static_cast<T>(value + static_cast<T_U>(group.frame_of_reference));
 			}
 			break;
-		}
-		default: {
-			D_ASSERT(group.metadata.mode == BitpackingMode::DELTA_FOR);
-			const idx_t offset_in_algorithm_group =
-			    group.offset % BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE;
-			run_end = MinValue<idx_t>(run_end, pos + BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE -
-			                                       offset_in_algorithm_group);
-			group.UnpackAlgorithmGroups(unsafe_array_ptr<T>(scan_state.decompression_buffer,
-			                                                BitpackingPrimitives::BITPACKING_ALGORITHM_GROUP_SIZE));
-			auto deltas = reinterpret_cast<const T_U *>(scan_state.decompression_buffer) + offset_in_algorithm_group;
-			const T_U frame = static_cast<T_U>(group.frame_of_reference);
-			T_U carry = static_cast<T_U>(group.delta_offset);
-			const idx_t first = i;
-			// prefix-sum the deltas up to each selected row, emitting the running value
-			idx_t cur = pos;
-			for (; i < sel_count && next_index(i) < run_end; i++) {
-				const idx_t selected = sel.get_index(i);
-				for (; cur <= selected; cur++) {
-					carry += deltas[cur - pos] + frame;
-				}
-				result_data[i] = static_cast<T>(carry);
-			}
-			// finish the unpacked algorithm group so that the next Skip does not decode it again
-			const idx_t unpacked_end = MinValue<idx_t>(run_end, vector_count);
-			for (; cur < unpacked_end; cur++) {
-				carry += deltas[cur - pos] + frame;
-			}
-			if (scan_state.is_bool) {
-				VerifyBooleanValues(result_data + first, i - first);
-			}
-			group.delta_offset = static_cast<T>(carry);
-			group.Advance(cur - pos);
-			pos = cur;
-			if (group.AtEnd() && group.index + 1 == scan_state.group_count) {
-				scan_state.Finish();
-			}
-			continue;
 		}
 		}
 		// move the group offset to the last selected row so that it matches 'pos'
