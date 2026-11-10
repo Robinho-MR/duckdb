@@ -22,6 +22,7 @@
 namespace duckdb {
 class AttachedDatabase;
 class ClientContext;
+class DatabaseInstance;
 class SecretManager;
 class SecretStorage;
 struct DatabaseModificationType;
@@ -41,11 +42,10 @@ struct TransactionReference {
 //! The MetaTransaction manages multiple transactions for different attached databases
 class MetaTransaction {
 public:
-	DUCKDB_API MetaTransaction(ClientContext &context, timestamp_t start_timestamp,
-	                           transaction_t global_transaction_id);
+	DUCKDB_API MetaTransaction(DatabaseInstance &db, shared_ptr<AttachedDatabase> temporary_objects,
+	                           timestamp_t start_timestamp, transaction_t global_transaction_id);
 	DUCKDB_API ~MetaTransaction();
 
-	ClientContext &context;
 	//! The timestamp when the transaction started
 	timestamp_t start_timestamp;
 	//! The global identifier of the transaction
@@ -80,8 +80,6 @@ public:
 	};
 	//! A participant leaves the transaction, voting for a commit or rollback
 	LeaveResult Leave(bool commit);
-	//! Keeps the context of the creating connection alive for the remaining participants after it left
-	void SetKeepAlive(shared_ptr<ClientContext> context);
 	//! Whether the transaction was committed or rolled back
 	bool IsFinished() const {
 		return finished;
@@ -93,21 +91,22 @@ public:
 		return start_timestamp;
 	}
 
-	Transaction &GetTransaction(AttachedDatabase &db);
+	//! The transaction for the database, started on behalf of the given context if it does not exist yet
+	Transaction &GetTransaction(ClientContext &context, AttachedDatabase &db);
 	optional_ptr<Transaction> TryGetTransaction(AttachedDatabase &db);
 	void RemoveTransaction(AttachedDatabase &db);
 
-	ErrorData Commit();
+	ErrorData Commit(ClientContext &context);
 	void Rollback();
 	// Finalize the transaction after a COMMIT of ROLLBACK.
-	void Finalize();
+	void Finalize(ClientContext &context);
 
 	idx_t GetActiveQuery();
 	void SetActiveQuery(transaction_t query_number);
 
 	void SetReadOnly();
 	bool IsReadOnly() const;
-	void ModifyDatabase(AttachedDatabase &db, DatabaseModificationType modification);
+	void ModifyDatabase(ClientContext &context, AttachedDatabase &db, DatabaseModificationType modification);
 	optional_ptr<AttachedDatabase> ModifiedDatabase() {
 		return modified_database;
 	}
@@ -148,8 +147,6 @@ private:
 	idx_t participants = 0;
 	//! Whether a participant of the shared transaction voted to roll back
 	bool rollback_vote = false;
-	//! The context of the connection that created the transaction, once it left while others still participate
-	shared_ptr<ClientContext> keep_alive;
 	//! Whether the transaction is shared with other connections
 	bool shared = false;
 	//! The identifier the transaction was exported under

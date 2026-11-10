@@ -119,6 +119,13 @@ void StandardColumnData::Select(TransactionData transaction, idx_t vector_index,
 		ColumnData::Select(transaction, vector_index, state, result, sel, sel_count);
 		return;
 	}
+	// a scan references uncompressed data without copying it: slicing beats gathering unless few rows are selected
+	static constexpr idx_t UNCOMPRESSED_SELECT_DENSITY = 5;
+	if (compression->type == CompressionType::COMPRESSION_UNCOMPRESSED &&
+	    sel_count * UNCOMPRESSED_SELECT_DENSITY > target_count) {
+		ColumnData::Select(transaction, vector_index, state, result, sel, sel_count);
+		return;
+	}
 	SelectVector(state, result, target_count, sel, sel_count, scan_type);
 	validity->SelectVector(state.child_states[0], result, target_count, sel, sel_count, scan_type);
 }
@@ -224,9 +231,9 @@ ValidityColumnData &StandardColumnData::GetValidityData() {
 }
 
 struct StandardColumnCheckpointState : public ColumnCheckpointState {
-	StandardColumnCheckpointState(const RowGroup &row_group, ColumnData &column_data,
+	StandardColumnCheckpointState(const RowGroup &row_group, ColumnData &column_data, Context &context,
 	                              PartialBlockManager &partial_block_manager)
-	    : ColumnCheckpointState(row_group, column_data, partial_block_manager) {
+	    : ColumnCheckpointState(row_group, column_data, context, partial_block_manager) {
 	}
 
 	unique_ptr<ColumnCheckpointState> validity_state;
@@ -261,8 +268,9 @@ public:
 };
 
 unique_ptr<ColumnCheckpointState>
-StandardColumnData::CreateCheckpointState(const RowGroup &row_group, PartialBlockManager &partial_block_manager) {
-	return make_uniq<StandardColumnCheckpointState>(row_group, *this, partial_block_manager);
+StandardColumnData::CreateCheckpointState(const RowGroup &row_group, Context &context,
+                                          PartialBlockManager &partial_block_manager) {
+	return make_uniq<StandardColumnCheckpointState>(row_group, *this, context, partial_block_manager);
 }
 
 unique_ptr<ColumnCheckpointState> StandardColumnData::Checkpoint(const RowGroup &row_group,
@@ -274,9 +282,10 @@ unique_ptr<ColumnCheckpointState> StandardColumnData::Checkpoint(const RowGroup 
 	// this is necessary for concurrent checkpointing as due to the partial block manager checkpointed data might be
 	// flushed to disk by a different thread than the one that wrote it, causing a data race
 	auto &partial_block_manager = checkpoint_info.GetPartialBlockManager();
-	auto base_state = CreateCheckpointState(row_group, partial_block_manager);
+	auto &context = checkpoint_info.GetContext();
+	auto base_state = CreateCheckpointState(row_group, context, partial_block_manager);
 	base_state->global_stats = BaseStatistics::CreateEmpty(type).ToUnique();
-	auto validity_state_p = validity->CreateCheckpointState(row_group, partial_block_manager);
+	auto validity_state_p = validity->CreateCheckpointState(row_group, context, partial_block_manager);
 	validity_state_p->global_stats = BaseStatistics::CreateEmpty(validity->type).ToUnique();
 
 	auto &validity_state = *validity_state_p;

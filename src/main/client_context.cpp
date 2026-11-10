@@ -433,7 +433,7 @@ void ClientContext::CheckIfPreparedStatementIsExecutable(PreparedStatementData &
 			    "Cannot execute statement of type \"%s\" on database %s which is attached in read-only mode!",
 			    StatementTypeToString(statement.statement_type), modified_database));
 		}
-		meta_transaction.ModifyDatabase(*entry, it.second.modifications);
+		meta_transaction.ModifyDatabase(*this, *entry, it.second.modifications);
 	}
 }
 
@@ -1257,7 +1257,7 @@ void ClientContext::RunTransactionStatementInternal(const TransactionInfo &info)
 				if (ValidChecker::IsInvalidated(*attached)) {
 					continue;
 				}
-				transaction.ActiveTransaction().GetTransaction(*attached);
+				transaction.ActiveTransaction().GetTransaction(*this, *attached);
 			}
 		}
 		break;

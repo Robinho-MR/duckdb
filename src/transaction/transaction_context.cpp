@@ -53,7 +53,8 @@ void TransactionContext::BeginTransaction() {
 	}
 	auto start_timestamp = Timestamp::GetCurrentTimestamp();
 	auto global_transaction_id = context.db->GetDatabaseManager().GetNewTransactionNumber();
-	current_transaction = make_shared_ptr<MetaTransaction>(context, start_timestamp, global_transaction_id);
+	current_transaction = make_shared_ptr<MetaTransaction>(*context.db, context.client_data->temporary_objects,
+	                                                       start_timestamp, global_transaction_id);
 
 	// Notify any registered state of transaction begin
 	for (auto &state : context.GetContext().GetRegisteredState().States()) {
@@ -90,7 +91,7 @@ void TransactionContext::Commit() {
 		RollbackTransaction(std::move(transaction), nullptr);
 		throw TransactionException("Failed to commit: a connection sharing the transaction rolled it back");
 	}
-	auto error = transaction->Commit();
+	auto error = transaction->Commit(context);
 	// Notify any registered state of transaction commit
 	if (error.HasError()) {
 		for (auto const &s : context.GetContext().GetRegisteredState().States()) {
@@ -105,7 +106,7 @@ void TransactionContext::Commit() {
 	for (auto &state : context.GetContext().GetRegisteredState().States()) {
 		state->TransactionCommit(*transaction, context);
 	}
-	transaction->Finalize();
+	transaction->Finalize(context);
 	if (autocheckpoint_error.HasError()) {
 		auto err = std::move(autocheckpoint_error);
 		autocheckpoint_error = ErrorData();
@@ -157,7 +158,7 @@ void TransactionContext::RollbackTransaction(shared_ptr<MetaTransaction> transac
 	if (rollback_error.HasError()) {
 		rollback_error.Throw();
 	}
-	transaction->Finalize();
+	transaction->Finalize(context);
 }
 
 bool TransactionContext::LeaveTransaction(MetaTransaction &transaction, bool commit, bool &commit_result) {
@@ -172,14 +173,6 @@ bool TransactionContext::LeaveTransaction(MetaTransaction &transaction, bool com
 		auto snapshot_id = transaction.GetSnapshotId();
 		context.db->GetDatabaseManager().RemoveExportedTransaction(snapshot_id);
 		return true;
-	}
-	if (&transaction.context == &context) {
-		// the other participants keep using the objects that belong to this connection
-		try {
-			transaction.SetKeepAlive(context.shared_from_this());
-		} catch (std::bad_weak_ptr &) { // NOLINT
-			                            // the context is being destroyed: nothing keeps it alive
-		}
 	}
 	return false;
 }
@@ -219,7 +212,7 @@ void TransactionContext::ImportSnapshot(const string &snapshot_id) {
 	for (auto const &s : context.GetContext().GetRegisteredState().States()) {
 		s->TransactionRollback(*previous, context, nullptr);
 	}
-	previous->Finalize();
+	previous->Finalize(context);
 	for (auto &state : context.GetContext().GetRegisteredState().States()) {
 		state->TransactionBegin(*current_transaction, context);
 	}
