@@ -346,11 +346,14 @@ void RegisterUnitsCast(Connection &conn, ScalarFunction::ExecCallback exec) {
 	conn.Register(type);
 
 	auto cast = ScalarFunction::Create(factory);
-	cast.SetName("units_to_text").SetExecCallback(exec);
-	cast.GetSignature()
-	    .AddParameter("value", factory.ParseType("INTEGER").WithAlias(factory, "UNITS"))
-	    .SetReturnType(factory.ParseType("VARCHAR"));
-	conn.RegisterCast(cast);
+	auto try_cast = ScalarFunction::Create(factory);
+	for (auto *function : {&cast, &try_cast}) {
+		function->SetName("units_to_text").SetExecCallback(exec);
+		function->GetSignature()
+		    .AddParameter("value", factory.ParseType("INTEGER").WithAlias(factory, "UNITS"))
+		    .SetReturnType(factory.ParseType("VARCHAR"));
+	}
+	conn.RegisterCast(cast, try_cast);
 }
 
 TEST_CASE("Stable C++API: scalar function runs without a client context while an index is built", "[cpp_api]") {

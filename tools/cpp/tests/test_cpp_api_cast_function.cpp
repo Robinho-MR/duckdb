@@ -8,7 +8,7 @@
 
 // ---------------------------------------------------------------------------
 // Stable C++ API tests: CustomType and casts, which are scalar functions of one
-// parameter registered with RegisterCast. A custom type TEMPERATURE (an alias of
+// parameter, one for CAST and one for TRY_CAST, registered with RegisterCast. A custom type TEMPERATURE (an alias of
 // INTEGER) plus the two casts between it and VARCHAR, reached through CAST,
 // TRY_CAST and implicit argument conversion.
 // ---------------------------------------------------------------------------
@@ -72,9 +72,30 @@ auto MakeCast(Connection &conn, const char *name, const LogicalType &source, con
 	return function;
 }
 
+// The two functions of a cast: CAST and TRY_CAST.
+struct CastPair {
+	ScalarFunction cast;
+	ScalarFunction try_cast;
+};
+
+auto MakeCastPair(Connection &conn, const char *name, const LogicalType &source, const LogicalType &target,
+                  ScalarFunction::ExecCallback exec, ScalarFunction::ExecCallback try_exec) -> CastPair {
+	return CastPair {MakeCast(conn, name, source, target, exec), MakeCast(conn, name, source, target, try_exec)};
+}
+
+// Applies the same setup to both functions of a cast.
+template <class F>
+void ForBoth(CastPair &pair, F &&configure) {
+	configure(pair.cast);
+	configure(pair.try_cast);
+}
+
+void RegisterPair(Connection &conn, CastPair &pair, int64_t cost = -1) {
+	conn.RegisterCast(pair.cast, pair.try_cast, cost);
+}
+
 // TEMPERATURE -> VARCHAR. Infallible: every value renders.
-void TempToText(ScalarFunction::ExecInput &input) {
-	last_mode = input.GetCastMode();
+void TempToTextImpl(ScalarFunction::ExecInput &input) {
 	auto in = input.GetArg(0);
 	auto out = input.GetResult();
 	auto view = in.GetView();
@@ -90,8 +111,7 @@ void TempToText(ScalarFunction::ExecInput &input) {
 
 // VARCHAR -> TEMPERATURE. A row that does not parse is left NULL and reported by throwing: a normal cast aborts on
 // the exception, a try cast swallows it and keeps the NULL.
-void TextToTemp(ScalarFunction::ExecInput &input) {
-	last_mode = input.GetCastMode();
+void TextToTempImpl(ScalarFunction::ExecInput &input) {
 	REQUIRE(input.GetUserData<CastTag>().value == "secret");
 
 	auto in = input.GetArg(0);
@@ -126,6 +146,26 @@ void TextToTemp(ScalarFunction::ExecInput &input) {
 	}
 }
 
+void TempToText(ScalarFunction::ExecInput &input) {
+	last_mode = CastMode::NORMAL;
+	TempToTextImpl(input);
+}
+
+void TryTempToText(ScalarFunction::ExecInput &input) {
+	last_mode = CastMode::TRY;
+	TempToTextImpl(input);
+}
+
+void TextToTemp(ScalarFunction::ExecInput &input) {
+	last_mode = CastMode::NORMAL;
+	TextToTempImpl(input);
+}
+
+void TryTextToTemp(ScalarFunction::ExecInput &input) {
+	last_mode = CastMode::TRY;
+	TextToTempImpl(input);
+}
+
 void NoopCast(ScalarFunction::ExecInput &) {
 }
 
@@ -143,12 +183,12 @@ void RegisterTemperatureCasts(Connection &conn, const LogicalType &temperature, 
 	auto &factory = conn.GetFactory();
 	const auto varchar = factory.ParseType("VARCHAR");
 
-	auto to_text = MakeCast(conn, "temperature_to_text", temperature, varchar, TempToText);
-	conn.RegisterCast(to_text);
+	auto to_text = MakeCastPair(conn, "temperature_to_text", temperature, varchar, TempToText, TryTempToText);
+	RegisterPair(conn, to_text);
 
-	auto from_text = MakeCast(conn, "text_to_temperature", varchar, temperature, TextToTemp);
-	from_text.SetUserData<CastTag>(CastTag {"secret"});
-	conn.RegisterCast(from_text, cost);
+	auto from_text = MakeCastPair(conn, "text_to_temperature", varchar, temperature, TextToTemp, TryTextToTemp);
+	ForBoth(from_text, [](ScalarFunction &function) { function.SetUserData<CastTag>(CastTag {"secret"}); });
+	RegisterPair(conn, from_text, cost);
 }
 
 // reading(t TEMPERATURE_CELSIUS) -> INTEGER: an identity scalar function, to observe implicit argument conversion.
@@ -298,34 +338,47 @@ TEST_CASE("Stable C++API: cast registration errors", "[cpp_api]") {
 	auto &factory = conn.GetFactory();
 	const auto integer = factory.ParseType("INTEGER");
 	const auto varchar = factory.ParseType("VARCHAR");
+	const auto any = factory.CreateType(LogicalTypeId::ANY);
 	const auto invalid = HasErrorCode(DUCKDB_V2_ERROR_INPUT_INVALID);
 
 	// Nothing configured, then each missing piece in turn: a parameter, the return type, the exec callback.
-	auto function = ScalarFunction::Create(conn.GetFactory());
+	auto function = ScalarFunction::Create(factory);
+	auto try_function = MakeCast(conn, "try_cast_function", integer, varchar, NoopCast);
 	function.SetName("cast_function");
-	REQUIRE_THROWS_MATCHES(conn.RegisterCast(function), Exception, invalid);
+	REQUIRE_THROWS_MATCHES(conn.RegisterCast(function, try_function), Exception, invalid);
 	function.WithSignature([&](FunctionSignature &sig) { sig.AddParameter("value", integer); });
-	REQUIRE_THROWS_MATCHES(conn.RegisterCast(function), Exception, invalid);
+	REQUIRE_THROWS_MATCHES(conn.RegisterCast(function, try_function), Exception, invalid);
 	function.WithSignature([&](FunctionSignature &sig) { sig.SetReturnType(varchar); });
-	REQUIRE_THROWS_MATCHES(conn.RegisterCast(function), Exception, invalid);
+	REQUIRE_THROWS_MATCHES(conn.RegisterCast(function, try_function), Exception, invalid);
 	function.SetExecCallback(NoopCast);
-	conn.RegisterCast(function);
+	conn.RegisterCast(function, try_function);
 
-	// A cast whose exec callback never asks for user data still needs none.
-	auto other = MakeCast(conn, "other_cast", varchar, integer, NoopCast);
-	conn.RegisterCast(other);
+	// A cast whose exec callbacks never ask for user data still needs none.
+	auto other = MakeCastPair(conn, "other_cast", varchar, integer, NoopCast, NoopCast);
+	RegisterPair(conn, other);
+
+	// The try function must convert between the same types
+	auto cast = MakeCast(conn, "cast", integer, varchar, NoopCast);
+	auto mismatch = MakeCast(conn, "mismatch", integer, integer, NoopCast);
+	REQUIRE_THROWS_MATCHES(conn.RegisterCast(cast, mismatch), Exception, invalid);
+	auto mismatch_parameter = MakeCast(conn, "mismatch_parameter", varchar, varchar, NoopCast);
+	REQUIRE_THROWS_MATCHES(conn.RegisterCast(cast, mismatch_parameter), Exception, invalid);
 
 	// More than one parameter
 	auto two = MakeCast(conn, "two_parameters", integer, varchar, NoopCast);
 	two.WithSignature([&](FunctionSignature &sig) { sig.AddParameter("second", integer); });
-	REQUIRE_THROWS_MATCHES(conn.RegisterCast(two), Exception, invalid);
+	auto two_try = MakeCast(conn, "two_parameters_try", integer, varchar, NoopCast);
+	REQUIRE_THROWS_MATCHES(conn.RegisterCast(two, two_try), Exception, invalid);
+	REQUIRE_THROWS_MATCHES(conn.RegisterCast(two_try, two), Exception, invalid);
 
 	// A parameter or return type that is not a concrete type
-	auto any_parameter = MakeCast(conn, "any_parameter", factory.CreateType(LogicalTypeId::ANY), varchar, NoopCast);
-	REQUIRE_THROWS_MATCHES(conn.RegisterCast(any_parameter), Exception, invalid);
-	auto any_return = MakeCast(conn, "any_return", integer, factory.CreateType(LogicalTypeId::ANY), NoopCast);
-	any_return.SetResolveTypesCallback([](ScalarFunction::ResolveTypesInput &) {});
-	REQUIRE_THROWS_MATCHES(conn.RegisterCast(any_return), Exception, invalid);
+	auto any_parameter = MakeCastPair(conn, "any_parameter", any, varchar, NoopCast, NoopCast);
+	REQUIRE_THROWS_MATCHES(RegisterPair(conn, any_parameter), Exception, invalid);
+	auto any_return = MakeCastPair(conn, "any_return", integer, any, NoopCast, NoopCast);
+	ForBoth(any_return, [](ScalarFunction &function) {
+		function.SetResolveTypesCallback([](ScalarFunction::ResolveTypesInput &) {});
+	});
+	REQUIRE_THROWS_MATCHES(RegisterPair(conn, any_return), Exception, invalid);
 }
 
 TEST_CASE("Stable C++API: try cast reports a failed row through the error slot", "[cpp_api]") {
@@ -442,10 +495,10 @@ void ForbiddingBind(ScalarFunction::BindInput &input) {
 }
 
 void RegisterOffsetCast(Connection &conn, const LogicalType &temperature, FunctionStability stability) {
-	auto cast = MakeCast(conn, "offset_temperature_to_text", temperature, conn.GetFactory().ParseType("VARCHAR"),
-	                     OffsetTempToText);
-	cast.SetStability(stability);
-	conn.RegisterCast(cast);
+	auto cast = MakeCastPair(conn, "offset_temperature_to_text", temperature, conn.GetFactory().ParseType("VARCHAR"),
+	                         OffsetTempToText, OffsetTempToText);
+	ForBoth(cast, [&](ScalarFunction &function) { function.SetStability(stability); });
+	RegisterPair(conn, cast);
 }
 
 } // namespace
@@ -497,11 +550,13 @@ TEST_CASE("Stable C++API: cast bind callback sets bind data for the exec callbac
 	RegisterOptions(conn);
 	auto temperature = RegisterTemperature(conn);
 
-	auto cast = MakeCast(conn, "recording_temperature_to_text", temperature, conn.GetFactory().ParseType("VARCHAR"),
-	                     BindDataTempToText);
-	cast.SetUserData<CastTag>(CastTag {"tag"});
-	cast.SetBindCallback(RecordingBind);
-	conn.RegisterCast(cast);
+	auto cast = MakeCastPair(conn, "recording_temperature_to_text", temperature, conn.GetFactory().ParseType("VARCHAR"),
+	                         BindDataTempToText, BindDataTempToText);
+	ForBoth(cast, [](ScalarFunction &function) {
+		function.SetUserData<CastTag>(CastTag {"tag"});
+		function.SetBindCallback(RecordingBind);
+	});
+	RegisterPair(conn, cast);
 
 	bind_calls = 0;
 	conn.Execute("SET cast_offset = 3").Drain();
@@ -530,10 +585,10 @@ TEST_CASE("Stable C++API: cast bind callback errors surface at bind time", "[cpp
 	RegisterOptions(conn);
 	auto temperature = RegisterTemperature(conn);
 
-	auto cast = MakeCast(conn, "forbidding_temperature_to_text", temperature, conn.GetFactory().ParseType("VARCHAR"),
-	                     OffsetTempToText);
-	cast.SetBindCallback(ForbiddingBind);
-	conn.RegisterCast(cast);
+	auto cast = MakeCastPair(conn, "forbidding_temperature_to_text", temperature,
+	                         conn.GetFactory().ParseType("VARCHAR"), OffsetTempToText, OffsetTempToText);
+	ForBoth(cast, [](ScalarFunction &function) { function.SetBindCallback(ForbiddingBind); });
+	RegisterPair(conn, cast);
 
 	const std::string sql = "SELECT CAST(CAST(5 AS TEMPERATURE_CELSIUS) AS VARCHAR)";
 	REQUIRE(CollectCastStrings(conn.Execute(sql)) == std::vector<std::string> {"5 degrees celsius"});

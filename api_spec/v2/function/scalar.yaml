@@ -958,32 +958,6 @@ functions:
         description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
     return_type: ERROR
 
-  scalar_function_exec_get_cast_mode:
-    lifecycle:
-      - [ "unstable", "v2.0.0", "2026-11-10" ]
-    description: |
-      Returns the mode the function is executed in when it was registered as a cast.
-
-      A function registered with `[[connection_register_cast]]` or `[[extension_register_cast]]` is a cast: its single
-      argument is the value to convert. In `CAST_MODE_TRY` a conversion failure should be written as a NULL into the
-      result vector and reported through the error slot once the batch is written; the engine keeps whatever the
-      callback wrote and reports that not every row converted, instead of aborting. A function that is not running as a
-      cast always executes in `CAST_MODE_NORMAL`.
-    parameters:
-      info:
-        type: scalar_function_exec_info
-        description: The exec info handle.
-      mode:
-        type: CAST_MODE
-        indirection: 1
-        kind: OUT
-        description: Receives the cast mode.
-      err:
-        type: error_info
-        indirection: 1
-        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
-    return_type: ERROR
-
   scalar_function_exec_get_arg_count:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-08-11" ]
@@ -1212,11 +1186,19 @@ functions:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-11-10" ]
     description: |
-      Registers the scalar function as a cast, making it available to CAST and TRY_CAST.
+      Registers a pair of scalar functions as a cast, making it available to CAST and TRY_CAST.
 
-      The function must take exactly one parameter, the value to convert, and both that parameter type and the return
-      type must be fully defined concrete types: the cast converts from the former to the latter. It cannot have a
-      resolve types callback. Its name is only used in messages. Setting the stability of the function (or of the call, in
+      `function` implements CAST and `try_function` implements TRY_CAST. Each must take exactly one parameter, the
+      value to convert, and both must declare the same parameter type and the same return type, which must be fully
+      defined concrete types: the cast converts from the former to the latter. Neither can have a resolve types
+      callback. Their names are only used in messages.
+
+      `function` reports a row it cannot convert as an error, which aborts the query. `try_function` writes a NULL
+      into the result vector for each such row and reports the error through the error slot once the batch is
+      written: the engine swallows the error, keeps the rows the callback wrote, and reports that not every row
+      converted, which callers that probe a cast, such as the CSV sniffer, rely on. A callback that leaves a row NULL
+      without reporting an error tells the engine the row converted. The two functions can share their exec callback
+      and differ only in how they treat a failure. Setting the stability of the function (or of the call, in
       its bind callback) to `FUNCTION_PROPERTY_STABILITY_CONSISTENT_WITHIN_QUERY` keeps a cast that reads a setting
       out of prepared statements and index expressions.
 
@@ -1226,8 +1208,8 @@ functions:
 
       The cast is registered on the connection's database and takes effect immediately for every connection; it is not
       part of the connection's transaction, so a rollback does not undo it. Registering a cast for a pair that already
-      has one replaces it. The function must have been created through a factory of the same database. The caller
-      still owns the handle after registration and must destroy it with `[[scalar_function_destroy]]`, which does not
+      has one replaces it. The functions must have been created through a factory of the same database. The caller
+      still owns the handles after registration and must destroy them with `[[scalar_function_destroy]]`, which does not
       affect the registered cast.
     role: method
     belongs_to: connection
@@ -1237,7 +1219,10 @@ functions:
         description: The connection to register on.
       function:
         type: scalar_function
-        description: The scalar function to register as a cast.
+        description: The scalar function implementing CAST.
+      try_function:
+        type: scalar_function
+        description: The scalar function implementing TRY_CAST.
       implicit_cast_cost:
         type: i64
         description: |
@@ -1255,12 +1240,12 @@ functions:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-11-10" ]
     description: |
-      Registers the scalar function as a cast, making it available to CAST and TRY_CAST.
+      Registers a pair of scalar functions as a cast, making it available to CAST and TRY_CAST.
 
       The cast is registered on the loading extension's database. Use this from the extension's load callback. See
-      `[[connection_register_cast]]` for what the function must look like and how the cast behaves. The caller still
-      owns the handle after registration and must destroy it with `[[scalar_function_destroy]]`, which does not affect
-      the registered cast.
+      `[[connection_register_cast]]` for what the functions must look like and how the cast behaves. The caller still
+      owns the handles after registration and must destroy them with `[[scalar_function_destroy]]`, which does not
+      affect the registered cast.
     role: method
     belongs_to: extension
     parameters:
@@ -1269,7 +1254,10 @@ functions:
         description: The loading extension.
       function:
         type: scalar_function
-        description: The scalar function to register as a cast.
+        description: The scalar function implementing CAST.
+      try_function:
+        type: scalar_function
+        description: The scalar function implementing TRY_CAST.
       implicit_cast_cost:
         type: i64
         description: What it costs to apply this cast implicitly, see `[[connection_register_cast]]`. Negative disables implicit casting.

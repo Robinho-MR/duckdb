@@ -988,21 +988,25 @@ public:
 	/// @throws InvalidInputException When the name or function name is missing, or the function does not exist or
 	/// has no overload taking one VARCHAR and returning VARCHAR or BLOB.
 	auto Register(CollationInfo &collation) -> void;
-	/// Registers a scalar function as a cast, replacing whatever cast was registered for the same type pair. A cast is
-	/// a scalar function with exactly one parameter, the value to convert, whose return type is the type converted
-	/// to; both must be fully defined concrete types and the function cannot have a resolve types callback. It is
-	/// reached from SQL through CAST and TRY_CAST, and through the binder converting argument types on its own when
-	/// `implicit_cast_cost` is not negative. Everything else is the scalar function's own: the bind callback runs
-	/// each time the cast is bound for a call site, set the stability to `CONSISTENT_WITHIN_QUERY` for a cast that
-	/// reads a setting, and the exec callback learns from `ScalarFunction::ExecInput::GetCastMode` whether a failed
-	/// row is to be left NULL. The function object remains valid and may be adjusted and registered again; user
-	/// data set via `SetUserData` is consumed by the first registration.
-	/// @param scalar_function The function to convert with. Its name is only used in messages.
+	/// Registers a pair of scalar functions as a cast, replacing whatever cast was registered for the same type pair.
+	/// A cast function has exactly one parameter, the value to convert, and its return type is the type converted to;
+	/// both must be fully defined concrete types and the function cannot have a resolve types callback. `cast_function`
+	/// implements CAST, `try_cast_function` implements TRY_CAST, and the two must have the same parameter and return
+	/// type. The cast is reached from SQL through CAST and TRY_CAST, and through the binder converting argument types
+	/// on its own when `implicit_cast_cost` is not negative. Everything else is the scalar functions' own: the bind
+	/// callback runs each time the cast is bound for a call site, and a cast that reads a setting sets its stability to
+	/// `CONSISTENT_WITHIN_QUERY`. The two must be distinct objects. The function objects remain valid and may be
+	/// adjusted and registered again; user data set via `SetUserData` is consumed by the first registration.
+	/// @param cast_function Converts the values; throwing for a row that does not convert aborts the query.
+	/// @param try_cast_function Writes NULL for each row that does not convert and throws once the batch is written:
+	/// the exception is swallowed, the rows written stay, and the cast reports that not every row converted. It may
+	/// share its exec callback with `cast_function`.
 	/// @param implicit_cast_cost What it costs to apply the cast implicitly: a lower non-negative cost makes the
 	/// binder more likely to pick it. Built-in widening casts sit in the [0, 20] range. A negative cost keeps the cast
 	/// out of implicit conversion entirely.
-	/// @throws InvalidInputException When the function does not have the shape of a cast.
-	auto RegisterCast(ScalarFunction &scalar_function, int64_t implicit_cast_cost = -1) -> void;
+	/// @throws InvalidInputException When the functions do not have the shape of a cast.
+	auto RegisterCast(ScalarFunction &cast_function, ScalarFunction &try_cast_function, int64_t implicit_cast_cost = -1)
+	    -> void;
 	/// Registers the pragma. The function object remains valid; user data set via `SetUserData` is consumed by the
 	/// first registration.
 	/// @throws InvalidInputException When the name is missing, not exactly one of the query and exec callbacks is set,
@@ -1417,21 +1421,10 @@ public:
 	/// @throws InvalidInputException When the name or function name is missing, or the function does not exist or
 	/// has no overload taking one VARCHAR and returning VARCHAR or BLOB.
 	auto Register(CollationInfo &collation) -> void;
-	/// Registers a scalar function as a cast, replacing whatever cast was registered for the same type pair. A cast is
-	/// a scalar function with exactly one parameter, the value to convert, whose return type is the type converted
-	/// to; both must be fully defined concrete types and the function cannot have a resolve types callback. It is
-	/// reached from SQL through CAST and TRY_CAST, and through the binder converting argument types on its own when
-	/// `implicit_cast_cost` is not negative. Everything else is the scalar function's own: the bind callback runs
-	/// each time the cast is bound for a call site, set the stability to `CONSISTENT_WITHIN_QUERY` for a cast that
-	/// reads a setting, and the exec callback learns from `ScalarFunction::ExecInput::GetCastMode` whether a failed
-	/// row is to be left NULL. The function object remains valid and may be adjusted and registered again; user
-	/// data set via `SetUserData` is consumed by the first registration.
-	/// @param scalar_function The function to convert with. Its name is only used in messages.
-	/// @param implicit_cast_cost What it costs to apply the cast implicitly: a lower non-negative cost makes the
-	/// binder more likely to pick it. Built-in widening casts sit in the [0, 20] range. A negative cost keeps the cast
-	/// out of implicit conversion entirely.
-	/// @throws InvalidInputException When the function does not have the shape of a cast.
-	auto RegisterCast(ScalarFunction &scalar_function, int64_t implicit_cast_cost = -1) -> void;
+	/// Registers a pair of scalar functions as a cast on the loading extension's database, see
+	/// `Connection::RegisterCast`.
+	auto RegisterCast(ScalarFunction &cast_function, ScalarFunction &try_cast_function, int64_t implicit_cast_cost = -1)
+	    -> void;
 	/// Registers the pragma. The function object remains valid; user data set via `SetUserData` is consumed by the
 	/// first registration.
 	/// @throws InvalidInputException When the name is missing, not exactly one of the query and exec callbacks is set,
@@ -3991,12 +3984,6 @@ public:
 		/// vector. May be less than a full vector; with all-constant arguments the function runs for a single row and
 		/// the engine expands the result.
 		auto GetRowCount() const -> idx_t;
-
-		/// The mode this execution runs in when the function was registered as a cast, `CastMode::NORMAL` otherwise.
-		/// In `CastMode::TRY` a row that does not convert should be left NULL rather than reported by throwing; an
-		/// exception thrown anyway is swallowed and the rows written so far stay, and the cast reports that not every
-		/// row converted.
-		auto GetCastMode() const -> CastMode;
 
 		/// How many argument vectors this execution carries, in all four parts. Valid indices for `GetArg` are
 		/// [0, GetArgCount()).

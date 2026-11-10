@@ -163,8 +163,8 @@ enums:
       could not convert instead of aborting, and still reports the failure
       through the error slot once the batch is written: that makes the cast
       return "not every row converted", which callers that probe a cast, such
-      as the CSV sniffer, rely on. Read with
-      `[[scalar_function_exec_get_cast_mode]]`, and passed to `[[vector_cast]]`.
+      as the CSV sniffer, rely on. Passed to `[[vector_cast]]`; see
+      `[[connection_register_cast]]` for the functions that implement the two modes of a registered cast.
     values:
       CAST_MODE_NORMAL:
         value: 0

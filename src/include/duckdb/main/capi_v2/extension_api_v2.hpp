@@ -1496,11 +1496,11 @@ typedef struct {
 	DUCKDB_V2_ERROR(*duckdb_v2_collation_info_set_not_required_for_equality)
 	(duckdb_v2_collation_info_handle info, bool not_required_for_equality, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_connection_register_cast)
-	(duckdb_v2_connection_handle conn, duckdb_v2_scalar_function_handle function, int64_t implicit_cast_cost,
-	 duckdb_v2_error_info_handle *err);
+	(duckdb_v2_connection_handle conn, duckdb_v2_scalar_function_handle function,
+	 duckdb_v2_scalar_function_handle try_function, int64_t implicit_cast_cost, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_extension_register_cast)
-	(duckdb_v2_extension_handle extension, duckdb_v2_scalar_function_handle function, int64_t implicit_cast_cost,
-	 duckdb_v2_error_info_handle *err);
+	(duckdb_v2_extension_handle extension, duckdb_v2_scalar_function_handle function,
+	 duckdb_v2_scalar_function_handle try_function, int64_t implicit_cast_cost, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_bind_replace_call)
 	(duckdb_v2_scalar_function_bind_info_handle info, const duckdb_v2_identifier_t *function_name,
 	 const idx_t *argument_indices, idx_t argument_count, duckdb_v2_error_info_handle *err);
@@ -1517,8 +1517,6 @@ typedef struct {
 	(duckdb_v2_scalar_function_deserialize_info_handle info, void **data, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_deserialize_set_bind_data)
 	(duckdb_v2_scalar_function_deserialize_info_handle info, duckdb_v2_opaque *data, duckdb_v2_error_info_handle *err);
-	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_exec_get_cast_mode)
-	(duckdb_v2_scalar_function_exec_info_handle info, DUCKDB_V2_CAST_MODE *mode, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_serialize_get_bind_data)
 	(duckdb_v2_scalar_function_serialize_info_handle info, void **data, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_serialize_get_user_data)
@@ -2231,7 +2229,6 @@ inline duckdb_ext_api_v2 CreateAPIv2(void) {
 	result.duckdb_v2_scalar_function_deserialize_get_data = duckdb_v2_scalar_function_deserialize_get_data;
 	result.duckdb_v2_scalar_function_deserialize_get_user_data = duckdb_v2_scalar_function_deserialize_get_user_data;
 	result.duckdb_v2_scalar_function_deserialize_set_bind_data = duckdb_v2_scalar_function_deserialize_set_bind_data;
-	result.duckdb_v2_scalar_function_exec_get_cast_mode = duckdb_v2_scalar_function_exec_get_cast_mode;
 	result.duckdb_v2_scalar_function_serialize_get_bind_data = duckdb_v2_scalar_function_serialize_get_bind_data;
 	result.duckdb_v2_scalar_function_serialize_get_user_data = duckdb_v2_scalar_function_serialize_get_user_data;
 	result.duckdb_v2_scalar_function_serialize_write = duckdb_v2_scalar_function_serialize_write;

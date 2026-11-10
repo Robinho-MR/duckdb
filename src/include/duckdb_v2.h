@@ -4958,8 +4958,8 @@ typedef enum DUCKDB_V2_VECTOR_TYPE {
  * aborts the query. A "try" cast (SQL TRY_CAST, and implicit casts the engine probes speculatively) tolerates per-row
  * failures: the callback writes NULL for the rows it could not convert instead of aborting, and still reports the
  * failure through the error slot once the batch is written: that makes the cast return "not every row converted", which
- * callers that probe a cast, such as the CSV sniffer, rely on. Read with
- * `duckdb_v2_scalar_function_exec_get_cast_mode()`, and passed to `duckdb_v2_vector_cast()`.
+ * callers that probe a cast, such as the CSV sniffer, rely on. Passed to `duckdb_v2_vector_cast()`; see
+ * `duckdb_v2_connection_register_cast()` for the functions that implement the two modes of a registered cast.
  */
 typedef enum DUCKDB_V2_CAST_MODE {
 	//! A regular cast. A conversion failure reported through the error slot aborts the query.
@@ -11938,29 +11938,6 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_exec_get_row_count(
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
- * Returns the mode the function is executed in when it was registered as a cast.
- *
- * A function registered with `duckdb_v2_connection_register_cast()` or `duckdb_v2_extension_register_cast()` is a cast:
- * its single argument is the value to convert. In `CAST_MODE_TRY` a conversion failure should be written as a NULL into
- * the result vector and reported through the error slot once the batch is written; the engine keeps whatever the
- * callback wrote and reports that not every row converted, instead of aborting. A function that is not running as a
- * cast always executes in `CAST_MODE_NORMAL`.
- *
- * history:
- * - unstable: v2.0.0
- *
- * @param info The exec info handle.
- * @param mode Receives the cast mode.
- * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
- * `duckdb_v2_error_info_destroy()`.
- * @return DUCKDB_V2_ERROR
- */
-DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_exec_get_cast_mode(
-    duckdb_v2_scalar_function_exec_info_handle info, DUCKDB_V2_CAST_MODE *mode, duckdb_v2_error_info_handle *err);
-#endif
-
-#if DUCKDB_V2_API_ALLOW_UNSTABLE
-/*!
  * Returns how many argument vectors this invocation carries, split into the four parts of the argument list.
  *
  * The parts and their order are those the bind callback saw through `duckdb_v2_function_bind_get_arg_count()`, and the
@@ -12124,13 +12101,21 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_stats_get_result_stats(
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
- * Registers the scalar function as a cast, making it available to CAST and TRY_CAST.
+ * Registers a pair of scalar functions as a cast, making it available to CAST and TRY_CAST.
  *
- * The function must take exactly one parameter, the value to convert, and both that parameter type and the return type
- * must be fully defined concrete types: the cast converts from the former to the latter. It cannot have a resolve types
- * callback. Its name is only used in messages. Setting the stability of the function (or of the call, in its bind
- * callback) to `FUNCTION_PROPERTY_STABILITY_CONSISTENT_WITHIN_QUERY` keeps a cast that reads a setting out of prepared
- * statements and index expressions.
+ * `function` implements CAST and `try_function` implements TRY_CAST. Each must take exactly one parameter, the value to
+ * convert, and both must declare the same parameter type and the same return type, which must be fully defined concrete
+ * types: the cast converts from the former to the latter. Neither can have a resolve types callback. Their names are
+ * only used in messages.
+ *
+ * `function` reports a row it cannot convert as an error, which aborts the query. `try_function` writes a NULL into the
+ * result vector for each such row and reports the error through the error slot once the batch is written: the engine
+ * swallows the error, keeps the rows the callback wrote, and reports that not every row converted, which callers that
+ * probe a cast, such as the CSV sniffer, rely on. A callback that leaves a row NULL without reporting an error tells
+ * the engine the row converted. The two functions can share their exec callback and differ only in how they treat a
+ * failure. Setting the stability of the function (or of the call, in its bind callback) to
+ * `FUNCTION_PROPERTY_STABILITY_CONSISTENT_WITHIN_QUERY` keeps a cast that reads a setting out of prepared statements
+ * and index expressions.
  *
  * The bind callback of the function runs each time the cast is bound for a call site. It is not run when the engine
  * binds the cast without a client context, and the exec callback then finds no bind data; the exec callback is handed a
@@ -12138,15 +12123,16 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_stats_get_result_stats(
  *
  * The cast is registered on the connection's database and takes effect immediately for every connection; it is not part
  * of the connection's transaction, so a rollback does not undo it. Registering a cast for a pair that already has one
- * replaces it. The function must have been created through a factory of the same database. The caller still owns the
- * handle after registration and must destroy it with `duckdb_v2_scalar_function_destroy()`, which does not affect the
- * registered cast.
+ * replaces it. The functions must have been created through a factory of the same database. The caller still owns the
+ * handles after registration and must destroy them with `duckdb_v2_scalar_function_destroy()`, which does not affect
+ * the registered cast.
  *
  * history:
  * - unstable: v2.0.0
  *
  * @param conn The connection to register on.
- * @param function The scalar function to register as a cast.
+ * @param function The scalar function implementing CAST.
+ * @param try_function The scalar function implementing TRY_CAST.
  * @param implicit_cast_cost What it costs to apply this cast implicitly. The binder uses the cost to choose between
  * candidate implicit casts: a lower non-negative cost makes the cast more likely to be picked, a higher one less
  * likely. Built-in widening casts sit in the [0, 20] range, so a cost above 100 effectively puts this cast last. A
@@ -12157,24 +12143,26 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_stats_get_result_stats(
  */
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_connection_register_cast(duckdb_v2_connection_handle conn,
                                                                 duckdb_v2_scalar_function_handle function,
+                                                                duckdb_v2_scalar_function_handle try_function,
                                                                 int64_t implicit_cast_cost,
                                                                 duckdb_v2_error_info_handle *err);
 #endif
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
- * Registers the scalar function as a cast, making it available to CAST and TRY_CAST.
+ * Registers a pair of scalar functions as a cast, making it available to CAST and TRY_CAST.
  *
  * The cast is registered on the loading extension's database. Use this from the extension's load callback. See
- * `duckdb_v2_connection_register_cast()` for what the function must look like and how the cast behaves. The caller
- * still owns the handle after registration and must destroy it with `duckdb_v2_scalar_function_destroy()`, which does
- * not affect the registered cast.
+ * `duckdb_v2_connection_register_cast()` for what the functions must look like and how the cast behaves. The caller
+ * still owns the handles after registration and must destroy them with `duckdb_v2_scalar_function_destroy()`, which
+ * does not affect the registered cast.
  *
  * history:
  * - unstable: v2.0.0
  *
  * @param extension The loading extension.
- * @param function The scalar function to register as a cast.
+ * @param function The scalar function implementing CAST.
+ * @param try_function The scalar function implementing TRY_CAST.
  * @param implicit_cast_cost What it costs to apply this cast implicitly, see `duckdb_v2_connection_register_cast()`.
  * Negative disables implicit casting.
  * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
@@ -12183,6 +12171,7 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_connection_register_cast(duckdb_v2_connec
  */
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_extension_register_cast(duckdb_v2_extension_handle extension,
                                                                duckdb_v2_scalar_function_handle function,
+                                                               duckdb_v2_scalar_function_handle try_function,
                                                                int64_t implicit_cast_cost,
                                                                duckdb_v2_error_info_handle *err);
 #endif

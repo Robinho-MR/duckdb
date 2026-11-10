@@ -1295,14 +1295,20 @@ auto Extension::Register(CollationInfo &collation) -> void {
 	CheckedAPICall(duckdb_v2_extension_register_collation, handle(), collation.handle());
 }
 
-auto Connection::RegisterCast(ScalarFunction &scalar_function, int64_t implicit_cast_cost) -> void {
-	scalar_function.PrepareRegistration();
-	CheckedAPICall(duckdb_v2_connection_register_cast, handle(), scalar_function.handle(), implicit_cast_cost);
+auto Connection::RegisterCast(ScalarFunction &cast_function, ScalarFunction &try_cast_function,
+                              int64_t implicit_cast_cost) -> void {
+	cast_function.PrepareRegistration();
+	try_cast_function.PrepareRegistration();
+	CheckedAPICall(duckdb_v2_connection_register_cast, handle(), cast_function.handle(), try_cast_function.handle(),
+	               implicit_cast_cost);
 }
 
-auto Extension::RegisterCast(ScalarFunction &scalar_function, int64_t implicit_cast_cost) -> void {
-	scalar_function.PrepareRegistration();
-	CheckedAPICall(duckdb_v2_extension_register_cast, handle(), scalar_function.handle(), implicit_cast_cost);
+auto Extension::RegisterCast(ScalarFunction &cast_function, ScalarFunction &try_cast_function,
+                             int64_t implicit_cast_cost) -> void {
+	cast_function.PrepareRegistration();
+	try_cast_function.PrepareRegistration();
+	CheckedAPICall(duckdb_v2_extension_register_cast, handle(), cast_function.handle(), try_cast_function.handle(),
+	               implicit_cast_cost);
 }
 
 auto Connection::Register(PragmaFunction &pragma_function) -> void {
@@ -3715,13 +3721,6 @@ auto ScalarFunction::ExecInput::GetRowCount() const -> idx_t {
 	CheckedAPICall(duckdb_v2_scalar_function_exec_get_row_count,
 	               static_cast<duckdb_v2_scalar_function_exec_info_handle>(args), &count);
 	return count;
-}
-
-auto ScalarFunction::ExecInput::GetCastMode() const -> CastMode {
-	DUCKDB_V2_CAST_MODE mode = DUCKDB_V2_CAST_MODE_NORMAL;
-	CheckedAPICall(duckdb_v2_scalar_function_exec_get_cast_mode,
-	               static_cast<duckdb_v2_scalar_function_exec_info_handle>(args), &mode);
-	return static_cast<CastMode>(mode);
 }
 
 auto ScalarFunction::ExecInput::GetArgumentCounts() const -> ArgumentCounts {

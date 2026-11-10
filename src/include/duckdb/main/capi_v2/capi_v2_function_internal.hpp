@@ -61,19 +61,20 @@ public:
 	vector<string> categories;
 };
 
-//! Executes the scalar function a cast is registered from. A scalar exec callback finds it behind its expression state
-//! to learn the cast mode, and to report a failed row of a try cast without aborting.
+//! Executes the scalar function a cast is registered from. The exec callback of a try cast reports a failed row
+//! through the error slot, which the executor holds on to instead of aborting.
 class CV2CastExecutor final : public ExpressionExecutor {
 public:
-	CV2CastExecutor(ClientContext &context, const Expression &expr) : ExpressionExecutor(context, expr) {
+	CV2CastExecutor(ClientContext &context, const Expression &expr, bool is_try)
+	    : ExpressionExecutor(context, expr), is_try(is_try) {
 	}
 	//! Without a client context, e.g. while an index is built
-	explicit CV2CastExecutor(const Expression &expr) : ExpressionExecutor() {
+	CV2CastExecutor(const Expression &expr, bool is_try) : ExpressionExecutor(), is_try(is_try) {
 		AddExpression(expr);
 	}
 
 public:
-	//! Whether the cast being executed is a try cast
+	//! Whether the function is a try cast, whose error is held instead of thrown
 	bool is_try = false;
 	//! The error a try cast reported, empty if it converted every row
 	string error;
