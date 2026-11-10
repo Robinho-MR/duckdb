@@ -1188,6 +1188,208 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_destroy(duckdb_v2_cast_func
 /* --- Struct definitions for cast --- */
 
 /* ============================================================================
+ * MODULE: collation
+ * ============================================================================ */
+
+/* --- Enums for collation --- */
+
+/* --- Struct forward declarations for collation --- */
+
+/* --- Types for collation --- */
+
+/*!
+ * An owned opaque handle to a collation being built. Created with `duckdb_v2_collation_info_create()`, configured with
+ * the setter functions (e.g. `duckdb_v2_collation_info_set_name()`, `duckdb_v2_collation_info_set_function_name()`,
+ * etc.), made available with `duckdb_v2_connection_register_collation()` or `duckdb_v2_extension_register_collation()`,
+ * and destroyed with `duckdb_v2_collation_info_destroy()`.
+ */
+typedef struct _duckdb_v2_collation_info {
+	void *internal_ptr;
+} * duckdb_v2_collation_info_handle;
+
+/* --- Constants for collation --- */
+
+/* --- Function pointer typedefs for collation --- */
+
+/* --- Functions for collation --- */
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Creates a new collation info through a factory.
+ *
+ * The collation starts out empty, neither combinable nor skippable for equality: configure it with the setter
+ * functions, then make it available with `duckdb_v2_connection_register_collation()` or
+ * `duckdb_v2_extension_register_collation()`. The caller owns the returned handle and must destroy it with
+ * `duckdb_v2_collation_info_destroy()`, also after registration.
+ *
+ * The collation can only be registered on the instance the factory belongs to.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param factory The factory to create the collation info through.
+ * @param info On success, receives the newly created collation info. Owned by the caller.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_collation_info_create(duckdb_v2_factory_handle factory,
+                                                             duckdb_v2_collation_info_handle *info,
+                                                             duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the name of the collation, as used in COLLATE.
+ *
+ * The name is borrowed and copied. Calling this again replaces the previous name. A name must be set before
+ * registration.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The collation info to set the name of.
+ * @param name The name to set. Borrowed and copied.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_collation_info_set_name(duckdb_v2_collation_info_handle info,
+                                                               const duckdb_v2_identifier_t *name,
+                                                               duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the name of the scalar function that computes the sort key of the collation.
+ *
+ * The function is looked up when the collation is registered, so it must be registered first, e.g. with
+ * `duckdb_v2_connection_register_scalar_function()` or `duckdb_v2_extension_register_scalar_function()`. It must have
+ * an overload that takes exactly one VARCHAR argument and returns VARCHAR or BLOB; that overload is the one the
+ * collation calls. Per-collation configuration can live in the function's user data.
+ *
+ * The name is borrowed and copied. Calling this again replaces the previous name. A function name must be set before
+ * registration.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The collation info to set the function name of.
+ * @param name The name of the scalar function. Borrowed and copied.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_collation_info_set_function_name(duckdb_v2_collation_info_handle info,
+                                                                        const duckdb_v2_identifier_t *name,
+                                                                        duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets whether the collation can be combined with other collations on the same expression. Defaults to false.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The collation info to configure.
+ * @param combinable Whether the collation can be combined with other collations.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_collation_info_set_combinable(duckdb_v2_collation_info_handle info,
+                                                                     bool combinable, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets whether equality comparisons can skip the collation and compare the raw strings. Defaults to false.
+ *
+ * This is only correct when equal strings always have equal sort keys and vice versa.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The collation info to configure.
+ * @param not_required_for_equality Whether equality comparisons can skip the collation.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_collation_info_set_not_required_for_equality(
+    duckdb_v2_collation_info_handle info, bool not_required_for_equality, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Registers the collation on the connection's database, making it available to COLLATE and as a column collation.
+ *
+ * The collation takes effect immediately for every connection; it is not part of the connection's transaction, so a
+ * rollback does not undo it. Registration requires a name and a function name, and fails when the function does not
+ * exist or has no overload taking one VARCHAR and returning VARCHAR or BLOB. An existing collation of the same name is
+ * kept. The collation info must have been created through a factory of the same database. The caller still owns the
+ * handle after registration and must destroy it with `duckdb_v2_collation_info_destroy()`, which does not affect the
+ * registered collation.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param conn The connection to register on.
+ * @param info The collation to register.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_connection_register_collation(duckdb_v2_connection_handle conn,
+                                                                     duckdb_v2_collation_info_handle info,
+                                                                     duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Registers the collation on the loading extension's database, making it available to COLLATE and as a column
+ * collation.
+ *
+ * Use this from the extension's load callback, after registering the collation's scalar function. Registration requires
+ * a name and a function name, and fails when the function does not exist or has no overload taking one VARCHAR and
+ * returning VARCHAR or BLOB. An existing collation of the same name is kept. The collation info must have been created
+ * through a factory of the same database. The caller still owns the handle after registration and must destroy it with
+ * `duckdb_v2_collation_info_destroy()`, which does not affect the registered collation.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param extension The loading extension.
+ * @param info The collation to register.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_extension_register_collation(duckdb_v2_extension_handle extension,
+                                                                    duckdb_v2_collation_info_handle info,
+                                                                    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Destroys the collation info, releasing its resources.
+ *
+ * Null-safe: passing a null pointer or null handle is a no-op. The handle is set to null on return to prevent
+ * double-destruction. Destroying the handle after registration does not affect the registered collation.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The collation info to destroy.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_collation_info_destroy(duckdb_v2_collation_info_handle *info);
+#endif
+
+/* --- Struct definitions for collation --- */
+
+/* ============================================================================
  * MODULE: column_data_collection
  * ============================================================================ */
 
@@ -11288,79 +11490,6 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_connection_register_scalar_function(duckd
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_extension_register_scalar_function(duckdb_v2_extension_handle extension,
                                                                           duckdb_v2_scalar_function_handle function,
                                                                           duckdb_v2_error_info_handle *err);
-#endif
-
-#if DUCKDB_V2_API_ALLOW_UNSTABLE
-/*!
- * Registers the scalar function as a collation, making it available to COLLATE and as a column collation.
- *
- * The collation is registered on the connection's database and takes effect immediately for every connection; it is not
- * part of the connection's transaction, so a rollback does not undo it.
- *
- * The function turns a string into the sort key its comparisons are performed on: it must take exactly one VARCHAR
- * argument and return VARCHAR or BLOB. Where a collated string is compared or sorted, the engine wraps it in a call to
- * the function and compares the results. Per-collation configuration can live in the function's user data. An existing
- * collation of the same name is kept. The scalar function must have been created through a factory of the same
- * database. The caller still owns the handle after registration and must destroy it with
- * `duckdb_v2_scalar_function_destroy()`, which does not affect the registered collation.
- *
- * `combinable` allows the collation to be combined with other collations on the same expression.
- * `not_required_for_equality` lets the engine compare equality on the raw strings, skipping the function, which is only
- * correct when equal strings always have equal sort keys and vice versa.
- *
- * history:
- * - unstable: v2.0.0
- *
- * @param conn The connection to register on.
- * @param name The name of the collation, as used in COLLATE.
- * @param function The scalar function that computes the sort key.
- * @param combinable Whether the collation can be combined with other collations.
- * @param not_required_for_equality Whether equality comparisons can skip the collation.
- * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
- * `duckdb_v2_error_info_destroy()`.
- * @return DUCKDB_V2_ERROR
- */
-DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_connection_register_collation(duckdb_v2_connection_handle conn,
-                                                                     const duckdb_v2_identifier_t *name,
-                                                                     duckdb_v2_scalar_function_handle function,
-                                                                     bool combinable, bool not_required_for_equality,
-                                                                     duckdb_v2_error_info_handle *err);
-#endif
-
-#if DUCKDB_V2_API_ALLOW_UNSTABLE
-/*!
- * Registers the scalar function as a collation, making it available to COLLATE and as a column collation.
- *
- * The collation is registered on the loading extension's database. Use this from the extension's load callback.
- *
- * The function turns a string into the sort key its comparisons are performed on: it must take exactly one VARCHAR
- * argument and return VARCHAR or BLOB. Where a collated string is compared or sorted, the engine wraps it in a call to
- * the function and compares the results. Per-collation configuration can live in the function's user data. An existing
- * collation of the same name is kept. The scalar function must have been created through a factory of the same
- * database. The caller still owns the handle after registration and must destroy it with
- * `duckdb_v2_scalar_function_destroy()`, which does not affect the registered collation.
- *
- * `combinable` allows the collation to be combined with other collations on the same expression.
- * `not_required_for_equality` lets the engine compare equality on the raw strings, skipping the function, which is only
- * correct when equal strings always have equal sort keys and vice versa.
- *
- * history:
- * - unstable: v2.0.0
- *
- * @param extension The loading extension.
- * @param name The name of the collation, as used in COLLATE.
- * @param function The scalar function that computes the sort key.
- * @param combinable Whether the collation can be combined with other collations.
- * @param not_required_for_equality Whether equality comparisons can skip the collation.
- * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
- * `duckdb_v2_error_info_destroy()`.
- * @return DUCKDB_V2_ERROR
- */
-DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_extension_register_collation(duckdb_v2_extension_handle extension,
-                                                                    const duckdb_v2_identifier_t *name,
-                                                                    duckdb_v2_scalar_function_handle function,
-                                                                    bool combinable, bool not_required_for_equality,
-                                                                    duckdb_v2_error_info_handle *err);
 #endif
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE

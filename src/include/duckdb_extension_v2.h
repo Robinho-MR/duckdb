@@ -1547,14 +1547,22 @@ typedef struct {
 	 duckdb_v2_column_data_collection_handle collection, const duckdb_v2_identifier_t *column_names, idx_t column_count,
 	 duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_connection_register_collation)
-	(duckdb_v2_connection_handle conn, const duckdb_v2_identifier_t *name, duckdb_v2_scalar_function_handle function,
-	 bool combinable, bool not_required_for_equality, duckdb_v2_error_info_handle *err);
+	(duckdb_v2_connection_handle conn, duckdb_v2_collation_info_handle info, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_context_get_transaction_start_timestamp)
 	(duckdb_v2_context_handle ctx, int64_t *out_micros, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_extension_register_collation)
-	(duckdb_v2_extension_handle extension, const duckdb_v2_identifier_t *name,
-	 duckdb_v2_scalar_function_handle function, bool combinable, bool not_required_for_equality,
-	 duckdb_v2_error_info_handle *err);
+	(duckdb_v2_extension_handle extension, duckdb_v2_collation_info_handle info, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_collation_info_create)
+	(duckdb_v2_factory_handle factory, duckdb_v2_collation_info_handle *info, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_collation_info_destroy)(duckdb_v2_collation_info_handle *info);
+	DUCKDB_V2_ERROR(*duckdb_v2_collation_info_set_combinable)
+	(duckdb_v2_collation_info_handle info, bool combinable, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_collation_info_set_function_name)
+	(duckdb_v2_collation_info_handle info, const duckdb_v2_identifier_t *name, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_collation_info_set_name)
+	(duckdb_v2_collation_info_handle info, const duckdb_v2_identifier_t *name, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_collation_info_set_not_required_for_equality)
+	(duckdb_v2_collation_info_handle info, bool not_required_for_equality, duckdb_v2_error_info_handle *err);
 #endif
 	// capigen:end appended
 } duckdb_ext_api_v2;
@@ -3535,6 +3543,25 @@ typedef struct {
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_extension_register_collation duckdb_ext_api.duckdb_v2_extension_register_collation
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_collation_info_create duckdb_ext_api.duckdb_v2_collation_info_create
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_collation_info_destroy duckdb_ext_api.duckdb_v2_collation_info_destroy
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_collation_info_set_combinable duckdb_ext_api.duckdb_v2_collation_info_set_combinable
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_collation_info_set_function_name duckdb_ext_api.duckdb_v2_collation_info_set_function_name
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_collation_info_set_name duckdb_ext_api.duckdb_v2_collation_info_set_name
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_collation_info_set_not_required_for_equality                                                         \
+	duckdb_ext_api.duckdb_v2_collation_info_set_not_required_for_equality
 #endif
 // capigen:end appended
 #endif // DUCKDB_BUILD_STATIC_EXTENSION
