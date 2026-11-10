@@ -12,7 +12,7 @@ module: function properties
 #     the properties shared by every function type (the base class); each other
 #     group reserves a range for properties specific to that function type:
 #       0x01 COMMON     (applies to all function types)
-#       0x02 SCALAR     (reserved)
+#       0x02 SCALAR     (scalar functions only)
 #       0x03 AGGREGATE
 #       0x04 WINDOW     (reserved)
 #       0x05 TABLE      (reserved)
@@ -48,6 +48,10 @@ enums:
       FUNCTION_PROPERTY_COLLATION_HANDLING:
         value: 0x010300
         description: "How the function interacts with collations on its arguments. Accepts the `FUNCTION_PROPERTY_COLLATION_HANDLING_*` values. Defaults to `PROPAGATE`."
+      # SCALAR group (0x02xxxx)
+      FUNCTION_PROPERTY_STATISTICS_PROPAGATION:
+        value: 0x020000
+        description: "Scalar only. How the statistics of the result are derived. Accepts the `FUNCTION_PROPERTY_STATISTICS_PROPAGATION_*` values. Defaults to `NONE`."
       # AGGREGATE group (0x03xxxx)
       FUNCTION_PROPERTY_AGG_ORDER_DEPENDENT:
         value: 0x030000
@@ -98,6 +102,13 @@ enums:
       FUNCTION_PROPERTY_COLLATION_HANDLING_IGNORE:
         value: 0x010302
         description: "Collations are ignored by the function."
+      # FUNCTION_PROPERTY_STATISTICS_PROPAGATION (0x020000)
+      FUNCTION_PROPERTY_STATISTICS_PROPAGATION_NONE:
+        value: 0x020000
+        description: "The engine derives no statistics of the result, unless a stats callback is set (default)."
+      FUNCTION_PROPERTY_STATISTICS_PROPAGATION_FINITE_MONOTONE_BOUNDS:
+        value: 0x020001
+        description: "The statistics of the result are derived from the finite bounds of the arguments through the declared argument monotonicity (see `[[scalar_function_set_argument_monotonicity]]`); an infinite argument gives a NULL result. It is an error to combine it with a stats callback."
       # FUNCTION_PROPERTY_AGG_ORDER_DEPENDENT (0x030000)
       FUNCTION_PROPERTY_AGG_ORDER_DEPENDENT_YES:
         value: 0x030000

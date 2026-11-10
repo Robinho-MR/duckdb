@@ -21,6 +21,29 @@ enums:
         value: 3
         description: The partitions the scan produces are disjoint ranges.
 
+  TABLE_IN_OUT_RESULT:
+    description: |
+      What an in-out table function tells the engine to do next. Reported from the in-out callback and the in-out final
+      callback via `[[table_function_in_out_set_result]]`.
+    values:
+      TABLE_IN_OUT_RESULT_NEED_MORE_INPUT:
+        value: 0
+        description: |
+          The input chunk is fully consumed: the engine calls the in-out callback with the next input chunk. The
+          output chunk may hold rows. Not valid from the in-out final callback.
+      TABLE_IN_OUT_RESULT_HAVE_MORE_OUTPUT:
+        value: 1
+        description: |
+          The function has more output for the current input (or, from the in-out final callback, more buffered
+          output): the engine consumes the output chunk and calls the callback again, with the same input chunk.
+      TABLE_IN_OUT_RESULT_FINISHED:
+        value: 2
+        description: |
+          The function wants no more input: the engine consumes the output chunk and then stops the pipeline the
+          function runs in on the thread, like a satisfied `LIMIT`. Input rows not yet seen produce no rows, so only
+          report it when the function can produce nothing more, e.g. because a limit was reached. From the in-out
+          final callback, all buffered output has been produced.
+
 #-----------------------------------------------------------------------------------------------------------------------
 # Handles
 #-----------------------------------------------------------------------------------------------------------------------
@@ -95,6 +118,13 @@ handles:
       next batch of work. The "claim batch" callback receives this handle and can use it to claim the next part of
       the scan from the shared global state for the thread's local state, and to report whether it claimed one.
 
+  table_function_in_out_info:
+    description: |
+      A borrowed opaque handle to the arguments supplied to an in-out table function when the engine pushes input to
+      it. The in-out callback and the in-out final callback receive this handle and can use it to access the global
+      and local state, the input chunk, and the output chunk to write the next batch of rows into, and to tell the
+      engine what to do next with `[[table_function_in_out_set_result]]`.
+
   table_function_get_bind_info_info:
     description: |
       A borrowed opaque handle to the arguments supplied to a table function when the engine asks it to describe a
@@ -167,6 +197,20 @@ callbacks:
     parameters:
       info:
         type: table_function_exec_info
+        description: Borrowed opaque handle providing access to the information available to the callback.
+      context:
+        type: context
+        description: Borrowed handle to the context of the query currently executing the callback.
+      err:
+        type: error_info
+        indirection: 1
+        description: Borrowed error info handle to use to report errors that occur during the callback.
+    return_type: void
+
+  table_function_in_out_callback:
+    parameters:
+      info:
+        type: table_function_in_out_info
         description: Borrowed opaque handle providing access to the information available to the callback.
       context:
         type: context
@@ -274,6 +318,25 @@ callbacks:
         indirection: 1
         description: Borrowed error info handle to use to report errors that occur during the callback.
     return_type: void
+
+#-----------------------------------------------------------------------------------------------------------------------
+# Constants
+#-----------------------------------------------------------------------------------------------------------------------
+constants:
+  VIRTUAL_COLUMN_START:
+    value: "0x8000000000000000ULL"
+    description: |
+      The first identifier of a virtual column, 2^63. The identifiers a function gives its virtual columns with
+      `[[table_function_bind_add_virtual_column]]` are at least this, and so is every column index the scan's column index functions
+      report for a virtual column.
+  COLUMN_IDENTIFIER_ROW_ID:
+    value: "0xFFFFFFFFFFFFFFFFULL"
+    description: The identifier of a row id column, a virtual column with a meaning of its own to the engine.
+  COLUMN_IDENTIFIER_EMPTY:
+    value: "0xFFFFFFFFFFFFFFFEULL"
+    description: |
+      The identifier of the empty column, a virtual column the engine requests when the query needs the rows but none
+      of their values, e.g. `SELECT count(*)`.
 
 #-----------------------------------------------------------------------------------------------------------------------
 # Functions
@@ -490,7 +553,8 @@ functions:
 
       The exec callback implements the function's logic: it is invoked repeatedly during query execution and
       writes the next batch of rows to the output chunk, until it produces an empty batch to signal the end of
-      the scan. An exec callback must be set before registration.
+      the scan. Exactly one of an exec callback and an in-out callback (see `[[table_function_set_in_out_callback]]`)
+      must be set before registration.
     parameters:
       function:
         type: table_function
@@ -498,6 +562,82 @@ functions:
       callback:
         type: table_function_exec_callback
         description: The exec callback to set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_set_in_out_callback:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-09" ]
+    description: |
+      Sets the in-out callback of the table function, which makes it an in-out table function.
+
+      An in-out function consumes an input chunk instead of scanning a source: it is the kind of function used with
+      a lateral join, e.g. `SELECT * FROM t, my_function(t.col)`, where the arguments are columns of the preceding
+      table. The engine invokes the callback with a chunk of input rows and an output chunk; the function writes the
+      rows it produces for the input into the output chunk (see `[[table_function_in_out_get_input_chunk]]` and
+      `[[table_function_in_out_get_output_chunk]]`) and tells the engine what to do next with
+      `[[table_function_in_out_set_result]]`. When the output chunk is full, the function reports
+      `TABLE_IN_OUT_RESULT_HAVE_MORE_OUTPUT` and is invoked again with the same input chunk, so it keeps its position
+      in the input in its local state; when it has consumed the input it reports `TABLE_IN_OUT_RESULT_NEED_MORE_INPUT`.
+      The callback is invoked for an input chunk until it reports so, also when it has no more output to produce.
+
+      The input chunk holds one vector per positional argument of the call, in the order of the signature. Named-only
+      arguments do not appear in it: they are constants, available at bind through `[[function_bind_info]]` like for
+      any table function. A call whose arguments are all constants, e.g. `SELECT * FROM my_function('x')`, runs the
+      function as a source instead: the input chunk is a single row holding the constants, the engine invokes the
+      callback again for as long as it produces rows, and an empty output chunk ends the scan, whatever result is
+      reported. A function meant for both kinds of call therefore reports `TABLE_IN_OUT_RESULT_NEED_MORE_INPUT` with
+      an empty output chunk, once it has produced all the rows of the input, instead of together with the last rows.
+
+      The function binds like any table function (see `[[table_function_set_bind_callback]]`), but its positional
+      arguments are only constants at bind when all of the call's arguments are; see `[[function_bind_get_arg_value]]`.
+      The init global and init local callbacks run as usual, once per scan and once per thread; the engine can
+      invoke the callback from several threads at once, each with its own local state, subject to the cap set with
+      `[[table_function_init_global_set_max_threads]]`. Projection pushdown (see
+      `[[table_function_set_projection_pushdown]]`) works as for an exec callback: with it the output chunk holds a
+      vector per column the query uses, in the order of `[[table_function_in_out_get_column_index]]`, and the function
+      should skip the others. The progress callback (see `[[table_function_set_progress_callback]]`) is only
+      consulted when the function runs as a source. The claim batch, partition data and partitioning callbacks do not
+      apply to an in-out function and are rejected at registration, as is setting an exec callback.
+    parameters:
+      function:
+        type: table_function
+        description: The function to set the in-out callback of.
+      callback:
+        type: table_function_in_out_callback
+        description: The in-out callback to set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_set_in_out_final_callback:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-09" ]
+    description: |
+      Sets the optional in-out final callback of an in-out table function.
+
+      The engine invokes it once there is no more input, so that a function that buffers rows can flush them. It
+      receives the same info handle as the in-out callback, with no input chunk (see
+      `[[table_function_in_out_get_input_chunk]]`), and writes to the output chunk. It reports
+      `TABLE_IN_OUT_RESULT_HAVE_MORE_OUTPUT` while it has more to produce, in which case it is invoked again, and
+      `TABLE_IN_OUT_RESULT_FINISHED` when it is done. Requires an in-out callback to be set before registration.
+
+      Limitation of the engine: it does not support the final callback of a function whose input comes from a subquery
+      (a lateral call): the query fails with an internal error. For a call whose arguments are all constants it invokes
+      the callback after the first empty output, and then invokes the in-out callback again with the same input. Prefer to
+      flush buffered rows from the in-out callback itself.
+    parameters:
+      function:
+        type: table_function
+        description: The function to set the in-out final callback of.
+      callback:
+        type: table_function_in_out_callback
+        description: The in-out final callback to set.
       err:
         type: error_info
         indirection: 1
@@ -537,7 +677,10 @@ functions:
       callback's output chunk holds one vector per requested column rather than one per column declared in bind,
       and the global init, local init and exec callbacks can look up which declared column each vector stands for
       via e.g. `[[table_function_exec_get_column_index]]`. Without it the output chunk always holds every declared
-      column, and the engine drops the unused ones itself.
+      column, and the engine drops the unused ones itself. The same holds for the output chunk of an in-out callback
+      (see `[[table_function_set_in_out_callback]]`). Virtual columns (see
+      `[[table_function_bind_add_virtual_column]]`) need projection pushdown, since it is what lets the query ask
+      for them.
     parameters:
       function:
         type: table_function
@@ -674,6 +817,57 @@ functions:
         const: true
         kind: IN
         description: The name of the column. Borrowed and copied.
+      type:
+        type: logical_type
+        description: The type of the column. Borrowed and copied.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_bind_add_virtual_column:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-09" ]
+    description: |
+      Declares a virtual column of this call of the function, identified by the given identifier.
+
+      A virtual column is not one of the columns the function returns (see `[[table_function_bind_add_result_column]]`):
+      it is not part of `SELECT *`, and the query asks for it by name. The function only produces it when it is asked
+      for, as a vector of the output chunk like any other column the scan produces (the output chunk of the exec
+      callback, or of the in-out callback). That requires projection pushdown (see
+      `[[table_function_set_projection_pushdown]]`), which is what lets the engine ask for it; declaring a virtual
+      column fails otherwise. The scan recognizes the column by its identifier: the column count and column index
+      functions of the init global, init local, exec and in-out callbacks (e.g.
+      `[[table_function_exec_get_column_index]]`) return it for the vectors that stand for the column.
+
+      The identifier must be at least `DUCKDB_V2_VIRTUAL_COLUMN_START`, and unique among the virtual columns of the
+      call. Two identifiers have a meaning of their own to the engine: `DUCKDB_V2_COLUMN_IDENTIFIER_ROW_ID` is the
+      identifier of the row id of a row, conventionally declared with the name `rowid`, and
+      `DUCKDB_V2_COLUMN_IDENTIFIER_EMPTY` is that of a column the engine requests when the query needs the rows but
+      none of their values, e.g. `SELECT count(*)`. A function that declares the latter receives it as the only
+      requested column then; its vector is a BOOLEAN one whose values are never read, but whose size, like for any
+      other column, is the batch's row count. A function that does not declare it receives its row id column if it
+      declares one, and its first declared column otherwise. Any other identifier is the function's to give a meaning
+      to, e.g. `DUCKDB_V2_VIRTUAL_COLUMN_START + 1`. The name must not be empty, except for the identifier
+      `DUCKDB_V2_COLUMN_IDENTIFIER_EMPTY`, and the type must be a fully defined concrete type. The name and type are
+      borrowed and copied.
+    parameters:
+      info:
+        type: table_function_bind_info
+        description: The bind info handle.
+      identifier:
+        type: idx
+        description: The identifier of the virtual column, at least `DUCKDB_V2_VIRTUAL_COLUMN_START`.
+      name:
+        type: char
+        indirection: 1
+        const: true
+        kind: IN
+        description: The name of the column. Borrowed and copied.
+      name_length:
+        type: idx
+        description: The length of `name` in bytes. `name` must be valid UTF-8, need not be null-terminated, and may be NULL only when this is 0.
       type:
         type: logical_type
         description: The type of the column. Borrowed and copied.
@@ -849,11 +1043,13 @@ functions:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-09-03" ]
     description: |
-      Returns which declared column the scan's column at the given index stands for.
+      Returns which column the scan's column at the given index stands for.
 
-      The result indexes the columns declared with `[[table_function_bind_add_result_column]]`, in declaration
-      order: the exec callback fills the output chunk's vector at `index` with that column's data. Without
-      projection pushdown the mapping is the identity. Fails if the index is out of bounds.
+      For a declared column, the result indexes the columns declared with `[[table_function_bind_add_result_column]]`,
+      in declaration order: the callback that fills the output chunk fills its vector at `index` with that column's
+      data. For a virtual column (see `[[table_function_bind_add_virtual_column]]`) it is the identifier the column
+      was declared with, which is at least `DUCKDB_V2_VIRTUAL_COLUMN_START`; tell the two apart by comparing with it.
+      Without projection pushdown the mapping is the identity. Fails if the index is out of bounds.
     parameters:
       info:
         type: table_function_init_global_info
@@ -989,11 +1185,13 @@ functions:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-09-03" ]
     description: |
-      Returns which declared column the scan's column at the given index stands for.
+      Returns which column the scan's column at the given index stands for.
 
-      The result indexes the columns declared with `[[table_function_bind_add_result_column]]`, in declaration
-      order: the exec callback fills the output chunk's vector at `index` with that column's data. Without
-      projection pushdown the mapping is the identity. Fails if the index is out of bounds.
+      For a declared column, the result indexes the columns declared with `[[table_function_bind_add_result_column]]`,
+      in declaration order: the callback that fills the output chunk fills its vector at `index` with that column's
+      data. For a virtual column (see `[[table_function_bind_add_virtual_column]]`) it is the identifier the column
+      was declared with, which is at least `DUCKDB_V2_VIRTUAL_COLUMN_START`; tell the two apart by comparing with it.
+      Without projection pushdown the mapping is the identity. Fails if the index is out of bounds.
     parameters:
       info:
         type: table_function_init_local_info
@@ -1151,11 +1349,13 @@ functions:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-09-03" ]
     description: |
-      Returns which declared column the scan's column at the given index stands for.
+      Returns which column the scan's column at the given index stands for.
 
-      The result indexes the columns declared with `[[table_function_bind_add_result_column]]`, in declaration
-      order: the exec callback fills the output chunk's vector at `index` with that column's data. Without
-      projection pushdown the mapping is the identity. Fails if the index is out of bounds.
+      For a declared column, the result indexes the columns declared with `[[table_function_bind_add_result_column]]`,
+      in declaration order: the callback that fills the output chunk fills its vector at `index` with that column's
+      data. For a virtual column (see `[[table_function_bind_add_virtual_column]]`) it is the identifier the column
+      was declared with, which is at least `DUCKDB_V2_VIRTUAL_COLUMN_START`; tell the two apart by comparing with it.
+      Without projection pushdown the mapping is the identity. Fails if the index is out of bounds.
     parameters:
       info:
         type: table_function_exec_info
@@ -1168,6 +1368,222 @@ functions:
         indirection: 1
         kind: OUT
         description: Receives the index of the declared column.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  #---------------------------------------------------------------------------------------------------------------------
+  # In-Out Callback Functions
+  #---------------------------------------------------------------------------------------------------------------------
+  table_function_in_out_get_user_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-09" ]
+    description: Retrieves the user data set via `[[table_function_set_user_data]]`.
+    parameters:
+      info:
+        type: table_function_in_out_info
+        description: The in-out info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the user data pointer, or null if none was set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_in_out_get_bind_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-09" ]
+    description: Retrieves the bind data set by the function's bind callback.
+    parameters:
+      info:
+        type: table_function_in_out_info
+        description: The in-out info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the bind data pointer, or null if none was set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_in_out_get_global_state:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-09" ]
+    description: |
+      Retrieves the global state set by the function's global init callback.
+
+      The global state is shared by every thread that runs the function, so access to it must be synchronized.
+    parameters:
+      info:
+        type: table_function_in_out_info
+        description: The in-out info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the global state pointer, or null if none was set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_in_out_get_local_state:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-09" ]
+    description: |
+      Retrieves the worker-local local state set by the function's local init callback.
+
+      This is where a function keeps its position in the input chunk across invocations that report
+      `TABLE_IN_OUT_RESULT_HAVE_MORE_OUTPUT`.
+    parameters:
+      info:
+        type: table_function_in_out_info
+        description: The in-out info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the local state pointer for the executing thread, or null if none was set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_in_out_get_input_chunk:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-09" ]
+    description: |
+      Retrieves the chunk of input rows the in-out callback is asked to process.
+
+      The chunk holds one vector per positional argument of the call, in the order of the signature; read them with
+      `[[data_chunk_get_vector]]` and `[[data_chunk_get_size]]`. The input is read-only: the function must not modify
+      the chunk or its vectors. While the function reports `TABLE_IN_OUT_RESULT_HAVE_MORE_OUTPUT`, the chunk stays the
+      same from one invocation to the next. For the in-out final callback there is no input, and `chunk` receives null.
+      Borrowed; valid only for the duration of the callback.
+    parameters:
+      info:
+        type: table_function_in_out_info
+        description: The in-out info handle.
+      chunk:
+        type: data_chunk
+        indirection: 1
+        kind: OUT
+        description: Receives the borrowed input chunk, or null for the in-out final callback.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_in_out_get_output_chunk:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-09" ]
+    description: |
+      Retrieves the output chunk the in-out callback must write the rows it produces into.
+
+      The first vectors of the chunk are the columns the scan produces, one per column of
+      `[[table_function_in_out_get_column_count]]`; reach them with `[[data_chunk_get_vector]]`. The chunk can hold
+      further vectors after those, which belong to the engine and must be left alone. The chunk starts out empty on
+      every invocation: write the rows, then declare how many there are with `[[vector_set_size]]` on the first
+      vector, which the engine takes as the number of rows and propagates to the other vectors. An empty output is
+      valid, e.g. for an input row that produces no rows. Borrowed; valid only for the duration of the callback.
+    parameters:
+      info:
+        type: table_function_in_out_info
+        description: The in-out info handle.
+      chunk:
+        type: data_chunk
+        indirection: 1
+        kind: OUT
+        description: Receives the borrowed output chunk to write into.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_in_out_get_column_count:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-09" ]
+    description: |
+      Returns the number of columns the scan produces.
+
+      With projection pushdown (see `[[table_function_set_projection_pushdown]]`) this is the number of columns the
+      query uses; without it, it is the number of columns declared in bind. These are the leading vectors of the output
+      chunk, see `[[table_function_in_out_get_output_chunk]]`. Valid indices for
+      `[[table_function_in_out_get_column_index]]` are `0` up to (but excluding) this count.
+    parameters:
+      info:
+        type: table_function_in_out_info
+        description: The in-out info handle.
+      count:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the number of columns the scan produces.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_in_out_get_column_index:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-09" ]
+    description: |
+      Returns which column the scan's column at the given index stands for.
+
+      For a declared column, the result indexes the columns declared with `[[table_function_bind_add_result_column]]`,
+      in declaration order: the in-out callback fills the output chunk's vector at `index` with that column's data.
+      For a virtual column (see `[[table_function_bind_add_virtual_column]]`) it is the identifier the column was
+      declared with, which is at least `DUCKDB_V2_VIRTUAL_COLUMN_START`; tell the two apart by comparing with it.
+      Without projection pushdown the mapping is the identity. Fails if the index is out of bounds.
+    parameters:
+      info:
+        type: table_function_in_out_info
+        description: The in-out info handle.
+      index:
+        type: idx
+        description: The index of the column in the scan's output.
+      column_index:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the index of the declared column, or the identifier of the virtual column.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_in_out_set_result:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-09" ]
+    description: |
+      Tells the engine what to do after this invocation of the in-out callback or the in-out final callback.
+
+      See `[[TABLE_IN_OUT_RESULT]]`. A callback that returns without calling this reports
+      `TABLE_IN_OUT_RESULT_NEED_MORE_INPUT` from the in-out callback, and `TABLE_IN_OUT_RESULT_FINISHED` from the
+      in-out final callback. Fails with `ERROR_INPUT_INVALID` when the result is not one of the enum's declared
+      values, or is `TABLE_IN_OUT_RESULT_NEED_MORE_INPUT` in the in-out final callback.
+    parameters:
+      info:
+        type: table_function_in_out_info
+        description: The in-out info handle.
+      result:
+        type: TABLE_IN_OUT_RESULT
+        description: What the engine should do next.
       err:
         type: error_info
         indirection: 1
@@ -1411,8 +1827,9 @@ functions:
       Resolves a column reference found in a predicate to the declared column it refers to.
 
       Takes the index a `EXPRESSION_TYPE_BOUND_COLUMN_REF` node reports and returns the index of the column among
-      the ones declared with `[[table_function_bind_add_result_column]]`, in declaration order. Fails if the index
-      is out of bounds.
+      the ones declared with `[[table_function_bind_add_result_column]]`, in declaration order, or the identifier of
+      the virtual column (see `[[table_function_bind_add_virtual_column]]`) it refers to, which is at least
+      `DUCKDB_V2_VIRTUAL_COLUMN_START`. Fails if the index is out of bounds.
     parameters:
       info:
         type: table_function_filter_pushdown_info

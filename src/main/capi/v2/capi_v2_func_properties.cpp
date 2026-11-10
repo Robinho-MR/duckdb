@@ -150,6 +150,24 @@ void SetScalarFunctionProperty(FunctionProperties &props, DUCKDB_V2_FUNCTION_PRO
 	SetCommonProperty(props, key, value);
 }
 
+bool TrySetScalarStatisticsPropagation(DUCKDB_V2_FUNCTION_PROPERTY_KEY key, DUCKDB_V2_FUNCTION_PROPERTY_VALUE value,
+                                       bool &finite_monotone_bounds) {
+	if (key != DUCKDB_V2_FUNCTION_PROPERTY_STATISTICS_PROPAGATION) {
+		return false;
+	}
+	ValidateValueMatchesKey(key, value);
+	switch (value) {
+	case DUCKDB_V2_FUNCTION_PROPERTY_STATISTICS_PROPAGATION_NONE:
+		finite_monotone_bounds = false;
+		return true;
+	case DUCKDB_V2_FUNCTION_PROPERTY_STATISTICS_PROPAGATION_FINITE_MONOTONE_BOUNDS:
+		finite_monotone_bounds = true;
+		return true;
+	default:
+		ThrowUnknownValue(key, value);
+	}
+}
+
 void SetAggregateFunctionProperty(AggregateFunctionProperties &props, DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
                                   DUCKDB_V2_FUNCTION_PROPERTY_VALUE value) {
 	ValidateValueMatchesKey(key, value);

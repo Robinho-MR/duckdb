@@ -153,7 +153,11 @@ functions:
       Folds the argument at the given index to a constant value.
 
       Fails if the argument is not constant, e.g. a column reference, or if the index is out of bounds. The
-      arguments of a table or pragma function are always constant. The resulting value may be NULL. The returned value is
+      arguments of a table or pragma function are constant, with one exception: when an in-out table function (see
+      `[[table_function_set_in_out_callback]]`) is called with a column of a preceding table as one of its arguments,
+      none of its positional arguments is available as a value, since they reach the function as the columns of its
+      input chunk; their types are still reported by `[[function_bind_get_arg_type]]`, and named-only arguments stay
+      constant. The resulting value may be NULL. The returned value is
       owned by the caller and must be destroyed via `[[value_destroy]]`.
     parameters:
       info:
