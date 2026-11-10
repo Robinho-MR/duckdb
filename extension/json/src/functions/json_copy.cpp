@@ -181,6 +181,61 @@ static void CheckCompression(const string &value, const string &path) {
 	throw InvalidInputException("Unrecognized file compression type \"%s\"", value);
 }
 
+//! Chooses the geometry, id and property columns of a GeoJSON Feature from the names and types of the bind data
+static void ResolveGeoJSONLayout(JSONCopyBindData &data, const ColumnOption &geometry_column,
+                                 const ColumnOption &id_column) {
+	// GEOMETRY_COLUMN selects the feature geometry, defaulting to the first GEOMETRY column
+	if (geometry_column.given) {
+		if (!geometry_column.name.empty()) {
+			const auto index = FindColumn(data.names, geometry_column.name, "GEOMETRY_COLUMN");
+			if (data.types[index].GetTypeId() != LogicalTypeId::GEOMETRY) {
+				throw BinderException("COPY ... TO ... (FORMAT GEOJSON) option GEOMETRY_COLUMN refers to column "
+				                      "\"%s\", which has type %s instead of GEOMETRY",
+				                      geometry_column.name, data.types[index].ToText());
+			}
+			data.geometry_index = index;
+		}
+	} else {
+		for (idx_t i = 0; i < data.types.size(); i++) {
+			if (data.types[i].GetTypeId() == LogicalTypeId::GEOMETRY) {
+				data.geometry_index = i;
+				break;
+			}
+		}
+		if (!data.geometry_index) {
+			throw BinderException(
+			    "COPY ... TO ... (FORMAT GEOJSON) requires a GEOMETRY column, but none of the columns "
+			    "being written has type GEOMETRY."
+			    "\n Use GEOMETRY_COLUMN NULL to write features without a geometry instead.");
+		}
+	}
+	// ID_COLUMN selects the Feature-level "id", defaulting to a column named "id" if there is one, so that a
+	// GeoJSON file read by DuckDB round-trips without needing the option
+	if (id_column.given) {
+		if (!id_column.name.empty()) {
+			data.id_index = FindColumn(data.names, id_column.name, "ID_COLUMN");
+		}
+	} else {
+		for (idx_t i = 0; i < data.names.size(); i++) {
+			if (data.names[i] == "id") {
+				data.id_index = i;
+				break;
+			}
+		}
+	}
+	if (data.geometry_index && data.id_index && *data.geometry_index == *data.id_index) {
+		throw BinderException("COPY ... TO ... (FORMAT GEOJSON) cannot write the same column as both the geometry "
+		                      "and the Feature id");
+	}
+	// Everything that is not the geometry or the id becomes a property
+	for (idx_t i = 0; i < data.names.size(); i++) {
+		if ((data.geometry_index && *data.geometry_index == i) || (data.id_index && *data.id_index == i)) {
+			continue;
+		}
+		data.property_indices.push_back(i);
+	}
+}
+
 static void CopyToBind(CopyFunction::CopyToBindInput &input) {
 	auto &user = input.GetUserData<JSONCopyUserData>();
 	auto &context = input.GetContext();
@@ -231,56 +286,7 @@ static void CopyToBind(CopyFunction::CopyToBindInput &input) {
 		CheckCompression("auto", input.GetFilePath());
 	}
 	if (user.geojson) {
-		// GEOMETRY_COLUMN selects the feature geometry, defaulting to the first GEOMETRY column
-		if (geometry_column.given) {
-			if (!geometry_column.name.empty()) {
-				const auto index = FindColumn(data.names, geometry_column.name, "GEOMETRY_COLUMN");
-				if (data.types[index].GetTypeId() != LogicalTypeId::GEOMETRY) {
-					throw BinderException("COPY ... TO ... (FORMAT GEOJSON) option GEOMETRY_COLUMN refers to column "
-					                      "\"%s\", which has type %s instead of GEOMETRY",
-					                      geometry_column.name, data.types[index].ToText());
-				}
-				data.geometry_index = index;
-			}
-		} else {
-			for (idx_t i = 0; i < data.types.size(); i++) {
-				if (data.types[i].GetTypeId() == LogicalTypeId::GEOMETRY) {
-					data.geometry_index = i;
-					break;
-				}
-			}
-			if (!data.geometry_index) {
-				throw BinderException(
-				    "COPY ... TO ... (FORMAT GEOJSON) requires a GEOMETRY column, but none of the columns "
-				    "being written has type GEOMETRY."
-				    "\n Use GEOMETRY_COLUMN NULL to write features without a geometry instead.");
-			}
-		}
-		// ID_COLUMN selects the Feature-level "id", defaulting to a column named "id" if there is one, so that a
-		// GeoJSON file read by DuckDB round-trips without needing the option
-		if (id_column.given) {
-			if (!id_column.name.empty()) {
-				data.id_index = FindColumn(data.names, id_column.name, "ID_COLUMN");
-			}
-		} else {
-			for (idx_t i = 0; i < data.names.size(); i++) {
-				if (data.names[i] == "id") {
-					data.id_index = i;
-					break;
-				}
-			}
-		}
-		if (data.geometry_index && data.id_index && *data.geometry_index == *data.id_index) {
-			throw BinderException("COPY ... TO ... (FORMAT GEOJSON) cannot write the same column as both the geometry "
-			                      "and the Feature id");
-		}
-		// Everything that is not the geometry or the id becomes a property
-		for (idx_t i = 0; i < data.names.size(); i++) {
-			if ((data.geometry_index && *data.geometry_index == i) || (data.id_index && *data.id_index == i)) {
-				continue;
-			}
-			data.property_indices.push_back(i);
-		}
+		ResolveGeoJSONLayout(data, geometry_column, id_column);
 	}
 	input.SetBindData<JSONCopyBindData>(std::move(data));
 }
@@ -339,8 +345,9 @@ static void CreateRowObjects(Context &context, const JSONCopyBindData &bind, yyj
 
 //! The GeoJSON Features of the rows of a chunk: the geometry column becomes "geometry", the id column "id" and the
 //! other columns the members of "properties"
+template <class GET_COLUMN>
 static void CreateFeatureObjects(Context &context, const JSONCopyBindData &bind, yyjson_mut_doc *doc,
-                                 yyjson_mut_val *features[], cxx::DataChunk &chunk, idx_t count,
+                                 yyjson_mut_val *features[], GET_COLUMN &&get_column, idx_t count,
                                  const JSONCreateOptions &options) {
 	auto vals = JSONCommon::AllocateArray<yyjson_mut_val *>(doc, count);
 	auto properties = JSONCommon::AllocateArray<yyjson_mut_val *>(doc, count);
@@ -350,14 +357,14 @@ static void CreateFeatureObjects(Context &context, const JSONCopyBindData &bind,
 		properties[i] = yyjson_mut_obj(doc);
 	}
 	if (bind.id_index) {
-		auto id_vector = chunk.GetVector(*bind.id_index);
+		auto id_vector = get_column(*bind.id_index);
 		CreateJSONValues(context, doc, vals, id_vector, count, options);
 		for (idx_t i = 0; i < count; i++) {
 			yyjson_mut_obj_add_val(doc, features[i], "id", vals[i]);
 		}
 	}
 	if (bind.geometry_index) {
-		auto geometry_vector = chunk.GetVector(*bind.geometry_index);
+		auto geometry_vector = get_column(*bind.geometry_index);
 		CreateJSONValues(context, doc, vals, geometry_vector, count, options);
 		for (idx_t i = 0; i < count; i++) {
 			yyjson_mut_obj_add_val(doc, features[i], "geometry", vals[i]);
@@ -395,7 +402,7 @@ static void CreateFeatureObjects(Context &context, const JSONCopyBindData &bind,
 		}
 	}
 	for (auto property_index : bind.property_indices) {
-		auto property_vector = chunk.GetVector(property_index);
+		auto property_vector = get_column(property_index);
 		CreateJSONValues(context, doc, vals, property_vector, count, options);
 		const auto &name = bind.names[property_index];
 		for (idx_t i = 0; i < count; i++) {
@@ -442,7 +449,8 @@ static void CopyToBatch(CopyFunction::CopyToBatchInput &input) {
 		auto doc = JSONCommon::CreateDocument(alc);
 		auto objs = JSONCommon::AllocateArray<yyjson_mut_val *>(doc, count);
 		if (bind.geojson) {
-			CreateFeatureObjects(context, bind, doc, objs, chunk, count, options);
+			CreateFeatureObjects(
+			    context, bind, doc, objs, [&](idx_t col) { return chunk.GetVector(col); }, count, options);
 		} else {
 			CreateRowObjects(context, bind, doc, objs, chunk, count, options);
 		}
@@ -517,14 +525,117 @@ static void RegisterCopyFormat(Extension &extension, Factory &factory, const str
 	extension.Register(function);
 }
 
-//! The writer that COPY ... TO ... (FORMAT GEOJSON) used to be rewritten to; kept so that calling it by hand fails the
-//! way it did
-static void InternalGeoJSONBind(ScalarFunction::BindInput &) {
-	throw BinderException("__internal_json_copy_to_geojson is for internal use only");
+//===--------------------------------------------------------------------===//
+// Internal scalar functions
+//===--------------------------------------------------------------------===//
+//! The scalar that COPY ... TO ... (FORMAT JSON) used to be rewritten to: calling it by hand fails the way it did
+static void InternalJSONBind(ScalarFunction::BindInput &) {
+	throw BinderException("__internal_json_copy_to_json is for internal use only");
 }
 
-static void InternalGeoJSONExec(ScalarFunction::ExecInput &) {
-	throw InternalException("__internal_json_copy_to_geojson is for internal use only");
+static void InternalJSONExec(ScalarFunction::ExecInput &) {
+	throw InternalException("__internal_json_copy_to_json is for internal use only");
+}
+
+//! The constant argument, or nullopt for a NULL. `what` names the argument in the errors
+static std::optional<string> GetConstantStringArgument(ScalarFunction::BindInput &input, idx_t index,
+                                                       const char *what) {
+	std::optional<Value> constant;
+	try {
+		constant = input.GetConstantArgument(index);
+	} catch (cxx::Exception &ex) {
+		if (what && string(ex.what()).find("must be a constant expression") != string::npos) {
+			throw BinderException("__internal_json_copy_to_geojson %s must be constants", what);
+		}
+		throw;
+	}
+	auto &value = *constant;
+	if (value.IsNull()) {
+		return std::nullopt;
+	}
+	if (value.GetLogicalType().GetTypeId() != LogicalTypeId::VARCHAR) {
+		throw BinderException("__internal_json_copy_to_geojson %s must be VARCHAR or NULL", what ? what : "arguments");
+	}
+	auto text = value.Get<varchar_t>();
+	return string(text.data(), text.size());
+}
+
+//! The column-selecting options are three-state: NULL means the option was not given (use the default behavior), an
+//! empty string means it was explicitly unset, and anything else names a column
+static ColumnOption GetColumnArgument(ScalarFunction::BindInput &input, idx_t index) {
+	ColumnOption result;
+	auto text = GetConstantStringArgument(input, index, "column options");
+	if (text) {
+		result.given = true;
+		result.name = *text;
+	}
+	return result;
+}
+
+static void InternalGeoJSONBind(ScalarFunction::BindInput &input) {
+	if (input.GetArgCount() != 6) {
+		throw BinderException("__internal_json_copy_to_geojson is for internal use only");
+	}
+	auto payload_type = input.GetArgType(0);
+	if (payload_type.GetTypeId() != LogicalTypeId::STRUCT) {
+		throw BinderException("__internal_json_copy_to_geojson is for internal use only");
+	}
+	JSONCopyBindData data;
+	data.geojson = true;
+	for (idx_t i = 0; i < payload_type.GetStructChildCount(); i++) {
+		data.names.push_back(payload_type.GetStructChildName(i));
+		data.types.push_back(payload_type.GetStructChildType(i));
+	}
+	const auto geometry_column = GetColumnArgument(input, 3);
+	const auto id_column = GetColumnArgument(input, 4);
+	ResolveGeoJSONLayout(data, geometry_column, id_column);
+	// like the column options, a NULL write_bbox means the option was not given
+	const auto write_bbox = input.GetConstantArgument(5);
+	data.bbox = !write_bbox.IsNull() && write_bbox.Get<bool>();
+
+	auto date_format = GetConstantStringArgument(input, 1, "formats");
+	if (date_format) {
+		data.date_format_string = *date_format;
+		data.date_format = JSONTimeFormat::Parse(*date_format, "date");
+	}
+	auto timestamp_format = GetConstantStringArgument(input, 2, "formats");
+	if (timestamp_format) {
+		data.timestamp_format_string = *timestamp_format;
+		data.timestamp_format = JSONTimeFormat::Parse(*timestamp_format, "timestamp");
+	}
+	input.SetBindData<JSONCopyBindData>(std::move(data));
+}
+
+//! Turns one row into a GeoJSON Feature: the geometry column becomes "geometry", the ID_COLUMN column becomes "id",
+//! and every other column becomes a member of "properties"
+static void InternalGeoJSONExec(ScalarFunction::ExecInput &input) {
+	const auto &bind = input.GetBindData<JSONCopyBindData>();
+	auto &lstate = JSONFunctionLocalState::ResetAndGet(input);
+	auto alc = lstate.json_allocator.GetYYAlc();
+	auto &context = input.GetContext();
+	auto options = ClientJSONCreateOptions(context);
+	options.geometry_format = JSONGeometryFormat::GEOJSON;
+	options.date_format = bind.date_format ? &*bind.date_format : nullptr;
+	options.timestamp_format = bind.timestamp_format ? &*bind.timestamp_format : nullptr;
+
+	const idx_t count = input.GetRowCount();
+	auto payload = input.GetArg(0);
+	payload.Flatten();
+	auto doc = JSONCommon::CreateDocument(alc);
+	auto features = JSONCommon::AllocateArray<yyjson_mut_val *>(doc, count);
+	CreateFeatureObjects(
+	    context, bind, doc, features, [&](idx_t col) { return payload.GetChild(col); }, count, options);
+
+	ValueView<uint8_t> validity(payload);
+	auto result = input.GetResult();
+	StringWriter writer(result, count);
+	for (idx_t i = 0; i < count; i++) {
+		if (validity.IsValid(i)) {
+			writer.WriteValue(JSONCommon::WriteVal<yyjson_mut_val>(features[i], alc));
+		} else {
+			writer.WriteNull();
+		}
+	}
 }
 
 void RegisterJSONCopy(Extension &extension, Context &context) {
@@ -535,16 +646,40 @@ void RegisterJSONCopy(Extension &extension, Context &context) {
 	RegisterCopyFormat(extension, factory, "geojson", "geojson", true, true);
 	RegisterCopyFormat(extension, factory, "geojsonl", "geojsonl", true, false);
 
-	auto internal = ScalarFunction::Create(factory);
-	internal.SetName("__internal_json_copy_to_geojson")
+	auto any = factory.CreateType(LogicalTypeId::ANY);
+	auto varchar = factory.CreateType(LogicalTypeId::VARCHAR);
+
+	auto to_json = ScalarFunction::Create(factory);
+	to_json.SetName("__internal_json_copy_to_json")
 	    .WithSignature([&](cxx::FunctionSignature &sig) {
-		    sig.AddArgs("args", factory.CreateType(LogicalTypeId::ANY));
+		    sig.AddParameter("value", any);
+		    sig.AddParameter("date_format", varchar);
+		    sig.AddParameter("timestamp_format", varchar);
+		    sig.SetReturnType(JSONType(factory));
+	    })
+	    .SetBindCallback(InternalJSONBind)
+	    .SetExecCallback(InternalJSONExec)
+	    .SetNullHandling(cxx::FunctionNullHandling::SPECIAL)
+	    .SetFallibility(FunctionFallibility::FALLIBLE);
+	extension.Register(to_json);
+
+	auto to_geojson = ScalarFunction::Create(factory);
+	to_geojson.SetName("__internal_json_copy_to_geojson")
+	    .WithSignature([&](cxx::FunctionSignature &sig) {
+		    sig.AddParameter("value", any);
+		    sig.AddParameter("date_format", varchar);
+		    sig.AddParameter("timestamp_format", varchar);
+		    sig.AddParameter("geometry_column", varchar);
+		    sig.AddParameter("id_column", varchar);
+		    sig.AddParameter("write_bbox", factory.CreateType(LogicalTypeId::BOOLEAN));
 		    sig.SetReturnType(JSONType(factory));
 	    })
 	    .SetBindCallback(InternalGeoJSONBind)
+	    .SetInitCallback(JSONFunctionLocalState::Init)
 	    .SetExecCallback(InternalGeoJSONExec)
-	    .SetNullHandling(cxx::FunctionNullHandling::SPECIAL);
-	extension.Register(internal);
+	    .SetNullHandling(cxx::FunctionNullHandling::SPECIAL)
+	    .SetFallibility(FunctionFallibility::FALLIBLE);
+	extension.Register(to_geojson);
 }
 
 } // namespace json
