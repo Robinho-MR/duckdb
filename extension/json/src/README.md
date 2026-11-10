@@ -78,5 +78,5 @@ error type). Use `BinderException` in bind/resolve callbacks. In `CastMode::TRY`
 - Cast callbacks: no per-thread state (thread_local arena), no source-column suffix on conversion errors.
 - Macros have a single signature: the multi-overload `json_copy_strftime_if_date/timestamp` macros need another design.
 - `json_loadable_extension` exports the yyjson symbols too (no export list for C-API unstable extensions).
-- Not yet needed, expect gaps for: in-out table functions + virtual columns (json_each/tree), file compression options
+- Not yet needed, expect gaps for: in-out table functions + virtual columns (json_each/tree)
   (read_json/COPY), serialization of SQL/plans (see the proposal doc, section 2).

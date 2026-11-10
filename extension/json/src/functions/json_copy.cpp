@@ -13,6 +13,7 @@ namespace duckdb {
 namespace json {
 
 using cxx::CopyFunction;
+using cxx::FileCompression;
 using cxx::FileFlags;
 using cxx::FileHandle;
 
@@ -47,7 +48,8 @@ struct JSONCopyBindData {
 		return names == other.names && geojson == other.geojson && array == other.array &&
 		       date_format_string == other.date_format_string &&
 		       timestamp_format_string == other.timestamp_format_string && geometry_index == other.geometry_index &&
-		       id_index == other.id_index && property_indices == other.property_indices && bbox == other.bbox;
+		       id_index == other.id_index && property_indices == other.property_indices && bbox == other.bbox &&
+		       compression == other.compression;
 	}
 
 	vector<string> names;
@@ -63,6 +65,7 @@ struct JSONCopyBindData {
 	std::optional<idx_t> id_index;
 	vector<idx_t> property_indices;
 	bool bbox = false;
+	FileCompression compression = FileCompression::AUTO_DETECT;
 };
 
 //! The state of a file that is being written
@@ -156,27 +159,19 @@ static idx_t FindColumn(const vector<string> &names, const string &name, const c
 	                      option_name, name, available);
 }
 
-static bool EndsWithCI(const string &text, const char *suffix) {
-	const auto len = strlen(suffix);
-	return text.size() >= len && StringUtil::CIEquals(text.data() + text.size() - len, len, suffix, len);
-}
-
-static void CheckCompression(const string &value, const string &path) {
+static FileCompression ParseCompression(const string &value) {
 	const auto compression = LowerCase(value);
 	if (compression == "uncompressed" || compression == "none" || compression.empty()) {
-		return;
+		return FileCompression::NONE;
 	}
 	if (compression == "auto" || compression == "auto_detect" || compression == "infer") {
-		if (EndsWithCI(path, ".gz") || EndsWithCI(path, ".zst")) {
-			throw NotImplementedException("COPY ... TO ... (FORMAT JSON) cannot write a compressed file: the stable "
-			                              "C++ API cannot compress a file it opens");
-		}
-		return;
+		return FileCompression::AUTO_DETECT;
 	}
-	if (compression == "gzip" || compression == "zstd") {
-		throw NotImplementedException("COPY ... TO ... (FORMAT JSON) cannot write a %s compressed file: the stable "
-		                              "C++ API cannot compress a file it opens",
-		                              compression);
+	if (compression == "gzip") {
+		return FileCompression::GZIP;
+	}
+	if (compression == "zstd") {
+		return FileCompression::ZSTD;
 	}
 	throw InvalidInputException("Unrecognized file compression type \"%s\"", value);
 }
@@ -193,7 +188,6 @@ static void CopyToBind(CopyFunction::CopyToBindInput &input) {
 		data.types.push_back(input.GetColumnType(i));
 	}
 
-	bool compression_given = false;
 	ColumnOption geometry_column;
 	ColumnOption id_column;
 	for (idx_t i = 0; i < input.GetOptionCount(); i++) {
@@ -214,8 +208,7 @@ static void CopyToBind(CopyFunction::CopyToBindInput &input) {
 		} else if (user.geojson && name == "bbox") {
 			data.bbox = GetBooleanOption(context, user, name, value);
 		} else if (name == "compression") {
-			compression_given = true;
-			CheckCompression(GetStringOption(user, name, value), input.GetFilePath());
+			data.compression = ParseCompression(GetStringOption(user, name, value));
 		} else if (name == "encoding") {
 			const auto encoding = LowerCase(GetStringOption(user, name, value));
 			if (encoding != "utf-8" && encoding != "utf8") {
@@ -227,9 +220,6 @@ static void CopyToBind(CopyFunction::CopyToBindInput &input) {
 		}
 	}
 
-	if (!compression_given) {
-		CheckCompression("auto", input.GetFilePath());
-	}
 	if (user.geojson) {
 		// GEOMETRY_COLUMN selects the feature geometry, defaulting to the first GEOMETRY column
 		if (geometry_column.given) {
@@ -313,7 +303,9 @@ static void WriteAll(FileHandle &file, const string &text) {
 static void CopyToInit(CopyFunction::CopyToInitInput &input) {
 	auto &bind = input.GetBindData<JSONCopyBindData>();
 	auto fs = input.GetContext().GetFileSystem();
-	auto file = fs.OpenFile(input.GetFilePath(), {FileFlags::WRITE, FileFlags::FILE_CREATE_NEW});
+	auto open_options = fs.CreateOpenOptions();
+	open_options.SetFlag(FileFlags::WRITE).SetFlag(FileFlags::FILE_CREATE_NEW).SetCompression(bind.compression);
+	auto file = fs.OpenFile(input.GetFilePath(), open_options);
 	const string prefix = Prefix(bind);
 	WriteAll(file, prefix);
 	input.SetInitData<JSONCopyFile>(std::move(file), prefix.size());

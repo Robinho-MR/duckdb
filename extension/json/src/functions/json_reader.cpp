@@ -398,10 +398,37 @@ JSONReader::JSONReader(const JSONReaderOptions &options_p, string file_name_p, J
       read_flag(JSONCommon::GetReadFlag(JSONCommon::READ_STOP_FLAG, JSONCommon::NumbersAsRaw(options.sql_type_list))) {
 }
 
-static FileHandle OpenFileHandle(Context &context, const Value &file, const string &file_name) {
+static bool IsCompressed(const JSONReaderOptions &options, const string &file_name) {
+	switch (options.compression) {
+	case JSONCompression::GZIP:
+	case JSONCompression::ZSTD:
+		return true;
+	case JSONCompression::UNCOMPRESSED:
+		return false;
+	default:
+		return HasCompressedExtension(file_name);
+	}
+}
+
+static cxx::FileCompression ToFileCompression(JSONCompression compression) {
+	switch (compression) {
+	case JSONCompression::GZIP:
+		return cxx::FileCompression::GZIP;
+	case JSONCompression::ZSTD:
+		return cxx::FileCompression::ZSTD;
+	case JSONCompression::UNCOMPRESSED:
+		return cxx::FileCompression::NONE;
+	default:
+		return cxx::FileCompression::AUTO_DETECT;
+	}
+}
+
+static FileHandle OpenFileHandle(Context &context, const Value &file, const string &file_name,
+                                 const JSONReaderOptions &options) {
 	auto fs = context.GetFileSystem();
 	auto open_options = fs.CreateOpenOptions();
 	open_options.SetFlag(cxx::FileFlags::READ).SetFlag(cxx::FileFlags::PARALLEL_ACCESS).SetValues(file);
+	open_options.SetCompression(ToFileCompression(options.compression));
 	return fs.OpenFile(file_name, open_options);
 }
 
@@ -414,31 +441,16 @@ static idx_t TryGetFileSize(FileHandle &handle) {
 }
 
 void JSONReader::Open(Context &context, const Value &file, bool allow_partial) {
-	handle.emplace(OpenFileHandle(context, file, file_name));
+	handle.emplace(OpenFileHandle(context, file, file_name, options));
 	file_size = TryGetFileSize(*handle);
-	if (file_size >= 4) {
-		// The stable file system cannot decompress a file it opens
-		unsigned char magic[4];
-		handle->ReadAt(magic, 4, 0);
-		if (magic[0] == 0x1F && magic[1] == 0x8B) {
-			throw NotImplementedException("Cannot read the gzip compressed file \"%s\": the stable C++ API cannot "
-			                              "decompress a file it opens",
-			                              file_name);
-		}
-		if (magic[0] == 0x28 && magic[1] == 0xB5 && magic[2] == 0x2F && magic[3] == 0xFD) {
-			throw NotImplementedException("Cannot read the zstd compressed file \"%s\": the stable C++ API cannot "
-			                              "decompress a file it opens",
-			                              file_name);
-		}
-	}
-	partial = allow_partial && format == JSONFormat::NEWLINE_DELIMITED && file_size != 0 &&
-	          options.compression != JSONCompression::GZIP && options.compression != JSONCompression::ZSTD &&
-	          !HasCompressedExtension(file_name);
+	// a compressed file is read front to back, and its size does not bound the size of what is read
+	const bool compressed = IsCompressed(options, file_name);
+	partial = allow_partial && format == JSONFormat::NEWLINE_DELIMITED && file_size != 0 && !compressed;
 	buffer_capacity = options.maximum_object_size * 2;
 	if (partial) {
 		chunk_size = options.maximum_object_size;
 		chunk_count = (file_size + chunk_size - 1) / chunk_size;
-	} else if (file_size != 0) {
+	} else if (file_size != 0 && !compressed) {
 		buffer_capacity = std::min<idx_t>(buffer_capacity, file_size + 4096 + 2 * YYJSON_PADDING_SIZE);
 	}
 }
@@ -451,9 +463,9 @@ void JSONReader::DetectFormat(Context &context, const Value &file, const string 
                               const JSONReaderOptions &options, JSONFormat &format, JSONRecordType &record_type,
                               bool &skip_feature_collection_prefix) {
 	skip_feature_collection_prefix = false;
-	auto handle = OpenFileHandle(context, file, file_name);
+	auto handle = OpenFileHandle(context, file, file_name, options);
 	const idx_t capacity = options.maximum_object_size * 2;
-	const auto file_size = TryGetFileSize(handle);
+	const auto file_size = IsCompressed(options, file_name) ? 0 : TryGetFileSize(handle);
 	const idx_t request = std::min<idx_t>(capacity - YYJSON_PADDING_SIZE, file_size == 0 ? capacity : file_size);
 	std::unique_ptr<char, decltype(&std::free)> buffer(static_cast<char *>(std::malloc(request + YYJSON_PADDING_SIZE)),
 	                                                   &std::free);
