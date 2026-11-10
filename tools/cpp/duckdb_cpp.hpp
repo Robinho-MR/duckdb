@@ -93,7 +93,6 @@ enum class CastMode : uint8_t;
 template <class CTX>
 class TypeBuilder;
 class CustomType;
-class CastFunction;
 struct timestamp_t;
 class PragmaFunction;
 class LogSink;
@@ -989,12 +988,25 @@ public:
 	/// @throws InvalidInputException When the name or function name is missing, or the function does not exist or
 	/// has no overload taking one VARCHAR and returning VARCHAR or BLOB.
 	auto Register(CollationInfo &collation) -> void;
-	/// Registers the cast, replacing whatever cast was registered for the same type pair. The function object remains
-	/// valid and may be adjusted and registered again; user data set via `SetUserData` is consumed by the first
-	/// registration.
-	/// @throws InvalidInputException When the source type, target type, or exec callback is missing, or either type is
-	/// not concrete.
-	auto Register(CastFunction &cast_function) -> void;
+	/// Registers a pair of scalar functions as a cast, replacing whatever cast was registered for the same type pair.
+	/// A cast function has exactly one parameter, the value to convert, and its return type is the type converted to;
+	/// both must be fully defined concrete types and the function cannot have a resolve types callback. `cast_function`
+	/// implements CAST, `try_cast_function` implements TRY_CAST, and the two must have the same parameter and return
+	/// type. The cast is reached from SQL through CAST and TRY_CAST, and through the binder converting argument types
+	/// on its own when `implicit_cast_cost` is not negative. Everything else is the scalar functions' own: the bind
+	/// callback runs each time the cast is bound for a call site, and a cast that reads a setting sets its stability to
+	/// `CONSISTENT_WITHIN_QUERY`. The two must be distinct objects. The function objects remain valid and may be
+	/// adjusted and registered again; user data set via `SetUserData` is consumed by the first registration.
+	/// @param cast_function Converts the values; throwing for a row that does not convert aborts the query.
+	/// @param try_cast_function Writes NULL for each row that does not convert and throws once the batch is written:
+	/// the exception is swallowed, the rows written stay, and the cast reports that not every row converted. It may
+	/// share its exec callback with `cast_function`.
+	/// @param implicit_cast_cost What it costs to apply the cast implicitly: a lower non-negative cost makes the
+	/// binder more likely to pick it. Built-in widening casts sit in the [0, 20] range. A negative cost keeps the cast
+	/// out of implicit conversion entirely.
+	/// @throws InvalidInputException When the functions do not have the shape of a cast.
+	auto RegisterCast(ScalarFunction &cast_function, ScalarFunction &try_cast_function, int64_t implicit_cast_cost = -1)
+	    -> void;
 	/// Registers the pragma. The function object remains valid; user data set via `SetUserData` is consumed by the
 	/// first registration.
 	/// @throws InvalidInputException When the name is missing, not exactly one of the query and exec callbacks is set,
@@ -1409,12 +1421,10 @@ public:
 	/// @throws InvalidInputException When the name or function name is missing, or the function does not exist or
 	/// has no overload taking one VARCHAR and returning VARCHAR or BLOB.
 	auto Register(CollationInfo &collation) -> void;
-	/// Registers the cast, replacing whatever cast was registered for the same type pair. The function object remains
-	/// valid and may be adjusted and registered again; user data set via `SetUserData` is consumed by the first
-	/// registration.
-	/// @throws InvalidInputException When the source type, target type, or exec callback is missing, or either type is
-	/// not concrete.
-	auto Register(CastFunction &cast_function) -> void;
+	/// Registers a pair of scalar functions as a cast on the loading extension's database, see
+	/// `Connection::RegisterCast`.
+	auto RegisterCast(ScalarFunction &cast_function, ScalarFunction &try_cast_function, int64_t implicit_cast_cost = -1)
+	    -> void;
 	/// Registers the pragma. The function object remains valid; user data set via `SetUserData` is consumed by the
 	/// first registration.
 	/// @throws InvalidInputException When the name is missing, not exactly one of the query and exec callbacks is set,
@@ -6481,7 +6491,7 @@ public:
 };
 
 //----------------------------------------------------------------------------------------------------------------------
-// Cast Function
+// Cast Mode
 //----------------------------------------------------------------------------------------------------------------------
 
 /// The mode a cast runs in, which decides what a conversion failure means.
@@ -6491,182 +6501,6 @@ enum class CastMode : uint8_t {
 	/// A "try" cast (SQL TRY_CAST). The rows the callback could not convert should be left NULL in the output; an
 	/// exception thrown anyway is swallowed and those rows stay NULL.
 	TRY = 1,
-};
-
-/// A user-defined cast between two types, built up with the setters and made live with `Connection::Register` or
-/// `Extension::Register`. Create one through a `Factory` of the database it will be registered in, describe it (source
-/// type, target type, exec callback), then register it with `Connection::Register` or `Extension::Register`. The
-/// function object may be destroyed after registration; the registered cast lives on.
-///
-/// A cast is keyed by its (source, target) type pair rather than by a name, and is reached from SQL through CAST and
-/// TRY_CAST -- and, when it declares a non-negative implicit cast cost, through the binder converting argument types
-/// on its own. The exec callback converts a whole batch at a time; whether a per-row failure aborts the query or
-/// becomes a NULL follows from `ExecInput::GetMode`.
-class CastFunction final : public detail::Handle<CastFunction> {
-	friend detail::HandleFactory;
-	friend class Connection;
-	friend class Extension;
-
-public:
-	class BindInput;
-	class ExecInput;
-
-	/// Called each time the cast is bound for a call site. Optional. Throwing aborts the binding with that error.
-	using BindCallback = void (*)(BindInput &input);
-	/// Called for every batch of values; must fill the output vector. Required.
-	using ExecCallback = void (*)(ExecInput &input);
-
-	CastFunction(CastFunction &&) noexcept = default;
-	CastFunction &operator=(CastFunction &&) noexcept = default;
-
-	~CastFunction() override;
-
-	/// Creates an empty CastFunction through `factory`. Register it through a `Connection` or an `Extension` of the
-	/// factory's database.
-	static auto Create(Factory &factory) -> CastFunction;
-
-	/// Sets the type the cast converts from. Must be a fully defined concrete type.
-	auto SetSourceType(const LogicalType &type) & -> CastFunction &;
-
-	/// Sets the type the cast converts to. Must be a fully defined concrete type.
-	auto SetTargetType(const LogicalType &type) & -> CastFunction &;
-
-	/// Sets what it costs to apply this cast implicitly. The binder uses the cost to choose between candidate
-	/// implicit casts: a lower non-negative cost makes this cast more likely to be picked. Built-in widening casts
-	/// sit in the [0, 20] range. A negative cost -- the default -- keeps the cast out of implicit conversion
-	/// entirely, so it is reached only through an explicit CAST or TRY_CAST.
-	/// @param cost The cost, or a negative value to disable implicit casting.
-	auto SetImplicitCastCost(int64_t cost) & -> CastFunction &;
-
-	/// Constructs user data of type `T`, carried by the registered cast and freed at engine teardown; read it from the
-	/// exec callback via `ExecInput::GetUserData<T>`. Consumed by registration: set it again before
-	/// re-registering.
-	template <class T, class... ARGS>
-	auto SetUserData(ARGS &&...args) & -> CastFunction & {
-		auto ptr = new T(std::forward<ARGS>(args)...);
-		SetUserDataInternal(ptr, detail::TypedDelete<T>);
-		return *this;
-	}
-
-	auto SetExecCallback(ExecCallback callback) & -> CastFunction &;
-
-	/// Sets the optional bind callback, invoked each time the cast is bound. It can read the source and target type,
-	/// set bind data for the exec callback, and reject the cast by throwing. Pass `nullptr` to remove it.
-	auto SetBindCallback(BindCallback callback) & -> CastFunction &;
-
-	/// How stable the cast's result is. Defaults to `CONSISTENT`. A cast that reads a setting (such as the time zone)
-	/// must declare `CONSISTENT_WITHIN_QUERY`: it is then not folded into a prepared statement nor accepted in an
-	/// index expression.
-	auto SetStability(FunctionStability value) & -> CastFunction &;
-
-private:
-	explicit CastFunction(void *impl);
-	//! Moves what the callbacks need into the C handle, right before it is registered.
-	auto PrepareRegistration() -> void;
-
-	auto SetUserDataInternal(void *data, void (*destructor)(void *)) -> void;
-
-	ExecCallback exec_callback = nullptr;
-	BindCallback bind_callback = nullptr;
-	detail::UserData user_data;
-
-public:
-	/// What the bind callback works with. Borrowed, valid only for the callback duration.
-	class BindInput {
-		friend detail::HandleFactory;
-
-	public:
-		~BindInput();
-
-		/// The user data set via `CastFunction::SetUserData`.
-		/// @throws InvalidInputException When none was set.
-		template <class T>
-		auto GetUserData() const -> T & {
-			return *static_cast<T *>(GetUserDataInternal());
-		}
-
-		/// The type the cast is bound to convert from.
-		auto GetSourceType() const -> LogicalType;
-
-		/// The type the cast is bound to convert to.
-		auto GetTargetType() const -> LogicalType;
-
-		/// Constructs bind data of type `T`, owned by the bound cast and readable from the exec callback via
-		/// `ExecInput::GetBindData<T>`. Calling this again replaces the previous bind data.
-		template <class T, class... ARGS>
-		void SetBindData(ARGS &&...args) {
-			auto ptr = new T(std::forward<ARGS>(args)...);
-			SetBindDataInternal(ptr, detail::TypedDelete<T>);
-		}
-
-		/// The context of the query binding the cast, or nullptr when the engine binds the cast without a client
-		/// context (for example when it probes the cast to compute implicit cast costs).
-		auto GetContext() -> Context * {
-			return context.get();
-		}
-
-	private:
-		BindInput(void *args, void *context_handle);
-
-		void *args;
-		std::unique_ptr<Context> context;
-
-		void SetBindDataInternal(void *data, void (*destructor)(void *));
-		void *GetUserDataInternal() const;
-	};
-
-	/// What the exec callback works with. Borrowed, valid only for the callback duration.
-	class ExecInput {
-		friend detail::HandleFactory;
-
-	public:
-		/// The bind data set via `BindInput::SetBindData`.
-		/// @throws InvalidInputException When none was set.
-		template <class T>
-		auto GetBindData() const -> T & {
-			return *static_cast<T *>(GetBindDataInternal());
-		}
-
-		/// The user data set via `CastFunction::SetUserData`.
-		/// @throws InvalidInputException When none was set.
-		template <class T>
-		auto GetUserData() const -> T & {
-			return *static_cast<T *>(GetUserDataInternal());
-		}
-
-		/// How many rows this execution must convert: the callback writes exactly this many entries to the output
-		/// vector. May be less than a full vector; a constant input is converted as a single row and the engine
-		/// expands the result.
-		auto GetRowCount() const -> idx_t;
-
-		/// The input vector holding the values to convert.
-		auto GetInput() const -> Vector;
-
-		/// The output vector to fill.
-		auto GetOutput() const -> Vector;
-
-		/// The mode this cast runs in. In `CastMode::TRY` a failed row should be left NULL rather than reported by
-		/// throwing.
-		auto GetMode() const -> CastMode;
-
-		/// The execution context. Borrowed, valid only for the callback duration.
-		/// @throws InvalidInputException When the cast runs without a client context, e.g. while an index is built.
-		auto GetContext() -> Context &;
-		/// Whether the cast runs with a client context.
-		auto HasContext() const -> bool;
-
-	private:
-		ExecInput(void *args, void *context)
-		    : args(args),
-		      context(context ? std::optional<Context>(detail::HandleFactory::Make<Context>(context)) : std::nullopt) {
-		}
-
-		void *args;
-		std::optional<Context> context;
-
-		void *GetUserDataInternal() const;
-		void *GetBindDataInternal() const;
-	};
 };
 
 //----------------------------------------------------------------------------------------------------------------------
