@@ -12,7 +12,7 @@
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/optional_idx.hpp"
-#include "duckdb/common/query_context.hpp"
+#include "duckdb/main/context.hpp"
 #include "duckdb/common/unique_ptr.hpp"
 #include "duckdb/storage/block.hpp"
 #include <cstdint>
@@ -69,7 +69,7 @@ public:
 	//! Returns a reference to the underlying block manager.
 	BlockManager &GetBlockManager() const;
 	//! Returns the query context to attribute IO to.
-	QueryContext GetQueryContext() const;
+	Context &GetContext() const;
 
 private:
 	//! Remove the smallest fitting block from the map, or return nullptr if none fits.

@@ -41,13 +41,13 @@ public:
 	string cgroup_path;
 };
 
-static vector<CGroupEntry> ParseGroupEntries(FileSystem &fs) {
+static vector<CGroupEntry> ParseGroupEntries(Context &context, FileSystem &fs) {
 	vector<CGroupEntry> result;
-	if (!fs.FileExists(CGROUP_PATH)) {
+	if (!fs.FileExists(context, CGROUP_PATH)) {
 		return result;
 	}
 
-	auto handle = fs.OpenFile(CGROUP_PATH, FileFlags::FILE_FLAGS_READ);
+	auto handle = fs.OpenFile(context, CGROUP_PATH, FileFlags::FILE_FLAGS_READ);
 
 	char buffer[DEFAULT_CGROUP_FILE_BUFFER_SIZE];
 	int64_t bytes_read;
@@ -87,7 +87,7 @@ static vector<CGroupEntry> ParseGroupEntries(FileSystem &fs) {
 	return result;
 }
 
-static optional_idx GetCPUCountV2(const string &cgroup_path, FileSystem &fs) {
+static optional_idx GetCPUCountV2(Context &context, const string &cgroup_path, FileSystem &fs) {
 	static constexpr const char *CPU_MAX = "/sys/fs/cgroup%s/cpu.max";
 
 	auto cpu_max = StringUtil::Format(CPU_MAX, cgroup_path);
@@ -98,13 +98,13 @@ static optional_idx GetCPUCountV2(const string &cgroup_path, FileSystem &fs) {
 	//! the length of a period (in microseconds)
 	int64_t period;
 
-	if (!fs.FileExists(cpu_max)) {
+	if (!fs.FileExists(context, cpu_max)) {
 		return optional_idx();
 	}
 
 	// cgroup v2
 	char byte_buffer[1000];
-	auto handle = fs.OpenFile(cpu_max, FileFlags::FILE_FLAGS_READ);
+	auto handle = fs.OpenFile(context, cpu_max, FileFlags::FILE_FLAGS_READ);
 	int64_t read_bytes = fs.Read(*handle, (void *)byte_buffer, 999);
 	byte_buffer[read_bytes] = '\0';
 	if (std::sscanf(byte_buffer, "%" SCNd64 " %" SCNd64 "", &quota, &period) != 2) {
@@ -117,14 +117,14 @@ static optional_idx GetCPUCountV2(const string &cgroup_path, FileSystem &fs) {
 	return optional_idx();
 }
 
-static optional_idx GetCPUCountV1(const string &cgroup_path, FileSystem &fs) {
+static optional_idx GetCPUCountV1(Context &context, const string &cgroup_path, FileSystem &fs) {
 	static constexpr const char *CFS_QUOTA = "/sys/fs/cgroup/cpu%s/cpu.cfs_quota_us";
 	static constexpr const char *CFS_PERIOD = "/sys/fs/cgroup/cpu%s/cpu.cfs_period_us";
 
 	auto cfs_quota = StringUtil::Format(CFS_QUOTA, cgroup_path);
 	auto cfs_period = StringUtil::Format(CFS_PERIOD, cgroup_path);
 
-	if (!fs.FileExists(cfs_quota) || !fs.FileExists(cfs_period)) {
+	if (!fs.FileExists(context, cfs_quota) || !fs.FileExists(context, cfs_period)) {
 		return optional_idx();
 	}
 
@@ -137,7 +137,7 @@ static optional_idx GetCPUCountV1(const string &cgroup_path, FileSystem &fs) {
 	// cgroup v1
 	char byte_buffer[1000];
 	{
-		auto handle = fs.OpenFile(cfs_quota, FileFlags::FILE_FLAGS_READ);
+		auto handle = fs.OpenFile(context, cfs_quota, FileFlags::FILE_FLAGS_READ);
 		int64_t read_bytes = fs.Read(*handle, (void *)byte_buffer, 999);
 		byte_buffer[read_bytes] = '\0';
 		if (std::sscanf(byte_buffer, "%" SCNd64 "", &quota) != 1) {
@@ -145,7 +145,7 @@ static optional_idx GetCPUCountV1(const string &cgroup_path, FileSystem &fs) {
 		}
 	}
 	{
-		auto handle = fs.OpenFile(cfs_period, FileFlags::FILE_FLAGS_READ);
+		auto handle = fs.OpenFile(context, cfs_period, FileFlags::FILE_FLAGS_READ);
 		int64_t read_bytes = fs.Read(*handle, (void *)byte_buffer, 999);
 		byte_buffer[read_bytes] = '\0';
 		if (std::sscanf(byte_buffer, "%" SCNd64 "", &period) != 1) {
@@ -159,12 +159,12 @@ static optional_idx GetCPUCountV1(const string &cgroup_path, FileSystem &fs) {
 	return optional_idx();
 }
 
-static optional_idx ReadMemoryLimit(FileSystem &fs, const string &file_path) {
-	if (!fs.FileExists(file_path)) {
+static optional_idx ReadMemoryLimit(Context &context, FileSystem &fs, const string &file_path) {
+	if (!fs.FileExists(context, file_path)) {
 		return optional_idx();
 	}
 
-	auto handle = fs.OpenFile(file_path, FileFlags::FILE_FLAGS_READ);
+	auto handle = fs.OpenFile(context, file_path, FileFlags::FILE_FLAGS_READ);
 	char buffer[100];
 	auto bytes_read = fs.Read(*handle, buffer, 99);
 	buffer[bytes_read] = '\0';
@@ -179,14 +179,14 @@ static optional_idx ReadMemoryLimit(FileSystem &fs, const string &file_path) {
 
 } // namespace
 
-optional_idx CGroups::GetMemoryLimit(FileSystem &fs) {
+optional_idx CGroups::GetMemoryLimit(Context &context, FileSystem &fs) {
 	static constexpr const char *MEMORY_LIMIT_IN_BYTES = "/sys/fs/cgroup/memory%s/memory.limit_in_bytes";
 	static constexpr const char *MEMORY_MAX = "/sys/fs/cgroup%s/memory.max";
 
 	optional_idx root_entry;
 	optional_idx memory_entry;
 
-	auto cgroup_entries = ParseGroupEntries(fs);
+	auto cgroup_entries = ParseGroupEntries(context, fs);
 	for (idx_t i = 0; i < cgroup_entries.size(); i++) {
 		auto &entry = cgroup_entries[i];
 		auto &controller_list = entry.controller_list;
@@ -208,13 +208,13 @@ optional_idx CGroups::GetMemoryLimit(FileSystem &fs) {
 	if (memory_entry.IsValid()) {
 		auto &entry = cgroup_entries[memory_entry.GetIndex()];
 		auto path = StringUtil::Format(MEMORY_LIMIT_IN_BYTES, entry.cgroup_path);
-		auto memory_limit = ReadMemoryLimit(fs, path.c_str());
+		auto memory_limit = ReadMemoryLimit(context, fs, path.c_str());
 		if (memory_limit.IsValid()) {
 			return memory_limit;
 		}
 		//! try falling back to the root directory
 		path = StringUtil::Format(MEMORY_LIMIT_IN_BYTES, "");
-		memory_limit = ReadMemoryLimit(fs, path.c_str());
+		memory_limit = ReadMemoryLimit(context, fs, path.c_str());
 		if (memory_limit.IsValid()) {
 			return memory_limit;
 		}
@@ -222,13 +222,13 @@ optional_idx CGroups::GetMemoryLimit(FileSystem &fs) {
 	if (root_entry.IsValid()) {
 		auto &entry = cgroup_entries[root_entry.GetIndex()];
 		auto path = StringUtil::Format(MEMORY_MAX, entry.cgroup_path);
-		auto memory_limit = ReadMemoryLimit(fs, path.c_str());
+		auto memory_limit = ReadMemoryLimit(context, fs, path.c_str());
 		if (memory_limit.IsValid()) {
 			return memory_limit;
 		}
 		//! try falling back to the root directory
 		path = StringUtil::Format(MEMORY_MAX, "");
-		memory_limit = ReadMemoryLimit(fs, path.c_str());
+		memory_limit = ReadMemoryLimit(context, fs, path.c_str());
 		if (memory_limit.IsValid()) {
 			return memory_limit;
 		}
@@ -236,11 +236,11 @@ optional_idx CGroups::GetMemoryLimit(FileSystem &fs) {
 	return optional_idx();
 }
 
-idx_t CGroups::GetCPULimit(FileSystem &fs, idx_t physical_cores) {
+idx_t CGroups::GetCPULimit(Context &context, FileSystem &fs, idx_t physical_cores) {
 	optional_idx root_entry;
 	optional_idx cpu_entry;
 
-	auto cgroup_entries = ParseGroupEntries(fs);
+	auto cgroup_entries = ParseGroupEntries(context, fs);
 	for (idx_t i = 0; i < cgroup_entries.size(); i++) {
 		auto &entry = cgroup_entries[i];
 		auto &controller_list = entry.controller_list;
@@ -261,24 +261,24 @@ idx_t CGroups::GetCPULimit(FileSystem &fs, idx_t physical_cores) {
 	// To properly handle this, we should parse and use the mapping in `/proc/self/mountinfo`
 	if (cpu_entry.IsValid()) {
 		auto &entry = cgroup_entries[cpu_entry.GetIndex()];
-		auto res = GetCPUCountV1(entry.cgroup_path, fs);
+		auto res = GetCPUCountV1(context, entry.cgroup_path, fs);
 		if (res.IsValid()) {
 			return res.GetIndex();
 		}
 		//! try falling back to the root directory
-		res = GetCPUCountV1("", fs);
+		res = GetCPUCountV1(context, "", fs);
 		if (res.IsValid()) {
 			return res.GetIndex();
 		}
 	}
 	if (root_entry.IsValid()) {
 		auto &entry = cgroup_entries[root_entry.GetIndex()];
-		auto res = GetCPUCountV2(entry.cgroup_path, fs);
+		auto res = GetCPUCountV2(context, entry.cgroup_path, fs);
 		if (res.IsValid()) {
 			return res.GetIndex();
 		}
 		//! try falling back to the root directory
-		res = GetCPUCountV2("", fs);
+		res = GetCPUCountV2(context, "", fs);
 		if (res.IsValid()) {
 			return res.GetIndex();
 		}
@@ -288,11 +288,11 @@ idx_t CGroups::GetCPULimit(FileSystem &fs, idx_t physical_cores) {
 
 #else
 
-optional_idx CGroups::GetMemoryLimit(FileSystem &fs) {
+optional_idx CGroups::GetMemoryLimit(Context &context, FileSystem &fs) {
 	return optional_idx();
 }
 
-idx_t CGroups::GetCPULimit(FileSystem &fs, idx_t physical_cores) {
+idx_t CGroups::GetCPULimit(Context &context, FileSystem &fs, idx_t physical_cores) {
 	return physical_cores;
 }
 

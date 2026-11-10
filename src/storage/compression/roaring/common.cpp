@@ -209,7 +209,7 @@ void RoaringFinalizeCompress(CompressionState &state_p) {
 	state.Finalize();
 }
 
-unique_ptr<SegmentScanState> RoaringInitScan(const QueryContext &context, ColumnSegment &segment) {
+unique_ptr<SegmentScanState> RoaringInitScan(Context &context, ColumnSegment &segment) {
 	auto result = make_uniq<RoaringScanState>(context, segment);
 	return std::move(result);
 }

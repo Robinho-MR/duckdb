@@ -16,7 +16,7 @@ namespace capiv2 {
 // detected across instances, while no instance is memoized.
 CV2Instance::CV2Instance(CV2Environment &env, DBConfig &startup_config)
     : database(env.cache->CreateEmptyInstance(startup_config)), env(env), factory(*this), config_handle(*this),
-      file_system(FileSystem::GetFileSystem(*database->instance), QueryContext()) {
+      file_system(FileSystem::GetFileSystem(*database->instance), database->instance->GetServices()) {
 }
 
 DatabaseInstance &CV2InstanceFactory::GetDatabase() {
@@ -67,7 +67,7 @@ void CV2Instance::Attach(const string &path, const Identifier &name,
 		// The host opening a file is not external access: allow it the way the main database path is allowed.
 		if (options.db_type.empty() && !DBConfig::IsInMemoryDatabase(info.path.c_str()) &&
 		    !FileSystem::IsRemoteFile(info.path) && !Settings::Get<EnableExternalAccessSetting>(instance)) {
-			instance.config.AddAllowedDatabasePath(info.path);
+			instance.config.AddAllowedDatabasePath(*instance.Services(), info.path);
 		}
 		auto &db_manager = DatabaseManager::Get(instance);
 		auto attached = db_manager.AttachDatabase(context, info, options);

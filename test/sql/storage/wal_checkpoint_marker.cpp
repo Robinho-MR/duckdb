@@ -22,21 +22,21 @@ static duckdb::vector<data_t> ReadFile(FileSystem &fs, const string &path) {
 	auto size = handle->GetFileSize();
 	duckdb::vector<data_t> result(size);
 	if (size > 0) {
-		handle->Read(QueryContext(), result.data(), size, 0);
+		handle->Read(result.data(), size, 0);
 	}
 	return result;
 }
 
-static void WriteFile(FileSystem &fs, const string &path, const duckdb::vector<data_t> &contents) {
-	BufferedFileWriter writer(fs, path, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE_NEW);
+static void WriteFile(FileSystem &fs, Context &context, const string &path, const duckdb::vector<data_t> &contents) {
+	BufferedFileWriter writer(fs, context, path, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE_NEW);
 	if (!contents.empty()) {
 		writer.WriteData(contents.data(), contents.size());
 	}
 	writer.Sync();
 }
 
-static void WriteTornLegacyCheckpointMarker(FileSystem &fs, const string &path) {
-	BufferedFileWriter writer(fs, path, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE_NEW);
+static void WriteTornLegacyCheckpointMarker(FileSystem &fs, Context &context, const string &path) {
+	BufferedFileWriter writer(fs, context, path, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE_NEW);
 	BinarySerializer serializer(writer);
 	serializer.Begin();
 	serializer.WriteProperty(100, "wal_type", WALType::CHECKPOINT);
@@ -70,7 +70,8 @@ TEST_CASE("Truncate a failed checkpoint marker before making its WAL writable", 
 
 	auto database_path = TestCreatePath("failed_checkpoint_marker");
 	auto wal_path = database_path + ".wal";
-	LocalFileSystem fs;
+	DuckDB fs_db(nullptr);
+	auto &fs = FileSystem::GetLocal(*fs_db.instance);
 	DeleteDatabase(database_path);
 	RemoveCheckpointRecoveryFiles(fs, database_path);
 
@@ -110,7 +111,8 @@ TEST_CASE("Reject a checkpoint marker that is not at the end of the WAL", "[stor
 
 	auto database_path = TestCreatePath("checkpoint_marker_not_at_end");
 	auto wal_path = database_path + ".wal";
-	LocalFileSystem fs;
+	DuckDB fs_db(nullptr);
+	auto &fs = FileSystem::GetLocal(*fs_db.instance);
 	DeleteDatabase(database_path);
 	RemoveCheckpointRecoveryFiles(fs, database_path);
 
@@ -148,7 +150,8 @@ TEST_CASE("Recover a missing or torn WAL flush following a checkpoint marker", "
 	config->options.checkpoint_on_shutdown = false;
 	config->options.abort_on_wal_failure = false;
 
-	LocalFileSystem fs;
+	DuckDB fs_db(nullptr);
+	auto &fs = FileSystem::GetLocal(*fs_db.instance);
 	for (idx_t flush_bytes = 0; flush_bytes <= 1; flush_bytes++) {
 		auto database_path = TestCreatePath("torn_checkpoint_flush_" + to_string(flush_bytes));
 		auto wal_path = database_path + ".wal";
@@ -195,7 +198,8 @@ TEST_CASE("Treat an incomplete checkpoint marker as a torn WAL entry", "[storage
 
 	auto database_path = TestCreatePath("torn_checkpoint_marker");
 	auto wal_path = database_path + ".wal";
-	LocalFileSystem fs;
+	DuckDB fs_db(nullptr);
+	auto &fs = FileSystem::GetLocal(*fs_db.instance);
 	DeleteDatabase(database_path);
 	RemoveCheckpointRecoveryFiles(fs, database_path);
 
@@ -205,7 +209,7 @@ TEST_CASE("Treat an incomplete checkpoint marker as a torn WAL entry", "[storage
 		REQUIRE_NO_FAIL(con.Query("CREATE TABLE integers(i INTEGER)"));
 		REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
 	}
-	WriteTornLegacyCheckpointMarker(fs, wal_path);
+	WriteTornLegacyCheckpointMarker(fs, fs_db.instance->GetServices(), wal_path);
 	auto torn_wal_contents = ReadFile(fs, wal_path);
 
 	{
@@ -231,7 +235,8 @@ TEST_CASE("Reject a mismatched WAL generation before truncating its checkpoint m
 
 	auto database_path = TestCreatePath("mismatched_checkpoint_marker");
 	auto wal_path = database_path + ".wal";
-	LocalFileSystem fs;
+	DuckDB fs_db(nullptr);
+	auto &fs = FileSystem::GetLocal(*fs_db.instance);
 	DeleteDatabase(database_path);
 	RemoveCheckpointRecoveryFiles(fs, database_path);
 
@@ -251,7 +256,7 @@ TEST_CASE("Reject a mismatched WAL generation before truncating its checkpoint m
 		Connection con(db);
 		REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
 	}
-	WriteFile(fs, wal_path, old_wal_contents);
+	WriteFile(fs, fs_db.instance->GetServices(), wal_path, old_wal_contents);
 
 	bool threw = false;
 	try {
@@ -278,7 +283,8 @@ TEST_CASE("Reject multiple checkpoint markers before changing WAL files", "[stor
 	auto wal_path = database_path + ".wal";
 	auto checkpoint_wal_path = database_path + ".wal.checkpoint";
 	auto recovery_wal_path = database_path + ".wal.recovery";
-	LocalFileSystem fs;
+	DuckDB fs_db(nullptr);
+	auto &fs = FileSystem::GetLocal(*fs_db.instance);
 	DeleteDatabase(database_path);
 	RemoveCheckpointRecoveryFiles(fs, database_path);
 

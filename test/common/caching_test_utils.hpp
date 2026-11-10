@@ -36,8 +36,7 @@ public:
 	bool CanHandleFile(const string &path) override;
 	bool CanSeek() override;
 	FileMetadata Stats(FileHandle &handle) override;
-	unique_ptr<FileHandle> OpenFile(const string &path, FileOpenFlags flags,
-	                                optional_ptr<FileOpener> opener = nullptr) override;
+	unique_ptr<FileHandle> OpenFile(Context &context, const string &path, FileOpenFlags flags) override;
 	void Read(FileHandle &handle, void *buffer, int64_t nr_bytes, idx_t location) override;
 	vector<pair<idx_t, idx_t>> TakeReads();
 

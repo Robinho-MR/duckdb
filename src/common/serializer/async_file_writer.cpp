@@ -45,7 +45,7 @@ private:
 AsyncFileWriter::AsyncFileWriter(Context &context_p, FileSystem &fs_p, const string &path_p,
                                  const FileOpenFlags &open_flags)
     : context(context_p), fs(fs_p), path(path_p) {
-	handle = fs.OpenFile(path, open_flags | FileLockType::WRITE_LOCK);
+	handle = fs.OpenFile(context, path, open_flags | FileLockType::WRITE_LOCK);
 
 	try {
 		ManagedAsyncWriteStreamTarget &target = *this;

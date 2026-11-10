@@ -20,17 +20,17 @@ static void CopyFile(FileSystem &fs, const string &source, const string &target)
 	auto source_handle = fs.OpenFile(source, FileFlags::FILE_FLAGS_READ);
 	auto file_size = source_handle->GetFileSize();
 	auto contents = duckdb::unique_ptr<data_t[]>(new data_t[file_size]);
-	source_handle->Read(QueryContext(), contents.get(), file_size, 0);
+	source_handle->Read(contents.get(), file_size, 0);
 
 	auto target_handle = fs.OpenFile(target, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE_NEW);
-	target_handle->Write(QueryContext(), contents.get(), file_size, 0);
+	fs.Write(*target_handle, contents.get(), UnsafeNumericCast<int64_t>(file_size), 0);
 }
 
 static pair<idx_t, idx_t> GetWALCommitBoundaries(FileSystem &fs, const string &path) {
 	auto handle = fs.OpenFile(path, FileFlags::FILE_FLAGS_READ);
 	auto wal_size = handle->GetFileSize();
 	auto wal_contents = duckdb::unique_ptr<data_t[]>(new data_t[wal_size]);
-	handle->Read(QueryContext(), wal_contents.get(), wal_size, 0);
+	handle->Read(wal_contents.get(), wal_size, 0);
 
 	for (idx_t start = 0; start + 2 * sizeof(uint64_t) <= wal_size; start++) {
 		idx_t offset = start;
@@ -69,7 +69,8 @@ TEST_CASE("Test torn WAL writes", "[storage][.]") {
 	auto source_database = TestCreatePath("storage_test_source");
 	auto source_wal = source_database + ".wal";
 
-	LocalFileSystem lfs;
+	DuckDB lfs_db(nullptr);
+	auto &lfs = FileSystem::GetLocal(*lfs_db.instance);
 	config->options.checkpoint_wal_size = idx_t(-1);
 	config->options.checkpoint_on_shutdown = false;
 	config->options.abort_on_wal_failure = false;
@@ -113,7 +114,8 @@ TEST_CASE("Test torn WAL writes followed by successful commits", "[storage][.]")
 	auto storage_database = TestCreatePath("storage_test");
 	auto storage_wal = storage_database + ".wal";
 
-	LocalFileSystem lfs;
+	DuckDB lfs_db(nullptr);
+	auto &lfs = FileSystem::GetLocal(*lfs_db.instance);
 	config->options.checkpoint_wal_size = idx_t(-1);
 	config->options.checkpoint_on_shutdown = false;
 	config->options.abort_on_wal_failure = false;
@@ -163,10 +165,10 @@ static void FlipWALByte(FileSystem &fs, const string &path, idx_t byte_pos) {
 	auto wal_size = handle->GetFileSize();
 	auto wal_contents = duckdb::unique_ptr<data_t[]>(new data_t[wal_size]);
 
-	handle->Read(QueryContext(), wal_contents.get(), wal_size, 0);
+	handle->Read(wal_contents.get(), wal_size, 0);
 	wal_contents[byte_pos]++;
 
-	handle->Write(QueryContext(), wal_contents.get(), wal_size, 0);
+	fs.Write(*handle, wal_contents.get(), UnsafeNumericCast<int64_t>(wal_size), 0);
 }
 
 TEST_CASE("Test WAL checksums", "[storage][.]") {
@@ -177,7 +179,8 @@ TEST_CASE("Test WAL checksums", "[storage][.]") {
 	auto source_database = TestCreatePath("wal_checksum_source");
 	auto source_wal = source_database + ".wal";
 
-	LocalFileSystem lfs;
+	DuckDB lfs_db(nullptr);
+	auto &lfs = FileSystem::GetLocal(*lfs_db.instance);
 	config->options.checkpoint_wal_size = idx_t(-1);
 	config->options.checkpoint_on_shutdown = false;
 	config->options.abort_on_wal_failure = false;

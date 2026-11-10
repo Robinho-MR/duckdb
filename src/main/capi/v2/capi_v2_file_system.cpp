@@ -3,7 +3,7 @@
 #include "duckdb/common/file_open_flags.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/open_file_info.hpp"
-#include "duckdb/common/query_context.hpp"
+#include "duckdb/main/context.hpp"
 
 namespace duckdb::capiv2 {
 
@@ -28,8 +28,11 @@ public:
 // An open file, owned. Carries the context for the same reason the file system handle does.
 class CV2File {
 public:
+	explicit CV2File(Context &query_p) : query(query_p) {
+	}
+
 	unique_ptr<FileHandle> handle;
-	QueryContext query;
+	Context &query;
 
 	auto Handle() const -> FileHandle & {
 		return *handle;
@@ -196,13 +199,12 @@ DUCKDB_V2_ERROR duckdb_v2_file_system_open(duckdb_v2_file_system_handle file_sys
 		// No opener is passed: FileSystem::GetFileSystem hands back the context's own OpenerFileSystem, which
 		// pushes the opener itself -- which is how a remote file system reaches settings and secrets. Supplying one
 		// here is rejected outright ("the opener is pushed automatically").
-		auto handle = slot.fs.OpenFile(info, opts.flags);
+		auto handle = slot.fs.OpenFile(slot.query, info, opts.flags);
 		if (!handle) {
 			throw duckdb::IOException("Failed to open file: %s", info.path);
 		}
-		auto file = duckdb::make_uniq<CV2File>();
+		auto file = duckdb::make_uniq<CV2File>(slot.query);
 		file->handle = std::move(handle);
-		file->query = slot.query;
 		*out_file_handle = Convert(file.release());
 	});
 }

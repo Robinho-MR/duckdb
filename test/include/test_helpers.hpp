@@ -136,6 +136,12 @@ bool SetDatabaseDestroy(const string &mode);
 bool DatabaseDestroyFires(bool success);
 //! Materializes $ROOT + $RUN_ID once, at startup (main). Fills error + returns false on failure.
 bool PrepareTempDir(string &error);
+//! The database-wide Context of a static database, for tests that work on a file system without a database
+Context &TestServicesContext();
+
+//! A local file system for tests without a database: its Context-free calls use a database-wide Context
+duckdb::unique_ptr<FileSystem> TestCreateLocalFileSystem();
+
 //! Reclaim the owned leaf and any empty ancestors created by the same lifecycle step.
 void ReclaimTestDirectoryLevels(FileSystem &fs, const string &leaf, const vector<string> &created);
 //! Executes the run-id-level destroy disposition (recursive, bottom-up "destroy only what I created").

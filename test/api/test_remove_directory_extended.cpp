@@ -7,7 +7,8 @@ using namespace duckdb;
 namespace {
 
 string ProbeDir(const string &name) {
-	LocalFileSystem fs;
+	DuckDB db(nullptr);
+	auto &fs = FileSystem::GetLocal(*db.instance);
 	return fs.JoinPath(TestDirectoryPath(), name);
 }
 
@@ -19,7 +20,8 @@ void MakeFile(FileSystem &fs, const string &path) {
 } // namespace
 
 TEST_CASE("Test RemoveDirectoryExtended in SINGLE mode", "[api]") {
-	LocalFileSystem fs;
+	DuckDB db(nullptr);
+	auto &fs = FileSystem::GetLocal(*db.instance);
 	const RemoveDirectoryOptions single {RemoveDirectoryMode::SINGLE};
 
 	SECTION("an empty directory is removed") {

@@ -15,8 +15,8 @@ namespace duckdb {
 
 class BufferedFileReader : public ReadStream {
 public:
-	BufferedFileReader(FileSystem &fs, const char *path, FileLockType lock_type = FileLockType::READ_LOCK,
-	                   optional_ptr<FileOpener> opener = nullptr);
+	BufferedFileReader(FileSystem &fs, Context &context, const char *path,
+	                   FileLockType lock_type = FileLockType::READ_LOCK);
 	BufferedFileReader(FileSystem &fs, unique_ptr<FileHandle> handle);
 
 	FileSystem &fs;
@@ -27,7 +27,6 @@ public:
 
 public:
 	void ReadData(data_ptr_t buffer, uint64_t read_size) override;
-	void ReadData(QueryContext context, data_ptr_t buffer, uint64_t read_size) override;
 
 	//! Returns true if the reader has finished reading the entire file
 	bool Finished();

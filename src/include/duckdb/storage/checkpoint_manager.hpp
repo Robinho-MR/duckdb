@@ -74,7 +74,7 @@ private:
 class CheckpointWriter {
 public:
 	//! The client context is only set for explicit checkpoints, which bind buffered index operations before writing
-	CheckpointWriter(AttachedDatabase &db, QueryContext context, optional_ptr<ClientContext> client_context = nullptr);
+	CheckpointWriter(AttachedDatabase &db, Context &context, optional_ptr<ClientContext> client_context = nullptr);
 	virtual ~CheckpointWriter();
 
 	//! The database
@@ -95,7 +95,6 @@ public:
 	virtual unique_ptr<TableDataWriter> GetTableDataWriter(TableCatalogEntry &table) = 0;
 
 private:
-	shared_ptr<Context> owned_context;
 	Context &context;
 	optional_ptr<ClientContext> client_context;
 
@@ -158,7 +157,7 @@ class SingleFileCheckpointWriter final : public CheckpointWriter {
 	friend class SingleFileTableDataWriter;
 
 public:
-	SingleFileCheckpointWriter(QueryContext context, AttachedDatabase &db, BlockManager &block_manager,
+	SingleFileCheckpointWriter(Context &context, AttachedDatabase &db, BlockManager &block_manager,
 	                           CheckpointOptions options, optional_ptr<ClientContext> client_context = nullptr);
 	~SingleFileCheckpointWriter() override;
 

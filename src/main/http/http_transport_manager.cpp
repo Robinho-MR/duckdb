@@ -1,7 +1,6 @@
 #include "duckdb/main/http/http_transport_manager.hpp"
 
 #include "duckdb/common/exception.hpp"
-#include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/limits.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/main/database.hpp"
@@ -239,9 +238,9 @@ bool HTTPTransportManager::AdvanceConnectionEpoch(uint64_t &connection_epoch, bo
 	return false;
 }
 
-void HTTPTransportManager::Initialize(const DBConfig &config) {
+void HTTPTransportManager::Initialize(const DBConfig &config, Context &context) {
 	auto new_capacity = config.options.http_client_pool_capacity == DConstants::INVALID_INDEX
-	                        ? AutomaticCapacity(config)
+	                        ? AutomaticCapacity(config, context)
 	                        : config.options.http_client_pool_capacity;
 	if (new_capacity == 0) {
 		throw InvalidInputException("The HTTP client pool capacity must be at least 1");
@@ -259,12 +258,13 @@ void HTTPTransportManager::Initialize(const DBConfig &config) {
 	initialized = true;
 }
 
-idx_t HTTPTransportManager::AutomaticCapacity(const DBConfig &config) {
+idx_t HTTPTransportManager::AutomaticCapacity(const DBConfig &config, Context &context) {
 	auto &fs = *config.file_system;
 	auto io_concurrency = config.options.async_threads == DConstants::INVALID_INDEX
-	                          ? DBConfig::GetSystemMaxAsyncThreads(fs)
+	                          ? DBConfig::GetSystemMaxAsyncThreads(context, fs)
 	                          : config.options.async_threads;
-	return CalculateCapacity(DBConfig::GetSystemMaxThreads(fs), FileSystem::GetFileDescriptorLimit(), io_concurrency);
+	return CalculateCapacity(DBConfig::GetSystemMaxThreads(context, fs), FileSystem::GetFileDescriptorLimit(),
+	                         io_concurrency);
 }
 
 idx_t HTTPTransportManager::GetCapacity() const {
@@ -338,14 +338,15 @@ HTTPTransportManager::Session HTTPTransportManager::CreateSession(ClientContext 
 	return FinishSession(reservation, reservation.state->http_util->InitializeParameters(context, path));
 }
 
-HTTPTransportManager::Session HTTPTransportManager::CreateSession(optional_ptr<FileOpener> opener,
-                                                                  optional_ptr<FileOpenerInfo> info) {
-	auto opener_db = FileOpener::TryGetDatabase(opener);
-	if (opener_db) {
-		ValidateDatabase(*opener_db);
-	}
+HTTPTransportManager::Session HTTPTransportManager::CreateSession(Context &context, optional_ptr<FileLookupInfo> info) {
+	ValidateDatabase(context.GetDatabase());
+	return CreateSessionUnchecked(context, info);
+}
+
+HTTPTransportManager::Session HTTPTransportManager::CreateSessionUnchecked(Context &context,
+                                                                           optional_ptr<FileLookupInfo> info) {
 	auto reservation = ReserveSession();
-	return FinishSession(reservation, reservation.state->http_util->InitializeParameters(opener, info));
+	return FinishSession(reservation, reservation.state->http_util->InitializeParameters(context, info));
 }
 
 void HTTPTransportManager::SetHTTPUtil(const shared_ptr<HTTPUtil> &new_http_util) {

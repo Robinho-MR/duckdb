@@ -21,7 +21,7 @@
 #include "duckdb/main/capi/extension_api.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/connection_manager.hpp"
-#include "duckdb/main/database_file_opener.hpp"
+#include "duckdb/main/database_file_system.hpp"
 #include "duckdb/main/database_file_path_manager.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/main/external_resource_type_registry.hpp"
@@ -82,7 +82,7 @@ DBConfig::DBConfig(const identifier_map_t<Value> &config_dict, bool read_only) :
 DBConfig::~DBConfig() {
 }
 
-DatabaseInstance::DatabaseInstance() : db_validity(*this) {
+DatabaseInstance::DatabaseInstance() : services(make_shared_ptr<Context>(*this)), db_validity(*this) {
 	config.is_user_config = false;
 	create_api_v1 = nullptr;
 	invoke_capi_v2 = nullptr;
@@ -356,7 +356,6 @@ void DatabaseInstance::InitializeInstance(const char *database_path, DBConfig *u
 	create_api_v1 = CreateAPIv1Wrapper;
 	invoke_capi_v2 = InvokeCAPIV2Entrypoint;
 
-	db_file_system = make_uniq<DatabaseFileSystem>(*this);
 	local_db_file_system = make_uniq<LocalDatabaseFileSystem>(*this);
 	db_manager = make_uniq<DatabaseManager>(*this);
 	external_resource_type_registry = make_uniq<ExternalResourceTypeRegistry>();
@@ -390,7 +389,7 @@ void DatabaseInstance::InitializeInstance(const char *database_path, DBConfig *u
 
 	// resolve the type of the database we are opening
 	auto &fs = FileSystem::GetFileSystem(*this);
-	DBPathAndType::ResolveDatabaseType(fs, config.options.database_path, config.options.database_type);
+	DBPathAndType::ResolveDatabaseType(GetServices(), fs, config.options.database_path, config.options.database_type);
 
 	if (!config.options.database_type.empty() && !StringUtil::CIEquals(config.options.database_type, "duckdb")) {
 		// if we are opening an extension database - load the extension
@@ -399,7 +398,8 @@ void DatabaseInstance::InitializeInstance(const char *database_path, DBConfig *u
 		}
 		auto storage_extension = StorageExtension::Find(config, config.options.database_type);
 		if (!storage_extension) {
-			ExtensionHelper::LoadExternalExtension(*this, *config.file_system, {config.options.database_type});
+			ExtensionHelper::LoadExternalExtension(*this, FileSystem::GetFileSystem(*this),
+			                                       {config.options.database_type});
 		}
 	}
 
@@ -484,7 +484,7 @@ static FileSystem &ResolveLocalFileSystem(DatabaseInstance &db, unique_ptr<FileS
 }
 
 LocalDatabaseFileSystem::LocalDatabaseFileSystem(DatabaseInstance &db_p)
-    : db(db_p), local_fs(ResolveLocalFileSystem(db_p, owned_file_system)), database_opener(db_p) {
+    : db(db_p), local_fs(ResolveLocalFileSystem(db_p, owned_file_system)), context(db_p.Services()) {
 }
 
 FileSystem &LocalDatabaseFileSystem::GetFileSystem() const {
@@ -561,24 +561,25 @@ void DatabaseInstance::Configure(DBConfig &new_config, const char *database_path
 	} else {
 		config.file_system = make_uniq<VirtualFileSystem>(FileSystem::CreateLocal());
 	}
-	config.http_transport_manager->Initialize(config);
+	db_file_system = make_uniq<DatabaseFileSystem>(*this);
+	config.http_transport_manager->Initialize(config, GetServices());
 	if (database_path && !Settings::Get<EnableExternalAccessSetting>(*this)) {
-		config.AddAllowedDatabasePath(database_path);
+		config.AddAllowedDatabasePath(*Services(), database_path);
 		if (!config.options.temporary_directory.empty()) {
-			config.AddAllowedDirectory(config.options.temporary_directory);
+			config.AddAllowedDirectory(*Services(), config.options.temporary_directory);
 		}
 	}
 	if (new_config.secret_manager) {
 		config.secret_manager = std::move(new_config.secret_manager);
 	}
 	if (config.options.maximum_memory == DConstants::INVALID_INDEX) {
-		config.SetDefaultMaxMemory();
+		config.SetDefaultMaxMemory(this);
 	}
 	if (new_config.options.maximum_threads == DConstants::INVALID_INDEX) {
-		config.options.maximum_threads = config.GetSystemMaxThreads(*config.file_system);
+		config.options.maximum_threads = config.GetSystemMaxThreads(GetServices(), *config.file_system);
 	}
 	if (new_config.options.async_threads == DConstants::INVALID_INDEX) {
-		config.options.async_threads = config.GetSystemMaxAsyncThreads(*config.file_system);
+		config.options.async_threads = config.GetSystemMaxAsyncThreads(GetServices(), *config.file_system);
 	}
 	config.allocator = std::move(new_config.allocator);
 	if (!config.allocator) {
@@ -587,8 +588,9 @@ void DatabaseInstance::Configure(DBConfig &new_config, const char *database_path
 	config.block_allocator = std::move(new_config.block_allocator);
 	if (!config.block_allocator) {
 		auto default_block_size = Settings::Get<DefaultBlockSizeSetting>(config);
-		config.block_allocator = make_uniq<BlockAllocator>(*config.allocator, default_block_size,
-		                                                   DBConfig::GetSystemAvailableMemory(*config.file_system));
+		config.block_allocator =
+		    make_uniq<BlockAllocator>(*config.allocator, default_block_size,
+		                              DBConfig::GetSystemAvailableMemory(GetServices(), *config.file_system));
 	}
 	config.block_allocator->SetEnabled(config.options.enable_block_allocator);
 	config.replacement_scans = std::move(new_config.replacement_scans);
@@ -709,6 +711,10 @@ void DatabaseInstance::InvokeExtensionEntrypointV2(const ExtensionInitResult &in
                                                    optional_ptr<ClientContext> context, bool statically_linked) {
 	D_ASSERT(invoke_capi_v2);
 	invoke_capi_v2(*this, init_result, extension_name, init_fun, context, statically_linked);
+}
+
+bool DatabaseInstance::HasLogManager() const {
+	return log_manager != nullptr;
 }
 
 LogManager &DatabaseInstance::GetLogManager() const {

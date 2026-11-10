@@ -60,7 +60,7 @@ public:
 	//! Retire excess idle clients and discard excess active clients on release
 	DUCKDB_API void SetCapacity(idx_t capacity) DUCKDB_EXCLUDES(lock);
 	DUCKDB_API idx_t GetCapacity() const DUCKDB_EXCLUDES(lock);
-	DUCKDB_API static idx_t AutomaticCapacity(const DBConfig &config);
+	DUCKDB_API static idx_t AutomaticCapacity(const DBConfig &config, Context &context);
 
 private:
 	explicit HTTPTransportManager(const shared_ptr<HTTPUtil> &initial_http_util);
@@ -68,8 +68,7 @@ private:
 public:
 	DUCKDB_API Session CreateSession(DatabaseInstance &db, const string &path) DUCKDB_EXCLUDES(lock);
 	DUCKDB_API Session CreateSession(ClientContext &context, const string &path) DUCKDB_EXCLUDES(lock);
-	DUCKDB_API Session CreateSession(optional_ptr<FileOpener> opener, optional_ptr<FileOpenerInfo> info)
-	    DUCKDB_EXCLUDES(lock);
+	DUCKDB_API Session CreateSession(Context &context, optional_ptr<FileLookupInfo> info) DUCKDB_EXCLUDES(lock);
 
 private:
 	using ClientKey = HTTPClientPool::ClientKey;
@@ -125,7 +124,7 @@ private:
 
 	//! Database lifecycle helpers.
 	static unique_ptr<HTTPTransportManager> Create(const shared_ptr<HTTPUtil> &initial_http_util);
-	void Initialize(const DBConfig &config) DUCKDB_EXCLUDES(lock);
+	void Initialize(const DBConfig &config, Context &context) DUCKDB_EXCLUDES(lock);
 	void Close() noexcept DUCKDB_EXCLUDES(lock);
 	static idx_t CalculateCapacity(idx_t system_concurrency, optional_idx file_descriptor_limit,
 	                               idx_t io_concurrency = 0);
@@ -135,6 +134,8 @@ private:
 
 	//! Session lifecycle helpers.
 	void ValidateDatabase(DatabaseInstance &db) const;
+	//! Creates a session without checking that the context belongs to the database of this manager
+	Session CreateSessionUnchecked(Context &context, optional_ptr<FileLookupInfo> info) DUCKDB_EXCLUDES(lock);
 	SessionReservation ReserveSession() DUCKDB_EXCLUDES(lock);
 	Session FinishSession(SessionReservation reservation, unique_ptr<HTTPParams> params) DUCKDB_EXCLUDES(lock);
 	void DestroySession(idx_t session_id) noexcept DUCKDB_EXCLUDES(lock);

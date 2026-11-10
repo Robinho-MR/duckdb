@@ -75,7 +75,7 @@ void TightenCacheDeadline(optional<timestamp_t> &cached, const optional<timestam
 
 class FetchBlockTask : public BaseExecutorTask {
 public:
-	FetchBlockTask(CachingFileHandle &caching_file_handle_p, TaskExecutor &executor, QueryContext context_p,
+	FetchBlockTask(CachingFileHandle &caching_file_handle_p, TaskExecutor &executor, Context &context_p,
 	               BufferManager &buffer_manager_p, shared_ptr<CacheBlock> block_p, BufferHandle &result_pin_p)
 	    : BaseExecutorTask(executor), caching_file_handle(caching_file_handle_p), context(context_p),
 	      buffer_manager(buffer_manager_p), block(std::move(block_p)), result_pin(result_pin_p) {
@@ -160,7 +160,7 @@ public:
 
 private:
 	CachingFileHandle &caching_file_handle;
-	QueryContext context;
+	Context &context;
 	BufferManager &buffer_manager;
 	shared_ptr<CacheBlock> block;
 	BufferHandle &result_pin;
@@ -172,7 +172,7 @@ private:
 
 class ReadRangeTask : public BaseExecutorTask {
 public:
-	ReadRangeTask(CachingFileHandle &caching_file_handle_p, TaskExecutor &executor, QueryContext context_p,
+	ReadRangeTask(CachingFileHandle &caching_file_handle_p, TaskExecutor &executor, Context &context_p,
 	              data_ptr_t buffer_p, idx_t nr_bytes_p, idx_t location_p)
 	    : BaseExecutorTask(executor), caching_file_handle(caching_file_handle_p), context(context_p), buffer(buffer_p),
 	      nr_bytes(nr_bytes_p), location(location_p) {
@@ -184,7 +184,7 @@ public:
 
 private:
 	CachingFileHandle &caching_file_handle;
-	QueryContext context;
+	Context &context;
 	data_ptr_t buffer;
 	idx_t nr_bytes;
 	idx_t location;
@@ -207,14 +207,9 @@ CachingFileSystem CachingFileSystem::Get(ClientContext &context) {
 	return CachingFileSystem(FileSystem::GetFileSystem(context), *context.db);
 }
 
-unique_ptr<CachingFileHandle> CachingFileSystem::OpenFile(const OpenFileInfo &path, const FileOpenFlags &flags,
-                                                          optional_ptr<FileOpener> opener) {
-	return make_uniq<CachingFileHandle>(QueryContext(), *this, path, flags, opener);
-}
-
-unique_ptr<CachingFileHandle> CachingFileSystem::OpenFile(QueryContext context, const OpenFileInfo &path,
-                                                          const FileOpenFlags &flags, optional_ptr<FileOpener> opener) {
-	return make_uniq<CachingFileHandle>(context, *this, path, flags, opener);
+unique_ptr<CachingFileHandle> CachingFileSystem::OpenFile(Context &context, const OpenFileInfo &path,
+                                                          const FileOpenFlags &flags) {
+	return make_uniq<CachingFileHandle>(context, *this, path, flags);
 }
 
 //===----------------------------------------------------------------------===//
@@ -304,13 +299,11 @@ void CachingFileHandle::ReconcileCacheAfterRead(CachedFile &cached_file) {
 	external_file_cache.DropBlocks(cached_file);
 }
 
-CachingFileHandle::CachingFileHandle(QueryContext context, CachingFileSystem &caching_file_system_p,
-                                     const OpenFileInfo &path_p, FileOpenFlags flags_p,
-                                     optional_ptr<FileOpener> opener_p)
+CachingFileHandle::CachingFileHandle(Context &context, CachingFileSystem &caching_file_system_p,
+                                     const OpenFileInfo &path_p, FileOpenFlags flags_p)
     : context(context), file_system(caching_file_system_p.file_system), db(caching_file_system_p.db),
       external_file_cache(caching_file_system_p.external_file_cache), path(path_p), flags(std::move(flags_p)),
-      opener(opener_p),
-      validate(ExternalFileCacheUtil::GetCacheValidationMode(path_p, context.GetContext(), caching_file_system_p.db)),
+      validate(ExternalFileCacheUtil::GetCacheValidationMode(path_p, context, caching_file_system_p.db)),
       cached_file(nullptr), position(0) {
 	cached_file = external_file_cache.GetOrCreateCachedFile(path_p.path);
 	if (!external_file_cache.IsEnabled() || Validate()) {
@@ -346,7 +339,7 @@ shared_ptr<FileHandle> CachingFileHandle::GetFileHandle() {
 	// Request parallel access on the underlying filesystem handle to avoid races in implementations that
 	// require explicit opt-in for concurrent pread-style access (e.g., HTTPFS).
 	auto internal_flags = flags | FileFlags::FILE_FLAGS_PARALLEL_ACCESS;
-	file_handle = file_system.OpenFile(path, internal_flags, opener);
+	file_handle = file_system.OpenFile(context, path, internal_flags);
 	// Snapshot the metadata with a single Stats call, avoiding repeated metadata lookups (e.g., fstat)
 	validation_info = GetValidationInfo(file_system, *file_handle);
 
@@ -671,7 +664,7 @@ idx_t CachingFileHandle::GetMaxMemory() const {
 	return external_file_cache.GetBufferManager().GetMaxMemory();
 }
 
-void CachingFileHandle::ReadAndRecord(QueryContext context, data_ptr_t buffer, idx_t nr_bytes, idx_t location) {
+void CachingFileHandle::ReadAndRecord(Context &context, data_ptr_t buffer, idx_t nr_bytes, idx_t location) {
 	auto handle = GetFileHandle();
 	if (handle->file_system.IsLocalFileSystem()) {
 		// Pre-fault local read buffers before the kernel fills them.
