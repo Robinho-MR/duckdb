@@ -2319,7 +2319,8 @@ void DoubleBindCb(duckdb_v2_function_bind_info_handle info, duckdb_v2_table_func
 	}
 	std::string_view name = "y";
 	std::string_view virtual_name = "v";
-	auto rc = duckdb_v2_table_function_bind_add_result_column(result, name.data(), name.size(), bigint, err);
+	duckdb_v2_identifier_t name_ident {name.data(), name.size()};
+	auto rc = duckdb_v2_table_function_bind_add_result_column(result, &name_ident, bigint, err);
 	if (rc == DUCKDB_V2_ERROR_NONE) {
 		rc = duckdb_v2_table_function_bind_add_virtual_column(result, DUCKDB_V2_VIRTUAL_COLUMN_START,
 		                                                      virtual_name.data(), virtual_name.size(), bigint, err);
@@ -2401,7 +2402,7 @@ void DoubleInOutCb(duckdb_v2_table_function_in_out_info_handle info, duckdb_v2_c
 
 duckdb_v2_table_function_handle MakeDouble(EnvFixture &fx, std::string_view name, bool pushdown) {
 	auto bigint = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_BIGINT);
-	auto function = MakeTable(fx.conn, name);
+	auto function = MakeTable(fx.conn, std::string(name).c_str());
 	TableSigParam(SigOf(function), "x", bigint);
 	duckdb_v2_logical_type_destroy(&bigint);
 	REQUIRE(duckdb_v2_table_function_set_bind_callback(function, DoubleBindCb, nullptr) == DUCKDB_V2_ERROR_NONE);

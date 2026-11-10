@@ -12,6 +12,14 @@
 // through CAST, TRY_CAST and implicit argument conversion.
 // ---------------------------------------------------------------------------
 
+// The tests call the C function setters directly, to pass what the C++ setters cannot express.
+namespace duckdb::cxx::detail {
+template <>
+struct HandleTraits<CastFunction> {
+	using handle = duckdb_v2_cast_function_handle;
+};
+} // namespace duckdb::cxx::detail
+
 namespace {
 
 using namespace duckdb::cxx;
@@ -338,4 +346,227 @@ TEST_CASE("Stable C++API: try cast reports a failed row through the error slot",
 	REQUIRE(source.TryCast(factory, target, &error));
 	REQUIRE(error.empty());
 	REQUIRE_FALSE(target.GetView().IsValid(1));
+}
+
+// ---------------------------------------------------------------------------
+// Stability, bind callback and bind data
+// ---------------------------------------------------------------------------
+
+namespace {
+
+constexpr const char *OFFSET_OPTION = "cast_offset";
+constexpr const char *FORBID_OPTION = "cast_forbidden";
+
+// Carried as bind data: what the bind callback saw.
+struct BindRecord {
+	std::string types;
+	int64_t offset = 0;
+};
+
+idx_t bind_calls = 0;
+
+void RegisterOptions(Connection &conn) {
+	auto &factory = conn.GetFactory();
+	auto offset = CustomOption::Create(factory);
+	offset.SetName(OFFSET_OPTION)
+	    .SetType(factory.ParseType("BIGINT"))
+	    .SetDefaultValue(Value::Create(factory, int64_t {0}));
+	conn.Register(offset);
+	auto forbid = CustomOption::Create(factory);
+	forbid.SetName(FORBID_OPTION).SetType(factory.ParseType("BOOLEAN")).SetDefaultValue(Value::Create(factory, false));
+	conn.Register(forbid);
+}
+
+// TEMPERATURE -> VARCHAR: renders the value plus the offset option, read while executing.
+void OffsetTempToText(CastFunction::ExecInput &input) {
+	const auto offset = input.GetContext().GetConfig().GetOption(OFFSET_OPTION).value.Get<int64_t>();
+	auto in = input.GetInput();
+	auto out = input.GetOutput();
+	auto view = in.GetView();
+	auto validity = out.GetValidityMutable();
+	for (idx_t i = 0; i < input.GetRowCount(); i++) {
+		if (!view.IsValid(i)) {
+			validity.SetInvalid(i);
+			continue;
+		}
+		out.AssignString(i, std::to_string(view.Data<int32_t>()[view.SelAt(i)] + offset) + SUFFIX);
+	}
+}
+
+// TEMPERATURE -> VARCHAR: renders the bind data the bind callback produced.
+void BindDataTempToText(CastFunction::ExecInput &input) {
+	const auto &record = input.GetBindData<BindRecord>();
+	auto in = input.GetInput();
+	auto out = input.GetOutput();
+	auto view = in.GetView();
+	auto validity = out.GetValidityMutable();
+	for (idx_t i = 0; i < input.GetRowCount(); i++) {
+		if (!view.IsValid(i)) {
+			validity.SetInvalid(i);
+			continue;
+		}
+		out.AssignString(i, record.types + " offset " + std::to_string(record.offset) + SUFFIX);
+	}
+}
+
+void RecordingBind(CastFunction::BindInput &input) {
+	bind_calls++;
+	BindRecord record;
+	record.types = input.GetUserData<CastTag>().value;
+	record.types += input.GetSourceType().GetTypeId() == LogicalTypeId::INTEGER ? " INTEGER->" : " ?->";
+	record.types += input.GetTargetType().GetTypeId() == LogicalTypeId::VARCHAR ? "VARCHAR" : "?";
+	if (auto *context = input.GetContext()) {
+		record.offset = context->GetConfig().GetOption(OFFSET_OPTION).value.Get<int64_t>();
+	}
+	input.SetBindData<BindRecord>(std::move(record));
+}
+
+void ForbiddingBind(CastFunction::BindInput &input) {
+	auto *context = input.GetContext();
+	if (context && context->GetConfig().GetOption(FORBID_OPTION).value.Get<bool>()) {
+		throw InvalidInputException("temperature casts are forbidden right now");
+	}
+}
+
+void RegisterOffsetCast(Connection &conn, const LogicalType &temperature, FunctionStability stability) {
+	auto cast = CastFunction::Create(conn.GetFactory());
+	cast.SetSourceType(temperature).SetTargetType(conn.GetFactory().ParseType("VARCHAR"));
+	cast.SetExecCallback(OffsetTempToText).SetStability(stability);
+	conn.Register(cast);
+}
+
+} // namespace
+
+TEST_CASE("Stable C++API: cast function stability decides whether a prepared cast follows a setting", "[cpp_api]") {
+	const auto query = "PREPARE p AS SELECT upper(CAST(CAST(5 AS TEMPERATURE_CELSIUS) AS VARCHAR))";
+	{
+		// A setting-dependent cast is not folded while preparing
+		auto db = Instance(":memory:");
+		auto conn = db.Connect();
+		RegisterOptions(conn);
+		auto temperature = RegisterTemperature(conn);
+		RegisterOffsetCast(conn, temperature, FunctionStability::CONSISTENT_WITHIN_QUERY);
+		conn.Execute(query).Drain();
+		REQUIRE(CollectCastStrings(conn.Execute("EXECUTE p")) == std::vector<std::string> {"5 DEGREES CELSIUS"});
+		conn.Execute("SET cast_offset = 100").Drain();
+		REQUIRE(CollectCastStrings(conn.Execute("EXECUTE p")) == std::vector<std::string> {"105 DEGREES CELSIUS"});
+	}
+	{
+		// A consistent cast is folded when the statement is prepared
+		auto db = Instance(":memory:");
+		auto conn = db.Connect();
+		RegisterOptions(conn);
+		auto temperature = RegisterTemperature(conn);
+		RegisterOffsetCast(conn, temperature, FunctionStability::CONSISTENT);
+		conn.Execute(query).Drain();
+		conn.Execute("SET cast_offset = 100").Drain();
+		REQUIRE(CollectCastStrings(conn.Execute("EXECUTE p")) == std::vector<std::string> {"5 DEGREES CELSIUS"});
+	}
+}
+
+TEST_CASE("Stable C++API: cast function stability decides whether an index expression is accepted", "[cpp_api]") {
+	const auto create_index = "CREATE INDEX i ON t ((CAST(CAST(x AS TEMPERATURE_CELSIUS) AS VARCHAR)))";
+	for (auto stability : {FunctionStability::CONSISTENT_WITHIN_QUERY, FunctionStability::VOLATILE}) {
+		auto db = Instance(":memory:");
+		auto conn = db.Connect();
+		RegisterOptions(conn);
+		auto temperature = RegisterTemperature(conn);
+		RegisterOffsetCast(conn, temperature, stability);
+		conn.Execute("CREATE TABLE t (x INTEGER)").Drain();
+		REQUIRE_THROWS_WITH(conn.Execute(create_index).Drain(),
+		                    Catch::Matchers::Contains("Index keys cannot contain expressions with side effects"));
+	}
+}
+
+TEST_CASE("Stable C++API: cast function bind callback sets bind data for the exec callback", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	RegisterOptions(conn);
+	auto temperature = RegisterTemperature(conn);
+
+	auto cast = CastFunction::Create(conn.GetFactory());
+	cast.SetSourceType(temperature).SetTargetType(conn.GetFactory().ParseType("VARCHAR"));
+	cast.SetUserData<CastTag>(CastTag {"tag"});
+	cast.SetBindCallback(RecordingBind).SetExecCallback(BindDataTempToText);
+	conn.Register(cast);
+
+	bind_calls = 0;
+	conn.Execute("SET cast_offset = 3").Drain();
+	REQUIRE(CollectCastStrings(conn.Execute("SELECT CAST(CAST(5 AS TEMPERATURE_CELSIUS) AS VARCHAR)")) ==
+	        std::vector<std::string> {"tag INTEGER->VARCHAR offset 3 degrees celsius"});
+	REQUIRE(bind_calls >= 1);
+	const auto after_first = bind_calls;
+
+	// Each binding runs the callback again and sees the settings of that moment
+	conn.Execute("SET cast_offset = 4").Drain();
+	REQUIRE(CollectCastStrings(conn.Execute("SELECT CAST(CAST(5 AS TEMPERATURE_CELSIUS) AS VARCHAR)")) ==
+	        std::vector<std::string> {"tag INTEGER->VARCHAR offset 4 degrees celsius"});
+	REQUIRE(bind_calls > after_first);
+
+	// Casting a table column works the same
+	conn.Execute("CREATE TABLE t (x INTEGER)").Drain();
+	conn.Execute("INSERT INTO t VALUES (1), (NULL)").Drain();
+	REQUIRE(CollectCastStrings(conn.Execute("SELECT CAST(CAST(x AS TEMPERATURE_CELSIUS) AS VARCHAR) FROM t WHERE x "
+	                                        "IS NOT NULL")) ==
+	        std::vector<std::string> {"tag INTEGER->VARCHAR offset 4 degrees celsius"});
+}
+
+TEST_CASE("Stable C++API: cast function bind callback errors surface at bind time", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	RegisterOptions(conn);
+	auto temperature = RegisterTemperature(conn);
+
+	auto cast = CastFunction::Create(conn.GetFactory());
+	cast.SetSourceType(temperature).SetTargetType(conn.GetFactory().ParseType("VARCHAR"));
+	cast.SetBindCallback(ForbiddingBind).SetExecCallback(OffsetTempToText);
+	conn.Register(cast);
+
+	const std::string sql = "SELECT CAST(CAST(5 AS TEMPERATURE_CELSIUS) AS VARCHAR)";
+	REQUIRE(CollectCastStrings(conn.Execute(sql)) == std::vector<std::string> {"5 degrees celsius"});
+
+	conn.Execute("SET cast_forbidden = true").Drain();
+	const auto message = Catch::Matchers::Contains("temperature casts are forbidden right now");
+	REQUIRE_THROWS_WITH(conn.Execute(sql).Drain(), message);
+	REQUIRE_THROWS_WITH(conn.Execute("EXPLAIN " + sql).Drain(), message);
+	REQUIRE_THROWS_WITH(conn.Execute("PREPARE p AS " + sql).Drain(), message);
+
+	// Once the option allows it again, the same statements bind
+	conn.Execute("SET cast_forbidden = false").Drain();
+	conn.Execute("PREPARE p AS " + sql).Drain();
+	REQUIRE(CollectCastStrings(conn.Execute("EXECUTE p")) == std::vector<std::string> {"5 degrees celsius"});
+}
+
+TEST_CASE("Stable C++API: cast function property and bind data misuse", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	auto function = CastFunction::Create(conn.GetFactory());
+
+	// Only the stability key is valid for a cast
+	REQUIRE(duckdb_v2_cast_function_set_property(function.handle(), DUCKDB_V2_FUNCTION_PROPERTY_NULL_HANDLING,
+	                                             DUCKDB_V2_FUNCTION_PROPERTY_NULL_HANDLING_SPECIAL,
+	                                             nullptr) != DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_cast_function_set_property(function.handle(), DUCKDB_V2_FUNCTION_PROPERTY_FALLIBILITY,
+	                                             DUCKDB_V2_FUNCTION_PROPERTY_FALLIBILITY_FALLIBLE,
+	                                             nullptr) != DUCKDB_V2_ERROR_NONE);
+	// A value that does not belong to the key
+	REQUIRE(duckdb_v2_cast_function_set_property(function.handle(), DUCKDB_V2_FUNCTION_PROPERTY_STABILITY,
+	                                             DUCKDB_V2_FUNCTION_PROPERTY_NULL_HANDLING_DEFAULT,
+	                                             nullptr) != DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_cast_function_set_property(nullptr, DUCKDB_V2_FUNCTION_PROPERTY_STABILITY,
+	                                             DUCKDB_V2_FUNCTION_PROPERTY_STABILITY_CONSISTENT,
+	                                             nullptr) != DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_cast_function_set_property(function.handle(), DUCKDB_V2_FUNCTION_PROPERTY_STABILITY,
+	                                             DUCKDB_V2_FUNCTION_PROPERTY_STABILITY_VOLATILE,
+	                                             nullptr) == DUCKDB_V2_ERROR_NONE);
+
+	// Null arguments of the bind accessors
+	void *data = nullptr;
+	REQUIRE(duckdb_v2_cast_function_bind_get_user_data(nullptr, &data, nullptr) != DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_cast_function_exec_get_bind_data(nullptr, &data, nullptr) != DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_cast_function_set_bind_callback(nullptr, nullptr, nullptr) != DUCKDB_V2_ERROR_NONE);
+
+	// The convenience setter works and a bind callback can be removed again
+	function.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
+	function.SetBindCallback(ForbiddingBind).SetBindCallback(nullptr);
 }

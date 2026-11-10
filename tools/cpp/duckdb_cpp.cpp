@@ -284,7 +284,7 @@ namespace {
 }
 
 template <class F, class... ARGS>
-auto CheckedAPICall(F &&func, ARGS &&... args) -> void {
+auto CheckedAPICall(F &&func, ARGS &&...args) -> void {
 	duckdb_v2_error_info_handle err = nullptr;
 	const auto code = func(std::forward<ARGS>(args)..., &err);
 	if (code != DUCKDB_V2_ERROR_NONE) {
@@ -426,7 +426,7 @@ auto ExecutePreparedArrow(duckdb_v2_prepared_statement_handle prepared, const Pa
 // then a buffer with room for the terminator receives the text. The library
 // never allocates, so there is nothing to free.
 template <class F, class... ARGS>
-auto RenderText(F &&func, ARGS &&... args) -> std::string {
+auto RenderText(F &&func, ARGS &&...args) -> std::string {
 	idx_t length = 0;
 	CheckedAPICall(func, args..., static_cast<char *>(nullptr), static_cast<idx_t>(0), &length);
 	std::string out;
@@ -3241,20 +3241,25 @@ struct ScalarFunctionInfo {
 	ScalarFunction::InitCallback init_callback = nullptr;
 	ScalarFunction::ExecCallback exec_callback = nullptr;
 	ScalarFunction::StatsCallback stats_callback = nullptr;
+	ScalarFunction::SerializeCallback serialize_callback = nullptr;
+	ScalarFunction::DeserializeCallback deserialize_callback = nullptr;
 	detail::UserData user_data;
 
 	ScalarFunctionInfo(ScalarFunction::ResolveTypesCallback resolve_types_callback,
 	                   ScalarFunction::BindCallback bind_callback, ScalarFunction::InitCallback init_callback,
 	                   ScalarFunction::ExecCallback exec_callback, ScalarFunction::StatsCallback stats_callback,
-	                   detail::UserData user_data)
+	                   ScalarFunction::SerializeCallback serialize_callback,
+	                   ScalarFunction::DeserializeCallback deserialize_callback, detail::UserData user_data)
 	    : resolve_types_callback(resolve_types_callback), bind_callback(bind_callback), init_callback(init_callback),
-	      exec_callback(exec_callback), stats_callback(stats_callback), user_data(std::move(user_data)) {
+	      exec_callback(exec_callback), stats_callback(stats_callback), serialize_callback(serialize_callback),
+	      deserialize_callback(deserialize_callback), user_data(std::move(user_data)) {
 	}
 
 	bool operator==(const ScalarFunctionInfo &other) const {
 		return resolve_types_callback == other.resolve_types_callback && bind_callback == other.bind_callback &&
 		       init_callback == other.init_callback && exec_callback == other.exec_callback &&
-		       stats_callback == other.stats_callback && user_data.get() == other.user_data.get();
+		       stats_callback == other.stats_callback && serialize_callback == other.serialize_callback &&
+		       deserialize_callback == other.deserialize_callback && user_data.get() == other.user_data.get();
 	}
 };
 
@@ -3452,6 +3457,49 @@ auto ScalarFunction::SetStatsCallback(StatsCallback callback) & -> ScalarFunctio
 	return *this;
 }
 
+auto ScalarFunction::SetSerializeCallbacks(SerializeCallback serialize,
+                                           DeserializeCallback deserialize) & -> ScalarFunction & {
+	if (!serialize && !deserialize) {
+		CheckedAPICall(duckdb_v2_scalar_function_set_serialize_callbacks, handle(), nullptr, nullptr);
+		serialize_callback = nullptr;
+		deserialize_callback = nullptr;
+		return *this;
+	}
+	if (!serialize || !deserialize) {
+		throw InvalidInputException("the serialize and deserialize callbacks must be set together");
+	}
+
+	static auto serialize_trampoline = [](duckdb_v2_scalar_function_serialize_info_handle info,
+	                                      duckdb_v2_error_info_handle *err) {
+		WithExceptionGuard(err, [&]() {
+			void *user_data = nullptr;
+			CheckedAPICall(duckdb_v2_scalar_function_serialize_get_user_data, info, &user_data);
+			const auto &function = *static_cast<ScalarFunctionInfo *>(user_data);
+
+			auto input = detail::HandleFactory::Make<SerializeInput>(static_cast<void *>(info));
+			function.serialize_callback(input);
+		});
+	};
+	static auto deserialize_trampoline = [](duckdb_v2_scalar_function_deserialize_info_handle info,
+	                                        duckdb_v2_context_handle context, duckdb_v2_error_info_handle *err) {
+		WithExceptionGuard(err, [&]() {
+			void *user_data = nullptr;
+			CheckedAPICall(duckdb_v2_scalar_function_deserialize_get_user_data, info, &user_data);
+			const auto &function = *static_cast<ScalarFunctionInfo *>(user_data);
+
+			auto input =
+			    detail::HandleFactory::Make<DeserializeInput>(static_cast<void *>(info), static_cast<void *>(context));
+			function.deserialize_callback(input);
+		});
+	};
+
+	CheckedAPICall(duckdb_v2_scalar_function_set_serialize_callbacks, handle(), serialize_trampoline,
+	               deserialize_trampoline);
+	serialize_callback = serialize;
+	deserialize_callback = deserialize;
+	return *this;
+}
+
 auto ScalarFunction::SetStability(FunctionStability value) & -> ScalarFunction & {
 	CheckedAPICall(duckdb_v2_scalar_function_set_property, handle(), DUCKDB_V2_FUNCTION_PROPERTY_STABILITY,
 	               ToCValue(value));
@@ -3479,8 +3527,9 @@ auto ScalarFunction::SetCollationHandling(FunctionCollationHandling value) & -> 
 auto ScalarFunction::PrepareRegistration() -> void {
 	// The callback table rides the C user_data slot so the trampolines can find
 	// it; the user's own data (SetUserData, moved out here) rides inside it.
-	auto info = std::unique_ptr<ScalarFunctionInfo>(new ScalarFunctionInfo(
-	    resolve_types_callback, bind_callback, init_callback, exec_callback, stats_callback, std::move(user_data)));
+	auto info = std::unique_ptr<ScalarFunctionInfo>(
+	    new ScalarFunctionInfo(resolve_types_callback, bind_callback, init_callback, exec_callback, stats_callback,
+	                           serialize_callback, deserialize_callback, std::move(user_data)));
 	duckdb_v2_opaque opaque {info.get(), detail::TypedDelete<ScalarFunctionInfo>,
 	                         detail::TypedEquals<ScalarFunctionInfo>};
 	CheckedAPICall(duckdb_v2_scalar_function_set_user_data, handle(), &opaque);
@@ -3508,6 +3557,65 @@ void ScalarFunction::BindInput::SetBindDataInternal(void *data, bool (*equals)(v
 void *ScalarFunction::BindInput::GetUserDataInternal() const {
 	const auto &function = *static_cast<const ScalarFunctionInfo *>(GetFunctionInfo());
 	return RequireUserData(function.user_data);
+}
+
+void ScalarFunction::BindInput::ReplaceCall(const std::string &function_name,
+                                            const std::vector<idx_t> &argument_indices) {
+	auto name = ToStr(function_name);
+	CheckedAPICall(duckdb_v2_scalar_function_bind_replace_call,
+	               static_cast<duckdb_v2_scalar_function_bind_info_handle>(result), &name, argument_indices.data(),
+	               argument_indices.size());
+}
+
+void *ScalarFunction::SerializeInput::GetBindDataInternal() const {
+	void *bind_data = nullptr;
+	CheckedAPICall(duckdb_v2_scalar_function_serialize_get_bind_data,
+	               static_cast<duckdb_v2_scalar_function_serialize_info_handle>(info), &bind_data);
+	return RequireBindData(bind_data);
+}
+
+void *ScalarFunction::SerializeInput::GetUserDataInternal() const {
+	void *user_data = nullptr;
+	CheckedAPICall(duckdb_v2_scalar_function_serialize_get_user_data,
+	               static_cast<duckdb_v2_scalar_function_serialize_info_handle>(info), &user_data);
+	const auto &function = *static_cast<const ScalarFunctionInfo *>(user_data);
+	return RequireUserData(function.user_data);
+}
+
+void ScalarFunction::SerializeInput::Write(const void *data, idx_t size) {
+	CheckedAPICall(duckdb_v2_scalar_function_serialize_write,
+	               static_cast<duckdb_v2_scalar_function_serialize_info_handle>(info), data, size);
+}
+
+void ScalarFunction::SerializeInput::Write(std::string_view bytes) {
+	Write(bytes.data(), bytes.size());
+}
+
+auto ScalarFunction::DeserializeInput::GetData() const -> std::string_view {
+	const void *data = nullptr;
+	idx_t size = 0;
+	CheckedAPICall(duckdb_v2_scalar_function_deserialize_get_data,
+	               static_cast<duckdb_v2_scalar_function_deserialize_info_handle>(info), &data, &size);
+	return std::string_view(static_cast<const char *>(data), size);
+}
+
+void *ScalarFunction::DeserializeInput::GetUserDataInternal() const {
+	void *user_data = nullptr;
+	CheckedAPICall(duckdb_v2_scalar_function_deserialize_get_user_data,
+	               static_cast<duckdb_v2_scalar_function_deserialize_info_handle>(info), &user_data);
+	const auto &function = *static_cast<const ScalarFunctionInfo *>(user_data);
+	return RequireUserData(function.user_data);
+}
+
+void ScalarFunction::DeserializeInput::SetBindDataInternal(void *data, bool (*equals)(void *a, void *b),
+                                                           void (*destructor)(void *)) {
+	duckdb_v2_opaque opaque {data, destructor, equals};
+	CheckedAPICall(duckdb_v2_scalar_function_deserialize_set_bind_data,
+	               static_cast<duckdb_v2_scalar_function_deserialize_info_handle>(info), &opaque);
+}
+
+auto ScalarFunction::DeserializeInput::GetContext() -> Context & {
+	return context;
 }
 
 void *ScalarFunction::InitInput::GetBindDataInternal() const {
@@ -6380,14 +6488,17 @@ namespace {
 // it. Owned by the registered cast, freed at engine teardown.
 struct CastFunctionInfo {
 	CastFunction::ExecCallback exec_callback = nullptr;
+	CastFunction::BindCallback bind_callback = nullptr;
 	detail::UserData user_data;
 
-	CastFunctionInfo(CastFunction::ExecCallback exec_callback, detail::UserData user_data)
-	    : exec_callback(exec_callback), user_data(std::move(user_data)) {
+	CastFunctionInfo(CastFunction::ExecCallback exec_callback, CastFunction::BindCallback bind_callback,
+	                 detail::UserData user_data)
+	    : exec_callback(exec_callback), bind_callback(bind_callback), user_data(std::move(user_data)) {
 	}
 
 	bool operator==(const CastFunctionInfo &other) const {
-		return exec_callback == other.exec_callback && user_data.get() == other.user_data.get();
+		return exec_callback == other.exec_callback && bind_callback == other.bind_callback &&
+		       user_data.get() == other.user_data.get();
 	}
 };
 
@@ -6462,10 +6573,88 @@ auto CastFunction::SetExecCallback(ExecCallback callback) & -> CastFunction & {
 	return *this;
 }
 
+auto CastFunction::SetBindCallback(BindCallback callback) & -> CastFunction & {
+	if (!callback) {
+		CheckedAPICall(duckdb_v2_cast_function_set_bind_callback, handle(), nullptr);
+		bind_callback = nullptr;
+		return *this;
+	}
+
+	static auto trampoline = [](duckdb_v2_cast_function_bind_info_handle info, duckdb_v2_context_handle context,
+	                            duckdb_v2_error_info_handle *err) {
+		WithExceptionGuard(err, [&]() {
+			void *user_data = nullptr;
+			CheckedAPICall(duckdb_v2_cast_function_bind_get_user_data, info, &user_data);
+			const auto &function = *static_cast<CastFunctionInfo *>(user_data);
+
+			auto input =
+			    detail::HandleFactory::Make<BindInput>(static_cast<void *>(info), static_cast<void *>(context));
+			function.bind_callback(input);
+		});
+	};
+
+	CheckedAPICall(duckdb_v2_cast_function_set_bind_callback, handle(), trampoline);
+	bind_callback = callback;
+	return *this;
+}
+
+auto CastFunction::SetStability(FunctionStability value) & -> CastFunction & {
+	CheckedAPICall(duckdb_v2_cast_function_set_property, handle(), DUCKDB_V2_FUNCTION_PROPERTY_STABILITY,
+	               ToCValue(value));
+	return *this;
+}
+
+CastFunction::BindInput::BindInput(void *args, void *context_handle) : args(args) {
+	if (context_handle) {
+		context.reset(new Context(detail::HandleFactory::Make<Context>(context_handle)));
+	}
+}
+
+CastFunction::BindInput::~BindInput() = default;
+
+auto CastFunction::BindInput::GetSourceType() const -> LogicalType {
+	duckdb_v2_logical_type_handle type = nullptr;
+	CheckedAPICall(duckdb_v2_cast_function_bind_get_source_type,
+	               static_cast<duckdb_v2_cast_function_bind_info_handle>(args), &type);
+	return detail::HandleFactory::Make<LogicalType>(type);
+}
+
+auto CastFunction::BindInput::GetTargetType() const -> LogicalType {
+	duckdb_v2_logical_type_handle type = nullptr;
+	CheckedAPICall(duckdb_v2_cast_function_bind_get_target_type,
+	               static_cast<duckdb_v2_cast_function_bind_info_handle>(args), &type);
+	return detail::HandleFactory::Make<LogicalType>(type);
+}
+
+void CastFunction::BindInput::SetBindDataInternal(void *data, void (*destructor)(void *)) {
+	duckdb_v2_opaque opaque {data, destructor, nullptr};
+	CheckedAPICall(duckdb_v2_cast_function_bind_set_bind_data,
+	               static_cast<duckdb_v2_cast_function_bind_info_handle>(args), &opaque);
+}
+
+void *CastFunction::BindInput::GetUserDataInternal() const {
+	void *user_data = nullptr;
+	CheckedAPICall(duckdb_v2_cast_function_bind_get_user_data,
+	               static_cast<duckdb_v2_cast_function_bind_info_handle>(args), &user_data);
+	const auto &function = *static_cast<const CastFunctionInfo *>(user_data);
+	return RequireCastUserData(function.user_data);
+}
+
+void *CastFunction::ExecInput::GetBindDataInternal() const {
+	void *bind_data = nullptr;
+	CheckedAPICall(duckdb_v2_cast_function_exec_get_bind_data,
+	               static_cast<duckdb_v2_cast_function_exec_info_handle>(args), &bind_data);
+	if (!bind_data) {
+		throw InvalidInputException("no bind data was set; call BindInput::SetBindData in the bind callback");
+	}
+	return bind_data;
+}
+
 auto CastFunction::PrepareRegistration() -> void {
 	// The callback table rides the C user_data slot so the trampoline can find
 	// it; the user's own data (SetUserData, moved out here) rides inside it.
-	auto info = std::unique_ptr<CastFunctionInfo>(new CastFunctionInfo(exec_callback, std::move(user_data)));
+	auto info =
+	    std::unique_ptr<CastFunctionInfo>(new CastFunctionInfo(exec_callback, bind_callback, std::move(user_data)));
 	duckdb_v2_opaque opaque {info.get(), detail::TypedDelete<CastFunctionInfo>, detail::TypedEquals<CastFunctionInfo>};
 	CheckedAPICall(duckdb_v2_cast_function_set_user_data, handle(), &opaque);
 	// The cast owns the table now.

@@ -579,8 +579,8 @@ TEST_CASE("V2 file system: open options carry a compression", "[capi_v2][file_sy
 		REQUIRE(duckdb_v2_file_open_options_set_compression(options, DUCKDB_V2_FILE_COMPRESSION_GZIP, nullptr) ==
 		        DUCKDB_V2_ERROR_NONE);
 		duckdb_v2_file_handle handle = nullptr;
-		REQUIRE(duckdb_v2_file_system_open(fs, path.data(), path.size(), options, &handle, nullptr) ==
-		        DUCKDB_V2_ERROR_NONE);
+		auto path_str = Convert(path);
+		REQUIRE(duckdb_v2_file_system_open(fs, &path_str, options, &handle, nullptr) == DUCKDB_V2_ERROR_NONE);
 		FsWrite(handle, text);
 		duckdb_v2_file_destroy(&handle);
 		duckdb_v2_file_open_options_destroy(&options);
@@ -600,8 +600,8 @@ TEST_CASE("V2 file system: open options carry a compression", "[capi_v2][file_sy
 		auto options = FsOptions(fs, {DUCKDB_V2_FILE_FLAG_READ});
 		REQUIRE(duckdb_v2_file_open_options_set_compression(options, compression, nullptr) == DUCKDB_V2_ERROR_NONE);
 		duckdb_v2_file_handle handle = nullptr;
-		REQUIRE(duckdb_v2_file_system_open(fs, path.data(), path.size(), options, &handle, nullptr) ==
-		        DUCKDB_V2_ERROR_NONE);
+		auto path_str = Convert(path);
+		REQUIRE(duckdb_v2_file_system_open(fs, &path_str, options, &handle, nullptr) == DUCKDB_V2_ERROR_NONE);
 		REQUIRE(FsReadAll(handle, 128) == text);
 		duckdb_v2_file_destroy(&handle);
 		duckdb_v2_file_open_options_destroy(&options);

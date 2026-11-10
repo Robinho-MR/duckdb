@@ -1,6 +1,10 @@
 #include "duckdb/main/capi_v2/capi_v2_internal.hpp"
 #include "duckdb/main/capi_v2/capi_v2_function_internal.hpp"
 #include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
+#include "duckdb/function/function_binder.hpp"
+#include "duckdb/common/serializer/serializer.hpp"
+#include "duckdb/common/serializer/deserializer.hpp"
 #include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 
@@ -56,6 +60,10 @@ class CV2BindInfo {
 public:
 	//! The bind data the callback set, or nullptr
 	shared_ptr<CV2UserData> out_bind_data;
+	//! Whether the callback replaced the call, and by what
+	bool replace_call = false;
+	Identifier replace_name;
+	vector<idx_t> replace_arguments;
 };
 
 static auto Convert(duckdb_v2_scalar_function_bind_info_handle info) -> CV2BindInfo * {
@@ -78,6 +86,38 @@ static auto Convert(duckdb_v2_scalar_function_resolve_types_info_handle info) ->
 }
 static auto Convert(CV2ResolveTypesInfo *info) -> duckdb_v2_scalar_function_resolve_types_info_handle {
 	return reinterpret_cast<duckdb_v2_scalar_function_resolve_types_info_handle>(info);
+}
+
+class CV2SerializeInfo {
+public:
+	CV2SerializeInfo(void *user_data, void *bind_data) : user_data(user_data), bind_data(bind_data) {
+	}
+
+	void *user_data;
+	void *bind_data;
+	//! The bytes written by the callback
+	string bytes;
+};
+
+static auto Convert(duckdb_v2_scalar_function_serialize_info_handle info) -> CV2SerializeInfo * {
+	return reinterpret_cast<CV2SerializeInfo *>(info);
+}
+static auto Convert(CV2SerializeInfo *info) -> duckdb_v2_scalar_function_serialize_info_handle {
+	return reinterpret_cast<duckdb_v2_scalar_function_serialize_info_handle>(info);
+}
+
+class CV2DeserializeInfo {
+public:
+	void *user_data = nullptr;
+	string bytes;
+	shared_ptr<CV2UserData> out_bind_data;
+};
+
+static auto Convert(duckdb_v2_scalar_function_deserialize_info_handle info) -> CV2DeserializeInfo * {
+	return reinterpret_cast<CV2DeserializeInfo *>(info);
+}
+static auto Convert(CV2DeserializeInfo *info) -> duckdb_v2_scalar_function_deserialize_info_handle {
+	return reinterpret_cast<duckdb_v2_scalar_function_deserialize_info_handle>(info);
 }
 
 class CV2InitInfo {
@@ -143,6 +183,8 @@ public:
 	duckdb_v2_scalar_function_init_callback_fn init_cb = nullptr;
 	duckdb_v2_scalar_function_exec_callback_fn exec_cb = nullptr;
 	duckdb_v2_scalar_function_stats_callback_fn stats_cb = nullptr;
+	duckdb_v2_scalar_function_serialize_callback_fn serialize_cb = nullptr;
+	duckdb_v2_scalar_function_deserialize_callback_fn deserialize_cb = nullptr;
 	shared_ptr<CV2UserData> user_data = nullptr;
 };
 
@@ -163,6 +205,52 @@ static auto CV2ScalarResolveTypes(ResolveScalarFunctionTypesInput &input) -> voi
 	}
 }
 
+//! Rebinds the call as a call to the function the callback named, taking the arguments it listed
+static auto ReplaceCall(BindScalarFunctionInput &input, const CV2BindInfo &result_info) -> unique_ptr<FunctionData> {
+	auto &bound_function = input.GetBoundFunction();
+	auto &context = input.GetClientContext();
+	auto &arguments = input.GetArguments();
+
+	vector<unique_ptr<Expression>> children;
+	vector<LogicalType> argument_types;
+	for (auto index : result_info.replace_arguments) {
+		if (index >= arguments.size()) {
+			throw InvalidInputException("Argument index %llu of the replacement of function %s is out of bounds: the "
+			                            "call has %llu arguments",
+			                            index, bound_function.GetName(), arguments.size());
+		}
+		children.push_back(arguments[index]->Copy());
+		argument_types.push_back(arguments[index]->GetReturnType());
+	}
+
+	auto definition_name = bound_function.GetDefinition()->GetQualifiedName();
+	if (result_info.replace_name == definition_name.Name()) {
+		throw InvalidInputException("Function %s cannot replace its own call by a call to itself",
+		                            bound_function.GetName());
+	}
+	auto replacement_name = definition_name.WithName(result_info.replace_name);
+	auto &entry = Catalog::GetEntry<ScalarFunctionCatalogEntry>(context, replacement_name);
+	auto replacement = entry.functions.GetFunctionByArguments(context, argument_types);
+
+	FunctionBinder binder(context);
+	auto expression = binder.BindScalarFunction(std::move(replacement), std::move(children), false,
+	                                            input.HasBinder() ? &input.GetBinder() : nullptr);
+	if (expression->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		throw InvalidInputException("The replacement %s of function %s was simplified away: it must remain a "
+		                            "function call",
+		                            result_info.replace_name.GetIdentifierName(), bound_function.GetName());
+	}
+	auto &replaced = expression->Cast<BoundFunctionExpression>();
+	if (replaced.GetReturnType() != bound_function.GetReturnType()) {
+		throw InvalidInputException("The replacement %s of function %s returns %s, but the call resolved to return %s",
+		                            result_info.replace_name.GetIdentifierName(), bound_function.GetName(),
+		                            replaced.GetReturnType().ToString(), bound_function.GetReturnType().ToString());
+	}
+	bound_function = std::move(replaced.FunctionMutable());
+	arguments = std::move(replaced.GetChildrenMutable());
+	return std::move(replaced.BindInfoMutable());
+}
+
 static auto CV2ScalarBind(BindScalarFunctionInput &input) -> unique_ptr<FunctionData> {
 	const auto &info = input.GetBoundFunction().GetExtraFunctionInfo().Cast<CV2ScalarFunctionInfo>();
 
@@ -176,6 +264,7 @@ static auto CV2ScalarBind(BindScalarFunctionInput &input) -> unique_ptr<Function
 	CV2CallbackContext callback_context(input.GetClientContext());
 	info.bind_cb(Convert(&bind_info), Convert(&result_info), Convert(&callback_context), &err_ptr);
 
+	// Throw after reading the bind data, so that it is destroyed even if we error.
 	unique_ptr<FunctionData> result = nullptr;
 	if (result_info.out_bind_data) {
 		auto set_result = make_uniq<CV2FunctionData>();
@@ -186,7 +275,60 @@ static auto CV2ScalarBind(BindScalarFunctionInput &input) -> unique_ptr<Function
 	if (err.HasError()) {
 		err.ThrowAsException();
 	}
+	if (result_info.replace_call) {
+		return ReplaceCall(input, result_info);
+	}
 
+	return result;
+}
+
+static auto CV2ScalarSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,
+                               const BoundScalarFunction &function) -> void {
+	const auto &info = function.GetExtraFunctionInfo().Cast<CV2ScalarFunctionInfo>();
+
+	void *user_bind_data = nullptr;
+	if (bind_data) {
+		const auto &data = bind_data->Cast<CV2FunctionData>();
+		user_bind_data = data.handle ? data.handle->GetData() : nullptr;
+	}
+	CV2SerializeInfo serialize_info(info.user_data ? info.user_data->GetData() : nullptr, user_bind_data);
+
+	CV2ErrorInfo err = {};
+	auto err_ptr = Convert(&err);
+	info.serialize_cb(Convert(&serialize_info), &err_ptr);
+	if (err.HasError()) {
+		err.ThrowAsException();
+	}
+
+	serializer.WriteProperty<idx_t>(100, "size", serialize_info.bytes.size());
+	serializer.WriteProperty(101, "data", const_data_ptr_cast(serialize_info.bytes.data()),
+	                         serialize_info.bytes.size());
+}
+
+static auto CV2ScalarDeserialize(Deserializer &deserializer, BoundScalarFunction &function)
+    -> unique_ptr<FunctionData> {
+	const auto &info = function.GetExtraFunctionInfo().Cast<CV2ScalarFunctionInfo>();
+
+	CV2DeserializeInfo deserialize_info;
+	deserialize_info.user_data = info.user_data ? info.user_data->GetData() : nullptr;
+	auto size = deserializer.ReadProperty<idx_t>(100, "size");
+	deserialize_info.bytes.resize(size);
+	deserializer.ReadProperty(101, "data", data_ptr_cast(&deserialize_info.bytes[0]), size);
+
+	CV2ErrorInfo err = {};
+	auto err_ptr = Convert(&err);
+	CV2CallbackContext callback_context(deserializer.Get<ClientContext &>());
+	info.deserialize_cb(Convert(&deserialize_info), Convert(&callback_context), &err_ptr);
+
+	unique_ptr<FunctionData> result = nullptr;
+	if (deserialize_info.out_bind_data) {
+		auto set_result = make_uniq<CV2FunctionData>();
+		set_result->handle = std::move(deserialize_info.out_bind_data);
+		result = std::move(set_result);
+	}
+	if (err.HasError()) {
+		err.ThrowAsException();
+	}
 	return result;
 }
 
@@ -336,6 +478,10 @@ public:
 		if (info.stats_cb) {
 			function.SetStatisticsCallback(CV2ScalarStats);
 		}
+		if (info.serialize_cb) {
+			function.SetSerializeCallback(CV2ScalarSerialize);
+			function.SetDeserializeCallback(CV2ScalarDeserialize);
+		}
 		function.SetExtraFunctionInfo<CV2ScalarFunctionInfo>(std::move(info));
 
 		return function;
@@ -469,6 +615,109 @@ duckdb_v2_scalar_function_resolve_types_set_return_type(duckdb_v2_scalar_functio
 
 DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_set_bind_data(duckdb_v2_scalar_function_bind_info_handle info,
                                                              duckdb_v2_opaque *data, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() {
+		if (Convert(info)->replace_call) {
+			throw duckdb::InvalidInputException(
+			    "The bind data cannot be set after the call was replaced: replacing it must be the only thing the "
+			    "bind callback does");
+		}
+		Convert(info)->out_bind_data =
+		    data->ptr ? duckdb::make_shared_ptr<CV2UserData>(data->ptr, data->destroy, data->equals) : nullptr;
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_replace_call(duckdb_v2_scalar_function_bind_info_handle info,
+                                                            const duckdb_v2_identifier_t *function_name,
+                                                            const idx_t *argument_indices, idx_t argument_count,
+                                                            duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(function_name);
+	if (argument_count > 0) {
+		DUCKDB_CHECK_ARG(argument_indices);
+	}
+	return WithErrorHandler(err, [&]() {
+		auto &bind_info = *Convert(info);
+		if (bind_info.out_bind_data) {
+			throw duckdb::InvalidInputException(
+			    "The call cannot be replaced after its bind data was set: replacing it must be the only thing the "
+			    "bind callback does");
+		}
+		if (bind_info.replace_call) {
+			throw duckdb::InvalidInputException("The call can only be replaced once");
+		}
+		bind_info.replace_call = true;
+		bind_info.replace_name = duckdb::Identifier(ConvertIdentifierName(function_name));
+		bind_info.replace_arguments.assign(argument_indices, argument_indices + argument_count);
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_scalar_function_set_serialize_callbacks(
+    duckdb_v2_scalar_function_handle function, duckdb_v2_scalar_function_serialize_callback_fn serialize_callback,
+    duckdb_v2_scalar_function_deserialize_callback_fn deserialize_callback, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() {
+		if ((serialize_callback == nullptr) != (deserialize_callback == nullptr)) {
+			throw duckdb::InvalidInputException("The serialize and deserialize callbacks must be set together");
+		}
+		auto &info = Convert(function)->info;
+		info.serialize_cb = serialize_callback;
+		info.deserialize_cb = deserialize_callback;
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_scalar_function_serialize_get_user_data(duckdb_v2_scalar_function_serialize_info_handle info,
+                                                                  void **data, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->user_data; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_scalar_function_serialize_get_bind_data(duckdb_v2_scalar_function_serialize_info_handle info,
+                                                                  void **data, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->bind_data; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_scalar_function_serialize_write(duckdb_v2_scalar_function_serialize_info_handle info,
+                                                          const void *data, idx_t size,
+                                                          duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	if (size > 0) {
+		DUCKDB_CHECK_ARG(data);
+	}
+	return WithErrorHandler(err, [&]() {
+		if (size > 0) {
+			Convert(info)->bytes.append(static_cast<const char *>(data), size);
+		}
+	});
+}
+
+DUCKDB_V2_ERROR
+duckdb_v2_scalar_function_deserialize_get_user_data(duckdb_v2_scalar_function_deserialize_info_handle info, void **data,
+                                                    duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->user_data; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_scalar_function_deserialize_get_data(duckdb_v2_scalar_function_deserialize_info_handle info,
+                                                               const void **data, idx_t *size,
+                                                               duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	DUCKDB_CHECK_ARG(size);
+	return WithErrorHandler(err, [&]() {
+		*data = Convert(info)->bytes.data();
+		*size = Convert(info)->bytes.size();
+	});
+}
+
+DUCKDB_V2_ERROR
+duckdb_v2_scalar_function_deserialize_set_bind_data(duckdb_v2_scalar_function_deserialize_info_handle info,
+                                                    duckdb_v2_opaque *data, duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(info);
 	DUCKDB_CHECK_ARG(data);
 	return WithErrorHandler(err, [&]() {

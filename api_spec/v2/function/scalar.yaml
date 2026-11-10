@@ -23,6 +23,18 @@ handles:
       handle next to a `[[function_bind_info]]`, which gives access to the arguments and the user data, and can use
       it to set the bind data of the call site being bound.
 
+  scalar_function_serialize_info:
+    description: |
+      A borrowed opaque handle to the serialization of a bound call site of a scalar function. The "serialize"
+      callback receives this handle and can use it to read the bind data and the user data and to append the bytes
+      that describe the call site to the serialized form.
+
+  scalar_function_deserialize_info:
+    description: |
+      A borrowed opaque handle to the deserialization of a bound call site of a scalar function. The "deserialize"
+      callback receives this handle and can use it to read the bytes written by the "serialize" callback and the
+      user data, and to set the bind data of the restored call site.
+
   scalar_function_init_info:
     description: |
       A borrowed opaque handle to the arguments supplied to a scalar function during the local state initialization 
@@ -72,6 +84,31 @@ callbacks:
       result:
         type: scalar_function_bind_info
         description: Borrowed opaque handle to set the bind data of the call site being bound through.
+      context:
+        type: context
+        description: Borrowed handle to the context of the query currently executing the callback.
+      err:
+        type: error_info
+        indirection: 1
+        description: Borrowed error info handle to use to report errors that occur during the callback.
+    return_type: void
+
+  scalar_function_serialize_callback:
+    parameters:
+      info:
+        type: scalar_function_serialize_info
+        description: Borrowed opaque handle providing access to the bind data and the user data, and to write the bytes through.
+      err:
+        type: error_info
+        indirection: 1
+        description: Borrowed error info handle to use to report errors that occur during the callback.
+    return_type: void
+
+  scalar_function_deserialize_callback:
+    parameters:
+      info:
+        type: scalar_function_deserialize_info
+        description: Borrowed opaque handle providing access to the serialized bytes and the user data, and to set the bind data.
       context:
         type: context
         description: Borrowed handle to the context of the query currently executing the callback.
@@ -404,6 +441,32 @@ functions:
         description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
     return_type: ERROR
 
+  scalar_function_set_serialize_callbacks:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Sets the optional serialize and deserialize callbacks of the scalar function.
+
+      They let a bound call site with bind data be written into a serialized plan and be restored from it. The
+      serialize callback reads the bind data and appends bytes to the serialized form; the deserialize callback
+      reads those bytes back and sets the bind data of the restored call site. Both must be set together: it is an
+      error to pass only one of them.
+    parameters:
+      function:
+        type: scalar_function
+        description: The function to set the callbacks of.
+      serialize_callback:
+        type: scalar_function_serialize_callback
+        description: The serialize callback to set.
+      deserialize_callback:
+        type: scalar_function_deserialize_callback
+        description: The deserialize callback to set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
   #---------------------------------------------------------------------------------------------------------------------
   # Resolve Types Callback Functions
   #---------------------------------------------------------------------------------------------------------------------
@@ -447,6 +510,184 @@ functions:
       info:
         type: scalar_function_bind_info
         description: The bind info handle.
+      data:
+        type: opaque
+        indirection: 1
+        description: Opaque handle bundling the bind data pointer plus optional destructor and equality callbacks.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  scalar_function_bind_replace_call:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Replaces the call site being bound by a call to another scalar function.
+
+      The call becomes a call to the scalar function `function_name`, looked up in the schema of the function being
+      bound; the overload is picked by the types of the arguments. The replacement takes the arguments of the
+      current call listed in `argument_indices`, in that order (indices into the arguments as passed to the bind
+      callback). The replacement is bound as if it had been written in the query, so it can have its own bind data
+      and callbacks. It replaces the function, the arguments and the bind data of the call site.
+
+      This must be the only thing the bind callback does: using it together with `[[scalar_function_bind_set_bind_data]]`
+      is an error. The replacement must return the type the original call resolved to (set by the resolve types
+      callback or declared in the signature): the engine reports an error when it does not.
+    parameters:
+      info:
+        type: scalar_function_bind_info
+        description: The bind info handle.
+      function_name:
+        type: identifier
+        indirection: 1
+        const: true
+        kind: IN
+        description: The name of the scalar function to call instead. Borrowed and copied.
+      argument_indices:
+        type: idx
+        indirection: 1
+        const: true
+        description: An array of argument_count indices of the arguments of the current call to pass on. Borrowed and copied. Pass NULL when argument_count is 0.
+      argument_count:
+        type: idx
+        description: The number of arguments of the replacement.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  #---------------------------------------------------------------------------------------------------------------------
+  # Serialize Callback Functions
+  #---------------------------------------------------------------------------------------------------------------------
+  scalar_function_serialize_get_user_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: Retrieves the user data set via `[[scalar_function_set_user_data]]`.
+    parameters:
+      info:
+        type: scalar_function_serialize_info
+        description: The serialize info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the user data pointer, or null if none was set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  scalar_function_serialize_get_bind_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: Retrieves the bind data set by the function's bind callback.
+    parameters:
+      info:
+        type: scalar_function_serialize_info
+        description: The serialize info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the bind data pointer, or null if none was set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  scalar_function_serialize_write:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Appends bytes to the serialized form of the call site.
+
+      It can be called several times: the bytes are concatenated and handed to the deserialize callback as one
+      buffer. The bytes are copied.
+    parameters:
+      info:
+        type: scalar_function_serialize_info
+        description: The serialize info handle.
+      data:
+        type: void
+        const: true
+        indirection: 1
+        description: The bytes to append. Borrowed for the call only. Pass NULL when size is 0.
+      size:
+        type: idx
+        description: The number of bytes to append.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  #---------------------------------------------------------------------------------------------------------------------
+  # Deserialize Callback Functions
+  #---------------------------------------------------------------------------------------------------------------------
+  scalar_function_deserialize_get_user_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: Retrieves the user data set via `[[scalar_function_set_user_data]]`.
+    parameters:
+      info:
+        type: scalar_function_deserialize_info
+        description: The deserialize info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the user data pointer, or null if none was set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  scalar_function_deserialize_get_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Retrieves the bytes the serialize callback wrote.
+
+      The bytes stay valid until the deserialize callback returns.
+    parameters:
+      info:
+        type: scalar_function_deserialize_info
+        description: The deserialize info handle.
+      data:
+        type: void
+        const: true
+        indirection: 2
+        kind: OUT
+        description: Receives a pointer to the bytes.
+      size:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the number of bytes.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  scalar_function_deserialize_set_bind_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Sets the "bind data" of the restored call site from the deserialize callback.
+
+      It works like `[[scalar_function_bind_set_bind_data]]`: the opaque handle bundles the pointer with an optional
+      destructor and an optional equality callback.
+    parameters:
+      info:
+        type: scalar_function_deserialize_info
+        description: The deserialize info handle.
       data:
         type: opaque
         indirection: 1

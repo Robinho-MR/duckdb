@@ -1305,7 +1305,9 @@ DUCKDB_V2_ERROR duckdb_v2_table_function_bind_add_virtual_column(duckdb_v2_table
                                                                  duckdb_v2_logical_type_handle type,
                                                                  duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(info);
-	DUCKDB_CHECK_STR_ARG(name, name_length);
+	if (name_length > 0) {
+		DUCKDB_CHECK_ARG(name);
+	}
 	DUCKDB_CHECK_ARG(type);
 	return WithErrorHandler(err, [&]() {
 		auto &bind_info = *Convert(info);
@@ -1322,7 +1324,7 @@ DUCKDB_V2_ERROR duckdb_v2_table_function_bind_add_virtual_column(duckdb_v2_table
 		if (!column_type.IsComplete()) {
 			throw duckdb::InvalidInputException("Virtual column type must be a fully defined concrete type");
 		}
-		duckdb::Identifier column_name(ConvertIdentifierName(name, name_length));
+		duckdb::Identifier column_name(ConvertIdentifierName(duckdb_v2_identifier_t {name, name_length}));
 		if (column_name.empty() && identifier != duckdb::COLUMN_IDENTIFIER_EMPTY) {
 			throw duckdb::InvalidInputException("The name of a virtual column cannot be empty");
 		}

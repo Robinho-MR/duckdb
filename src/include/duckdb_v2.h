@@ -881,9 +881,21 @@ typedef struct _duckdb_v2_cast_function_exec_info {
 	void *internal_ptr;
 } * duckdb_v2_cast_function_exec_info_handle;
 
+/*!
+ * A borrowed opaque handle to the cast being bound, given to the "bind" callback. It gives access to the user data and
+ * the source and target type of the cast, and can be used to set the bind data of the bound cast.
+ */
+typedef struct _duckdb_v2_cast_function_bind_info {
+	void *internal_ptr;
+} * duckdb_v2_cast_function_bind_info_handle;
+
 /* --- Constants for cast --- */
 
 /* --- Function pointer typedefs for cast --- */
+
+typedef void (*duckdb_v2_cast_function_bind_callback_fn)(duckdb_v2_cast_function_bind_info_handle info,
+                                                         duckdb_v2_context_handle context,
+                                                         duckdb_v2_error_info_handle *err);
 
 typedef void (*duckdb_v2_cast_function_exec_callback_fn)(duckdb_v2_cast_function_exec_info_handle info,
                                                          duckdb_v2_context_handle context,
@@ -1024,6 +1036,151 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_set_user_data(duckdb_v2_cas
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_set_exec_callback(
     duckdb_v2_cast_function_handle function, duckdb_v2_cast_function_exec_callback_fn callback,
     duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets a property on the cast function.
+ *
+ * Only the `FUNCTION_PROPERTY_STABILITY` key is valid for cast functions. A cast whose result depends on a setting
+ * (such as the time zone) must declare `FUNCTION_PROPERTY_STABILITY_CONSISTENT_WITHIN_QUERY`, so that the engine does
+ * not fold the cast into a prepared statement or accept it in an index expression. The value must belong to `key`; any
+ * other key, or a value that does not belong to the key, results in an error. The default is
+ * `FUNCTION_PROPERTY_STABILITY_CONSISTENT`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the property of.
+ * @param key The property to set.
+ * @param value The value to set for the property. Must belong to `key`.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_set_property(duckdb_v2_cast_function_handle function,
+                                                                  DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
+                                                                  DUCKDB_V2_FUNCTION_PROPERTY_VALUE value,
+                                                                  duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the optional bind callback of the cast function.
+ *
+ * The bind callback is invoked each time the cast is bound for a call site, before the cast is executed. It can read
+ * the source and target type, set "bind data" retrievable from the exec callback, and abort the binding by reporting an
+ * error, which then surfaces as a regular error of the statement being bound (for example of a plain `EXPLAIN` or
+ * `PREPARE`). The callback may be invoked without a context when the engine probes a cast without a client context.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the bind callback of.
+ * @param callback The bind callback to set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_set_bind_callback(
+    duckdb_v2_cast_function_handle function, duckdb_v2_cast_function_bind_callback_fn callback,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the user data set via `duckdb_v2_cast_function_set_user_data()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind info handle.
+ * @param data Receives the user data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_bind_get_user_data(duckdb_v2_cast_function_bind_info_handle info,
+                                                                        void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the type the cast is bound to convert from.
+ *
+ * The returned type is owned by the caller and must be destroyed via `duckdb_v2_logical_type_destroy()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind info handle.
+ * @param type Receives the source type. Owned by the caller; destroy via `duckdb_v2_logical_type_destroy()`.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_bind_get_source_type(duckdb_v2_cast_function_bind_info_handle info,
+                                                                          duckdb_v2_logical_type_handle *type,
+                                                                          duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the type the cast is bound to convert to.
+ *
+ * The returned type is owned by the caller and must be destroyed via `duckdb_v2_logical_type_destroy()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind info handle.
+ * @param type Receives the target type. Owned by the caller; destroy via `duckdb_v2_logical_type_destroy()`.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_bind_get_target_type(duckdb_v2_cast_function_bind_info_handle info,
+                                                                          duckdb_v2_logical_type_handle *type,
+                                                                          duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the cast's "bind data" from the bind callback.
+ *
+ * The bind data is stored with the bound cast and retrievable from the exec callback via
+ * `duckdb_v2_cast_function_exec_get_bind_data()`. The opaque handle bundles the pointer with an optional destructor,
+ * invoked when the bind data is no longer needed. Calling this again replaces the previous bind data.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind info handle.
+ * @param data Opaque handle bundling the bind data pointer plus an optional destructor.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_bind_set_bind_data(duckdb_v2_cast_function_bind_info_handle info,
+                                                                        duckdb_v2_opaque *data,
+                                                                        duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the bind data set by the cast function's bind callback.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The exec info handle.
+ * @param data Receives the bind data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_exec_get_bind_data(duckdb_v2_cast_function_exec_info_handle info,
+                                                                        void **data, duckdb_v2_error_info_handle *err);
 #endif
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
@@ -10868,6 +11025,24 @@ typedef struct _duckdb_v2_scalar_function_bind_info {
 } * duckdb_v2_scalar_function_bind_info_handle;
 
 /*!
+ * A borrowed opaque handle to the serialization of a bound call site of a scalar function. The "serialize" callback
+ * receives this handle and can use it to read the bind data and the user data and to append the bytes that describe the
+ * call site to the serialized form.
+ */
+typedef struct _duckdb_v2_scalar_function_serialize_info {
+	void *internal_ptr;
+} * duckdb_v2_scalar_function_serialize_info_handle;
+
+/*!
+ * A borrowed opaque handle to the deserialization of a bound call site of a scalar function. The "deserialize" callback
+ * receives this handle and can use it to read the bytes written by the "serialize" callback and the user data, and to
+ * set the bind data of the restored call site.
+ */
+typedef struct _duckdb_v2_scalar_function_deserialize_info {
+	void *internal_ptr;
+} * duckdb_v2_scalar_function_deserialize_info_handle;
+
+/*!
  * A borrowed opaque handle to the arguments supplied to a scalar function during the local state initialization "init"
  * phase. The "init" callback receives this handle and can use it to e.g. set up local state reusable across invocations
  * of the "exec" execution callback.
@@ -10906,6 +11081,13 @@ typedef void (*duckdb_v2_scalar_function_bind_callback_fn)(duckdb_v2_function_bi
                                                            duckdb_v2_scalar_function_bind_info_handle result,
                                                            duckdb_v2_context_handle context,
                                                            duckdb_v2_error_info_handle *err);
+
+typedef void (*duckdb_v2_scalar_function_serialize_callback_fn)(duckdb_v2_scalar_function_serialize_info_handle info,
+                                                                duckdb_v2_error_info_handle *err);
+
+typedef void (*duckdb_v2_scalar_function_deserialize_callback_fn)(
+    duckdb_v2_scalar_function_deserialize_info_handle info, duckdb_v2_context_handle context,
+    duckdb_v2_error_info_handle *err);
 
 typedef void (*duckdb_v2_scalar_function_init_callback_fn)(duckdb_v2_scalar_function_init_info_handle info,
                                                            duckdb_v2_context_handle context,
@@ -11174,6 +11356,30 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_set_stats_callback(
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
+ * Sets the optional serialize and deserialize callbacks of the scalar function.
+ *
+ * They let a bound call site with bind data be written into a serialized plan and be restored from it. The serialize
+ * callback reads the bind data and appends bytes to the serialized form; the deserialize callback reads those bytes
+ * back and sets the bind data of the restored call site. Both must be set together: it is an error to pass only one of
+ * them.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the callbacks of.
+ * @param serialize_callback The serialize callback to set.
+ * @param deserialize_callback The deserialize callback to set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_set_serialize_callbacks(
+    duckdb_v2_scalar_function_handle function, duckdb_v2_scalar_function_serialize_callback_fn serialize_callback,
+    duckdb_v2_scalar_function_deserialize_callback_fn deserialize_callback, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
  * Sets the concrete return type of the call site being bound.
  *
  * Overrides the return type declared in the signature. Register the function with an ANY return type and set the
@@ -11214,6 +11420,152 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_resolve_types_set_return_
  */
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_set_bind_data(
     duckdb_v2_scalar_function_bind_info_handle info, duckdb_v2_opaque *data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Replaces the call site being bound by a call to another scalar function.
+ *
+ * The call becomes a call to the scalar function `function_name`, looked up in the schema of the function being bound;
+ * the overload is picked by the types of the arguments. The replacement takes the arguments of the current call listed
+ * in `argument_indices`, in that order (indices into the arguments as passed to the bind callback). The replacement is
+ * bound as if it had been written in the query, so it can have its own bind data and callbacks. It replaces the
+ * function, the arguments and the bind data of the call site.
+ *
+ * This must be the only thing the bind callback does: using it together with
+ * `duckdb_v2_scalar_function_bind_set_bind_data()` is an error. The replacement must return the type the original call
+ * resolved to (set by the resolve types callback or declared in the signature): the engine reports an error when it
+ * does not.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind info handle.
+ * @param function_name The name of the scalar function to call instead. Borrowed and copied.
+ * @param argument_indices An array of argument_count indices of the arguments of the current call to pass on. Borrowed
+ * and copied. Pass NULL when argument_count is 0.
+ * @param argument_count The number of arguments of the replacement.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_replace_call(
+    duckdb_v2_scalar_function_bind_info_handle info, const duckdb_v2_identifier_t *function_name,
+    const idx_t *argument_indices, idx_t argument_count, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the user data set via `duckdb_v2_scalar_function_set_user_data()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The serialize info handle.
+ * @param data Receives the user data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_serialize_get_user_data(
+    duckdb_v2_scalar_function_serialize_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the bind data set by the function's bind callback.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The serialize info handle.
+ * @param data Receives the bind data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_serialize_get_bind_data(
+    duckdb_v2_scalar_function_serialize_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Appends bytes to the serialized form of the call site.
+ *
+ * It can be called several times: the bytes are concatenated and handed to the deserialize callback as one buffer. The
+ * bytes are copied.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The serialize info handle.
+ * @param data The bytes to append. Borrowed for the call only. Pass NULL when size is 0.
+ * @param size The number of bytes to append.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR
+duckdb_v2_scalar_function_serialize_write(duckdb_v2_scalar_function_serialize_info_handle info, const void *data,
+                                          idx_t size, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the user data set via `duckdb_v2_scalar_function_set_user_data()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The deserialize info handle.
+ * @param data Receives the user data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_deserialize_get_user_data(
+    duckdb_v2_scalar_function_deserialize_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the bytes the serialize callback wrote.
+ *
+ * The bytes stay valid until the deserialize callback returns.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The deserialize info handle.
+ * @param data Receives a pointer to the bytes.
+ * @param size Receives the number of bytes.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR
+duckdb_v2_scalar_function_deserialize_get_data(duckdb_v2_scalar_function_deserialize_info_handle info,
+                                               const void **data, idx_t *size, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the "bind data" of the restored call site from the deserialize callback.
+ *
+ * It works like `duckdb_v2_scalar_function_bind_set_bind_data()`: the opaque handle bundles the pointer with an
+ * optional destructor and an optional equality callback.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The deserialize info handle.
+ * @param data Opaque handle bundling the bind data pointer plus optional destructor and equality callbacks.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_deserialize_set_bind_data(
+    duckdb_v2_scalar_function_deserialize_info_handle info, duckdb_v2_opaque *data, duckdb_v2_error_info_handle *err);
 #endif
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
