@@ -107,8 +107,7 @@ static void DamerauLevenshteinFunction(DataChunk &args, ExpressionState &state, 
 	const auto &source_vec = args.data[0];
 	const auto &target_vec = args.data[1];
 
-	// the client context only serves interrupt checks, and index keys are computed without one
-	optional_ptr<ClientContext> context = state.HasContext() ? &state.GetContext() : nullptr;
+	optional_ptr<ClientContext> context = &state.GetContext();
 	BinaryExecutor::Execute<string_t, string_t, int64_t>(
 	    source_vec, target_vec, result,
 	    [&](string_t source, string_t target) { return DamerauLevenshteinScalarFunction(context, source, target); });

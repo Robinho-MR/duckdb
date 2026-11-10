@@ -13,7 +13,7 @@
 
 namespace duckdb {
 
-ExpressionExecutor::ExpressionExecutor(ClientContext &context) : context(&context) {
+ExpressionExecutor::ExpressionExecutor(ClientContext &context) : context(context) {
 	debug_vector_verification = Settings::Get<DebugVerifyVectorSetting>(context);
 }
 
@@ -36,33 +36,12 @@ ExpressionExecutor::ExpressionExecutor(ClientContext &context, const vector<uniq
 	}
 }
 
-ExpressionExecutor::ExpressionExecutor(const vector<unique_ptr<Expression>> &exprs) : context(nullptr) {
-	D_ASSERT(exprs.size() > 0);
-	for (auto &expr : exprs) {
-		AddExpression(*expr);
-	}
-}
-
-ExpressionExecutor::ExpressionExecutor() : context(nullptr) {
-}
-
-bool ExpressionExecutor::HasContext() {
-	return context;
-}
-
 ClientContext &ExpressionExecutor::GetContext() {
-	if (!context) {
-		throw InternalException("Calling ExpressionExecutor::GetContext on an expression executor without a context");
-	}
-	return *context;
-}
-
-optional_ptr<ClientContext> ExpressionExecutor::GetContextPtr() {
 	return context;
 }
 
 Allocator &ExpressionExecutor::GetAllocator() {
-	return context ? Allocator::Get(*context) : Allocator::DefaultAllocator();
+	return Allocator::Get(context);
 }
 
 void ExpressionExecutor::AddExpression(const Expression &expr) {
@@ -92,7 +71,7 @@ void ExpressionExecutor::Execute(DataChunk *input, DataChunk &result) {
 		ExecuteExpression(i, result.data[i]);
 	}
 	result.SetChildCardinality(input ? input->size() : 1);
-	result.Verify(context);
+	result.Verify(&context);
 }
 
 void ExpressionExecutor::ExecuteExpression(DataChunk &input, Vector &result) {
@@ -201,21 +180,13 @@ void ExpressionExecutor::Verify(const Expression &expr, Vector &vector, idx_t co
 		Vector intermediate(LogicalType::VARIANT(), cast_count);
 
 		//! First cast to VARIANT
-		if (HasContext()) {
-			VectorOperations::Cast(GetContext(), vector, intermediate, cast_count, true);
-		} else {
-			VectorOperations::DefaultCast(vector, intermediate, cast_count, true);
-		}
+		VectorOperations::Cast(GetContext(), vector, intermediate, cast_count, true);
 		intermediate.Verify();
 		//! FIXME: this is probably also where we want to test 'variant_normalize'
 
 		Vector result(vector.GetType(), cast_count);
 		//! Then cast back into the original type
-		if (HasContext()) {
-			VectorOperations::Cast(GetContext(), intermediate, result, cast_count, true);
-		} else {
-			VectorOperations::DefaultCast(intermediate, result, cast_count, true);
-		}
+		VectorOperations::Cast(GetContext(), intermediate, result, cast_count, true);
 		if (input_is_constant) {
 			result.SetVectorType(VectorType::CONSTANT_VECTOR);
 			FlatVector::SetSize(result, count_t(count));

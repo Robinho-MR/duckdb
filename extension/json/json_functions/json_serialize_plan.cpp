@@ -113,9 +113,6 @@ static void JsonSerializePlanFunction(DataChunk &args, ExpressionState &state, V
 	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
 	const auto &info = func_expr.BindInfo()->Cast<JsonSerializePlanBindData>();
 
-	if (!state.HasContext()) {
-		throw InvalidInputException("json_serialize_plan: No client context available");
-	}
 	auto &context = state.GetContext();
 
 	auto &heap = StringVector::GetStringHeap(result);

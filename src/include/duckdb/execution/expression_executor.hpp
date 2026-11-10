@@ -21,8 +21,6 @@ class ExecutionContext;
 
 //! ExpressionExecutor is responsible for executing a set of expressions and storing the result in a data chunk
 class ExpressionExecutor {
-	friend class BoundIndex;
-
 public:
 	DUCKDB_API explicit ExpressionExecutor(ClientContext &context);
 	DUCKDB_API ExpressionExecutor(ClientContext &context, const Expression *expression);
@@ -37,9 +35,7 @@ public:
 	DataChunk *chunk = nullptr;
 
 public:
-	bool HasContext();
 	ClientContext &GetContext();
-	optional_ptr<ClientContext> GetContextPtr();
 	Allocator &GetAllocator();
 
 	//! Add an expression to the set of to-be-executed expressions of the executor
@@ -161,15 +157,10 @@ protected:
 
 private:
 	//! Client context
-	optional_ptr<ClientContext> context;
+	ClientContext &context;
 	//! The states of the expression executor; this holds any intermediates and temporary states of expressions
 	vector<unique_ptr<ExpressionExecutorState>> states;
 	//! The vector verification (debug setting)
 	DebugVectorVerification debug_vector_verification = DebugVectorVerification::NONE;
-
-private:
-	// it is possible to create an expression executor without a ClientContext - but it should be avoided
-	DUCKDB_API ExpressionExecutor();
-	DUCKDB_API explicit ExpressionExecutor(const vector<unique_ptr<Expression>> &exprs);
 };
 } // namespace duckdb

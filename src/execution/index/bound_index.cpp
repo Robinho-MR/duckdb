@@ -1,5 +1,9 @@
 #include "duckdb/execution/index/bound_index.hpp"
 
+#include "duckdb/main/client_context.hpp"
+#include "duckdb/main/attached_database.hpp"
+#include "duckdb/main/database.hpp"
+
 #include "duckdb/common/array.hpp"
 #include "duckdb/common/radix.hpp"
 #include "duckdb/common/serializer/serializer.hpp"
@@ -28,7 +32,6 @@ BoundIndex::BoundIndex(const Identifier &name, const string &index_type, IndexCo
 		logical_types.push_back(expr->GetReturnType());
 		unbound_expressions.emplace_back(expr->Copy());
 		bound_expressions.push_back(BindExpression(expr->Copy()));
-		executor.AddExpression(*bound_expressions.back());
 	}
 }
 
@@ -142,6 +145,9 @@ idx_t BoundIndex::GetInMemorySize() const {
 }
 
 void BoundIndex::ExecuteExpressions(DataChunk &input, DataChunk &result) const {
+	// index expressions run outside of any client, so use a temporary one
+	ClientContext context(db.GetDatabase().shared_from_this());
+	ExpressionExecutor executor(context, bound_expressions);
 	executor.Execute(input, result);
 }
 

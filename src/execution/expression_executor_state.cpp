@@ -23,23 +23,14 @@ void ExpressionState::Finalize() {
 	if (types.empty()) {
 		return;
 	}
-	auto &allocator = HasContext() ? BufferAllocator::Get(GetContext()) : GetAllocator();
-	intermediate_chunk.Initialize(allocator, types, initialize);
+	intermediate_chunk.Initialize(BufferAllocator::Get(GetContext()), types, initialize);
 }
 
 Allocator &ExpressionState::GetAllocator() {
 	return root.executor->GetAllocator();
 }
 
-bool ExpressionState::HasContext() {
-	return root.executor->HasContext();
-}
-
 ClientContext &ExpressionState::GetContext() {
-	if (!HasContext()) {
-		throw BinderException("Cannot use %s in this context",
-		                      (expr.Cast<BoundFunctionExpression>()).Function().GetName());
-	}
 	return root.executor->GetContext();
 }
 

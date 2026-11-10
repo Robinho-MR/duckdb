@@ -236,9 +236,6 @@ protected:
 	vector<unique_ptr<Expression>> bound_expressions;
 
 private:
-	//! Expression executor to execute the index expressions
-	mutable ExpressionExecutor executor;
-
 	//! Bind the unbound expressions of the index
 	unique_ptr<Expression> BindExpression(unique_ptr<Expression> expr);
 };
