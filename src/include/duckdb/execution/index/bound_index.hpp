@@ -234,6 +234,8 @@ protected:
 	//!	With these offsets into the DataChunk, the expression executor can now evaluate the expression
 	//! on incoming data chunks to generate the keys.
 	vector<unique_ptr<Expression>> bound_expressions;
+	//! Whether every bound expression is a plain column reference
+	bool only_column_references = true;
 
 private:
 	//! Bind the unbound expressions of the index

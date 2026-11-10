@@ -32,6 +32,9 @@ BoundIndex::BoundIndex(const Identifier &name, const string &index_type, IndexCo
 		logical_types.push_back(expr->GetReturnType());
 		unbound_expressions.emplace_back(expr->Copy());
 		bound_expressions.push_back(BindExpression(expr->Copy()));
+		if (bound_expressions.back()->GetExpressionClass() != ExpressionClass::BOUND_REF) {
+			only_column_references = false;
+		}
 	}
 }
 
@@ -146,14 +149,7 @@ idx_t BoundIndex::GetInMemorySize() const {
 
 void BoundIndex::ExecuteExpressions(DataChunk &input, DataChunk &result) const {
 	// plain column indexes only need to reference the input columns
-	bool only_columns = true;
-	for (auto &expr : bound_expressions) {
-		if (expr->GetExpressionClass() != ExpressionClass::BOUND_REF) {
-			only_columns = false;
-			break;
-		}
-	}
-	if (only_columns) {
+	if (only_column_references) {
 		for (idx_t i = 0; i < bound_expressions.size(); i++) {
 			auto &ref = bound_expressions[i]->Cast<BoundReferenceExpression>();
 			result.data[i].Reference(input.data[ref.Index()]);
