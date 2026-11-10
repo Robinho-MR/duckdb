@@ -1211,13 +1211,13 @@ void ForceMbedtlsUnsafeSetting::OnSet(SettingCallbackInfo &info, Value &input) {
 //===----------------------------------------------------------------------===//
 // HTTP Proxy
 //===----------------------------------------------------------------------===//
-void HTTPProxySetting::OnSet(SettingCallbackInfo &info, Value &input) {
+Value HTTPProxySetting::GetDefaultValue(const DBConfig &) {
+	return Value(FileSystem::GetEnvVariable("HTTP_PROXY"));
+}
+
+void HTTPProxySetting::OnSet(SettingCallbackInfo &, Value &input) {
 	if (input.IsNull()) {
 		throw InvalidInputException("%s setting cannot be NULL", HTTPProxySetting::Name);
-	}
-	if (info.is_reset) {
-		input = Value(FileSystem::GetEnvVariable("HTTP_PROXY"));
-		info.has_computed_default = true;
 	}
 }
 
@@ -1272,6 +1272,10 @@ void LogQueryPathSetting::OnSet(SettingCallbackInfo &info, Value &input) {
 //===----------------------------------------------------------------------===//
 // Max Memory
 //===----------------------------------------------------------------------===//
+Value MaxMemorySetting::GetDefaultValue(const DBConfig &config) {
+	return Value(StringUtil::BytesToHumanReadableString(config.GetDefaultMaxMemory()));
+}
+
 void MaxMemorySetting::OnSet(SettingCallbackInfo &info, Value &input) {
 	idx_t maximum_memory;
 	if (info.is_reset) {
@@ -1289,7 +1293,6 @@ void MaxMemorySetting::OnSet(SettingCallbackInfo &info, Value &input) {
 	}
 	info.config.options.maximum_memory = maximum_memory;
 	input = Value(StringUtil::BytesToHumanReadableString(maximum_memory));
-	info.has_computed_default = info.is_reset;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1705,11 +1708,11 @@ void TrackedMetricsSetting::OnSet(SettingCallbackInfo &info, Value &input) {
 //===----------------------------------------------------------------------===//
 // Threads
 //===----------------------------------------------------------------------===//
+Value ThreadsSetting::GetDefaultValue(const DBConfig &config) {
+	return Value::BIGINT(NumericCast<int64_t>(config.GetDefaultThreads()));
+}
+
 void ThreadsSetting::OnSet(SettingCallbackInfo &info, Value &input) {
-	if (info.is_reset) {
-		input = Value::BIGINT(NumericCast<int64_t>(info.config.GetSystemMaxThreads(*info.config.file_system)));
-		info.has_computed_default = true;
-	}
 	if (input.IsNull()) {
 		throw InvalidInputException("threads must be a positive integer");
 	}
@@ -1734,11 +1737,11 @@ static void ResizeAutomaticHTTPClientPool(optional_ptr<DatabaseInstance> db, DBC
 //===----------------------------------------------------------------------===//
 // Async Threads
 //===----------------------------------------------------------------------===//
+Value AsyncThreadsSetting::GetDefaultValue(const DBConfig &config) {
+	return Value::BIGINT(NumericCast<int64_t>(config.GetDefaultAsyncThreads()));
+}
+
 void AsyncThreadsSetting::OnSet(SettingCallbackInfo &info, Value &input) {
-	if (info.is_reset) {
-		input = Value::BIGINT(NumericCast<int64_t>(info.config.GetSystemMaxAsyncThreads(*info.config.file_system)));
-		info.has_computed_default = true;
-	}
 	if (input.IsNull()) {
 		throw InvalidInputException("async_threads must be a positive integer");
 	}

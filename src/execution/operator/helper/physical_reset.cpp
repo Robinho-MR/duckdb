@@ -52,27 +52,18 @@ SourceResultType PhysicalReset::GetDataInternal(ExecutionContext &context, DataC
 	// Transform scope
 	SetScope variable_scope = PhysicalSet::GetSettingScope(*option, scope);
 
-	if (option->default_value) {
+	if (option->IsGeneric()) {
 		auto setting_index = option->setting_idx.GetIndex();
-		auto parameter_type = DBConfig::ParseLogicalType(option->parameter_type);
-		auto default_val = Value(option->default_value).CastAs(context.client, parameter_type);
-		auto reset_val = default_val;
-		bool is_substituted = false;
 		if (option->set_callback) {
+			auto parameter_type = DBConfig::ParseLogicalType(option->parameter_type);
+			auto reset_val = option->GetDefaultValue(config).CastAs(context.client, parameter_type);
 			SettingCallbackInfo info(context.client, variable_scope);
 			info.is_reset = true;
 			option->set_callback(info, reset_val);
-			is_substituted = info.has_computed_default;
 		}
 		if (variable_scope == SetScope::SESSION) {
 			auto &client_config = ClientConfig::GetConfig(context.client);
-			if (is_substituted) {
-				client_config.user_settings.SetUserSetting(setting_index, std::move(reset_val));
-			} else {
-				client_config.user_settings.ClearSetting(setting_index);
-			}
-		} else if (is_substituted) {
-			config.SetOption(setting_index, std::move(reset_val));
+			client_config.user_settings.ClearSetting(setting_index);
 		} else {
 			config.ResetGenericOption(setting_index);
 		}

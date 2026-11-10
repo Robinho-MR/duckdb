@@ -165,7 +165,7 @@ public:
 	}
 
 	template <class... ARGS>
-	void emplace_back(ARGS &&... args) { // NOLINT
+	void emplace_back(ARGS &&...args) { // NOLINT
 		auto scan = make_shared_ptr<ReplacementScan>(std::forward<ARGS>(args)...);
 		lock_guard<mutex> guard(lock);
 		scans.push_back(std::move(scan));
@@ -327,7 +327,11 @@ public:
 	static idx_t GetSystemMaxAsyncThreads(FileSystem &fs);
 	static idx_t GetSystemAvailableMemory(FileSystem &fs);
 	static optional_idx ParseMemoryLimitSlurm(const string &arg);
-	idx_t GetDefaultMaxMemory();
+	idx_t GetDefaultMaxMemory() const;
+	//! The number of threads used when the threads setting is not set
+	idx_t GetDefaultThreads() const;
+	//! The number of async threads used when the async_threads setting is not set
+	idx_t GetDefaultAsyncThreads() const;
 	void SetDefaultMaxMemory();
 	void SetDefaultTempDirectory();
 
@@ -340,7 +344,7 @@ public:
 	//! Returns the value of a setting set by the user currently
 	SettingLookupResult TryGetCurrentUserSetting(idx_t setting_index, Value &result) const;
 	//! Returns the default value of an option
-	static SettingLookupResult TryGetDefaultValue(optional_ptr<const ConfigurationOption> option, Value &result);
+	SettingLookupResult TryGetDefaultValue(optional_ptr<const ConfigurationOption> option, Value &result) const;
 	SettingLookupResult TryGetDefaultValue(const Identifier &key, optional_ptr<const ConfigurationOption> option,
 	                                       Value &result) const;
 
@@ -387,6 +391,10 @@ private:
 	mutable mutex disabled_optimizers_lock;
 	//! Whether disabled_optimizers is non-empty
 	atomic<bool> has_disabled_optimizers {false};
+	//! Cache of GetDefaultThreads, which reads the cgroup CPU limit
+	mutable atomic<idx_t> default_threads {0};
+	//! Cache of GetDefaultMaxMemory, which reads the cgroup memory limit through the file system
+	mutable atomic<idx_t> default_max_memory {0};
 	unique_ptr<CompressionFunctionSet> compression_functions;
 	unique_ptr<EncodingFunctionSet> encoding_functions;
 	unique_ptr<ArrowTypeExtensionSet> arrow_extensions;

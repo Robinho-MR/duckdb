@@ -254,7 +254,7 @@ SELECT current_setting('profiling_renderer_settings')
 ----
 {}
 
-# computed defaults are materialized when the database starts, and restored by RESET
+# computed defaults come from a default function while the setting is not set, also after RESET
 query I
 SELECT current_setting('threads') > 0 AND current_setting('async_threads') >= 0
 ----

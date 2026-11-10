@@ -42,6 +42,12 @@ DebugVerificationMode DBConfigOptions::global_verification_mode = DebugVerificat
 		    _PARAM::Scope, _PARAM::DefaultValue, _PARAM::OnSet, _PARAM::SettingIndex, _PARAM::IsDebug,                 \
 		    _PARAM::IsDeprecated, Settings::GetDefaultValue<_PARAM>                                                    \
 	}
+#define DUCKDB_SETTING_DEFAULT_FUNCTION(_PARAM)                                                                        \
+	{                                                                                                                  \
+		_PARAM::Name, _PARAM::Description, _PARAM::InputType, nullptr, nullptr, nullptr, nullptr, nullptr,             \
+		    _PARAM::Scope, nullptr, _PARAM::OnSet, _PARAM::SettingIndex, _PARAM::IsDebug, _PARAM::IsDeprecated,        \
+		    nullptr, _PARAM::GetDefaultValue                                                                           \
+	}
 #define DUCKDB_GLOBAL(_PARAM)                                                                                          \
 	{                                                                                                                  \
 		_PARAM::Name, _PARAM::Description, _PARAM::InputType, _PARAM::SetGlobal, nullptr, _PARAM::ResetGlobal,         \
@@ -94,7 +100,7 @@ static const ConfigurationOption internal_options[] = {
     DUCKDB_SETTING(ArrowOutputListViewSetting),
     DUCKDB_SETTING_CALLBACK(ArrowOutputVersionSetting),
     DUCKDB_SETTING(AsofLoopJoinThresholdSetting),
-    DUCKDB_SETTING_CALLBACK(AsyncThreadsSetting),
+    DUCKDB_SETTING_DEFAULT_FUNCTION(AsyncThreadsSetting),
     DUCKDB_SETTING(AutoCheckpointSkipWalThresholdSetting),
     DUCKDB_SETTING(AutoinstallExtensionRepositorySetting),
     DUCKDB_SETTING(AutoinstallKnownExtensionsSetting),
@@ -201,7 +207,7 @@ static const ConfigurationOption internal_options[] = {
     DUCKDB_SETTING(GeometryMinimumShreddingSize),
     DUCKDB_SETTING_CALLBACK(HomeDirectorySetting),
     DUCKDB_GLOBAL(HTTPClientPoolCapacitySetting),
-    DUCKDB_SETTING_CALLBACK(HTTPProxySetting),
+    DUCKDB_SETTING_DEFAULT_FUNCTION(HTTPProxySetting),
     DUCKDB_SETTING(HTTPProxyPasswordSetting),
     DUCKDB_SETTING(HTTPProxyUsernameSetting),
     DUCKDB_SETTING(HTTPRetryQuotaThrottledSetting),
@@ -226,7 +232,7 @@ static const ConfigurationOption internal_options[] = {
     DUCKDB_SETTING(MatchRecognizeMaxStatesSetting),
     DUCKDB_SETTING(MaxExecutionTimeSetting),
     DUCKDB_SETTING(MaxExpressionDepthSetting),
-    DUCKDB_SETTING_CALLBACK(MaxMemorySetting),
+    DUCKDB_SETTING_DEFAULT_FUNCTION(MaxMemorySetting),
     DUCKDB_SETTING_CALLBACK(MaxStreamingBufferSizeSetting),
     DUCKDB_GLOBAL(MaxTempDirectorySizeSetting),
     DUCKDB_SETTING(MaxVacuumTasksSetting),
@@ -268,7 +274,7 @@ static const ConfigurationOption internal_options[] = {
     DUCKDB_SETTING_CALLBACK(TableFunctionIdentifierConversionSetting),
     DUCKDB_GLOBAL(TempDirectorySetting),
     DUCKDB_SETTING_CALLBACK(TempFileEncryptionSetting),
-    DUCKDB_SETTING_CALLBACK(ThreadsSetting),
+    DUCKDB_SETTING_DEFAULT_FUNCTION(ThreadsSetting),
     DUCKDB_SETTING_CALLBACK(TrackedMetricsSetting),
     DUCKDB_SETTING(TrimFreeBlocksSetting),
     DUCKDB_SETTING(UsernameSetting),
@@ -395,7 +401,7 @@ idx_t DBConfig::GetWriteBufferMemoryLimit() const {
 	if (options.write_buffer_row_group_memory_limit.IsValid()) {
 		return options.write_buffer_row_group_memory_limit.GetIndex();
 	}
-	auto threads = NumericCast<idx_t>(MaxValue<int64_t>(Settings::Get<ThreadsSetting>(*this), 0));
+	auto threads = NumericCast<idx_t>(Settings::Get<ThreadsSetting>(*this));
 	return options.maximum_memory / 5 / (threads + 1);
 }
 
@@ -437,7 +443,7 @@ void DBConfig::SetOptionsByName(const identifier_map_t<Value> &values) {
 
 void DBConfig::SetOption(optional_ptr<DatabaseInstance> db, const ConfigurationOption &option, const Value &value) {
 	Value input = value.DefaultCastAs(ParseLogicalType(option.parameter_type));
-	if (option.default_value) {
+	if (option.IsGeneric()) {
 		// generic option
 		SettingCallbackInfo info(*this, db);
 		if (option.set_callback) {
@@ -459,21 +465,15 @@ void DBConfig::SetOption(optional_ptr<DatabaseInstance> db, const ConfigurationO
 }
 
 void DBConfig::ResetOption(optional_ptr<DatabaseInstance> db, const ConfigurationOption &option) {
-	if (option.default_value) {
+	if (option.IsGeneric()) {
 		// generic option
-		auto reset_value = Value(option.default_value).DefaultCastAs(ParseLogicalType(option.parameter_type));
-		bool has_computed_default = false;
 		if (option.set_callback) {
+			auto reset_value = option.GetDefaultValue(*this).DefaultCastAs(ParseLogicalType(option.parameter_type));
 			SettingCallbackInfo info(*this, db);
 			info.is_reset = true;
 			option.set_callback(info, reset_value);
-			has_computed_default = info.has_computed_default;
 		}
-		if (has_computed_default) {
-			user_settings.SetUserSetting(option.setting_idx.GetIndex(), std::move(reset_value));
-		} else {
-			user_settings.ClearSetting(option.setting_idx.GetIndex());
-		}
+		user_settings.ClearSetting(option.setting_idx.GetIndex());
 		return;
 	}
 	if (!option.reset_global) {
@@ -482,6 +482,14 @@ void DBConfig::ResetOption(optional_ptr<DatabaseInstance> db, const Configuratio
 	std::lock_guard<std::recursive_mutex> guard(config_lock);
 	D_ASSERT(option.set_global);
 	option.reset_global(db.get(), *this);
+}
+
+Value ConfigurationOption::GetDefaultValue(const DBConfig &config) const {
+	D_ASSERT(IsGeneric());
+	if (default_function) {
+		return default_function(config);
+	}
+	return Value(default_value);
 }
 
 void DBConfig::SetOption(idx_t setting_index, Value value) {
@@ -683,20 +691,28 @@ IndexTypeSet &DBConfig::GetIndexTypes() {
 	return *index_types;
 }
 
-idx_t DBConfig::GetDefaultMaxMemory() {
-	auto memory = GetSystemAvailableMemory(*file_system);
+idx_t DBConfig::GetDefaultMaxMemory() const {
+	auto default_memory = default_max_memory.load();
+	if (default_memory != 0) {
+		return default_memory;
+	}
+	auto memory = GetSystemAvailableMemory(file_system ? *file_system : *FileSystem::CreateLocal());
 	if (memory == DBConfigOptions().maximum_memory) {
 		// If GetSystemAvailableMemory returned the default, use it as is
-		return memory;
+		default_memory = memory;
+	} else {
+		// Otherwise, use 80% of the available memory
+		default_memory = memory * 8 / 10;
 	}
-	// Otherwise, use 80% of the available memory
-	return memory * 8 / 10;
+	// not started yet: do not cache, the database may still install another file system
+	if (file_system) {
+		default_max_memory = default_memory;
+	}
+	return default_memory;
 }
 
 void DBConfig::SetDefaultMaxMemory() {
 	options.maximum_memory = GetDefaultMaxMemory();
-	Settings::Set<MaxMemorySetting>(*this, SetScope::GLOBAL,
-	                                Value(StringUtil::BytesToHumanReadableString(options.maximum_memory)));
 }
 
 void DBConfig::SetDefaultTempDirectory() {
@@ -751,12 +767,34 @@ idx_t DBConfig::GetSystemMaxThreads(FileSystem &fs) {
 #endif
 }
 
-idx_t DBConfig::GetSystemMaxAsyncThreads(FileSystem &fs) {
+static idx_t AsyncThreadsForThreads(idx_t threads) {
 #ifdef DUCKDB_NO_THREADS
 	return 0;
 #else
-	return MinValue<idx_t>(4 * GetSystemMaxThreads(fs), 256);
+	return MinValue<idx_t>(4 * threads, 256);
 #endif
+}
+
+idx_t DBConfig::GetSystemMaxAsyncThreads(FileSystem &fs) {
+	return AsyncThreadsForThreads(GetSystemMaxThreads(fs));
+}
+
+idx_t DBConfig::GetDefaultThreads() const {
+	auto threads = default_threads.load();
+	if (threads != 0) {
+		return threads;
+	}
+	if (!file_system) {
+		// not started yet: do not cache, the database may still install another file system
+		return GetSystemMaxThreads(*FileSystem::CreateLocal());
+	}
+	threads = GetSystemMaxThreads(*file_system);
+	default_threads = threads;
+	return threads;
+}
+
+idx_t DBConfig::GetDefaultAsyncThreads() const {
+	return AsyncThreadsForThreads(GetDefaultThreads());
 }
 
 idx_t DBConfig::GetSystemAvailableMemory(FileSystem &fs) {
@@ -892,9 +930,13 @@ SettingLookupResult DBConfig::TryGetCurrentUserSetting(idx_t setting_index, Valu
 	return user_settings.TryGetSetting(setting_index, result);
 }
 
-SettingLookupResult DBConfig::TryGetDefaultValue(optional_ptr<const ConfigurationOption> option, Value &result) {
-	if (!option || !option->default_value) {
+SettingLookupResult DBConfig::TryGetDefaultValue(optional_ptr<const ConfigurationOption> option, Value &result) const {
+	if (!option || !option->IsGeneric()) {
 		return SettingLookupResult();
+	}
+	if (option->default_function) {
+		result = option->default_function(*this);
+		return SettingLookupResult(SettingScope::GLOBAL);
 	}
 	if (!option->get_default_value) {
 		throw InternalException("Generic setting \"%s\" has no typed default value", option->name);

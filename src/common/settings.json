@@ -182,13 +182,13 @@
         "description": "The number of total async threads used by the system for tasks like I/O.",
         "type": "BIGINT",
         "scope": "global",
-        "default_value": "-1",
         "custom_implementation": [
             "set"
         ],
         "on_callbacks": [
             "set"
-        ]
+        ],
+        "default_function": true
     },
     {
         "name": "auto_checkpoint_skip_wal_threshold",
@@ -1148,13 +1148,13 @@
         "type": "VARCHAR",
         "scope": "global",
         "struct": "HTTPProxySetting",
-        "default_value": "",
         "custom_implementation": [
             "set"
         ],
         "on_callbacks": [
             "set"
-        ]
+        ],
+        "default_function": true
     },
     {
         "name": "http_proxy_password",
@@ -1353,13 +1353,13 @@
         "aliases": [
             "memory_limit"
         ],
-        "default_value": "",
         "custom_implementation": [
             "set"
         ],
         "on_callbacks": [
             "set"
-        ]
+        ],
+        "default_function": true
     },
     {
         "name": "max_streaming_buffer_size",
@@ -1725,13 +1725,13 @@
         "aliases": [
             "worker_threads"
         ],
-        "default_value": "-1",
         "custom_implementation": [
             "set"
         ],
         "on_callbacks": [
             "set"
-        ]
+        ],
+        "default_function": true
     },
     {
         "name": "tracked_metrics",
@@ -1823,3 +1823,4 @@
         "scope": "global",
         "default_value": "4096"
     }
+]

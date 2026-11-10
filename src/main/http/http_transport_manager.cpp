@@ -263,9 +263,7 @@ void HTTPTransportManager::Initialize(const DBConfig &config) {
 idx_t HTTPTransportManager::AutomaticCapacity(const DBConfig &config, optional_idx async_threads) {
 	auto &fs = *config.file_system;
 	if (!async_threads.IsValid()) {
-		// the setting holds a negative placeholder until the database has resolved it
-		auto configured = Settings::Get<AsyncThreadsSetting>(config);
-		async_threads = configured < 0 ? DBConfig::GetSystemMaxAsyncThreads(fs) : NumericCast<idx_t>(configured);
+		async_threads = NumericCast<idx_t>(Settings::Get<AsyncThreadsSetting>(config));
 	}
 	return CalculateCapacity(DBConfig::GetSystemMaxThreads(fs), FileSystem::GetFileDescriptorLimit(),
 	                         async_threads.GetIndex());

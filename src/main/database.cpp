@@ -553,13 +553,6 @@ void DatabaseInstance::Configure(DBConfig &new_config, const char *database_path
 		config.SetDefaultTempDirectory();
 	}
 
-	if (!config.user_settings.IsSet(HTTPProxySetting::SettingIndex)) {
-		auto http_proxy = FileSystem::GetEnvVariable("HTTP_PROXY");
-		if (!http_proxy.empty()) {
-			Settings::Set<HTTPProxySetting>(config, SetScope::GLOBAL, Value(http_proxy));
-		}
-	}
-
 	if (config.options.access_mode == AccessMode::UNDEFINED) {
 		config.options.access_mode = AccessMode::READ_WRITE;
 	}
@@ -580,14 +573,6 @@ void DatabaseInstance::Configure(DBConfig &new_config, const char *database_path
 	}
 	if (config.options.maximum_memory == DConstants::INVALID_INDEX) {
 		config.SetDefaultMaxMemory();
-	}
-	if (Settings::Get<ThreadsSetting>(config) < 1) {
-		auto threads = NumericCast<int64_t>(config.GetSystemMaxThreads(*config.file_system));
-		Settings::Set<ThreadsSetting>(config, SetScope::GLOBAL, Value::BIGINT(threads));
-	}
-	if (Settings::Get<AsyncThreadsSetting>(config) < 0) {
-		auto async_threads = NumericCast<int64_t>(config.GetSystemMaxAsyncThreads(*config.file_system));
-		Settings::Set<AsyncThreadsSetting>(config, SetScope::GLOBAL, Value::BIGINT(async_threads));
 	}
 	config.allocator = std::move(new_config.allocator);
 	if (!config.allocator) {
