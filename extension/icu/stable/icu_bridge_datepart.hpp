@@ -52,6 +52,12 @@ inline bool IsDoublePart(DatePart part) {
 //! Parses a part specifier such as "year", "dow" or "epoch". False when it is not recognized.
 bool TryParseDatePart(const std::string &name, DatePart &part);
 
+//! The epoch of an instant in seconds. It needs no calendar.
+double ExtractEpochOfInstant(int64_t instant);
+
+//! The name of the single-part function that extracts the part (year, dayofweek, epoch, ...)
+std::string UnaryFunctionName(DatePart part);
+
 //! Extraction of an instant (microseconds since the epoch) in the calendar. They return false when the calendar cannot
 //! represent the instant. The calendar must not be shared with other users: the week parts change its week rules.
 bool ExtractBigintPart(Calendar &calendar, DatePart part, int64_t instant, int64_t &result);

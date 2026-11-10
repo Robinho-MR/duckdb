@@ -1,4 +1,7 @@
 #include "icu_bridge_datepart.hpp"
+
+#include "duckdb/common/enum_util.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "icu_bridge_internal.hpp"
 
 #include "calendar.hpp"
@@ -208,6 +211,35 @@ bool TryParseDatePart(const std::string &name, DatePart &part) {
 	// the enums list the same parts in the same order
 	part = static_cast<DatePart>(static_cast<uint8_t>(specifier));
 	return true;
+}
+
+double ExtractEpochOfInstant(int64_t instant) {
+	// the milliseconds carry the fraction of a second, so the division has to keep it
+	auto millis = instant / 1000;
+	auto micros = instant % 1000;
+	if (micros < 0) {
+		--millis;
+		micros += 1000;
+	}
+	return double(millis) / 1000.0 + static_cast<double>(micros) / 1000000.0;
+}
+
+std::string UnaryFunctionName(DatePart part) {
+	const auto specifier = static_cast<duckdb::DatePartSpecifier>(static_cast<uint8_t>(part));
+	switch (specifier) {
+	case duckdb::DatePartSpecifier::DOW:
+		return "dayofweek";
+	case duckdb::DatePartSpecifier::DOY:
+		return "dayofyear";
+	case duckdb::DatePartSpecifier::JULIAN_DAY:
+		return "julian";
+	case duckdb::DatePartSpecifier::MILLISECONDS:
+		return "millisecond";
+	case duckdb::DatePartSpecifier::MICROSECONDS:
+		return "microsecond";
+	default:
+		return duckdb::StringUtil::Lower(duckdb::EnumUtil::ToChars(specifier));
+	}
 }
 
 bool ExtractBigintPart(Calendar &calendar, DatePart part, int64_t instant, int64_t &result) {

@@ -72,7 +72,8 @@ struct TimeTraits<cxx::timestamp_tz_ns_t> {
 };
 
 void InitState(cxx::ScalarFunction::InitInput &input) {
-	const auto settings = ReadSettings(input.GetContext());
+	// Without a context (an index key being evaluated) the defaults apply
+	const auto settings = input.HasContext() ? ReadSettings(input.GetContext()) : Settings();
 	input.SetInitData<DatePartState>(
 	    DatePartState {icu_bridge::Calendar::Create(settings.time_zone, settings.calendar)});
 }
@@ -163,12 +164,37 @@ void NameExec(cxx::ScalarFunction::ExecInput &input) {
 	});
 }
 
+//! The epoch is read from the instant itself: no calendar and no client context are needed
+template <class IN>
+void EpochExec(cxx::ScalarFunction::ExecInput &input) {
+	const auto in = input.GetArg(0).GetView();
+	auto result = input.GetResult();
+	result.SetSize(input.GetRowCount());
+	auto *out = result.GetDataMutable<double>();
+	for (idx_t i = 0; i < input.GetRowCount(); i++) {
+		if (!in.IsValid(i)) {
+			result.SetNull(i);
+			continue;
+		}
+		const auto value = in.Data<IN>()[in.SelAt(i)];
+		if (!TimeTraits<IN>::IsFiniteValue(value)) {
+			result.SetNull(i);
+			continue;
+		}
+		out[i] = icu_bridge::ExtractEpochOfInstant(TimeTraits<IN>::Instant(value));
+	}
+}
+
 //! Registers a function over TIMESTAMPTZ and TIMESTAMPTZ_NS
 template <class SETUP>
-void RegisterOverloads(cxx::Extension &extension, cxx::Factory &factory, const char *name, SETUP &&setup) {
+void RegisterOverloads(cxx::Extension &extension, cxx::Factory &factory, const char *name, SETUP &&setup,
+                       bool needs_calendar = true) {
 	for (int ns = 0; ns < 2; ns++) {
 		auto function = cxx::ScalarFunction::Create(factory);
-		function.SetName(name).SetInitCallback(InitState).SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+		function.SetName(name).SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+		if (needs_calendar) {
+			function.SetInitCallback(InitState);
+		}
 		setup(function, ns == 1);
 		extension.Register(function);
 	}
@@ -180,25 +206,34 @@ void RegisterSinglePart(cxx::Extension &extension, cxx::Factory &factory, const 
 		ThrowConversion(std::string("unknown date part function ") + name);
 	}
 	const auto is_double = icu_bridge::IsDoublePart(part);
-	RegisterOverloads(extension, factory, name, [&](cxx::ScalarFunction &function, bool ns) {
-		function.SetUserData<PartInfo>(PartInfo {part});
-		if (part == DatePart::EPOCH) {
-			// The epoch does not depend on the time zone
-			function.SetStability(cxx::FunctionStability::CONSISTENT);
-		}
-		if (ns) {
-			function.SetExecCallback(is_double ? DoublePartExec<cxx::timestamp_tz_ns_t>
-			                                   : BigintPartExec<cxx::timestamp_tz_ns_t>);
-		} else {
-			function.SetExecCallback(is_double ? DoublePartExec<cxx::timestamp_tz_t>
-			                                   : BigintPartExec<cxx::timestamp_tz_t>);
-		}
-		const auto input_type =
-		    ns ? TimeTraits<cxx::timestamp_tz_ns_t>::Type(factory) : TimeTraits<cxx::timestamp_tz_t>::Type(factory);
-		function.GetSignature()
-		    .AddParameter("ts", input_type)
-		    .SetReturnType(factory.ParseType(is_double ? "DOUBLE" : "BIGINT"));
-	});
+	RegisterOverloads(
+	    extension, factory, name,
+	    [&](cxx::ScalarFunction &function, bool ns) {
+		    function.SetUserData<PartInfo>(PartInfo {part});
+		    if (part == DatePart::ERA || part == DatePart::ISOYEAR) {
+			    function.SetArgumentMonotonicity(0, cxx::Monotonicity::NON_DECREASING)
+			        .SetStatisticsPropagation(cxx::StatisticsPropagation::FINITE_MONOTONE_BOUNDS);
+		    }
+		    if (part == DatePart::EPOCH) {
+			    // The epoch does not depend on the time zone
+			    function.SetStability(cxx::FunctionStability::CONSISTENT);
+		    }
+		    if (part == DatePart::EPOCH) {
+			    function.SetExecCallback(ns ? EpochExec<cxx::timestamp_tz_ns_t> : EpochExec<cxx::timestamp_tz_t>);
+		    } else if (ns) {
+			    function.SetExecCallback(is_double ? DoublePartExec<cxx::timestamp_tz_ns_t>
+			                                       : BigintPartExec<cxx::timestamp_tz_ns_t>);
+		    } else {
+			    function.SetExecCallback(is_double ? DoublePartExec<cxx::timestamp_tz_t>
+			                                       : BigintPartExec<cxx::timestamp_tz_t>);
+		    }
+		    const auto input_type =
+		        ns ? TimeTraits<cxx::timestamp_tz_ns_t>::Type(factory) : TimeTraits<cxx::timestamp_tz_t>::Type(factory);
+		    function.GetSignature()
+		        .AddParameter("ts", input_type)
+		        .SetReturnType(factory.ParseType(is_double ? "DOUBLE" : "BIGINT"));
+	    },
+	    part != DatePart::EPOCH);
 }
 
 template <cxx::ScalarFunction::ExecCallback TZ, cxx::ScalarFunction::ExecCallback TZ_NS>
@@ -215,25 +250,15 @@ void RegisterTimestampFunction(cxx::Extension &extension, cxx::Factory &factory,
 //----------------------------------------------------------------------------------------------------------------------
 // date_part(part, ts) and date_part([parts], ts)
 //----------------------------------------------------------------------------------------------------------------------
-void BinaryResolveTypes(cxx::ScalarFunction::ResolveTypesInput &input) {
-	auto &factory = input.GetContext().GetFactory();
-	// a part that is not constant is resolved per row, and may be any part
-	auto is_double = true;
-	const auto part = input.TryGetConstantArgument(0);
-	if (part && !part->IsNull()) {
-		is_double = icu_bridge::IsDoublePart(ParsePart(std::string(part->Get<cxx::varchar_t>().view())));
-	}
-	input.SetReturnType(factory.ParseType(is_double ? "DOUBLE" : "BIGINT"));
-}
-
 void BinaryBind(cxx::ScalarFunction::BindInput &input) {
-	PartBind bind;
 	const auto part = input.TryGetConstantArgument(0);
 	if (part && !part->IsNull()) {
-		bind.constant_part = true;
-		bind.part = ParsePart(std::string(part->Get<cxx::varchar_t>().view()));
+		// A constant part is bound to the equivalent single-part function
+		const auto parsed = ParsePart(std::string(part->Get<cxx::varchar_t>().view()));
+		input.ReplaceCall(icu_bridge::UnaryFunctionName(parsed), {1});
+		return;
 	}
-	input.SetBindData<PartBind>(std::move(bind));
+	input.SetBindData<PartBind>(PartBind());
 }
 
 template <class IN>
@@ -324,6 +349,14 @@ void StructBind(cxx::ScalarFunction::BindInput &input) {
 	for (const auto &entry : ReadPartListValue(input.GetConstantArgument(0))) {
 		bind.parts.push_back(entry.second);
 	}
+	// The epoch does not depend on the time zone, a call that only asks for it is consistent
+	bool only_epoch = true;
+	for (const auto part : bind.parts) {
+		only_epoch = only_epoch && part == DatePart::EPOCH;
+	}
+	if (only_epoch) {
+		input.SetStability(cxx::FunctionStability::CONSISTENT);
+	}
 	input.SetBindData<PartBind>(std::move(bind));
 }
 
@@ -380,12 +413,15 @@ void RegisterDatePartFunction(cxx::Extension &extension, cxx::Factory &factory, 
 
 		auto binary = cxx::ScalarFunction::Create(factory);
 		binary.SetName(name)
-		    .SetResolveTypesCallback(BinaryResolveTypes)
 		    .SetBindCallback(BinaryBind)
 		    .SetInitCallback(InitState)
 		    .SetExecCallback(ns ? BinaryExec<cxx::timestamp_tz_ns_t> : BinaryExec<cxx::timestamp_tz_t>)
 		    .SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
-		binary.GetSignature().AddParameter("part", varchar).AddParameter("ts", input_type).SetReturnType(any);
+		// A constant part is bound to the single-part function, which sets the type of the call
+		binary.GetSignature()
+		    .AddParameter("part", varchar)
+		    .AddParameter("ts", input_type)
+		    .SetReturnType(factory.ParseType("DOUBLE"));
 		extension.Register(binary);
 
 		auto structs = cxx::ScalarFunction::Create(factory);

@@ -108,7 +108,13 @@ void StrptimeResolveTypes(cxx::ScalarFunction::ResolveTypesInput &input) {
 
 void StrptimeBindCallback(cxx::ScalarFunction::BindInput &input) {
 	const auto &user = input.GetUserData<StrptimeUser>();
-	input.SetBindData<StrptimeBind>(CompileFormats(input, user.is_try, user.is_list));
+	auto bind = CompileFormats(input, user.is_try, user.is_list);
+	// Only a format with a time zone depends on the settings
+	if (bind.formats && (bind.formats->Kind() == icu_bridge::TimestampKind::TIMESTAMP_TZ ||
+	                     bind.formats->Kind() == icu_bridge::TimestampKind::TIMESTAMP_TZ_NS)) {
+		input.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+	}
+	input.SetBindData<StrptimeBind>(std::move(bind));
 }
 
 void StrptimeExec(cxx::ScalarFunction::ExecInput &input) {
@@ -122,7 +128,7 @@ void StrptimeExec(cxx::ScalarFunction::ExecInput &input) {
 		}
 		return;
 	}
-	const auto settings = ReadSettings(input.GetContext());
+	const auto settings = ReadSettingsOrDefault(input);
 	auto &calendar = SettingsCalendar(settings);
 	const auto zones = MakeZoneLookup(settings);
 	const auto in = input.GetArg(0).GetView();
@@ -156,8 +162,7 @@ void RegisterStrptime(cxx::Extension &extension, cxx::Factory &factory) {
 			function.SetName(is_try ? "try_strptime" : "strptime")
 			    .SetResolveTypesCallback(StrptimeResolveTypes)
 			    .SetBindCallback(StrptimeBindCallback)
-			    .SetExecCallback(StrptimeExec)
-			    .SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+			    .SetExecCallback(StrptimeExec);
 			function.SetUserData<StrptimeUser>(StrptimeUser {is_try, is_list});
 			function.GetSignature()
 			    .AddParameter("text", varchar)
@@ -351,6 +356,8 @@ void RegisterStringCasts(cxx::Extension &extension, cxx::Factory &factory) {
 	                         cxx::CastFunction::ExecCallback callback) {
 		auto cast = cxx::CastFunction::Create(factory);
 		cast.SetSourceType(source).SetTargetType(target).SetExecCallback(callback);
+		// The text depends on the TimeZone and Calendar settings
+		cast.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
 		extension.Register(cast);
 	};
 	register_cast(timestamp_tz, varchar, TimestampTZToVarcharExec<cxx::timestamp_tz_t, false>);

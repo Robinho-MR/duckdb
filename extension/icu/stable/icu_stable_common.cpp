@@ -10,6 +10,25 @@ void ThrowConversion(const std::string &message) {
 	throw cxx::Exception(DUCKDB_V2_ERROR_TYPE_CONVERSION, message);
 }
 
+void CheckTimestampTZCastsEnabled(cxx::Context &context, const std::string &from, const std::string &to) {
+	auto disabled = context.GetConfig().TryGetOption("disable_timestamptz_casts");
+	if (disabled && !disabled->value.IsNull() && disabled->value.Get<bool>()) {
+		throw cxx::Exception(DUCKDB_V2_ERROR_QUERY_BINDER,
+		                     "Casting from " + from + " to " + to +
+		                         " without an explicit time zone has been disabled  - use \"AT TIME ZONE ...\"");
+	}
+}
+
+void CheckDisabledCastAtBind(cxx::CastFunction::BindInput &input) {
+	// A cast that is probed without a client context is checked when it executes
+	auto *context = input.GetContext();
+	if (!context) {
+		return;
+	}
+	const auto &names = input.GetUserData<DisabledCastNames>();
+	CheckTimestampTZCastsEnabled(*context, names.from, names.to);
+}
+
 static std::string ReadString(const cxx::Config &config, const char *name, const std::string &fallback) {
 	auto option = config.TryGetOption(name);
 	if (!option || option->value.IsNull()) {

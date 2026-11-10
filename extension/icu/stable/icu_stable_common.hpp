@@ -63,6 +63,19 @@ private:
 	std::string first_message;
 };
 
+//! The type names a cast reports when `disable_timestamptz_casts` refuses it, carried by the cast as user data
+struct DisabledCastNames {
+	std::string from;
+	std::string to;
+};
+
+//! Bind callback of the casts between timestamps and timestamps with time zone: refuses the cast when the setting
+//! `disable_timestamptz_casts` says so. Needs DisabledCastNames as the user data of the cast.
+void CheckDisabledCastAtBind(cxx::CastFunction::BindInput &input);
+
+//! Throws the error of a refused cast if `disable_timestamptz_casts` is set
+void CheckTimestampTZCastsEnabled(cxx::Context &context, const std::string &from, const std::string &to);
+
 //! The TimeZone and Calendar settings of a context
 struct Settings {
 	std::string time_zone = "UTC";
@@ -74,6 +87,13 @@ struct Settings {
 };
 
 Settings ReadSettings(cxx::Context &context);
+
+//! The settings for a function that may run without a client context (for example while an index key is evaluated):
+//! the defaults then
+template <class INPUT>
+Settings ReadSettingsOrDefault(INPUT &input) {
+	return input.HasContext() ? ReadSettings(input.GetContext()) : Settings();
+}
 
 //! The calendar of the settings, cached per thread because creating one parses the time zone. The reference is valid
 //! until the next call on the same thread.

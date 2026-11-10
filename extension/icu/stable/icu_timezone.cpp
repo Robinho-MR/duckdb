@@ -297,6 +297,15 @@ void RegisterCast(cxx::Extension &extension, cxx::Factory &factory, const char *
                   int64_t cost, cxx::CastFunction::ExecCallback callback) {
 	auto cast = cxx::CastFunction::Create(factory);
 	cast.SetSourceType(NamedType(factory, source)).SetTargetType(NamedType(factory, target)).SetExecCallback(callback);
+	// The result depends on the TimeZone and Calendar settings, and the setting that refuses the cast is read when it
+	// is bound
+	cast.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+	const std::string source_name = source;
+	const bool from_time_zone = source_name != "TIMESTAMP" && source_name != "TIMESTAMP_MS" &&
+	                            source_name != "TIMESTAMP_NS" && source_name != "TIMESTAMP_S" && source_name != "DATE";
+	cast.SetUserData<DisabledCastNames>(from_time_zone ? DisabledCastNames {"TIMESTAMP WITH TIME ZONE", target}
+	                                                   : DisabledCastNames {"TIMESTAMP", "TIMESTAMP WITH TIME ZONE"});
+	cast.SetBindCallback(CheckDisabledCastAtBind);
 	if (cost >= 0) {
 		cast.SetImplicitCastCost(cost);
 	}

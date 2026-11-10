@@ -209,6 +209,20 @@ void SortKeyBind(cxx::ScalarFunction::BindInput &input) {
 	input.SetBindData<CollationBind>(std::move(bind));
 }
 
+//! The plan keeps the name and the tag of the collation ("name/tag")
+void CollateSerialize(cxx::ScalarFunction::SerializeInput &input) {
+	input.Write(input.GetBindData<CollationBind>().key);
+}
+
+void CollateDeserialize(cxx::ScalarFunction::DeserializeInput &input) {
+	const std::string key(input.GetData());
+	const auto separator = key.find('/');
+	if (separator == std::string::npos) {
+		throw cxx::InvalidInputException("Invalid serialized collation");
+	}
+	input.SetBindData<CollationBind>(MakeCollationBind(key.substr(0, separator), key.substr(separator + 1)));
+}
+
 void CollationInit(cxx::ScalarFunction::InitInput &input) {
 	input.SetInitData<icu_bridge::Collation::Buffer>();
 }
@@ -257,7 +271,7 @@ void RegisterCollations(cxx::Extension &extension, cxx::Factory &factory) {
 	auto register_collation = [&](const std::string &sql_name, const std::string &name, const std::string &tag) {
 		auto function = cxx::ScalarFunction::Create(factory);
 		function.SetName("collate_" + name).SetBindCallback(CollateBind).SetInitCallback(CollationInit);
-		function.SetExecCallback(CollateExec<false>);
+		function.SetExecCallback(CollateExec<false>).SetSerializeCallbacks(CollateSerialize, CollateDeserialize);
 		function.SetUserData<CollationUser>(CollationUser {name, tag});
 		function.GetSignature().AddParameter("str", varchar).SetReturnType(blob);
 		extension.Register(function);
@@ -269,7 +283,7 @@ void RegisterCollations(cxx::Extension &extension, cxx::Factory &factory) {
 		// Kept for queries and plans that call the function that returned the sort key in hexadecimal
 		auto hex_function = cxx::ScalarFunction::Create(factory);
 		hex_function.SetName("icu_collate_" + name).SetBindCallback(CollateBind).SetInitCallback(CollationInit);
-		hex_function.SetExecCallback(CollateExec<true>);
+		hex_function.SetExecCallback(CollateExec<true>).SetSerializeCallbacks(CollateSerialize, CollateDeserialize);
 		hex_function.SetUserData<CollationUser>(CollationUser {name, tag});
 		hex_function.GetSignature().AddParameter("str", varchar).SetReturnType(varchar);
 		extension.Register(hex_function);
@@ -286,7 +300,8 @@ void RegisterCollations(cxx::Extension &extension, cxx::Factory &factory) {
 	sort_key.SetName("icu_sort_key")
 	    .SetBindCallback(SortKeyBind)
 	    .SetInitCallback(CollationInit)
-	    .SetExecCallback(CollateExec<true>);
+	    .SetExecCallback(CollateExec<true>)
+	    .SetSerializeCallbacks(CollateSerialize, CollateDeserialize);
 	sort_key.GetSignature().AddParameter("str", varchar).AddParameter("collator", varchar).SetReturnType(varchar);
 	extension.Register(sort_key);
 }

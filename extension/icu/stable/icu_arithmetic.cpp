@@ -2,6 +2,7 @@
 #include "icu_stable_common.hpp"
 
 #include "icu_bridge_arithmetic.hpp"
+#include "icu_bridge_datepart.hpp"
 
 #include <map>
 #include <memory>
@@ -246,10 +247,39 @@ void RegisterOperator(cxx::Extension &extension, cxx::Factory &factory, const ch
 	extension.Register(function);
 }
 
+//! The parts the monotonicity of date_sub / date_diff does not hold for with a constant part: date_sub for eras (era
+//! boundaries can occur partway through a year), date_diff for decades, centuries and millennia (the calendar skips
+//! year 0 at the BC/AD boundary)
+template <bool IS_SUB>
+void BindDiffMonotonicity(cxx::ScalarFunction::BindInput &input) {
+	const auto part = input.TryGetConstantArgument(0);
+	if (!part || part->IsNull()) {
+		return;
+	}
+	icu_bridge::DatePart parsed;
+	if (!icu_bridge::TryParseDatePart(std::string(part->Get<cxx::varchar_t>().view()), parsed)) {
+		return;
+	}
+	const bool not_monotone =
+	    IS_SUB ? parsed == icu_bridge::DatePart::ERA
+	           : (parsed == icu_bridge::DatePart::DECADE || parsed == icu_bridge::DatePart::CENTURY ||
+	              parsed == icu_bridge::DatePart::MILLENNIUM);
+	if (not_monotone) {
+		input.SetArgumentMonotonicity(1, cxx::Monotonicity::UNKNOWN);
+		input.SetArgumentMonotonicity(2, cxx::Monotonicity::UNKNOWN);
+	}
+}
+
 void RegisterDiffFunction(cxx::Extension &extension, cxx::Factory &factory, const char *name,
-                          cxx::ScalarFunction::ExecCallback exec, const char *type) {
+                          cxx::ScalarFunction::ExecCallback exec, cxx::ScalarFunction::BindCallback bind,
+                          const char *type) {
 	auto function = cxx::ScalarFunction::Create(factory);
-	function.SetName(name).SetExecCallback(exec).SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+	function.SetName(name).SetExecCallback(exec).SetBindCallback(bind).SetStability(
+	    cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+	// A later start moves the result down, a later end up
+	function.SetArgumentMonotonicity(1, cxx::Monotonicity::NON_INCREASING)
+	    .SetArgumentMonotonicity(2, cxx::Monotonicity::NON_DECREASING)
+	    .SetStatisticsPropagation(cxx::StatisticsPropagation::FINITE_MONOTONE_BOUNDS);
 	function.GetSignature()
 	    .AddParameter("part", factory.ParseType("VARCHAR"))
 	    .AddParameter("startdate", factory.ParseType(type))
@@ -290,12 +320,14 @@ void RegisterArithmeticFunctions(cxx::Extension &extension, cxx::Factory &factor
 	extension.Register(age_unary);
 
 	for (const char *name : {"date_sub", "datesub"}) {
-		RegisterDiffFunction(extension, factory, name, DateDiffExec<cxx::timestamp_tz_t, DiffKind::SUB>, tstz);
+		RegisterDiffFunction(extension, factory, name, DateDiffExec<cxx::timestamp_tz_t, DiffKind::SUB>,
+		                     BindDiffMonotonicity<true>, tstz);
 	}
 	for (const char *name : {"date_diff", "datediff"}) {
-		RegisterDiffFunction(extension, factory, name, DateDiffExec<cxx::timestamp_tz_t, DiffKind::DIFF>, tstz);
+		RegisterDiffFunction(extension, factory, name, DateDiffExec<cxx::timestamp_tz_t, DiffKind::DIFF>,
+		                     BindDiffMonotonicity<false>, tstz);
 		RegisterDiffFunction(extension, factory, name, DateDiffExec<cxx::timestamp_tz_ns_t, DiffKind::DIFF_NANOS>,
-		                     "TIMESTAMPTZ_NS");
+		                     BindDiffMonotonicity<false>, "TIMESTAMPTZ_NS");
 	}
 }
 

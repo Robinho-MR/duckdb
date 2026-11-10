@@ -1,6 +1,8 @@
 #include "icu_stable_areas.hpp"
 #include "icu_stable_common.hpp"
 
+#include "icu_bridge_datepart.hpp"
+
 #include "icu_bridge_trunc_bucket.hpp"
 
 #include <string>
@@ -119,13 +121,31 @@ void DateTruncExec(cxx::ScalarFunction::ExecInput &input) {
 	}
 }
 
+//! date_trunc is not monotone for these constant parts because the calendar skips year 0 at the BC/AD boundary
+void BindDateTruncMonotonicity(cxx::ScalarFunction::BindInput &input) {
+	const auto part = input.TryGetConstantArgument(0);
+	if (!part || part->IsNull()) {
+		return;
+	}
+	icu_bridge::DatePart parsed;
+	if (!icu_bridge::TryParseDatePart(std::string(part->Get<cxx::varchar_t>().view()), parsed)) {
+		return;
+	}
+	if (parsed == icu_bridge::DatePart::DECADE || parsed == icu_bridge::DatePart::CENTURY ||
+	    parsed == icu_bridge::DatePart::MILLENNIUM || parsed == icu_bridge::DatePart::ERA) {
+		input.SetArgumentMonotonicity(1, cxx::Monotonicity::UNKNOWN);
+	}
+}
+
 template <class TS>
 void RegisterDateTrunc(cxx::Extension &extension, cxx::Factory &factory, const char *name,
                        const cxx::LogicalType &type) {
 	auto function = cxx::ScalarFunction::Create(factory);
 	function.SetName(name)
 	    .SetExecCallback(DateTruncExec<TS>)
-	    .SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+	    .SetBindCallback(BindDateTruncMonotonicity)
+	    .SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY)
+	    .SetArgumentMonotonicity(1, cxx::Monotonicity::NON_DECREASING);
 	function.GetSignature()
 	    .AddParameter("part", factory.ParseType("VARCHAR"))
 	    .AddParameter("timestamp", type)
@@ -339,7 +359,8 @@ void RegisterTimeBucket(cxx::Extension &extension, cxx::Factory &factory, const 
 		auto function = cxx::ScalarFunction::Create(factory);
 		function.SetName("time_bucket")
 		    .SetExecCallback(exec)
-		    .SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+		    .SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY)
+		    .SetArgumentMonotonicity(1, cxx::Monotonicity::NON_DECREASING);
 		auto signature = function.GetSignature();
 		signature.AddParameter("bucket_width", interval).AddParameter("timestamp", type);
 		if (third_name) {
@@ -460,20 +481,30 @@ void RegisterCasts(cxx::Extension &extension, cxx::Factory &factory) {
 	const auto date = factory.ParseType("DATE");
 	const auto time_tz = factory.ParseType("TIME WITH TIME ZONE");
 
+	auto set_depends_on_settings = [](cxx::CastFunction &cast, const char *target) {
+		cast.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+		cast.SetUserData<DisabledCastNames>(DisabledCastNames {"TIMESTAMP WITH TIME ZONE", target});
+		cast.SetBindCallback(CheckDisabledCastAtBind);
+	};
+
 	auto to_date = cxx::CastFunction::Create(factory);
 	to_date.SetSourceType(timestamp_tz).SetTargetType(date).SetExecCallback(CastToDate<cxx::timestamp_tz_t>);
+	set_depends_on_settings(to_date, "DATE");
 	extension.Register(to_date);
 
 	auto ns_to_date = cxx::CastFunction::Create(factory);
 	ns_to_date.SetSourceType(timestamp_tz_ns).SetTargetType(date).SetExecCallback(CastToDate<cxx::timestamp_tz_ns_t>);
+	set_depends_on_settings(ns_to_date, "DATE");
 	extension.Register(ns_to_date);
 
 	auto to_time_tz = cxx::CastFunction::Create(factory);
 	to_time_tz.SetSourceType(timestamp_tz).SetTargetType(time_tz).SetExecCallback(CastToTimeTZ);
+	to_time_tz.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
 	extension.Register(to_time_tz);
 
 	auto from_time = cxx::CastFunction::Create(factory);
 	from_time.SetSourceType(factory.ParseType("TIME")).SetTargetType(time_tz).SetExecCallback(CastFromTime);
+	from_time.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
 	extension.Register(from_time);
 }
 
