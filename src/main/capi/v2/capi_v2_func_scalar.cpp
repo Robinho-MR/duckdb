@@ -150,6 +150,7 @@ public:
 	//! Tells the four parts of the argument list apart
 	const BoundScalarFunction *function = nullptr;
 	Vector *result;
+	DUCKDB_V2_CAST_MODE cast_mode = DUCKDB_V2_CAST_MODE_NORMAL;
 };
 
 static auto Convert(duckdb_v2_scalar_function_exec_info_handle info) -> CV2ExecInfo * {
@@ -384,8 +385,17 @@ static auto CV2ScalarExec(DataChunk &input, ExpressionState &state, Vector &resu
 	auto &expr = state.expr.Cast<BoundFunctionExpression>();
 	const auto &info = expr.Function().GetExtraFunctionInfo().Cast<CV2ScalarFunctionInfo>();
 
+	// A function registered as a cast runs under a cast executor, which tells a try cast apart
+	optional_ptr<CV2CastExecutor> cast_executor;
+	if (state.root.executor && state.root.executor == ActiveCastExecutor()) {
+		cast_executor = ActiveCastExecutor();
+	}
+
 	CV2ExecInfo args;
 	args.in_user_data = info.user_data ? info.user_data->GetData() : nullptr;
+	if (cast_executor && cast_executor->is_try) {
+		args.cast_mode = DUCKDB_V2_CAST_MODE_TRY;
+	}
 	args.input = &input;
 	args.function = &expr.Function();
 	args.result = &result;
@@ -412,6 +422,11 @@ static auto CV2ScalarExec(DataChunk &input, ExpressionState &state, Vector &resu
 	info.exec_cb(Convert(&args), Convert(callback_context.get()), &err_ptr);
 
 	if (err.HasError()) {
+		if (args.cast_mode == DUCKDB_V2_CAST_MODE_TRY) {
+			// The rows the callback wrote stay: the cast reports that not every row converted
+			cast_executor->error = err.message;
+			return;
+		}
 		err.ThrowAsException();
 	}
 }
@@ -523,6 +538,21 @@ public:
 		return function;
 	}
 
+	//! Builds the function a cast is registered from: one concrete parameter, converting to the concrete return type
+	ScalarFunction BuildForCast(DatabaseInstance &target) {
+		if (signature.GetParameterCount() != 1 || signature.IsVariadic() ||
+		    !signature.GetParameter(0).AcceptsPosition()) {
+			throw InvalidInputException("A cast function must take exactly one standard parameter: the value to cast.");
+		}
+		if (!signature.GetParameter(0).GetType().IsComplete()) {
+			throw InvalidInputException("The parameter of a cast function must be a fully defined concrete type");
+		}
+		if (info.resolve_types_cb) {
+			throw InvalidInputException("A cast function cannot have a resolve types callback: its types are fixed.");
+		}
+		return Build(target);
+	}
+
 public:
 	//! The database it was created for: the only one it can be registered on.
 	DatabaseInstance &db;
@@ -541,6 +571,10 @@ static auto Convert(duckdb_v2_scalar_function_handle func) -> CV2ScalarFunction 
 }
 static auto Convert(CV2ScalarFunction *func) -> duckdb_v2_scalar_function_handle {
 	return reinterpret_cast<duckdb_v2_scalar_function_handle>(func);
+}
+
+ScalarFunction BuildScalarFunctionForCast(duckdb_v2_scalar_function_handle function, DatabaseInstance &target) {
+	return Convert(function)->BuildForCast(target);
 }
 
 } // namespace duckdb::capiv2
@@ -902,6 +936,15 @@ DUCKDB_V2_ERROR duckdb_v2_scalar_function_exec_get_row_count(duckdb_v2_scalar_fu
 	DUCKDB_CHECK_ARG(count);
 
 	return WithErrorHandler(err, [&]() { *count = Convert(info)->input->size(); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_scalar_function_exec_get_cast_mode(duckdb_v2_scalar_function_exec_info_handle info,
+                                                             DUCKDB_V2_CAST_MODE *mode,
+                                                             duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(mode);
+
+	return WithErrorHandler(err, [&]() { *mode = Convert(info)->cast_mode; });
 }
 
 DUCKDB_V2_ERROR duckdb_v2_scalar_function_exec_get_arg_count(duckdb_v2_scalar_function_exec_info_handle info,

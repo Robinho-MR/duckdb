@@ -4,9 +4,10 @@
 #include <string>
 
 // ---------------------------------------------------------------------------
-// V2 cast function tests: register a custom type TEMPERATURE (an alias of
-// INTEGER) plus two casts between it and VARCHAR, then reach them from SQL
-// through CAST / TRY_CAST and through implicit argument conversion.
+// V2 cast tests: register a custom type TEMPERATURE (an alias of INTEGER) plus
+// two casts between it and VARCHAR, then reach them from SQL through CAST /
+// TRY_CAST and through implicit argument conversion. A cast is a scalar
+// function of one parameter, registered with duckdb_v2_connection_register_cast.
 //
 // Callbacks avoid Catch assertions: a REQUIRE would throw through the C
 // callback boundary into the engine. On failure they populate the provided
@@ -50,11 +51,11 @@ struct CastArgs {
 	duckdb_v2_vector_view view {};
 };
 
-bool ReadCastArgs(duckdb_v2_cast_function_exec_info_handle info, CastArgs &out, duckdb_v2_error_info_handle *err) {
-	if (duckdb_v2_cast_function_exec_get_input(info, &out.input, err) != DUCKDB_V2_ERROR_NONE ||
-	    duckdb_v2_cast_function_exec_get_output(info, &out.output, err) != DUCKDB_V2_ERROR_NONE ||
-	    duckdb_v2_cast_function_exec_get_row_count(info, &out.count, err) != DUCKDB_V2_ERROR_NONE ||
-	    duckdb_v2_cast_function_exec_get_mode(info, &last_cast_mode, err) != DUCKDB_V2_ERROR_NONE ||
+bool ReadCastArgs(duckdb_v2_scalar_function_exec_info_handle info, CastArgs &out, duckdb_v2_error_info_handle *err) {
+	if (duckdb_v2_scalar_function_exec_get_arg(info, 0, &out.input, err) != DUCKDB_V2_ERROR_NONE ||
+	    duckdb_v2_scalar_function_exec_get_result(info, &out.output, err) != DUCKDB_V2_ERROR_NONE ||
+	    duckdb_v2_scalar_function_exec_get_row_count(info, &out.count, err) != DUCKDB_V2_ERROR_NONE ||
+	    duckdb_v2_scalar_function_exec_get_cast_mode(info, &last_cast_mode, err) != DUCKDB_V2_ERROR_NONE ||
 	    duckdb_v2_vector_get_view(out.input, &out.view, err) != DUCKDB_V2_ERROR_NONE) {
 		return false;
 	}
@@ -82,7 +83,7 @@ bool ParseTemperature(const char *data, idx_t len, int32_t &out) {
 }
 
 // TEMPERATURE -> VARCHAR. Infallible: every input value formats.
-void TempToVarchar(duckdb_v2_cast_function_exec_info_handle info, duckdb_v2_context_handle context,
+void TempToVarchar(duckdb_v2_scalar_function_exec_info_handle info, duckdb_v2_context_handle context,
                    duckdb_v2_error_info_handle *err) {
 	if (!context) {
 		FailCast(err, DUCKDB_V2_ERROR_INPUT_INVALID, "cast callback ran without a context");
@@ -110,10 +111,10 @@ void TempToVarchar(duckdb_v2_cast_function_exec_info_handle info, duckdb_v2_cont
 
 // VARCHAR -> TEMPERATURE. Fails on malformed input: the failing row is left NULL, which is what a TRY cast keeps,
 // and the reported error is what a normal cast aborts on. Also checks that the user data was threaded through.
-void VarcharToTemp(duckdb_v2_cast_function_exec_info_handle info, duckdb_v2_context_handle,
+void VarcharToTemp(duckdb_v2_scalar_function_exec_info_handle info, duckdb_v2_context_handle,
                    duckdb_v2_error_info_handle *err) {
 	void *user_data = nullptr;
-	if (duckdb_v2_cast_function_exec_get_user_data(info, &user_data, err) != DUCKDB_V2_ERROR_NONE) {
+	if (duckdb_v2_scalar_function_exec_get_user_data(info, &user_data, err) != DUCKDB_V2_ERROR_NONE) {
 		return;
 	}
 	auto *secret = static_cast<std::string *>(user_data);
@@ -153,7 +154,7 @@ void VarcharToTemp(duckdb_v2_cast_function_exec_info_handle info, duckdb_v2_cont
 	}
 }
 
-void NoopCast(duckdb_v2_cast_function_exec_info_handle, duckdb_v2_context_handle, duckdb_v2_error_info_handle *) {
+void NoopCast(duckdb_v2_scalar_function_exec_info_handle, duckdb_v2_context_handle, duckdb_v2_error_info_handle *) {
 }
 
 // Registers the TEMPERATURE custom type and hands back a logical type handle for it.
@@ -172,15 +173,22 @@ duckdb_v2_logical_type_handle RegisterTemperatureType(EnvFixture &fx, duckdb_v2_
 	return temperature;
 }
 
-// Creates a cast function on the connection, configured but not yet registered.
-duckdb_v2_cast_function_handle MakeCast(duckdb_v2_connection_handle conn, duckdb_v2_logical_type_handle source,
-                                        duckdb_v2_logical_type_handle target,
-                                        duckdb_v2_cast_function_exec_callback_fn callback) {
-	duckdb_v2_cast_function_handle function = nullptr;
-	REQUIRE(duckdb_v2_cast_function_create(FactoryOf(conn), &function, nullptr) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(duckdb_v2_cast_function_set_source_type(function, source, nullptr) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(duckdb_v2_cast_function_set_target_type(function, target, nullptr) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(duckdb_v2_cast_function_set_exec_callback(function, callback, nullptr) == DUCKDB_V2_ERROR_NONE);
+// Creates the scalar function of a cast on the connection, configured but not yet registered.
+duckdb_v2_scalar_function_handle MakeCast(duckdb_v2_connection_handle conn, duckdb_v2_logical_type_handle source,
+                                          duckdb_v2_logical_type_handle target,
+                                          duckdb_v2_scalar_function_exec_callback_fn callback) {
+	duckdb_v2_scalar_function_handle function = nullptr;
+	REQUIRE(duckdb_v2_scalar_function_create(FactoryOf(conn), &function, nullptr) == DUCKDB_V2_ERROR_NONE);
+	auto name = Convert("cast_function");
+	REQUIRE(duckdb_v2_scalar_function_set_name(function, &name, nullptr) == DUCKDB_V2_ERROR_NONE);
+	duckdb_v2_function_signature_handle sig = nullptr;
+	REQUIRE(duckdb_v2_scalar_function_get_signature(function, &sig, nullptr) == DUCKDB_V2_ERROR_NONE);
+	auto parameter = CastIdent("value");
+	REQUIRE(duckdb_v2_function_signature_add_parameter(sig, &parameter, source, nullptr,
+	                                                   DUCKDB_V2_FUNCTION_PARAMETER_KIND_STANDARD,
+	                                                   nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_function_signature_set_return_type(sig, target, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_scalar_function_set_exec_callback(function, callback, nullptr) == DUCKDB_V2_ERROR_NONE);
 	return function;
 }
 
@@ -192,16 +200,15 @@ void DestroySecret(void *data) {
 void RegisterTemperatureCasts(duckdb_v2_connection_handle conn, duckdb_v2_logical_type_handle temperature,
                               duckdb_v2_logical_type_handle varchar, int64_t cost) {
 	auto to_varchar = MakeCast(conn, temperature, varchar, TempToVarchar);
-	REQUIRE(duckdb_v2_connection_register_cast_function(conn, to_varchar, nullptr) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(duckdb_v2_cast_function_destroy(&to_varchar) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_connection_register_cast(conn, to_varchar, -1, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_scalar_function_destroy(&to_varchar) == DUCKDB_V2_ERROR_NONE);
 	REQUIRE(to_varchar == nullptr);
 
 	auto from_varchar = MakeCast(conn, varchar, temperature, VarcharToTemp);
-	REQUIRE(duckdb_v2_cast_function_set_implicit_cast_cost(from_varchar, cost, nullptr) == DUCKDB_V2_ERROR_NONE);
 	duckdb_v2_opaque user_data = {new std::string("secret"), DestroySecret, nullptr};
-	REQUIRE(duckdb_v2_cast_function_set_user_data(from_varchar, &user_data, nullptr) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(duckdb_v2_connection_register_cast_function(conn, from_varchar, nullptr) == DUCKDB_V2_ERROR_NONE);
-	duckdb_v2_cast_function_destroy(&from_varchar);
+	REQUIRE(duckdb_v2_scalar_function_set_user_data(from_varchar, &user_data, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_connection_register_cast(conn, from_varchar, cost, nullptr) == DUCKDB_V2_ERROR_NONE);
+	duckdb_v2_scalar_function_destroy(&from_varchar);
 }
 
 // Run a query producing a single VARCHAR cell.
@@ -386,38 +393,47 @@ TEST_CASE("V2 cast: registration refusals", "[capi_v2][cast_function]") {
 	auto varchar = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR);
 	auto any = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_ANY);
 
-	// Nothing configured at all, then each missing piece in turn.
+	// Nothing configured at all, then each missing piece in turn: a parameter, the return type, the exec callback.
 	{
-		duckdb_v2_cast_function_handle function = nullptr;
-		REQUIRE(duckdb_v2_cast_function_create(fx.factory, &function, nullptr) == DUCKDB_V2_ERROR_NONE);
-		REQUIRE(duckdb_v2_connection_register_cast_function(fx.conn, function, nullptr) ==
-		        DUCKDB_V2_ERROR_INPUT_INVALID);
+		duckdb_v2_scalar_function_handle function = nullptr;
+		REQUIRE(duckdb_v2_scalar_function_create(fx.factory, &function, nullptr) == DUCKDB_V2_ERROR_NONE);
+		auto name = Convert("cast_function");
+		REQUIRE(duckdb_v2_scalar_function_set_name(function, &name, nullptr) == DUCKDB_V2_ERROR_NONE);
+		REQUIRE(duckdb_v2_connection_register_cast(fx.conn, function, -1, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
 
-		REQUIRE(duckdb_v2_cast_function_set_source_type(function, integer, nullptr) == DUCKDB_V2_ERROR_NONE);
-		REQUIRE(duckdb_v2_connection_register_cast_function(fx.conn, function, nullptr) ==
-		        DUCKDB_V2_ERROR_INPUT_INVALID);
+		duckdb_v2_function_signature_handle sig = nullptr;
+		REQUIRE(duckdb_v2_scalar_function_get_signature(function, &sig, nullptr) == DUCKDB_V2_ERROR_NONE);
+		auto parameter = CastIdent("value");
+		REQUIRE(duckdb_v2_function_signature_add_parameter(sig, &parameter, integer, nullptr,
+		                                                   DUCKDB_V2_FUNCTION_PARAMETER_KIND_STANDARD,
+		                                                   nullptr) == DUCKDB_V2_ERROR_NONE);
+		REQUIRE(duckdb_v2_connection_register_cast(fx.conn, function, -1, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
 
-		REQUIRE(duckdb_v2_cast_function_set_target_type(function, varchar, nullptr) == DUCKDB_V2_ERROR_NONE);
-		REQUIRE(duckdb_v2_connection_register_cast_function(fx.conn, function, nullptr) ==
-		        DUCKDB_V2_ERROR_INPUT_INVALID);
+		REQUIRE(duckdb_v2_function_signature_set_return_type(sig, varchar, nullptr) == DUCKDB_V2_ERROR_NONE);
+		REQUIRE(duckdb_v2_connection_register_cast(fx.conn, function, -1, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
 
-		REQUIRE(duckdb_v2_cast_function_set_exec_callback(function, NoopCast, nullptr) == DUCKDB_V2_ERROR_NONE);
-		REQUIRE(duckdb_v2_connection_register_cast_function(fx.conn, function, nullptr) == DUCKDB_V2_ERROR_NONE);
-		duckdb_v2_cast_function_destroy(&function);
+		REQUIRE(duckdb_v2_scalar_function_set_exec_callback(function, NoopCast, nullptr) == DUCKDB_V2_ERROR_NONE);
+		REQUIRE(duckdb_v2_connection_register_cast(fx.conn, function, -1, nullptr) == DUCKDB_V2_ERROR_NONE);
+
+		// Another parameter makes it more than a cast
+		auto second = CastIdent("second");
+		REQUIRE(duckdb_v2_function_signature_add_parameter(sig, &second, integer, nullptr,
+		                                                   DUCKDB_V2_FUNCTION_PARAMETER_KIND_STANDARD,
+		                                                   nullptr) == DUCKDB_V2_ERROR_NONE);
+		REQUIRE(duckdb_v2_connection_register_cast(fx.conn, function, -1, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+		duckdb_v2_scalar_function_destroy(&function);
 	}
 
 	// ANY is a signature wildcard, not a cast endpoint -- on either side.
 	{
 		auto function = MakeCast(fx.conn, any, varchar, NoopCast);
-		REQUIRE(duckdb_v2_connection_register_cast_function(fx.conn, function, nullptr) ==
-		        DUCKDB_V2_ERROR_INPUT_INVALID);
-		duckdb_v2_cast_function_destroy(&function);
+		REQUIRE(duckdb_v2_connection_register_cast(fx.conn, function, -1, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+		duckdb_v2_scalar_function_destroy(&function);
 	}
 	{
 		auto function = MakeCast(fx.conn, varchar, any, NoopCast);
-		REQUIRE(duckdb_v2_connection_register_cast_function(fx.conn, function, nullptr) ==
-		        DUCKDB_V2_ERROR_INPUT_INVALID);
-		duckdb_v2_cast_function_destroy(&function);
+		REQUIRE(duckdb_v2_connection_register_cast(fx.conn, function, -1, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+		duckdb_v2_scalar_function_destroy(&function);
 	}
 
 	duckdb_v2_logical_type_destroy(&integer);
@@ -425,53 +441,24 @@ TEST_CASE("V2 cast: registration refusals", "[capi_v2][cast_function]") {
 	duckdb_v2_logical_type_destroy(&any);
 }
 
-TEST_CASE("V2 cast: null arguments and destroy null-safety", "[capi_v2][cast_function]") {
+TEST_CASE("V2 cast: null arguments", "[capi_v2][cast_function]") {
 	EnvFixture fx;
 	auto integer = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER);
+	auto varchar = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR);
+	auto function = MakeCast(fx.conn, integer, varchar, NoopCast);
 
-	duckdb_v2_cast_function_handle function = nullptr;
-	REQUIRE(duckdb_v2_cast_function_create(nullptr, &function, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
-	REQUIRE(function == nullptr);
-	REQUIRE(duckdb_v2_cast_function_create(fx.factory, nullptr, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
-	REQUIRE(duckdb_v2_connection_register_cast_function(nullptr, function, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_connection_register_cast(nullptr, function, -1, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_connection_register_cast(fx.conn, nullptr, -1, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_extension_register_cast(nullptr, function, -1, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
 
-	REQUIRE(duckdb_v2_cast_function_create(fx.factory, &function, nullptr) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(duckdb_v2_cast_function_set_source_type(function, nullptr, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
-	REQUIRE(duckdb_v2_cast_function_set_source_type(nullptr, integer, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
-	REQUIRE(duckdb_v2_cast_function_set_target_type(function, nullptr, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
-	REQUIRE(duckdb_v2_cast_function_set_target_type(nullptr, integer, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
-	REQUIRE(duckdb_v2_cast_function_set_implicit_cast_cost(nullptr, 0, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
-	REQUIRE(duckdb_v2_cast_function_set_user_data(function, nullptr, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
-	REQUIRE(duckdb_v2_cast_function_set_exec_callback(nullptr, NoopCast, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
-	REQUIRE(duckdb_v2_connection_register_cast_function(fx.conn, nullptr, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
-
-	// The exec accessors reject a null info handle and a null out-parameter alike.
-	void *data = nullptr;
-	idx_t count = 0;
-	duckdb_v2_vector_handle vector = nullptr;
+	// The cast mode accessor rejects a null info handle and a null out-parameter alike.
 	auto mode = DUCKDB_V2_CAST_MODE_NORMAL;
-	REQUIRE(duckdb_v2_cast_function_exec_get_user_data(nullptr, &data, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
-	REQUIRE(duckdb_v2_cast_function_exec_get_row_count(nullptr, &count, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
-	REQUIRE(duckdb_v2_cast_function_exec_get_input(nullptr, &vector, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
-	REQUIRE(duckdb_v2_cast_function_exec_get_output(nullptr, &vector, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
-	REQUIRE(duckdb_v2_cast_function_exec_get_mode(nullptr, &mode, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_scalar_function_exec_get_cast_mode(nullptr, &mode, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_scalar_function_exec_get_cast_mode(nullptr, nullptr, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
 
-	REQUIRE(duckdb_v2_cast_function_destroy(&function) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(function == nullptr);
-	REQUIRE(duckdb_v2_cast_function_destroy(&function) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(duckdb_v2_cast_function_destroy(nullptr) == DUCKDB_V2_ERROR_NONE);
-
+	duckdb_v2_scalar_function_destroy(&function);
 	duckdb_v2_logical_type_destroy(&integer);
-}
-
-TEST_CASE("V2 cast: scalar-only properties are rejected", "[capi_v2][cast_function]") {
-	EnvFixture fx;
-	duckdb_v2_cast_function_handle function = nullptr;
-	REQUIRE(duckdb_v2_cast_function_create(fx.factory, &function, nullptr) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(duckdb_v2_cast_function_set_property(function, DUCKDB_V2_FUNCTION_PROPERTY_STATISTICS_PROPAGATION,
-	                                             DUCKDB_V2_FUNCTION_PROPERTY_STATISTICS_PROPAGATION_NONE,
-	                                             nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
-	duckdb_v2_cast_function_destroy(&function);
+	duckdb_v2_logical_type_destroy(&varchar);
 }
 
 } // namespace test_capi_v2

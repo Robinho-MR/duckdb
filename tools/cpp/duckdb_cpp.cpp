@@ -196,10 +196,6 @@ struct HandleTraits<PragmaFunction> {
 	using handle = duckdb_v2_pragma_function_handle;
 };
 template <>
-struct HandleTraits<CastFunction> {
-	using handle = duckdb_v2_cast_function_handle;
-};
-template <>
 struct HandleTraits<ReplacementScan> {
 	using handle = duckdb_v2_replacement_scan_handle;
 };
@@ -1299,14 +1295,14 @@ auto Extension::Register(CollationInfo &collation) -> void {
 	CheckedAPICall(duckdb_v2_extension_register_collation, handle(), collation.handle());
 }
 
-auto Connection::Register(CastFunction &cast_function) -> void {
-	cast_function.PrepareRegistration();
-	CheckedAPICall(duckdb_v2_connection_register_cast_function, handle(), cast_function.handle());
+auto Connection::RegisterCast(ScalarFunction &scalar_function, int64_t implicit_cast_cost) -> void {
+	scalar_function.PrepareRegistration();
+	CheckedAPICall(duckdb_v2_connection_register_cast, handle(), scalar_function.handle(), implicit_cast_cost);
 }
 
-auto Extension::Register(CastFunction &cast_function) -> void {
-	cast_function.PrepareRegistration();
-	CheckedAPICall(duckdb_v2_extension_register_cast_function, handle(), cast_function.handle());
+auto Extension::RegisterCast(ScalarFunction &scalar_function, int64_t implicit_cast_cost) -> void {
+	scalar_function.PrepareRegistration();
+	CheckedAPICall(duckdb_v2_extension_register_cast, handle(), scalar_function.handle(), implicit_cast_cost);
 }
 
 auto Connection::Register(PragmaFunction &pragma_function) -> void {
@@ -3719,6 +3715,13 @@ auto ScalarFunction::ExecInput::GetRowCount() const -> idx_t {
 	CheckedAPICall(duckdb_v2_scalar_function_exec_get_row_count,
 	               static_cast<duckdb_v2_scalar_function_exec_info_handle>(args), &count);
 	return count;
+}
+
+auto ScalarFunction::ExecInput::GetCastMode() const -> CastMode {
+	DUCKDB_V2_CAST_MODE mode = DUCKDB_V2_CAST_MODE_NORMAL;
+	CheckedAPICall(duckdb_v2_scalar_function_exec_get_cast_mode,
+	               static_cast<duckdb_v2_scalar_function_exec_info_handle>(args), &mode);
+	return static_cast<CastMode>(mode);
 }
 
 auto ScalarFunction::ExecInput::GetArgumentCounts() const -> ArgumentCounts {
@@ -6531,237 +6534,6 @@ auto CopyFunction::CopyFromProgressInput::SetProgress(double progress) -> void {
 
 auto CopyFunction::CopyFromProgressInput::GetContext() -> Context & {
 	return context;
-}
-
-//----------------------------------------------------------------------------------------------------------------------
-// Cast Function
-//----------------------------------------------------------------------------------------------------------------------
-
-namespace {
-
-// The callback table for one registered cast: rides the C user_data slot so
-// the trampoline can find it; the user's own slot (SetUserData) rides inside
-// it. Owned by the registered cast, freed at engine teardown.
-struct CastFunctionInfo {
-	CastFunction::ExecCallback exec_callback = nullptr;
-	CastFunction::BindCallback bind_callback = nullptr;
-	detail::UserData user_data;
-
-	CastFunctionInfo(CastFunction::ExecCallback exec_callback, CastFunction::BindCallback bind_callback,
-	                 detail::UserData user_data)
-	    : exec_callback(exec_callback), bind_callback(bind_callback), user_data(std::move(user_data)) {
-	}
-
-	bool operator==(const CastFunctionInfo &other) const {
-		return exec_callback == other.exec_callback && bind_callback == other.bind_callback &&
-		       user_data.get() == other.user_data.get();
-	}
-};
-
-// Guard for ExecInput::GetUserData: a clear error instead of a null deref.
-void *RequireCastUserData(const detail::UserData &user_data) {
-	auto ptr = user_data.get();
-	if (!ptr) {
-		throw InvalidInputException("no user data was set; call CastFunction::SetUserData before Register");
-	}
-	return ptr;
-}
-
-} // namespace
-
-CastFunction::CastFunction(void *impl) : detail::Handle<CastFunction>(impl) {
-}
-
-CastFunction::~CastFunction() {
-	auto _h = handle();
-	duckdb_v2_cast_function_destroy(&_h);
-}
-
-auto CastFunction::Create(Factory &factory) -> CastFunction {
-	duckdb_v2_cast_function_handle _h = nullptr;
-	CheckedAPICall(duckdb_v2_cast_function_create, factory.handle(), &_h);
-	return detail::HandleFactory::Make<CastFunction>(_h);
-}
-
-auto CastFunction::SetSourceType(const LogicalType &type) & -> CastFunction & {
-	CheckedAPICall(duckdb_v2_cast_function_set_source_type, handle(), type.handle());
-	return *this;
-}
-
-auto CastFunction::SetTargetType(const LogicalType &type) & -> CastFunction & {
-	CheckedAPICall(duckdb_v2_cast_function_set_target_type, handle(), type.handle());
-	return *this;
-}
-
-auto CastFunction::SetImplicitCastCost(int64_t cost) & -> CastFunction & {
-	CheckedAPICall(duckdb_v2_cast_function_set_implicit_cast_cost, handle(), cost);
-	return *this;
-}
-
-auto CastFunction::SetUserDataInternal(void *data, void (*destructor)(void *)) -> void {
-	user_data = detail::UserData(data, destructor);
-}
-
-auto CastFunction::SetExecCallback(ExecCallback callback) & -> CastFunction & {
-	if (!callback) {
-		CheckedAPICall(duckdb_v2_cast_function_set_exec_callback, handle(), nullptr);
-		exec_callback = nullptr;
-		return *this;
-	}
-
-	// The C-side callback is one shared trampoline; the user's callback is looked
-	// up through the info table riding the user_data slot (set by Register).
-	static auto trampoline = [](duckdb_v2_cast_function_exec_info_handle info, duckdb_v2_context_handle context,
-	                            duckdb_v2_error_info_handle *err) {
-		WithExceptionGuard(err, [&]() {
-			void *user_data = nullptr;
-			CheckedAPICall(duckdb_v2_cast_function_exec_get_user_data, info, &user_data);
-			const auto &function = *static_cast<CastFunctionInfo *>(user_data);
-
-			auto input =
-			    detail::HandleFactory::Make<ExecInput>(static_cast<void *>(info), static_cast<void *>(context));
-			function.exec_callback(input);
-		});
-	};
-
-	CheckedAPICall(duckdb_v2_cast_function_set_exec_callback, handle(), trampoline);
-	exec_callback = callback;
-	return *this;
-}
-
-auto CastFunction::SetBindCallback(BindCallback callback) & -> CastFunction & {
-	if (!callback) {
-		CheckedAPICall(duckdb_v2_cast_function_set_bind_callback, handle(), nullptr);
-		bind_callback = nullptr;
-		return *this;
-	}
-
-	static auto trampoline = [](duckdb_v2_cast_function_bind_info_handle info, duckdb_v2_context_handle context,
-	                            duckdb_v2_error_info_handle *err) {
-		WithExceptionGuard(err, [&]() {
-			void *user_data = nullptr;
-			CheckedAPICall(duckdb_v2_cast_function_bind_get_user_data, info, &user_data);
-			const auto &function = *static_cast<CastFunctionInfo *>(user_data);
-
-			auto input =
-			    detail::HandleFactory::Make<BindInput>(static_cast<void *>(info), static_cast<void *>(context));
-			function.bind_callback(input);
-		});
-	};
-
-	CheckedAPICall(duckdb_v2_cast_function_set_bind_callback, handle(), trampoline);
-	bind_callback = callback;
-	return *this;
-}
-
-auto CastFunction::SetStability(FunctionStability value) & -> CastFunction & {
-	CheckedAPICall(duckdb_v2_cast_function_set_property, handle(), DUCKDB_V2_FUNCTION_PROPERTY_STABILITY,
-	               ToCValue(value));
-	return *this;
-}
-
-CastFunction::BindInput::BindInput(void *args, void *context_handle) : args(args) {
-	if (context_handle) {
-		context.reset(new Context(detail::HandleFactory::Make<Context>(context_handle)));
-	}
-}
-
-CastFunction::BindInput::~BindInput() = default;
-
-auto CastFunction::BindInput::GetSourceType() const -> LogicalType {
-	duckdb_v2_logical_type_handle type = nullptr;
-	CheckedAPICall(duckdb_v2_cast_function_bind_get_source_type,
-	               static_cast<duckdb_v2_cast_function_bind_info_handle>(args), &type);
-	return detail::HandleFactory::Make<LogicalType>(type);
-}
-
-auto CastFunction::BindInput::GetTargetType() const -> LogicalType {
-	duckdb_v2_logical_type_handle type = nullptr;
-	CheckedAPICall(duckdb_v2_cast_function_bind_get_target_type,
-	               static_cast<duckdb_v2_cast_function_bind_info_handle>(args), &type);
-	return detail::HandleFactory::Make<LogicalType>(type);
-}
-
-void CastFunction::BindInput::SetBindDataInternal(void *data, void (*destructor)(void *)) {
-	duckdb_v2_opaque opaque {data, destructor, nullptr};
-	CheckedAPICall(duckdb_v2_cast_function_bind_set_bind_data,
-	               static_cast<duckdb_v2_cast_function_bind_info_handle>(args), &opaque);
-}
-
-void *CastFunction::BindInput::GetUserDataInternal() const {
-	void *user_data = nullptr;
-	CheckedAPICall(duckdb_v2_cast_function_bind_get_user_data,
-	               static_cast<duckdb_v2_cast_function_bind_info_handle>(args), &user_data);
-	const auto &function = *static_cast<const CastFunctionInfo *>(user_data);
-	return RequireCastUserData(function.user_data);
-}
-
-void *CastFunction::ExecInput::GetBindDataInternal() const {
-	void *bind_data = nullptr;
-	CheckedAPICall(duckdb_v2_cast_function_exec_get_bind_data,
-	               static_cast<duckdb_v2_cast_function_exec_info_handle>(args), &bind_data);
-	if (!bind_data) {
-		throw InvalidInputException("no bind data was set; call BindInput::SetBindData in the bind callback");
-	}
-	return bind_data;
-}
-
-auto CastFunction::PrepareRegistration() -> void {
-	// The callback table rides the C user_data slot so the trampoline can find
-	// it; the user's own data (SetUserData, moved out here) rides inside it.
-	auto info =
-	    std::unique_ptr<CastFunctionInfo>(new CastFunctionInfo(exec_callback, bind_callback, std::move(user_data)));
-	duckdb_v2_opaque opaque {info.get(), detail::TypedDelete<CastFunctionInfo>, detail::TypedEquals<CastFunctionInfo>};
-	CheckedAPICall(duckdb_v2_cast_function_set_user_data, handle(), &opaque);
-	// The cast owns the table now.
-	info.release(); // NOLINT(bugprone-unused-return-value)
-}
-
-void *CastFunction::ExecInput::GetUserDataInternal() const {
-	void *user_data = nullptr;
-	CheckedAPICall(duckdb_v2_cast_function_exec_get_user_data,
-	               static_cast<duckdb_v2_cast_function_exec_info_handle>(args), &user_data);
-	const auto &function = *static_cast<const CastFunctionInfo *>(user_data);
-	return RequireCastUserData(function.user_data);
-}
-
-auto CastFunction::ExecInput::GetRowCount() const -> idx_t {
-	idx_t count = 0;
-	CheckedAPICall(duckdb_v2_cast_function_exec_get_row_count,
-	               static_cast<duckdb_v2_cast_function_exec_info_handle>(args), &count);
-	return count;
-}
-
-auto CastFunction::ExecInput::GetInput() const -> Vector {
-	duckdb_v2_vector_handle vector = nullptr;
-	CheckedAPICall(duckdb_v2_cast_function_exec_get_input, static_cast<duckdb_v2_cast_function_exec_info_handle>(args),
-	               &vector);
-	return detail::HandleFactory::Make<Vector>(vector);
-}
-
-auto CastFunction::ExecInput::GetOutput() const -> Vector {
-	duckdb_v2_vector_handle vector = nullptr;
-	CheckedAPICall(duckdb_v2_cast_function_exec_get_output, static_cast<duckdb_v2_cast_function_exec_info_handle>(args),
-	               &vector);
-	return detail::HandleFactory::Make<Vector>(vector);
-}
-
-auto CastFunction::ExecInput::GetMode() const -> CastMode {
-	auto mode = DUCKDB_V2_CAST_MODE_NORMAL;
-	CheckedAPICall(duckdb_v2_cast_function_exec_get_mode, static_cast<duckdb_v2_cast_function_exec_info_handle>(args),
-	               &mode);
-	return static_cast<CastMode>(mode);
-}
-
-auto CastFunction::ExecInput::GetContext() -> Context & {
-	if (!context) {
-		throw InvalidInputException("the cast runs without a client context");
-	}
-	return *context;
-}
-
-auto CastFunction::ExecInput::HasContext() const -> bool {
-	return context.has_value();
 }
 
 //----------------------------------------------------------------------------------------------------------------------

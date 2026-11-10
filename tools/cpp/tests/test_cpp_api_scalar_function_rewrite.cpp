@@ -313,19 +313,19 @@ void ContextExec(ScalarFunction::ExecInput &input) {
 }
 
 // INTEGER -> VARCHAR through the custom type, without touching the context
-void NoContextCastExec(CastFunction::ExecInput &input) {
+void NoContextCastExec(ScalarFunction::ExecInput &input) {
 	if (!input.HasContext()) {
 		no_context_exec_runs++;
 	}
-	auto in = input.GetInput();
-	auto out = input.GetOutput();
+	auto in = input.GetArg(0);
+	auto out = input.GetResult();
 	auto view = in.GetView();
 	for (idx_t i = 0; i < input.GetRowCount(); i++) {
 		out.AssignString(i, std::to_string(view.Data<int32_t>()[view.SelAt(i)]) + " units");
 	}
 }
 
-void ContextCastExec(CastFunction::ExecInput &input) {
+void ContextCastExec(ScalarFunction::ExecInput &input) {
 	input.GetContext();
 	NoContextCastExec(input);
 }
@@ -339,17 +339,18 @@ void RegisterNoContextFunction(Connection &conn, const char *name, ScalarFunctio
 	conn.Register(function);
 }
 
-void RegisterUnitsCast(Connection &conn, CastFunction::ExecCallback exec) {
+void RegisterUnitsCast(Connection &conn, ScalarFunction::ExecCallback exec) {
 	auto &factory = conn.GetFactory();
 	auto type = CustomType::Create(factory);
 	type.SetName("UNITS").SetBaseType(factory.ParseType("INTEGER"));
 	conn.Register(type);
 
-	auto cast = CastFunction::Create(factory);
-	cast.SetSourceType(factory.ParseType("INTEGER").WithAlias(factory, "UNITS"))
-	    .SetTargetType(factory.ParseType("VARCHAR"))
-	    .SetExecCallback(exec);
-	conn.Register(cast);
+	auto cast = ScalarFunction::Create(factory);
+	cast.SetName("units_to_text").SetExecCallback(exec);
+	cast.GetSignature()
+	    .AddParameter("value", factory.ParseType("INTEGER").WithAlias(factory, "UNITS"))
+	    .SetReturnType(factory.ParseType("VARCHAR"));
+	conn.RegisterCast(cast);
 }
 
 TEST_CASE("Stable C++API: scalar function runs without a client context while an index is built", "[cpp_api]") {
@@ -381,7 +382,7 @@ TEST_CASE("Stable C++API: scalar function runs without a client context while an
 	        std::vector<int32_t> {1001, 1002, 1003, 1004});
 }
 
-TEST_CASE("Stable C++API: cast function runs without a client context while an index is built", "[cpp_api]") {
+TEST_CASE("Stable C++API: cast runs without a client context while an index is built", "[cpp_api]") {
 	const auto create_index = "CREATE INDEX i ON t ((CAST(CAST(x AS UNITS) AS VARCHAR)))";
 	{
 		auto db = Instance(":memory:");
