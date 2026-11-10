@@ -181,6 +181,33 @@ TEST_CASE("Test sharing a transaction between connections", "[api][transaction]"
 		REQUIRE_NO_FAIL(con2.Query("ROLLBACK"));
 		REQUIRE_NO_FAIL(con1.Query("ROLLBACK"));
 	}
+	SECTION("the transaction outlives the connection that created it, with optimistic writes to disk") {
+		auto path = TestCreatePath("shared_transaction_outlives_owner.db");
+		DeleteDatabase(path);
+		{
+			DuckDB file_db(path);
+			auto owner = make_uniq<Connection>(file_db);
+			Connection joined(file_db);
+			Connection reader(file_db);
+			REQUIRE_NO_FAIL(owner->Query("CREATE TABLE big(i BIGINT)"));
+			REQUIRE_NO_FAIL(owner->Query("BEGIN TRANSACTION"));
+			REQUIRE_NO_FAIL(owner->Query("INSERT INTO big SELECT range FROM range(300000)"));
+			auto snapshot = ExportSnapshot(*owner);
+			REQUIRE_NO_FAIL(joined.Query("BEGIN TRANSACTION"));
+			REQUIRE_NO_FAIL(joined.Query("SET TRANSACTION SNAPSHOT '" + snapshot + "'"));
+			// the owner commits and goes away, the joined connection keeps using the transaction
+			REQUIRE_NO_FAIL(owner->Query("COMMIT"));
+			owner.reset();
+			REQUIRE_NO_FAIL(joined.Query("INSERT INTO big SELECT range FROM range(300000)"));
+			RequireValue(joined, "SELECT COUNT(*) FROM big", 600000);
+			RequireValue(reader, "SELECT COUNT(*) FROM big", 0);
+			REQUIRE_NO_FAIL(joined.Query("COMMIT"));
+			RequireValue(reader, "SELECT COUNT(*) FROM big", 600000);
+		}
+		DuckDB reopened(path);
+		Connection check(reopened);
+		RequireValue(check, "SELECT COUNT(*) FROM big", 600000);
+	}
 	SECTION("errors") {
 		// exporting requires a transaction
 		REQUIRE_FAIL(con1.Query("SELECT pg_export_snapshot()"));
