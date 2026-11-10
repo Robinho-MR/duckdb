@@ -1,0 +1,214 @@
+# name: test/sql/timezone/test_icu_stable_api.test
+# description: The subset of ICU that is written against the stable C++ API
+# group: [timezone]
+
+require icu
+
+# options
+statement ok
+SET TimeZone='America/Los_Angeles'
+
+query I
+SELECT current_setting('TimeZone')
+----
+America/Los_Angeles
+
+statement ok
+SET TimeZone='europe/amsterdam'
+
+query I
+SELECT current_setting('TimeZone')
+----
+Europe/Amsterdam
+
+statement error
+SET TimeZone='Nowhere/Land'
+----
+Unknown TimeZone 'Nowhere/Land'
+
+statement error
+SET TimeZone=NULL
+----
+TimeZone setting cannot be NULL
+
+statement ok
+SET Calendar='GREGORIAN'
+
+query I
+SELECT current_setting('Calendar')
+----
+gregorian
+
+statement error
+SET Calendar='no_such_calendar'
+----
+Unknown Calendar
+
+# table functions
+query I
+SELECT count(*) > 400 FROM pg_timezone_names()
+----
+true
+
+query TTT
+SELECT name, abbrev, utc_offset FROM pg_timezone_names() WHERE name = 'Asia/Tokyo'
+----
+Asia/Tokyo	JST	09:00:00
+
+query I
+SELECT 'gregorian' IN (SELECT name FROM icu_calendar_names())
+----
+true
+
+# casts between TIMESTAMP and TIMESTAMPTZ
+statement ok
+SET TimeZone='America/Los_Angeles'
+
+query I
+SELECT timezone('UTC', '2020-06-15 12:00:00'::TIMESTAMP::TIMESTAMPTZ)
+----
+2020-06-15 19:00:00
+
+query I
+SELECT '2020-06-15 12:00:00'::TIMESTAMP::TIMESTAMPTZ::TIMESTAMP
+----
+2020-06-15 12:00:00
+
+# a local time that does not exist (spring forward) is moved forward, the one that occurs twice resolves consistently
+query I
+SELECT timezone('UTC', '2020-03-08 02:30:00'::TIMESTAMP::TIMESTAMPTZ)
+----
+2020-03-08 10:30:00
+
+query I
+SELECT '-infinity'::TIMESTAMP::TIMESTAMPTZ = '-infinity'::TIMESTAMPTZ
+----
+true
+
+query I
+SELECT NULL::TIMESTAMP::TIMESTAMPTZ IS NULL
+----
+true
+
+# AT TIME ZONE
+query I
+SELECT '2020-06-15 12:00:00'::TIMESTAMP AT TIME ZONE 'Asia/Tokyo' = '2020-06-15 03:00:00+00'::TIMESTAMPTZ
+----
+true
+
+query I
+SELECT '2020-06-15 12:00:00+00'::TIMESTAMPTZ AT TIME ZONE 'Asia/Tokyo'
+----
+2020-06-15 21:00:00
+
+statement error
+SELECT '2020-06-15 12:00:00+00'::TIMESTAMPTZ AT TIME ZONE 'Nowhere/Land'
+----
+Unknown TimeZone 'Nowhere/Land'
+
+# date parts follow the time zone
+query IIIIII
+SELECT year(t), month(t), day(t), hour(t), minute(t), dayofweek(t) FROM (SELECT '2020-06-15 12:34:56+00'::TIMESTAMPTZ t)
+----
+2020	6	15	5	34	1
+
+statement ok
+SET TimeZone='Asia/Tokyo'
+
+query IIIIII
+SELECT year(t), month(t), day(t), hour(t), second(t), dayofyear(t) FROM (SELECT '2020-12-31 20:00:30+00'::TIMESTAMPTZ t)
+----
+2021	1	1	5	30	1
+
+query I
+SELECT year('infinity'::TIMESTAMPTZ) IS NULL
+----
+true
+
+# current date and time
+statement ok
+SET TimeZone='America/Los_Angeles'
+
+query I
+SELECT current_date = (now() AT TIME ZONE 'America/Los_Angeles')::DATE
+----
+true
+
+query I
+SELECT typeof(get_current_time())
+----
+TIME WITH TIME ZONE
+
+query I
+SELECT today() = current_date
+----
+true
+
+# collations
+query I
+SELECT s FROM (VALUES ('B'), ('a'), ('C'), ('ä')) t(s) ORDER BY s COLLATE de
+----
+a
+ä
+B
+C
+
+query I
+SELECT s FROM (VALUES ('B'), ('a'), ('C'), ('ä')) t(s) ORDER BY s
+----
+B
+C
+a
+ä
+
+query I
+SELECT 'mühle' = 'muhle' COLLATE icu_noaccent
+----
+true
+
+query I
+SELECT 'mühle' = 'Muhle' COLLATE icu_noaccent
+----
+false
+
+query I
+SELECT count(DISTINCT s COLLATE icu_noaccent) FROM (VALUES ('e'), ('é'), ('è'), ('f')) t(s)
+----
+2
+
+query I
+SELECT icu_sort_key('a', 'de') < icu_sort_key('B', 'de')
+----
+true
+
+query I
+SELECT icu_collate_de('Straße') = hex(collate_de('Straße'))
+----
+true
+
+statement error
+SELECT icu_sort_key('goose', 'DUCK_DUCK_ENUM')
+----
+Expected one or two splits
+
+# TIMESTAMPTZ renders in the time zone
+statement ok
+SET TimeZone='America/Los_Angeles'
+
+query I
+SELECT '2020-06-15 12:00:00.5+00'::TIMESTAMPTZ::VARCHAR
+----
+2020-06-15 05:00:00.5-07
+
+statement ok
+SET TimeZone='Asia/Kolkata'
+
+query I
+SELECT '2020-06-15 12:00:00+00'::TIMESTAMPTZ::VARCHAR
+----
+2020-06-15 17:30:00+05:30
+
+query I
+SELECT 'infinity'::TIMESTAMPTZ::VARCHAR
+----
+infinity
