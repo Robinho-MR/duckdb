@@ -52,6 +52,10 @@ struct HandleTraits<Factory> {
 	using handle = duckdb_v2_factory_handle;
 };
 template <>
+struct HandleTraits<CollationInfo> {
+	using handle = duckdb_v2_collation_info_handle;
+};
+template <>
 struct HandleTraits<CustomOption> {
 	using handle = duckdb_v2_custom_option_handle;
 };
@@ -280,7 +284,7 @@ namespace {
 }
 
 template <class F, class... ARGS>
-auto CheckedAPICall(F &&func, ARGS &&...args) -> void {
+auto CheckedAPICall(F &&func, ARGS &&... args) -> void {
 	duckdb_v2_error_info_handle err = nullptr;
 	const auto code = func(std::forward<ARGS>(args)..., &err);
 	if (code != DUCKDB_V2_ERROR_NONE) {
@@ -422,7 +426,7 @@ auto ExecutePreparedArrow(duckdb_v2_prepared_statement_handle prepared, const Pa
 // then a buffer with room for the terminator receives the text. The library
 // never allocates, so there is nothing to free.
 template <class F, class... ARGS>
-auto RenderText(F &&func, ARGS &&...args) -> std::string {
+auto RenderText(F &&func, ARGS &&... args) -> std::string {
 	idx_t length = 0;
 	CheckedAPICall(func, args..., static_cast<char *>(nullptr), static_cast<idx_t>(0), &length);
 	std::string out;
@@ -599,6 +603,42 @@ auto GetCustomOptionInfo(duckdb_v2_custom_option_update_info_handle info) -> con
 }
 
 } // namespace
+
+CollationInfo::CollationInfo(void *impl) : detail::Handle<CollationInfo>(impl) {
+}
+
+CollationInfo::~CollationInfo() {
+	auto _h = handle();
+	duckdb_v2_collation_info_destroy(&_h);
+}
+
+auto CollationInfo::Create(Factory &factory) -> CollationInfo {
+	duckdb_v2_collation_info_handle _h = nullptr;
+	CheckedAPICall(duckdb_v2_collation_info_create, factory.handle(), &_h);
+	return detail::HandleFactory::Make<CollationInfo>(_h);
+}
+
+auto CollationInfo::SetName(std::string_view name) & -> CollationInfo & {
+	const duckdb_v2_identifier_t name_str = {name.data(), name.size()};
+	CheckedAPICall(duckdb_v2_collation_info_set_name, handle(), &name_str);
+	return *this;
+}
+
+auto CollationInfo::SetFunctionName(std::string_view function_name) & -> CollationInfo & {
+	const duckdb_v2_identifier_t name_str = {function_name.data(), function_name.size()};
+	CheckedAPICall(duckdb_v2_collation_info_set_function_name, handle(), &name_str);
+	return *this;
+}
+
+auto CollationInfo::SetCombinable(bool combinable) & -> CollationInfo & {
+	CheckedAPICall(duckdb_v2_collation_info_set_combinable, handle(), combinable);
+	return *this;
+}
+
+auto CollationInfo::SetNotRequiredForEquality(bool not_required_for_equality) & -> CollationInfo & {
+	CheckedAPICall(duckdb_v2_collation_info_set_not_required_for_equality, handle(), not_required_for_equality);
+	return *this;
+}
 
 CustomOption::CustomOption(void *impl) : detail::Handle<CustomOption>(impl) {
 }
@@ -1251,20 +1291,12 @@ auto Extension::Register(CopyFunction &copy_function) -> void {
 	CheckedAPICall(duckdb_v2_extension_register_copy_function, handle(), copy_function.handle());
 }
 
-auto Connection::RegisterCollation(std::string_view name, ScalarFunction &scalar_function, bool combinable,
-                                   bool not_required_for_equality) -> void {
-	scalar_function.PrepareRegistration();
-	const duckdb_v2_identifier_t name_str = {name.data(), name.size()};
-	CheckedAPICall(duckdb_v2_connection_register_collation, handle(), &name_str, scalar_function.handle(), combinable,
-	               not_required_for_equality);
+auto Connection::Register(CollationInfo &collation) -> void {
+	CheckedAPICall(duckdb_v2_connection_register_collation, handle(), collation.handle());
 }
 
-auto Extension::RegisterCollation(std::string_view name, ScalarFunction &scalar_function, bool combinable,
-                                  bool not_required_for_equality) -> void {
-	scalar_function.PrepareRegistration();
-	const duckdb_v2_identifier_t name_str = {name.data(), name.size()};
-	CheckedAPICall(duckdb_v2_extension_register_collation, handle(), &name_str, scalar_function.handle(), combinable,
-	               not_required_for_equality);
+auto Extension::Register(CollationInfo &collation) -> void {
+	CheckedAPICall(duckdb_v2_extension_register_collation, handle(), collation.handle());
 }
 
 auto Connection::Register(CastFunction &cast_function) -> void {
