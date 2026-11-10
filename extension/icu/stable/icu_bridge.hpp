@@ -12,10 +12,16 @@
 
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace icu_bridge {
+
+//! Raised when the input is not well formed data, e.g. invalid UTF-8 handed to a collation
+struct DataCorruptionError : public std::runtime_error {
+	using std::runtime_error::runtime_error;
+};
 
 //! The parts of an instant a calendar can report
 enum class Part : uint8_t {
@@ -62,6 +68,7 @@ public:
 	bool Format(int64_t instant, std::string &result);
 
 private:
+	friend struct CalendarAccess;
 	Calendar();
 	struct Impl;
 	std::unique_ptr<Impl> impl;

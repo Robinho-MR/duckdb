@@ -1,7 +1,8 @@
-#include "icu_bridge.hpp"
+#include "icu_bridge_internal.hpp"
 
 #include "calendar.hpp"
 #include "collation_collator.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "timezone.hpp"
 
@@ -158,10 +159,6 @@ std::vector<std::string> CalendarNames() {
 //----------------------------------------------------------------------------------------------------------------------
 // Calendar
 //----------------------------------------------------------------------------------------------------------------------
-struct Calendar::Impl {
-	std::unique_ptr<duckdb::datetime::Calendar> calendar;
-};
-
 Calendar::Calendar() : impl(new Impl()) {
 }
 
@@ -173,6 +170,8 @@ std::unique_ptr<Calendar> Calendar::Create(const std::string &time_zone, const s
 		tz = duckdb::datetime::TimeZone::TryCreate("UTC");
 	}
 	std::unique_ptr<Calendar> result(new Calendar());
+	result->impl->time_zone = time_zone;
+	result->impl->calendar_name = calendar;
 	result->impl->calendar = duckdb::datetime::Calendar::TryCreate(calendar, std::move(tz));
 	if (!result->impl->calendar) {
 		throw std::runtime_error("Unable to create calendar.");
@@ -183,6 +182,7 @@ std::unique_ptr<Calendar> Calendar::Create(const std::string &time_zone, const s
 void Calendar::SetTimeZone(const std::string &time_zone) {
 	auto tz = duckdb::datetime::TimeZone::TryCreate(time_zone);
 	if (tz) {
+		impl->time_zone = time_zone;
 		impl->calendar->SetTimeZone(std::move(tz));
 	}
 }
@@ -422,7 +422,11 @@ std::vector<std::string> Collation::Names() {
 }
 
 void Collation::SortKey(const char *data, size_t size, Buffer &buffer, const char *&key, size_t &key_size) const {
-	impl->collator.GetSortKey(data, size, buffer.impl->buffer);
+	try {
+		impl->collator.GetSortKey(data, size, buffer.impl->buffer);
+	} catch (duckdb::DataCorruptionException &ex) {
+		throw DataCorruptionError(duckdb::ErrorData(ex).RawMessage());
+	}
 	auto &result = buffer.impl->buffer.key;
 	key = reinterpret_cast<const char *>(result.data());
 	// the terminating null byte is not part of the key

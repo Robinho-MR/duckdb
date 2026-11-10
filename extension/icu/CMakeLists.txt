@@ -56,8 +56,9 @@ set(ICU_EXTENSION_FILES
 if(ICU_STABLE_API)
   # Only the surface is written against the stable API, the calendar and
   # collation engine is still compiled from its sources
-  set(ICU_STABLE_FILES ${ICU_ENGINE_FILES} stable/icu_bridge.cpp
-                       stable/icu_stable_extension.cpp)
+  file(GLOB ICU_STABLE_SURFACE_FILES CONFIGURE_DEPENDS
+       ${CMAKE_CURRENT_SOURCE_DIR}/stable/*.cpp)
+  set(ICU_STABLE_FILES ${ICU_ENGINE_FILES} ${ICU_STABLE_SURFACE_FILES})
   build_static_extension_capi_unstable(icu ${ICU_STABLE_FILES})
   disable_target_warnings(icu_extension)
   target_include_directories(icu_extension PRIVATE stable)

@@ -10,7 +10,8 @@
 
 #include "duckdb_cpp_extension.hpp"
 
-#include "icu_bridge.hpp"
+#include "icu_stable_areas.hpp"
+#include "icu_stable_common.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -21,79 +22,9 @@
 #include <utility>
 
 namespace cxx = duckdb::cxx;
-using cxx::idx_t;
+using namespace icu_stable;
 
 namespace {
-
-constexpr int64_t MICROS_PER_DAY = 86400LL * 1000000LL;
-
-bool IsFinite(int64_t micros) {
-	return micros != std::numeric_limits<int64_t>::max() && micros != -std::numeric_limits<int64_t>::max();
-}
-
-[[noreturn]] void ThrowConversion(const std::string &message) {
-	throw cxx::Exception(DUCKDB_V2_ERROR_TYPE_CONVERSION, message);
-}
-
-//----------------------------------------------------------------------------------------------------------------------
-// Settings and calendars
-//----------------------------------------------------------------------------------------------------------------------
-struct Settings {
-	std::string time_zone = "UTC";
-	std::string calendar = "gregorian";
-
-	bool operator==(const Settings &other) const {
-		return time_zone == other.time_zone && calendar == other.calendar;
-	}
-};
-
-std::string ReadString(const cxx::Config &config, const char *name, const std::string &fallback) {
-	auto option = config.TryGetOption(name);
-	if (!option || option->value.IsNull()) {
-		return fallback;
-	}
-	return std::string(option->value.Get<cxx::varchar_t>().view());
-}
-
-Settings ReadSettings(cxx::Context &context) {
-	Settings settings;
-	const auto &config = context.GetConfig();
-	settings.time_zone = ReadString(config, "TimeZone", settings.time_zone);
-	settings.calendar = ReadString(config, "Calendar", settings.calendar);
-	return settings;
-}
-
-//! The calendar of the settings, kept per thread because creating one parses the time zone
-icu_bridge::Calendar &SettingsCalendar(const Settings &settings) {
-	thread_local std::unique_ptr<icu_bridge::Calendar> cached;
-	thread_local Settings cached_settings;
-	if (!cached || !(cached_settings == settings)) {
-		cached = icu_bridge::Calendar::Create(settings.time_zone, settings.calendar);
-		cached_settings = settings;
-	}
-	return *cached;
-}
-
-//! The calendar of an arbitrary time zone name, or nullptr with the reason
-icu_bridge::Calendar *ZoneCalendar(const Settings &settings, const std::string &zone, std::string &error) {
-	struct Entry {
-		std::unique_ptr<icu_bridge::Calendar> calendar;
-		std::string error;
-	};
-	thread_local std::map<std::pair<std::string, std::string>, Entry> cache;
-	auto key = std::make_pair(settings.calendar, zone);
-	auto entry = cache.find(key);
-	if (entry == cache.end()) {
-		Entry created;
-		auto resolved = zone;
-		if (icu_bridge::ResolveTimeZone(resolved, &created.error)) {
-			created.calendar = icu_bridge::Calendar::Create(resolved, settings.calendar);
-		}
-		entry = cache.emplace(std::move(key), std::move(created)).first;
-	}
-	error = entry->second.error;
-	return entry->second.calendar.get();
-}
 
 //----------------------------------------------------------------------------------------------------------------------
 // Options
@@ -294,7 +225,11 @@ void CollateExec(cxx::ScalarFunction::ExecInput &input) {
 		const auto value = in.Data<cxx::varchar_t>()[in.SelAt(i)];
 		const char *key;
 		size_t key_size;
-		bind.collation->SortKey(value.data(), value.size(), buffer, key, key_size);
+		try {
+			bind.collation->SortKey(value.data(), value.size(), buffer, key, key_size);
+		} catch (icu_bridge::DataCorruptionError &error) {
+			throw cxx::Exception(DUCKDB_V2_ERROR_DATABASE_DATA_CORRUPTION, error.what());
+		}
 		if (!HEX) {
 			result.AssignString(i, std::string_view(key, key_size));
 			continue;
@@ -461,44 +396,8 @@ void RegisterCasts(cxx::Extension &extension, cxx::Factory &factory) {
 }
 
 //----------------------------------------------------------------------------------------------------------------------
-// Scalar functions
+// Time zone conversion and current date and time
 //----------------------------------------------------------------------------------------------------------------------
-//! year(timestamptz) and friends, extracted in the time zone and calendar of the settings
-template <icu_bridge::Part PART>
-void PartExec(cxx::ScalarFunction::ExecInput &input) {
-	auto &calendar = SettingsCalendar(ReadSettings(input.GetContext()));
-	const auto in = input.GetArg(0).GetView();
-	auto result = input.GetResult();
-	result.SetSize(input.GetRowCount());
-	auto *out = result.GetDataMutable<int64_t>();
-	for (idx_t i = 0; i < input.GetRowCount(); i++) {
-		if (!in.IsValid(i)) {
-			result.SetNull(i);
-			continue;
-		}
-		const auto instant = in.Data<cxx::timestamp_tz_t>()[in.SelAt(i)].micros;
-		if (!IsFinite(instant)) {
-			result.SetNull(i);
-			continue;
-		}
-		if (!calendar.GetPart(instant, PART, out[i])) {
-			ThrowConversion("Unable to extract calendar part");
-		}
-	}
-}
-
-template <icu_bridge::Part PART>
-void RegisterPart(cxx::Extension &extension, cxx::Factory &factory, const char *name) {
-	auto function = cxx::ScalarFunction::Create(factory);
-	function.SetName(name)
-	    .SetExecCallback(PartExec<PART>)
-	    .SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
-	function.GetSignature()
-	    .AddParameter("ts", factory.ParseType("TIMESTAMP WITH TIME ZONE"))
-	    .SetReturnType(factory.ParseType("BIGINT"));
-	extension.Register(function);
-}
-
 //! timezone(zone, timestamptz) -> timestamp: the wall clock of the instant in the zone
 void ZoneToNaiveExec(cxx::ScalarFunction::ExecInput &input) {
 	const auto settings = ReadSettings(input.GetContext());
@@ -604,18 +503,6 @@ void RegisterScalars(cxx::Extension &extension, cxx::Factory &factory) {
 	const auto timestamp = factory.ParseType("TIMESTAMP");
 	const auto timestamp_tz = factory.ParseType("TIMESTAMP WITH TIME ZONE");
 
-	RegisterPart<icu_bridge::Part::ERA>(extension, factory, "era");
-	RegisterPart<icu_bridge::Part::YEAR>(extension, factory, "year");
-	RegisterPart<icu_bridge::Part::MONTH>(extension, factory, "month");
-	RegisterPart<icu_bridge::Part::DAY>(extension, factory, "day");
-	RegisterPart<icu_bridge::Part::DAY_OF_WEEK>(extension, factory, "dayofweek");
-	RegisterPart<icu_bridge::Part::DAY_OF_YEAR>(extension, factory, "dayofyear");
-	RegisterPart<icu_bridge::Part::HOUR>(extension, factory, "hour");
-	RegisterPart<icu_bridge::Part::MINUTE>(extension, factory, "minute");
-	RegisterPart<icu_bridge::Part::SECOND>(extension, factory, "second");
-	RegisterPart<icu_bridge::Part::MILLISECOND>(extension, factory, "millisecond");
-	RegisterPart<icu_bridge::Part::MICROSECOND>(extension, factory, "microsecond");
-
 	auto to_naive = cxx::ScalarFunction::Create(factory);
 	to_naive.SetName("timezone").SetExecCallback(ZoneToNaiveExec);
 	to_naive.GetSignature().AddParameter("zone", varchar).AddParameter("ts", timestamp_tz).SetReturnType(timestamp);
@@ -652,4 +539,9 @@ DUCKDB_CPP_EXTENSION_ENTRYPOINT(cxx::Extension &extension, cxx::Context &context
 	RegisterCollations(extension, factory);
 	RegisterCasts(extension, factory);
 	RegisterScalars(extension, factory);
+	RegisterDatePartFunctions(extension, factory);
+	RegisterArithmeticFunctions(extension, factory);
+	RegisterTruncBucketFunctions(extension, factory);
+	RegisterRangeFunctions(extension, factory);
+	RegisterStrptimeFunctions(extension, factory);
 }
