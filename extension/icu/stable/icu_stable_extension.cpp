@@ -260,7 +260,11 @@ void RegisterCollations(cxx::Extension &extension, cxx::Factory &factory) {
 		function.SetExecCallback(CollateExec<false>);
 		function.SetUserData<CollationUser>(CollationUser {name, tag});
 		function.GetSignature().AddParameter("str", varchar).SetReturnType(blob);
-		extension.RegisterCollation(sql_name, function);
+		extension.Register(function);
+
+		auto collation = cxx::CollationInfo::Create(factory);
+		collation.SetName(sql_name).SetFunctionName("collate_" + name);
+		extension.Register(collation);
 
 		// Kept for queries and plans that call the function that returned the sort key in hexadecimal
 		auto hex_function = cxx::ScalarFunction::Create(factory);
