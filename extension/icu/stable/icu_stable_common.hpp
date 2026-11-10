@@ -33,6 +33,36 @@ inline bool IsFinite(int64_t micros) {
 //! Throws a conversion error
 [[noreturn]] void ThrowConversion(const std::string &message);
 
+//! The failed rows of a cast. A normal cast throws at the first one. A try cast writes NULL for them and reports the
+//! first failure with Report() once the batch is written, which makes the cast return "not every row converted".
+class CastFailures {
+public:
+	explicit CastFailures(cxx::CastFunction::ExecInput &input) : try_mode(input.GetMode() == cxx::CastMode::TRY) {
+	}
+
+	void Fail(cxx::Vector &out, idx_t row, const std::string &message) {
+		if (!try_mode) {
+			ThrowConversion(message);
+		}
+		out.SetNull(row);
+		if (!failed) {
+			failed = true;
+			first_message = message;
+		}
+	}
+
+	void Report() const {
+		if (failed) {
+			ThrowConversion(first_message);
+		}
+	}
+
+private:
+	bool try_mode;
+	bool failed = false;
+	std::string first_message;
+};
+
 //! The TimeZone and Calendar settings of a context
 struct Settings {
 	std::string time_zone = "UTC";

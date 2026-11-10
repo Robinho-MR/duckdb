@@ -237,6 +237,8 @@ void TimestampTZToVarcharExec(cxx::CastFunction::ExecInput &input) {
 	auto out = input.GetOutput();
 	out.SetSize(input.GetRowCount());
 	const auto try_mode = input.GetMode() == cxx::CastMode::TRY;
+	bool failed = false;
+	icu_bridge::Failure first_failure;
 	std::string text;
 	for (idx_t i = 0; i < input.GetRowCount(); i++) {
 		if (!in.IsValid(i)) {
@@ -252,11 +254,19 @@ void TimestampTZToVarcharExec(cxx::CastFunction::ExecInput &input) {
 		icu_bridge::Failure failure;
 		if (icu_bridge::TimestampTZToString(calendar, instant, IS_NANOS, text, failure)) {
 			out.AssignString(i, text);
-		} else if (try_mode) {
-			out.SetNull(i);
 		} else {
-			Throw(failure);
+			if (!try_mode) {
+				Throw(failure);
+			}
+			out.SetNull(i);
+			if (!failed) {
+				failed = true;
+				first_failure = failure;
+			}
 		}
+	}
+	if (failed) {
+		Throw(first_failure);
 	}
 }
 
@@ -270,6 +280,8 @@ void VarcharToTimestampTZExec(cxx::CastFunction::ExecInput &input) {
 	out.SetSize(input.GetRowCount());
 	auto *data = out.GetDataMutable<int64_t>();
 	const auto try_mode = input.GetMode() == cxx::CastMode::TRY;
+	bool failed = false;
+	icu_bridge::Failure first_failure;
 	for (idx_t i = 0; i < input.GetRowCount(); i++) {
 		if (!in.IsValid(i)) {
 			out.SetNull(i);
@@ -284,6 +296,13 @@ void VarcharToTimestampTZExec(cxx::CastFunction::ExecInput &input) {
 			Throw(failure);
 		}
 		out.SetNull(i);
+		if (!failed) {
+			failed = true;
+			first_failure = failure;
+		}
+	}
+	if (failed) {
+		Throw(first_failure);
 	}
 }
 
@@ -294,6 +313,8 @@ void VarcharToTimeTZExec(cxx::CastFunction::ExecInput &input) {
 	out.SetSize(input.GetRowCount());
 	auto *data = out.GetDataMutable<cxx::dtime_tz_t>();
 	const auto try_mode = input.GetMode() == cxx::CastMode::TRY;
+	bool failed = false;
+	icu_bridge::Failure first_failure;
 	for (idx_t i = 0; i < input.GetRowCount(); i++) {
 		if (!in.IsValid(i)) {
 			out.SetNull(i);
@@ -311,6 +332,13 @@ void VarcharToTimeTZExec(cxx::CastFunction::ExecInput &input) {
 			Throw(failure);
 		}
 		out.SetNull(i);
+		if (!failed) {
+			failed = true;
+			first_failure = failure;
+		}
+	}
+	if (failed) {
+		Throw(first_failure);
 	}
 }
 

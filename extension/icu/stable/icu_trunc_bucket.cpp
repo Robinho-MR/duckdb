@@ -374,7 +374,7 @@ void CastToDate(cxx::CastFunction::ExecInput &input) {
 	auto out = input.GetOutput();
 	out.SetSize(input.GetRowCount());
 	auto *data = out.GetDataMutable<cxx::date_t>();
-	const auto try_mode = input.GetMode() == cxx::CastMode::TRY;
+	CastFailures failures(input);
 	for (idx_t i = 0; i < input.GetRowCount(); i++) {
 		if (!in.IsValid(i)) {
 			out.SetNull(i);
@@ -387,12 +387,10 @@ void CastToDate(cxx::CastFunction::ExecInput &input) {
 		}
 		std::string error;
 		if (!icu_bridge::InstantToDate(calendar, instant, data[i].days, error)) {
-			if (!try_mode) {
-				ThrowConversion(error);
-			}
-			out.SetNull(i);
+			failures.Fail(out, i, error);
 		}
 	}
+	failures.Report();
 }
 
 void CastToTimeTZ(cxx::CastFunction::ExecInput &input) {
@@ -401,7 +399,7 @@ void CastToTimeTZ(cxx::CastFunction::ExecInput &input) {
 	auto out = input.GetOutput();
 	out.SetSize(input.GetRowCount());
 	auto *data = out.GetDataMutable<cxx::dtime_tz_t>();
-	const auto try_mode = input.GetMode() == cxx::CastMode::TRY;
+	CastFailures failures(input);
 	for (idx_t i = 0; i < input.GetRowCount(); i++) {
 		if (!in.IsValid(i)) {
 			out.SetNull(i);
@@ -417,11 +415,13 @@ void CastToTimeTZ(cxx::CastFunction::ExecInput &input) {
 			data[i] = cxx::dtime_tz_t(time_micros, offset);
 			continue;
 		}
-		if (!error.empty() && !try_mode) {
-			ThrowConversion(error);
+		if (error.empty()) {
+			out.SetNull(i);
+		} else {
+			failures.Fail(out, i, error);
 		}
-		out.SetNull(i);
 	}
+	failures.Report();
 }
 
 void CastFromTime(cxx::CastFunction::ExecInput &input) {
@@ -430,7 +430,7 @@ void CastFromTime(cxx::CastFunction::ExecInput &input) {
 	auto out = input.GetOutput();
 	out.SetSize(input.GetRowCount());
 	auto *data = out.GetDataMutable<cxx::dtime_tz_t>();
-	const auto try_mode = input.GetMode() == cxx::CastMode::TRY;
+	CastFailures failures(input);
 	// The session offset (with DST), which matches the offset '00:00:00'::TIMETZ gets
 	bool have_offset = false;
 	bool offset_valid = false;
@@ -446,14 +446,12 @@ void CastFromTime(cxx::CastFunction::ExecInput &input) {
 			have_offset = true;
 		}
 		if (!offset_valid) {
-			if (!try_mode) {
-				ThrowConversion(error);
-			}
-			out.SetNull(i);
+			failures.Fail(out, i, error);
 			continue;
 		}
 		data[i] = cxx::dtime_tz_t(in.Data<cxx::dtime_t>()[in.SelAt(i)].micros, offset);
 	}
+	failures.Report();
 }
 
 void RegisterCasts(cxx::Extension &extension, cxx::Factory &factory) {

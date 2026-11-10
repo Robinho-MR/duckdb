@@ -207,14 +207,6 @@ void CheckCastsEnabled(cxx::Context &context, const std::string &from, const std
 //----------------------------------------------------------------------------------------------------------------------
 // Casts between naive timestamps and timestamps with time zone
 //----------------------------------------------------------------------------------------------------------------------
-//! A failed row is NULL in TRY mode and an error otherwise
-void FailRow(cxx::Vector &out, idx_t row, bool try_mode, const std::string &message) {
-	if (!try_mode) {
-		ThrowConversion(message);
-	}
-	out.SetNull(row);
-}
-
 template <class SRC, class DST>
 void FromNaiveCast(cxx::CastFunction::ExecInput &input) {
 	auto &context = input.GetContext();
@@ -224,7 +216,7 @@ void FromNaiveCast(cxx::CastFunction::ExecInput &input) {
 	auto out = input.GetOutput();
 	out.SetSize(input.GetRowCount());
 	auto *data = out.template GetDataMutable<DST>();
-	const auto try_mode = input.GetMode() == cxx::CastMode::TRY;
+	CastFailures failures(input);
 	for (idx_t i = 0; i < input.GetRowCount(); i++) {
 		if (!in.IsValid(i)) {
 			out.SetNull(i);
@@ -232,17 +224,18 @@ void FromNaiveCast(cxx::CastFunction::ExecInput &input) {
 		}
 		int64_t naive;
 		if (!Ts<SRC>::Load(in.template Data<SRC>()[in.SelAt(i)], Ts<DST>::PRECISION, naive)) {
-			FailRow(out, i, try_mode, "Could not convert timestamp to the precision of the target");
+			failures.Fail(out, i, "Could not convert timestamp to the precision of the target");
 			continue;
 		}
 		int64_t instant;
 		const char *error;
 		if (!ShiftFromLocal(calendar, naive, Ts<DST>::PRECISION, instant, error)) {
-			FailRow(out, i, try_mode, error);
+			failures.Fail(out, i, error);
 			continue;
 		}
 		data[i] = Ts<DST>::Make(instant);
 	}
+	failures.Report();
 }
 
 template <class SRC, class DST>
@@ -254,7 +247,7 @@ void ToNaiveCast(cxx::CastFunction::ExecInput &input, const char *target_name) {
 	auto out = input.GetOutput();
 	out.SetSize(input.GetRowCount());
 	auto *data = out.template GetDataMutable<DST>();
-	const auto try_mode = input.GetMode() == cxx::CastMode::TRY;
+	CastFailures failures(input);
 	for (idx_t i = 0; i < input.GetRowCount(); i++) {
 		if (!in.IsValid(i)) {
 			out.SetNull(i);
@@ -265,16 +258,17 @@ void ToNaiveCast(cxx::CastFunction::ExecInput &input, const char *target_name) {
 		int64_t local;
 		const char *error;
 		if (!ShiftToLocal(calendar, instant, Ts<SRC>::PRECISION, local, error)) {
-			FailRow(out, i, try_mode, error);
+			failures.Fail(out, i, error);
 			continue;
 		}
 		int64_t scaled;
 		if (!Rescale(local, Ts<SRC>::PRECISION, Ts<DST>::PRECISION, scaled)) {
-			FailRow(out, i, try_mode, "Could not convert Timestamp to higher precision.");
+			failures.Fail(out, i, "Could not convert Timestamp to higher precision.");
 			continue;
 		}
 		data[i] = Ts<DST>::Make(scaled);
 	}
+	failures.Report();
 }
 
 template <class SRC, class DST, const char *NAME>
