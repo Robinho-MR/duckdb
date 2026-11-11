@@ -555,7 +555,8 @@ unique_ptr<WriteAheadLog> WriteAheadLogReplayer::ReplayLog(unique_ptr<FileHandle
 	} catch (std::exception &ex) { // LCOV_EXCL_START
 		ErrorData error(ex);
 		// ignore serialization exceptions - they signal a torn WAL
-		bool torn_wal = !config.options.abort_on_wal_failure && error.Type() == ExceptionType::SERIALIZATION;
+		bool torn_wal =
+		    !Settings::Get<DebugAbortOnWalFailureSetting>(config) && error.Type() == ExceptionType::SERIALIZATION;
 		if (snapshot) {
 			// the writer may be appending to the WAL: an incomplete or partially written entry ends it
 			torn_wal = error.Type() == ExceptionType::SERIALIZATION || error.Type() == ExceptionType::DATA_CORRUPTION ||
@@ -742,7 +743,7 @@ unique_ptr<WriteAheadLog> WriteAheadLogReplayer::ReplayLog(unique_ptr<FileHandle
 		// serialization failure means a truncated WAL
 		// these failures are ignored unless abort_on_wal_failure is true
 		// other failures always result in an error
-		if (config.options.abort_on_wal_failure || error.Type() != ExceptionType::SERIALIZATION) {
+		if (Settings::Get<DebugAbortOnWalFailureSetting>(config) || error.Type() != ExceptionType::SERIALIZATION) {
 			error.Throw("Failure while replaying WAL file \"" + wal_path + "\": ");
 		}
 	} catch (...) {
