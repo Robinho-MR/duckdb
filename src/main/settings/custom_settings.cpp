@@ -1642,7 +1642,8 @@ void MaxStreamingBufferSizeSetting::OnSet(SettingCallbackInfo &info, Value &inpu
 	if (input.IsNull()) {
 		throw InvalidInputException("%s setting cannot be NULL", MaxStreamingBufferSizeSetting::Name);
 	}
-	DBConfig::ParseMemoryLimitOrMaximum(input.ToString());
+	auto size = DBConfig::ParseMemoryLimitOrMaximum(input.ToString());
+	input = Value(StringUtil::BytesToHumanReadableString(size));
 }
 
 //===----------------------------------------------------------------------===//
