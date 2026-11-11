@@ -36,6 +36,7 @@ class Transaction;
 class TransactionManager;
 class WriteAheadLogDeserializer;
 struct PersistentCollectionData;
+struct SnapshotWALHandles;
 
 enum class WALInitState { NO_WAL, UNINITIALIZED, UNINITIALIZED_REQUIRES_TRUNCATE, INITIALIZED };
 
@@ -55,6 +56,9 @@ public:
 	//! Replay and initialize the WAL, QueryContext is passed for metric collection purposes only!!
 	static unique_ptr<WriteAheadLog> Replay(QueryContext context, StorageManager &storage_manager,
 	                                        const string &wal_path);
+	//! Replay the WAL files of a snapshot reader, which were opened together with the database header
+	static unique_ptr<WriteAheadLog> Replay(QueryContext context, StorageManager &storage_manager,
+	                                        const string &wal_path, SnapshotWALHandles &&snapshot_handles);
 
 	AttachedDatabase &GetDatabase();
 	StorageManager &GetStorageManager();

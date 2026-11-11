@@ -684,6 +684,21 @@ bool SingleFileBlockManager::SnapshotReadersAttached() {
 	}
 }
 
+void SingleFileBlockManager::ReadDatabaseHeaders(QueryContext context, MainHeader &main_header, DatabaseHeader &h1,
+                                                 DatabaseHeader &h2) {
+	// a snapshot reader holds a read lock while reading, so that it never sees a partially written header
+	unique_ptr<HeaderRangeLock> header_lock;
+	if (options.snapshot) {
+		header_lock = make_uniq<HeaderRangeLock>(*handle, Storage::FILE_HEADER_SIZE, Storage::FILE_HEADER_SIZE * 2,
+		                                         FileLockType::READ_LOCK);
+	}
+	ReadAndChecksum(context, header_buffer, Storage::FILE_HEADER_SIZE);
+	h1 = DeserializeDatabaseHeader(main_header, header_buffer.GetDataMutable());
+
+	ReadAndChecksum(context, header_buffer, Storage::FILE_HEADER_SIZE * 2ULL);
+	h2 = DeserializeDatabaseHeader(main_header, header_buffer.GetDataMutable());
+}
+
 void SingleFileBlockManager::LoadExistingDatabase(QueryContext context) {
 	handle = DatabaseHandle::Open(context, db, path, options, DatabaseOpenMode::OPEN_EXISTING_FILE);
 	handle->CheckMagicBytes(context);
@@ -760,18 +775,36 @@ void SingleFileBlockManager::LoadExistingDatabase(QueryContext context) {
 	// read the database headers from disk
 	DatabaseHeader h1;
 	DatabaseHeader h2;
-	{
-		// a snapshot reader holds a read lock while reading, so that it never sees a partially written header
-		unique_ptr<HeaderRangeLock> header_lock;
-		if (options.snapshot) {
-			header_lock = make_uniq<HeaderRangeLock>(*handle, Storage::FILE_HEADER_SIZE, Storage::FILE_HEADER_SIZE * 2,
-			                                         FileLockType::READ_LOCK);
-		}
-		ReadAndChecksum(context, header_buffer, Storage::FILE_HEADER_SIZE);
-		h1 = DeserializeDatabaseHeader(main_header, header_buffer.GetDataMutable());
+	ReadDatabaseHeaders(context, main_header, h1, h2);
+	if (options.snapshot) {
+		// a snapshot reader replays the WAL files that belong to the header it loaded: open them, then check that the
+		// header did not change in the meantime. The checkpoint WAL is opened first, as a finishing checkpoint moves
+		// it over the main WAL.
+		static constexpr idx_t MAX_SNAPSHOT_ATTEMPTS = 10;
+		auto &fs = FileSystem::Get(db);
+		auto &storage_manager = db.GetStorageManager();
+		auto wal_flags = FileFlags::FILE_FLAGS_READ | FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS;
+		for (idx_t attempt = 0;; attempt++) {
+			if (attempt >= MAX_SNAPSHOT_ATTEMPTS) {
+				throw IOException("Cannot open database \"%s\" in snapshot mode: the database was checkpointed "
+				                  "concurrently %llu times while opening it",
+				                  path, MAX_SNAPSHOT_ATTEMPTS);
+			}
+			SnapshotWALHandles wal_handles;
+			wal_handles.checkpoint_wal = fs.OpenFile(storage_manager.GetCheckpointWALPath(), wal_flags);
+			wal_handles.main_wal = fs.OpenFile(storage_manager.GetWALPath(), wal_flags);
 
-		ReadAndChecksum(context, header_buffer, Storage::FILE_HEADER_SIZE * 2ULL);
-		h2 = DeserializeDatabaseHeader(main_header, header_buffer.GetDataMutable());
+			DatabaseHeader new_h1;
+			DatabaseHeader new_h2;
+			ReadDatabaseHeaders(context, main_header, new_h1, new_h2);
+			bool header_changed = MaxValue(h1.iteration, h2.iteration) != MaxValue(new_h1.iteration, new_h2.iteration);
+			h1 = new_h1;
+			h2 = new_h2;
+			if (!header_changed) {
+				snapshot_wal_handles = std::move(wal_handles);
+				break;
+			}
+		}
 	}
 
 	// check the header with the highest iteration count

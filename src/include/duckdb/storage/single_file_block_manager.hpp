@@ -46,9 +46,15 @@ struct EncryptionOptions {
 	EncryptionTypes::EncryptionVersion encryption_version = EncryptionTypes::NONE;
 };
 
+//! The WAL files of a snapshot reader, opened while the header it loaded was the active header
+struct SnapshotWALHandles {
+	unique_ptr<FileHandle> checkpoint_wal;
+	unique_ptr<FileHandle> main_wal;
+};
+
 struct StorageManagerOptions {
 	bool read_only = false;
-	//! Read the last checkpoint while a writer may be active (requires read_only)
+	//! Read a snapshot of the last commit while a writer may be active (requires read_only)
 	bool snapshot = false;
 	FileIOMode io_mode = FileIOMode::BUFFERED_IO;
 	//! Reserve size for MMAP mode; empty uses the built-in default.
@@ -147,6 +153,10 @@ public:
 	data_ptr_t GetDBIdentifier() {
 		return options.db_identifier;
 	}
+	//! Hands over the WAL files that match the loaded header (snapshot readers only)
+	SnapshotWALHandles TakeSnapshotWALHandles() {
+		return std::move(snapshot_wal_handles);
+	}
 
 private:
 	//! Rewrites the main header
@@ -203,6 +213,8 @@ private:
 	bool BlockIsFreeListed(block_id_t block_id);
 	//! Whether snapshot readers might be reading an older checkpoint of the file
 	bool SnapshotReadersAttached();
+	//! Reads both database headers, under a read lock for snapshot readers
+	void ReadDatabaseHeaders(QueryContext context, MainHeader &main_header, DatabaseHeader &h1, DatabaseHeader &h2);
 
 private:
 	AttachedDatabase &db;
@@ -231,6 +243,8 @@ private:
 	set<block_id_t> reader_held_blocks;
 	//! Whether snapshot readers can attach while this writer is active
 	bool snapshot_readers_possible = false;
+	//! The WAL files of a snapshot reader, until they are replayed
+	SnapshotWALHandles snapshot_wal_handles;
 	//! The current meta block id
 	idx_t meta_block;
 	//! The current maximum block id, this id will be given away first after the free_list runs out

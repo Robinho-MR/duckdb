@@ -597,9 +597,12 @@ void SingleFileStorageManager::LoadDatabase(QueryContext context) {
 			timer = make_uniq<MetricsTimer>(profiler->StartTimer<MetricStorageAttachReplayWALLatency>());
 		}
 
-		// Replay the WAL. A snapshot reader only reads the last checkpoint: the WAL may be written concurrently.
+		// Replay the WAL. A snapshot reader replays the WAL files it opened together with the database header.
 		wal_path = GetWALPath();
-		if (!storage_options.snapshot) {
+		if (storage_options.snapshot) {
+			auto &single_file_block_manager = GetBlockManager().Cast<SingleFileBlockManager>();
+			wal = WriteAheadLog::Replay(context, *this, wal_path, single_file_block_manager.TakeSnapshotWALHandles());
+		} else {
 			wal = WriteAheadLog::Replay(context, *this, wal_path);
 		}
 
