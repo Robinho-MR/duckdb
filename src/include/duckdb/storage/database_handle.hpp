@@ -43,6 +43,7 @@ struct DatabaseHandle {
 	//! Whether the database file uses byte-range locks, so that snapshot readers can coexist with a writer
 	bool SupportsRangeLocks();
 	void LockRange(idx_t start, idx_t length, FileLockType type);
+	bool TryLockRange(idx_t start, idx_t length, FileLockType type);
 	void UnlockRange(idx_t start, idx_t length);
 	bool RangeIsLocked(idx_t start, idx_t length);
 

@@ -256,6 +256,23 @@ public:
 		}
 	}
 
+	bool TryLockRange(idx_t start, idx_t length, FileLockType type) override {
+		D_ASSERT(type != FileLockType::NO_LOCK);
+		auto fl = RangeLockStruct(type == FileLockType::READ_LOCK ? F_RDLCK : F_WRLCK, start, length);
+		while (fcntl(fd, F_OFD_SETLK, &fl) == -1) {
+			if (errno == EAGAIN || errno == EACCES) {
+				return false;
+			}
+			if (errno != EINTR) {
+				throw IOException({{ "errno",
+					                 std::to_string(errno) }},
+				                  "Could not lock bytes %llu-%llu of file \"%s\": %s", start, start + length, path,
+				                  strerror(errno));
+			}
+		}
+		return true;
+	}
+
 	void UnlockRange(idx_t start, idx_t length) override {
 		auto fl = RangeLockStruct(F_UNLCK, start, length);
 		if (fcntl(fd, F_OFD_SETLK, &fl) == -1) {

@@ -877,6 +877,10 @@ void FileHandle::LockRange(idx_t start, idx_t length, FileLockType type) {
 	throw NotImplementedException("Byte-range locks are not supported for file \"%s\"", path);
 }
 
+bool FileHandle::TryLockRange(idx_t start, idx_t length, FileLockType type) {
+	throw NotImplementedException("Byte-range locks are not supported for file \"%s\"", path);
+}
+
 void FileHandle::UnlockRange(idx_t start, idx_t length) {
 	throw NotImplementedException("Byte-range locks are not supported for file \"%s\"", path);
 }

@@ -646,6 +646,13 @@ struct HeaderRangeLock {
 	    : handle(handle), start(start), length(length) {
 		handle.LockRange(start, length, type);
 	}
+	//! Takes the lock without waiting; returns nullptr if a conflicting lock is held
+	static unique_ptr<HeaderRangeLock> TryLock(DatabaseHandle &handle, idx_t start, idx_t length, FileLockType type) {
+		if (!handle.TryLockRange(start, length, type)) {
+			return nullptr;
+		}
+		return unique_ptr<HeaderRangeLock>(new HeaderRangeLock(handle, start, length));
+	}
 	~HeaderRangeLock() {
 		try {
 			handle.UnlockRange(start, length);
@@ -656,6 +663,11 @@ struct HeaderRangeLock {
 	DatabaseHandle &handle;
 	idx_t start;
 	idx_t length;
+
+private:
+	//! Adopts a lock that is already held
+	HeaderRangeLock(DatabaseHandle &handle, idx_t start, idx_t length) : handle(handle), start(start), length(length) {
+	}
 };
 
 } // namespace
@@ -1469,9 +1481,15 @@ void SingleFileBlockManager::WriteHeader(QueryContext context, DatabaseHeader he
 	// we also need to re-write the main header
 	bool downgrade_main_header = options.version_number == MainHeader::DEPRECATED_VERSION_NUMBER &&
 	                             options.storage_version < StorageVersion::V2_0_0;
-	if ((upgrade_main_header || downgrade_main_header) && SnapshotReadersAttached()) {
-		// snapshot readers read the main header without coordinating with the writer
-		throw IOException("Cannot change the storage version of \"%s\" while snapshot readers are attached", path);
+	// snapshot readers read the main header without coordinating with the writer: hold the readers range while it
+	// is rewritten, so that no reader is attached and none can attach in the meantime
+	unique_ptr<HeaderRangeLock> readers_lock;
+	if ((upgrade_main_header || downgrade_main_header) && snapshot_readers_possible) {
+		readers_lock = HeaderRangeLock::TryLock(*handle, DatabaseLockRange::READERS_START,
+		                                        DatabaseLockRange::READERS_LENGTH, FileLockType::WRITE_LOCK);
+		if (!readers_lock) {
+			throw IOException("Cannot change the storage version of \"%s\" while snapshot readers are attached", path);
+		}
 	}
 	if (upgrade_main_header) {
 		RewriteMainHeader(context, StorageVersion::V1_2_0);
@@ -1479,6 +1497,7 @@ void SingleFileBlockManager::WriteHeader(QueryContext context, DatabaseHeader he
 	if (downgrade_main_header) {
 		RewriteMainHeader(context, options.storage_version);
 	}
+	readers_lock.reset();
 
 	// set the header inside the buffer
 	MemoryStream serializer(Allocator::Get(db));

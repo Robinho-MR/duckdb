@@ -164,4 +164,31 @@ TEST_CASE("Snapshot readers with a regular writer and reader", "[storage][snapsh
 	REQUIRE_NO_FAIL(reader.Query("ATTACH '" + path + ".other' AS other (SNAPSHOT FALSE)"));
 }
 
+TEST_CASE("Byte-range locks can be taken without waiting", "[storage][snapshot]") {
+	auto path = TestCreatePath("snapshot_try_lock.db");
+	DeleteDatabase(path);
+	auto fs = FileSystem::CreateLocal();
+	auto flags = FileFlags::FILE_FLAGS_READ | FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE;
+	auto first = fs->OpenFile(path, flags);
+	auto second = fs->OpenFile(path, flags);
+	if (!first->SupportsRangeLocks()) {
+		return;
+	}
+
+	// a held read lock blocks a write lock, but not another read lock
+	first->LockRange(0, 8, FileLockType::READ_LOCK);
+	REQUIRE(!second->TryLockRange(0, 8, FileLockType::WRITE_LOCK));
+	REQUIRE(second->TryLockRange(0, 8, FileLockType::READ_LOCK));
+	second->UnlockRange(0, 8);
+	first->UnlockRange(0, 8);
+
+	// a held write lock blocks both, until it is released
+	REQUIRE(second->TryLockRange(0, 8, FileLockType::WRITE_LOCK));
+	REQUIRE(!first->TryLockRange(0, 8, FileLockType::READ_LOCK));
+	REQUIRE(!first->TryLockRange(4, 8, FileLockType::WRITE_LOCK));
+	REQUIRE(first->TryLockRange(8, 8, FileLockType::WRITE_LOCK));
+	second->UnlockRange(0, 8);
+	REQUIRE(first->TryLockRange(0, 8, FileLockType::READ_LOCK));
+}
+
 #endif

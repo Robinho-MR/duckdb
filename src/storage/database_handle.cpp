@@ -203,6 +203,11 @@ void DatabaseHandle::LockRange(idx_t start, idx_t length, FileLockType type) {
 	handle->LockRange(start, length, type);
 }
 
+bool DatabaseHandle::TryLockRange(idx_t start, idx_t length, FileLockType type) {
+	D_ASSERT(handle);
+	return handle->TryLockRange(start, length, type);
+}
+
 void DatabaseHandle::UnlockRange(idx_t start, idx_t length) {
 	D_ASSERT(handle);
 	handle->UnlockRange(start, length);
