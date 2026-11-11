@@ -777,6 +777,11 @@ TEST_CASE("V2 aggregate: function properties", "[capi_v2][aggregate_function]") 
 	                                                  static_cast<DUCKDB_V2_FUNCTION_PROPERTY_VALUE>(0x7F0000),
 	                                                  nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
 
+	// The scalar-only statistics propagation property is rejected.
+	REQUIRE(duckdb_v2_aggregate_function_set_property(function, DUCKDB_V2_FUNCTION_PROPERTY_STATISTICS_PROPAGATION,
+	                                                  DUCKDB_V2_FUNCTION_PROPERTY_STATISTICS_PROPAGATION_NONE,
+	                                                  nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+
 	REQUIRE(duckdb_v2_connection_register_aggregate_function(fx.conn, function, nullptr) == DUCKDB_V2_ERROR_NONE);
 	duckdb_v2_aggregate_function_destroy(&function);
 	duckdb_v2_logical_type_destroy(&integer);

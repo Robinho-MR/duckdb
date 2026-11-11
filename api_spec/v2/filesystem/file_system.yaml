@@ -53,6 +53,27 @@ enums:
           that later reads of the same file - also by later queries - do not have to read them again. Whether a
           local file is cached is decided by the `cache_local_files` setting. Only meaningful for reading.
 
+  FILE_COMPRESSION:
+    description: |
+      How the contents of a file are compressed, as set with `[[file_open_options_set_compression]]`. A file opened
+      with a compression is read and written through its decompressed contents: the bytes the caller reads are the
+      decompressed ones, and the bytes it writes are compressed on their way to the file.
+    values:
+      FILE_COMPRESSION_AUTO_DETECT:
+        value: 0
+        description: |
+          Determine the compression from the extension of the file (e.g. `.gz`, `.zst`). A file without such an
+          extension is read and written as it is, whatever its contents.
+      FILE_COMPRESSION_NONE:
+        value: 1
+        description: The file is not compressed, whatever its name. This is what a file opened without a compression gets.
+      FILE_COMPRESSION_GZIP:
+        value: 2
+        description: The file is gzip compressed.
+      FILE_COMPRESSION_ZSTD:
+        value: 3
+        description: The file is Zstandard compressed. The implementation is provided by the `parquet` extension, which must be loaded.
+
 #-----------------------------------------------------------------------------------------------------------------------
 # Handles
 #-----------------------------------------------------------------------------------------------------------------------
@@ -265,6 +286,34 @@ functions:
       value:
         type: value
         description: The value. Borrowed and copied.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  file_open_options_set_compression:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-09" ]
+    description: |
+      Sets the compression of the files opened with the options.
+
+      Works for files opened for reading as well as for writing (see `[[FILE_FLAG]]`). The compression is applied by the
+      engine itself, on top of the file system that handles the path, so it also works for virtual and remote file
+      systems. Without this call, files are opened with `FILE_COMPRESSION_NONE`. Setting it again replaces the
+      previous compression. Opening a file with a compression that is not available (e.g. `FILE_COMPRESSION_ZSTD`
+      without its implementation loaded) fails in `[[file_system_open]]`.
+
+      A compressed file can only be read and written sequentially, so the positional functions (`[[file_read_at]]`,
+      `[[file_write_at]]`, `[[file_seek]]`) can fail on it. Fails with `ERROR_INPUT_INVALID` when the compression is
+      not one of the `[[FILE_COMPRESSION]]` values.
+    parameters:
+      options:
+        type: file_open_options
+        description: The options to set the compression of.
+      compression:
+        type: FILE_COMPRESSION
+        description: The compression of the files.
       err:
         type: error_info
         indirection: 1

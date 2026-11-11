@@ -47,6 +47,10 @@ public:
 
 	//! Returns the DatabaseInstance associated with this extension loader
 	DUCKDB_API DatabaseInstance &GetDatabaseInstance() const;
+	//! Returns the schema the extension registers its functions in
+	const Identifier &GetExtensionSchema() const {
+		return loader_info.extension_schema;
+	}
 
 public:
 	//! Set the description of the extension
@@ -132,6 +136,9 @@ public:
 	//! Registers a cast between two types
 	DUCKDB_API void RegisterCastFunction(const LogicalType &source, const LogicalType &target,
 	                                     bind_cast_function_t function, int64_t implicit_cast_cost = -1);
+	DUCKDB_API void RegisterCastFunction(const LogicalType &source, const LogicalType &target,
+	                                     bind_cast_function_t function, shared_ptr<BindCastInfo> bind_info,
+	                                     int64_t implicit_cast_cost = -1);
 	DUCKDB_API void RegisterCastFunction(const LogicalType &source, const LogicalType &target, BoundCastInfo function,
 	                                     int64_t implicit_cast_cost = -1);
 

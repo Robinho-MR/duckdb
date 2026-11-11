@@ -496,6 +496,9 @@ auto GetExtensionLoader(duckdb_v2_extension_handle handle) -> ExtensionLoader &;
 //! capi_v2_func_properties.cpp and shared by the scalar and aggregate set_property entry points.
 void SetScalarFunctionProperty(FunctionProperties &props, DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
                                DUCKDB_V2_FUNCTION_PROPERTY_VALUE value);
+//! The scalar-only statistics propagation property: returns false when `key` is another property
+bool TrySetScalarStatisticsPropagation(DUCKDB_V2_FUNCTION_PROPERTY_KEY key, DUCKDB_V2_FUNCTION_PROPERTY_VALUE value,
+                                       bool &finite_monotone_bounds);
 void SetAggregateFunctionProperty(AggregateFunctionProperties &props, DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
                                   DUCKDB_V2_FUNCTION_PROPERTY_VALUE value);
 

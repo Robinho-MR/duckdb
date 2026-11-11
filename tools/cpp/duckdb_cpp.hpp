@@ -62,6 +62,7 @@ class Exception;
 class OptionDescription;
 struct OptionValue;
 class Config;
+class CollationInfo;
 class CustomOption;
 class Environment;
 class Instance;
@@ -93,6 +94,7 @@ template <class CTX>
 class TypeBuilder;
 class CustomType;
 class CastFunction;
+struct timestamp_t;
 class PragmaFunction;
 class LogSink;
 class MacroFunction;
@@ -182,7 +184,7 @@ private:
 /// ownership release from inside a member of the consuming wrapper.
 struct HandleFactory {
 	template <class T, class... ARGS>
-	static auto Make(ARGS &&... args) -> T {
+	static auto Make(ARGS &&...args) -> T {
 		return T(std::forward<ARGS>(args)...);
 	}
 };
@@ -533,6 +535,10 @@ public:
 	/// The file system this context reads and writes through. Borrowed, and valid only while the context is.
 	auto GetFileSystem() const -> FileSystem;
 
+	/// The start time of the context's current transaction: the instant `current_timestamp` reports, the same for
+	/// every call within the transaction.
+	auto GetTransactionStartTimestamp() const -> timestamp_t;
+
 	/// The factory values, types and data chunks are created through in this context.
 	auto GetFactory() -> Factory & {
 		return factory;
@@ -564,6 +570,36 @@ private:
 ///
 /// Registration is not transactional: a registered option is visible to every connection at once, is not undone by a
 /// rollback, and lives for as long as the database does.
+/// A collation being built: a name, as used in COLLATE, and the scalar function that turns a string into the sort key
+/// its comparisons are performed on. Register it through a `Connection` or an `Extension` of the factory's database,
+/// after registering the function.
+class CollationInfo final : public detail::Handle<CollationInfo> {
+	friend detail::HandleFactory;
+
+public:
+	CollationInfo(CollationInfo &&) noexcept = default;
+	CollationInfo &operator=(CollationInfo &&) noexcept = default;
+
+	~CollationInfo() override;
+
+	/// Creates an empty CollationInfo through `factory`.
+	static auto Create(Factory &factory) -> CollationInfo;
+
+	/// Sets the collation's name, as used in COLLATE.
+	auto SetName(std::string_view name) & -> CollationInfo &;
+	/// Sets the name of the scalar function computing the sort key. It must have an overload taking exactly one
+	/// VARCHAR argument and returning VARCHAR or BLOB, which is the one the collation calls.
+	auto SetFunctionName(std::string_view function_name) & -> CollationInfo &;
+	/// Sets whether the collation can be combined with other collations on an expression. Defaults to false.
+	auto SetCombinable(bool combinable) & -> CollationInfo &;
+	/// Sets whether equality comparisons can skip the collation and compare the raw strings, which is only correct when
+	/// equal strings always have equal sort keys and vice versa. Defaults to false.
+	auto SetNotRequiredForEquality(bool not_required_for_equality) & -> CollationInfo &;
+
+private:
+	explicit CollationInfo(void *impl);
+};
+
 class CustomOption final : public detail::Handle<CustomOption> {
 	friend detail::HandleFactory;
 	friend class Connection;
@@ -607,7 +643,7 @@ public:
 	/// the update callback via `UpdateInput::GetUserData<T>`. Consumed by registration: set it again before
 	/// re-registering.
 	template <class T, class... ARGS>
-	auto SetUserData(ARGS &&... args) & -> CustomOption & {
+	auto SetUserData(ARGS &&...args) & -> CustomOption & {
 		auto ptr = new T(std::forward<ARGS>(args)...);
 		SetUserDataInternal(ptr, detail::TypedDelete<T>);
 		return *this;
@@ -948,6 +984,11 @@ public:
 	/// `COPY ... TO` side lacks its batch or flush callback, or a configured `COPY ... FROM` side lacks its bind or
 	/// exec callback.
 	auto Register(CopyFunction &copy_function) -> void;
+	/// Registers the collation, making it available to COLLATE and as a column collation. Its scalar function must be
+	/// registered first. The collation object remains valid. An existing collation of the same name is kept.
+	/// @throws InvalidInputException When the name or function name is missing, or the function does not exist or
+	/// has no overload taking one VARCHAR and returning VARCHAR or BLOB.
+	auto Register(CollationInfo &collation) -> void;
 	/// Registers the cast, replacing whatever cast was registered for the same type pair. The function object remains
 	/// valid and may be adjusted and registered again; user data set via `SetUserData` is consumed by the first
 	/// registration.
@@ -1363,6 +1404,11 @@ public:
 	/// `COPY ... TO` side lacks its batch or flush callback, or a configured `COPY ... FROM` side lacks its bind or
 	/// exec callback.
 	auto Register(CopyFunction &copy_function) -> void;
+	/// Registers the collation, making it available to COLLATE and as a column collation. Its scalar function must be
+	/// registered first. The collation object remains valid. An existing collation of the same name is kept.
+	/// @throws InvalidInputException When the name or function name is missing, or the function does not exist or
+	/// has no overload taking one VARCHAR and returning VARCHAR or BLOB.
+	auto Register(CollationInfo &collation) -> void;
 	/// Registers the cast, replacing whatever cast was registered for the same type pair. The function object remains
 	/// valid and may be adjusted and registered again; user data set via `SetUserData` is consumed by the first
 	/// registration.
@@ -3454,7 +3500,7 @@ public:
 	/// `GetBindData<T>`. The engine compares bind data when it compares expressions: by `operator==` when `T` has one,
 	/// by identity otherwise.
 	template <class T, class... ARGS>
-	void SetBindData(ARGS &&... args) {
+	void SetBindData(ARGS &&...args) {
 		auto ptr = new T(std::forward<ARGS>(args)...);
 		SetBindDataInternal(ptr, detail::SelectEquals<T>(), detail::TypedDelete<T>);
 	}
@@ -3547,6 +3593,31 @@ enum class FunctionFallibility : uint8_t {
 	FALLIBLE = 1,
 };
 
+/// How the statistics of the result of a scalar function are derived.
+enum class StatisticsPropagation : uint8_t {
+	/// No statistics are derived, unless a stats callback is set (default).
+	NONE = 0,
+	/// Derived from the finite bounds of the arguments through the declared argument monotonicity; an infinite
+	/// argument gives a NULL result. Cannot be combined with a stats callback.
+	FINITE_MONOTONE_BOUNDS = 1,
+};
+
+/// How the result of a scalar function changes with one argument, the other arguments held constant.
+enum class Monotonicity : uint8_t {
+	/// Nothing is known (default).
+	UNKNOWN = 0,
+	/// The result does not depend on the argument.
+	CONSTANT = 1,
+	/// A larger argument never gives a smaller result.
+	NON_DECREASING = 2,
+	/// A larger argument always gives a larger result.
+	STRICTLY_INCREASING = 3,
+	/// A larger argument never gives a larger result.
+	NON_INCREASING = 4,
+	/// A larger argument always gives a smaller result.
+	STRICTLY_DECREASING = 5,
+};
+
 /// How a function interacts with collations on its arguments.
 enum class FunctionCollationHandling : uint8_t {
 	/// Combines collations from its inputs and propagates them to its result (default).
@@ -3630,6 +3701,8 @@ public:
 	class InitInput;
 	class ExecInput;
 	class StatsInput;
+	class SerializeInput;
+	class DeserializeInput;
 
 	/// Called once per query while the function call is bound, before the arguments are cast to the parameter types.
 	/// Optional; required when the return type is ANY.
@@ -3644,6 +3717,12 @@ public:
 	/// Called while the query is optimized, possibly more than once, to narrow the statistics of the result from
 	/// those of the arguments. Optional; without it the engine knows nothing about the result.
 	using StatsCallback = void (*)(StatsInput &input);
+	/// Called when a bound call of the function is written into a serialized plan; appends the bytes that describe the
+	/// bind data. Set together with `DeserializeCallback`.
+	using SerializeCallback = void (*)(SerializeInput &input);
+	/// Called when a bound call of the function is restored from a serialized plan; reads the bytes the
+	/// `SerializeCallback` wrote and sets the bind data again. Set together with `SerializeCallback`.
+	using DeserializeCallback = void (*)(DeserializeInput &input);
 
 	ScalarFunction(ScalarFunction &&) noexcept = default;
 	ScalarFunction &operator=(ScalarFunction &&) noexcept = default;
@@ -3685,7 +3764,7 @@ public:
 	/// any callback via the inputs' `GetUserData<T>`. Consumed by registration: set it again before
 	/// re-registering.
 	template <class T, class... ARGS>
-	auto SetUserData(ARGS &&... args) & -> ScalarFunction & {
+	auto SetUserData(ARGS &&...args) & -> ScalarFunction & {
 		auto ptr = new T(std::forward<ARGS>(args)...);
 		SetUserDataInternal(ptr, detail::TypedDelete<T>);
 		return *this;
@@ -3696,6 +3775,10 @@ public:
 	auto SetInitCallback(InitCallback callback) & -> ScalarFunction &;
 	auto SetExecCallback(ExecCallback callback) & -> ScalarFunction &;
 	auto SetStatsCallback(StatsCallback callback) & -> ScalarFunction &;
+	/// Lets a bound call with bind data be written into a serialized plan and be restored from it. Both callbacks must
+	/// be given, or both be null.
+	/// @throws InvalidInputException When only one of them is null.
+	auto SetSerializeCallbacks(SerializeCallback serialize, DeserializeCallback deserialize) & -> ScalarFunction &;
 
 	/// How stable the function's result is across rows and queries. Defaults to `CONSISTENT`.
 	auto SetStability(FunctionStability value) & -> ScalarFunction &;
@@ -3704,6 +3787,13 @@ public:
 	/// Whether the function can raise a runtime error. Defaults to `FALLIBLE`; declaring `INFALLIBLE` promises the
 	/// callbacks never throw.
 	auto SetFallibility(FunctionFallibility value) & -> ScalarFunction &;
+	/// How the statistics of the result are derived. Defaults to `NONE`; `FINITE_MONOTONE_BOUNDS` uses the
+	/// monotonicity set with `SetArgumentMonotonicity` and cannot be combined with a stats callback (rejected at
+	/// registration).
+	auto SetStatisticsPropagation(StatisticsPropagation value) & -> ScalarFunction &;
+	/// Declares how the result changes with the argument at `index` of the signature, the other arguments held
+	/// constant. An index beyond the signature is rejected at registration.
+	auto SetArgumentMonotonicity(idx_t index, Monotonicity value) & -> ScalarFunction &;
 	/// How the function interacts with collations on its arguments. Defaults to `PROPAGATE`.
 	auto SetCollationHandling(FunctionCollationHandling value) & -> ScalarFunction &;
 
@@ -3719,6 +3809,8 @@ private:
 	InitCallback init_callback = nullptr;
 	ExecCallback exec_callback = nullptr;
 	StatsCallback stats_callback = nullptr;
+	SerializeCallback serialize_callback = nullptr;
+	DeserializeCallback deserialize_callback = nullptr;
 	detail::UserData user_data;
 
 public:
@@ -3761,10 +3853,32 @@ public:
 		/// callbacks via `GetBindData<T>`. The engine compares bind data when it compares expressions: by
 		/// `operator==` when `T` has one, by identity otherwise.
 		template <class T, class... ARGS>
-		void SetBindData(ARGS &&... args) {
+		void SetBindData(ARGS &&...args) {
 			auto ptr = new T(std::forward<ARGS>(args)...);
 			SetBindDataInternal(ptr, detail::SelectEquals<T>(), detail::TypedDelete<T>);
 		}
+
+		/// Replaces the call being bound by a call to the scalar function `function_name`, looked up in the schema of
+		/// the function being bound, with the overload picked by the argument types. The replacement takes the
+		/// arguments of the current call listed in `argument_indices`, in that order. It must be the only thing the
+		/// bind callback does (not combinable with `SetBindData` or `SetStability`). The return type of the replacement
+		/// becomes the type of the call.
+		/// @throws InvalidInputException When bind data or the stability was set, the call was replaced already, or an
+		/// index is invalid.
+		void ReplaceCall(const std::string &function_name, const std::vector<idx_t> &argument_indices);
+
+		/// Sets the stability of the call being bound, overriding the stability set on the function; e.g. `CONSISTENT`
+		/// for the arguments that make the function deterministic, which lets the call appear in an index key. May be
+		/// combined with `SetBindData`, not with `ReplaceCall`.
+		/// @throws InvalidInputException When the call was replaced already.
+		void SetStability(FunctionStability value);
+
+		/// Overrides the monotonicity of the function in the argument at `index` of the call being bound; `UNKNOWN`
+		/// clears the declaration of `ScalarFunction::SetArgumentMonotonicity`. May be combined with `SetBindData` and
+		/// `SetStability`, not with `ReplaceCall`. An index beyond the arguments of the call is rejected when the
+		/// bind callback returns.
+		/// @throws InvalidInputException When the call was replaced already.
+		void SetArgumentMonotonicity(idx_t index, Monotonicity value);
 
 		/// The user data set via `ScalarFunction::SetUserData`.
 		/// @throws InvalidInputException When none was set.
@@ -3791,7 +3905,7 @@ public:
 		/// Constructs init data of type `T`, owned by this execution thread's function state and readable from the
 		/// exec callback via `GetInitData<T>`.
 		template <class T, class... ARGS>
-		void SetInitData(ARGS &&... args) {
+		void SetInitData(ARGS &&...args) {
 			auto ptr = new T(std::forward<ARGS>(args)...);
 			SetInitDataInternal(ptr, detail::TypedDelete<T>);
 		}
@@ -3811,14 +3925,19 @@ public:
 		}
 
 		/// The context the function is initialized in. Borrowed, valid only for the callback duration.
+		/// @throws InvalidInputException When the function runs without a client context, e.g. while an index is built.
 		auto GetContext() -> Context &;
+		/// Whether the function runs with a client context.
+		auto HasContext() const -> bool;
 
 	private:
-		InitInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		InitInput(void *args, void *context)
+		    : args(args),
+		      context(context ? std::optional<Context>(detail::HandleFactory::Make<Context>(context)) : std::nullopt) {
 		}
 
 		void *args;
-		Context context;
+		std::optional<Context> context;
 
 		void SetInitDataInternal(void *data, void (*destructor)(void *));
 		void *GetBindDataInternal() const;
@@ -3871,17 +3990,93 @@ public:
 		auto GetResult() const -> Vector;
 
 		/// The execution context. Borrowed, valid only for the callback duration.
+		/// @throws InvalidInputException When the function runs without a client context, e.g. while an index is built.
 		auto GetContext() -> Context &;
+		/// Whether the function runs with a client context.
+		auto HasContext() const -> bool;
 
 	private:
-		ExecInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		ExecInput(void *args, void *context)
+		    : args(args),
+		      context(context ? std::optional<Context>(detail::HandleFactory::Make<Context>(context)) : std::nullopt) {
 		}
 
 		void *args;
-		Context context;
+		std::optional<Context> context;
 
 		void *GetBindDataInternal() const;
 		void *GetInitDataInternal() const;
+		void *GetUserDataInternal() const;
+	};
+
+	/// What the serialize callback works with. Borrowed, valid only for the callback duration.
+	class SerializeInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// The bind data set via `BindInput::SetBindData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetBindData() const -> const T & {
+			return *static_cast<const T *>(GetBindDataInternal());
+		}
+
+		/// The user data set via `ScalarFunction::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// Appends bytes to the serialized form; may be called several times.
+		void Write(const void *data, idx_t size);
+		/// Appends the bytes of `bytes` to the serialized form; may be called several times.
+		void Write(std::string_view bytes);
+
+	private:
+		explicit SerializeInput(void *info) : info(info) {
+		}
+
+		void *info;
+
+		void *GetBindDataInternal() const;
+		void *GetUserDataInternal() const;
+	};
+
+	/// What the deserialize callback works with. Borrowed, valid only for the callback duration.
+	class DeserializeInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// The bytes the serialize callback wrote, concatenated. Valid until the callback returns.
+		auto GetData() const -> std::string_view;
+
+		/// The user data set via `ScalarFunction::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// Constructs bind data of type `T` for the restored call, as `BindInput::SetBindData` does.
+		template <class T, class... ARGS>
+		void SetBindData(ARGS &&...args) {
+			auto ptr = new T(std::forward<ARGS>(args)...);
+			SetBindDataInternal(ptr, detail::SelectEquals<T>(), detail::TypedDelete<T>);
+		}
+
+		/// The context the plan is restored in. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context &;
+
+	private:
+		DeserializeInput(void *info, void *context)
+		    : info(info), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+
+		void *info;
+		Context context;
+
+		void SetBindDataInternal(void *data, bool (*equals)(void *a, void *b), void (*destructor)(void *));
 		void *GetUserDataInternal() const;
 	};
 
@@ -4042,7 +4237,7 @@ public:
 	/// any callback via the inputs' `GetUserData<T>`. Consumed by registration: set it again before
 	/// re-registering.
 	template <class T, class... ARGS>
-	auto SetUserData(ARGS &&... args) & -> AggregateFunction & {
+	auto SetUserData(ARGS &&...args) & -> AggregateFunction & {
 		auto ptr = new T(std::forward<ARGS>(args)...);
 		SetUserDataInternal(ptr, detail::TypedDelete<T>);
 		return *this;
@@ -4536,6 +4731,7 @@ public:
 	class InitGlobalInput;
 	class InitLocalInput;
 	class ExecInput;
+	class InOutInput;
 	class ProgressInput;
 	class FilterPushdownInput;
 	class PartitionDataInput;
@@ -4543,6 +4739,27 @@ public:
 	class ClaimBatchInput;
 	class GetBindInfoInput;
 	class StatsInput;
+
+	/// What an in-out function tells the engine to do next. Reported from the in-out callbacks.
+	enum class InOutResult : uint8_t {
+		/// The input chunk is fully consumed: the callback is invoked with the next one. Not valid from the in-out
+		/// final
+		/// callback.
+		NEED_MORE_INPUT = 0,
+		/// The function has more output for the current input (or, from the in-out final callback, more buffered
+		/// output): the callback is invoked again with the same input.
+		HAVE_MORE_OUTPUT = 1,
+		/// The function wants no more input: the pipeline it runs in stops on the thread, like a satisfied `LIMIT`.
+		FINISHED = 2,
+	};
+
+	/// The first identifier of a virtual column, 2^63: see `BindInput::AddVirtualColumn`. Unstable API.
+	static constexpr idx_t VIRTUAL_COLUMN_START = 0x8000000000000000ULL;
+	/// The identifier of a row id column, a virtual column with a meaning of its own to the engine. Unstable API.
+	static constexpr idx_t COLUMN_IDENTIFIER_ROW_ID = 0xFFFFFFFFFFFFFFFFULL;
+	/// The identifier of the empty column, a virtual column the engine requests when the query needs the rows but none
+	/// of their values, e.g. `SELECT count(*)`. Unstable API.
+	static constexpr idx_t COLUMN_IDENTIFIER_EMPTY = 0xFFFFFFFFFFFFFFFEULL;
 
 	/// Whether, and how, the scan is partitioned by a set of columns. Reported from the partitioning callback.
 	enum class PartitionInfo : uint8_t {
@@ -4562,8 +4779,12 @@ public:
 	using InitGlobalCallback = void (*)(InitGlobalInput &input);
 	/// Called once per scanning thread, before the first `ExecCallback` on it. Optional.
 	using InitLocalCallback = void (*)(InitLocalInput &input);
-	/// Called repeatedly to produce the next batch of rows; an empty batch ends the scan. Required.
+	/// Called repeatedly to produce the next batch of rows; an empty batch ends the scan. Required, unless the function
+	/// is an in-out function.
 	using ExecCallback = void (*)(ExecInput &input);
+	/// Called instead of an `ExecCallback` to make the function an in-out function: see `SetInOutCallback`. Unstable
+	/// API.
+	using InOutCallback = void (*)(InOutInput &input);
 	/// Called on demand during execution to report how far the scan has advanced. Optional.
 	using ProgressCallback = void (*)(ProgressInput &input);
 	/// Called while the query is optimized, possibly more than once, with the predicates the query applies to the
@@ -4629,7 +4850,7 @@ public:
 	/// any callback via the inputs' `GetUserData<T>`. Consumed by registration: set it again before
 	/// re-registering.
 	template <class T, class... ARGS>
-	auto SetUserData(ARGS &&... args) & -> TableFunction & {
+	auto SetUserData(ARGS &&...args) & -> TableFunction & {
 		auto ptr = new T(std::forward<ARGS>(args)...);
 		SetUserDataInternal(ptr, detail::TypedDelete<T>);
 		return *this;
@@ -4639,6 +4860,23 @@ public:
 	auto SetInitGlobalCallback(InitGlobalCallback callback) & -> TableFunction &;
 	auto SetInitLocalCallback(InitLocalCallback callback) & -> TableFunction &;
 	auto SetExecCallback(ExecCallback callback) & -> TableFunction &;
+	/// Makes the function an in-out function, which consumes an input chunk instead of scanning a source: the kind of
+	/// function used with a lateral join, e.g. `SELECT * FROM t, my_function(t.col)`. The callback is invoked with a
+	/// chunk of input rows (`InOutInput::GetInputChunk`, a vector per positional argument) and writes the rows it
+	/// produces to the output chunk; it reports `InOutResult::HAVE_MORE_OUTPUT` when the output chunk is full, and is
+	/// invoked again with the same input, so it keeps its position in the input in its local state, and
+	/// `InOutResult::NEED_MORE_INPUT` when it has consumed the input. A call whose arguments are all constants runs the
+	/// function as a source instead: the input is a single row holding the constants, the callback is invoked again for
+	/// as long as it produces rows, and an empty output ends the scan whatever result it reports. At the bind
+	/// callback, the types of the arguments are known (`FunctionBindInput::GetArgType`), but their values only when
+	/// all arguments of the call are constants. Projection pushdown works as for an exec callback. The progress
+	/// callback is only consulted when the function runs as a source. Mutually exclusive with the exec callback, and
+	/// with the claim batch, partition data and partitioning callbacks: registration fails otherwise. Unstable API.
+	auto SetInOutCallback(InOutCallback callback) & -> TableFunction &;
+	/// Sets the callback invoked once there is no more input, so that an in-out function that buffers rows can flush
+	/// them: it reports `InOutResult::HAVE_MORE_OUTPUT` while it has more, and `InOutResult::FINISHED` when it is done.
+	/// Requires an in-out callback. Unstable API.
+	auto SetInOutFinalCallback(InOutCallback callback) & -> TableFunction &;
 	auto SetProgressCallback(ProgressCallback callback) & -> TableFunction &;
 	auto SetFilterPushdownCallback(FilterPushdownCallback callback) & -> TableFunction &;
 	auto SetPartitionDataCallback(PartitionDataCallback callback) & -> TableFunction &;
@@ -4668,6 +4906,8 @@ private:
 	InitGlobalCallback init_global_callback = nullptr;
 	InitLocalCallback init_local_callback = nullptr;
 	ExecCallback exec_callback = nullptr;
+	InOutCallback in_out_callback = nullptr;
+	InOutCallback in_out_final_callback = nullptr;
 	ProgressCallback progress_callback = nullptr;
 	FilterPushdownCallback filter_pushdown_callback = nullptr;
 	PartitionDataCallback partition_data_callback = nullptr;
@@ -4695,6 +4935,22 @@ public:
 		auto GetUserData() const -> T & {
 			return *static_cast<T *>(GetUserDataInternal());
 		}
+
+		/// Declares a virtual column of this call of the function. A virtual column is not one of the columns the
+		/// function returns: it is not part of `SELECT *`, and the query asks for it by name. The function only
+		/// produces it when it is asked for, as a vector of the output chunk like any other column the scan produces,
+		/// and finds it by its identifier: the `GetColumnIndex` of the init, exec and in-out inputs returns the
+		/// identifier for the vectors that stand for the column. Requires projection pushdown
+		/// (`TableFunction::SetProjectionPushdown`). Unstable API.
+		/// @param identifier The identifier of the column, at least `VIRTUAL_COLUMN_START` and unique among the
+		/// virtual columns of the call. `COLUMN_IDENTIFIER_ROW_ID` and `COLUMN_IDENTIFIER_EMPTY` have a meaning of
+		/// their own to the engine; the latter, if declared, is the only column requested when the query needs the
+		/// rows but none of their values (e.g. `SELECT count(*)`), and its vector is only sized.
+		/// @param name The column's name. May be empty only for `COLUMN_IDENTIFIER_EMPTY`.
+		/// @param type The column's type. Must be a fully defined concrete type.
+		/// @throws InvalidInputException When projection pushdown is not enabled, the identifier is below
+		/// `VIRTUAL_COLUMN_START` or already declared, or the name is empty or already taken.
+		auto AddVirtualColumn(idx_t identifier, const std::string &name, const LogicalType &type) -> void;
 
 		/// Hints how many rows the scan will produce, for the optimizer. Producing a different number of rows is not
 		/// an error.
@@ -4727,7 +4983,7 @@ public:
 		/// local init, exec and progress callbacks. Since every thread sees the same object, the function must
 		/// synchronize its own access to it.
 		template <class T, class... ARGS>
-		void SetGlobalState(ARGS &&... args) {
+		void SetGlobalState(ARGS &&...args) {
 			auto ptr = new T(std::forward<ARGS>(args)...);
 			SetGlobalStateInternal(ptr, detail::TypedDelete<T>);
 		}
@@ -4783,7 +5039,7 @@ public:
 		/// Constructs local state of type `T`, owned by this scanning thread and readable from the exec callback via
 		/// `ExecInput::GetLocalState<T>`. No other thread observes it, so it needs no synchronization.
 		template <class T, class... ARGS>
-		void SetLocalState(ARGS &&... args) {
+		void SetLocalState(ARGS &&...args) {
 			auto ptr = new T(std::forward<ARGS>(args)...);
 			SetLocalStateInternal(ptr, detail::TypedDelete<T>);
 		}
@@ -4884,6 +5140,84 @@ public:
 
 	private:
 		ExecInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+
+		void *args;
+		Context context;
+
+		void *GetBindDataInternal() const;
+		void *GetGlobalStateInternal() const;
+		void *GetLocalStateInternal() const;
+		void *GetUserDataInternal() const;
+	};
+
+	/// What the in-out callbacks work with. Borrowed, valid only for the callback duration.
+	class InOutInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// The bind data set via `BindInput::SetBindData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetBindData() const -> const T & {
+			return *static_cast<const T *>(GetBindDataInternal());
+		}
+
+		/// The global state set via `InitGlobalInput::SetGlobalState`. Shared with every other thread running the
+		/// function; access must be synchronized.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetGlobalState() const -> T & {
+			return *static_cast<T *>(GetGlobalStateInternal());
+		}
+
+		/// The local state set via `InitLocalInput::SetLocalState`, private to this thread. This is where the
+		/// function keeps its position in the input chunk while it reports `InOutResult::HAVE_MORE_OUTPUT`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetLocalState() const -> T & {
+			return *static_cast<T *>(GetLocalStateInternal());
+		}
+
+		/// The user data set via `TableFunction::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// The chunk of input rows to process, with a vector per positional argument of the call. Read-only, and the
+		/// same from one invocation to the next while the function reports `InOutResult::HAVE_MORE_OUTPUT`.
+		/// @return A borrowed chunk, valid only for the callback duration.
+		/// @throws InvalidInputException In the in-out final callback, which has no input.
+		auto GetInputChunk() const -> DataChunk;
+
+		/// The chunk to write the rows to produce into: its first `GetColumnCount` vectors are the columns the scan
+		/// produces, any further vectors belong to the engine. It starts out empty on every invocation: write the
+		/// rows, then give them a row count with `Vector::SetSize` on the chunk's first vector, which the engine
+		/// propagates to the others. An empty output is valid, e.g. for an input row that produces no rows.
+		/// @return A borrowed chunk, valid only for the callback duration.
+		auto GetOutputChunk() const -> DataChunk;
+
+		/// How many columns the scan produces, the leading vectors of the output chunk; see
+		/// `InitGlobalInput::GetColumnCount`.
+		auto GetColumnCount() const -> idx_t;
+		/// Which column the output chunk's vector at `index` must be filled with: the index of a declared column, or
+		/// the identifier of a virtual one (at least `VIRTUAL_COLUMN_START`); see `InitGlobalInput::GetColumnIndex`.
+		/// @throws InvalidInputException When the index is out of bounds.
+		auto GetColumnIndex(idx_t index) const -> idx_t;
+
+		/// Tells the engine what to do next. A callback that does not call it reports `InOutResult::NEED_MORE_INPUT`,
+		/// the in-out final callback `InOutResult::FINISHED`.
+		/// @throws InvalidInputException When the result is `InOutResult::NEED_MORE_INPUT` in the in-out final
+		/// callback.
+		auto SetResult(InOutResult result) -> void;
+
+		/// The execution context. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context &;
+
+	private:
+		InOutInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
 		}
 
 		void *args;
@@ -5465,7 +5799,7 @@ public:
 	/// any callback via the inputs' `GetUserData<T>`. Consumed by registration: set it again before
 	/// re-registering.
 	template <class T, class... ARGS>
-	auto SetUserData(ARGS &&... args) & -> CopyFunction & {
+	auto SetUserData(ARGS &&...args) & -> CopyFunction & {
 		auto ptr = new T(std::forward<ARGS>(args)...);
 		SetUserDataInternal(ptr, detail::TypedDelete<T>);
 		return *this;
@@ -5516,7 +5850,7 @@ public:
 		/// callback via `GetBindData<T>`. The engine compares bind data when it compares statements: by `operator==`
 		/// when `T` has one, by identity otherwise.
 		template <class T, class... ARGS>
-		void SetBindData(ARGS &&... args) {
+		void SetBindData(ARGS &&...args) {
 			auto ptr = new T(std::forward<ARGS>(args)...);
 			SetBindDataInternal(ptr, detail::SelectEquals<T>(), detail::TypedDelete<T>);
 		}
@@ -5625,7 +5959,7 @@ public:
 		/// finalize callbacks of that file via `GetInitData<T>`. Batches may be prepared on several threads at once, so
 		/// the batch callback must synchronize its own access to it.
 		template <class T, class... ARGS>
-		void SetInitData(ARGS &&... args) {
+		void SetInitData(ARGS &&...args) {
 			auto ptr = new T(std::forward<ARGS>(args)...);
 			SetInitDataInternal(ptr, detail::TypedDelete<T>);
 		}
@@ -5672,7 +6006,7 @@ public:
 		/// Constructs batch data of type `T`: the prepared form of the batch, handed to the flush callback via
 		/// `CopyToFlushInput::GetBatchData<T>` and freed once the batch has been flushed.
 		template <class T, class... ARGS>
-		void SetBatchData(ARGS &&... args) {
+		void SetBatchData(ARGS &&...args) {
 			auto ptr = new T(std::forward<ARGS>(args)...);
 			SetBatchDataInternal(ptr, detail::TypedDelete<T>);
 		}
@@ -5872,7 +6206,7 @@ public:
 		/// `COPY ... FROM` callback via `GetBindData<T>`. The engine compares bind data when it compares statements:
 		/// by `operator==` when `T` has one, by identity otherwise.
 		template <class T, class... ARGS>
-		void SetBindData(ARGS &&... args) {
+		void SetBindData(ARGS &&...args) {
 			auto ptr = new T(std::forward<ARGS>(args)...);
 			SetBindDataInternal(ptr, detail::SelectEquals<T>(), detail::TypedDelete<T>);
 		}
@@ -5947,7 +6281,7 @@ public:
 		/// init, exec and progress callbacks. Since every thread sees the same object, the function must synchronize
 		/// its own access to it.
 		template <class T, class... ARGS>
-		void SetGlobalState(ARGS &&... args) {
+		void SetGlobalState(ARGS &&...args) {
 			auto ptr = new T(std::forward<ARGS>(args)...);
 			SetGlobalStateInternal(ptr, detail::TypedDelete<T>);
 		}
@@ -5995,7 +6329,7 @@ public:
 		/// Constructs local state of type `T`, owned by this reading thread and readable from the exec callback via
 		/// `CopyFromExecInput::GetLocalState<T>`. No other thread observes it, so it needs no synchronization.
 		template <class T, class... ARGS>
-		void SetLocalState(ARGS &&... args) {
+		void SetLocalState(ARGS &&...args) {
 			auto ptr = new T(std::forward<ARGS>(args)...);
 			SetLocalStateInternal(ptr, detail::TypedDelete<T>);
 		}
@@ -6174,8 +6508,11 @@ class CastFunction final : public detail::Handle<CastFunction> {
 	friend class Extension;
 
 public:
+	class BindInput;
 	class ExecInput;
 
+	/// Called each time the cast is bound for a call site. Optional. Throwing aborts the binding with that error.
+	using BindCallback = void (*)(BindInput &input);
 	/// Called for every batch of values; must fill the output vector. Required.
 	using ExecCallback = void (*)(ExecInput &input);
 
@@ -6205,13 +6542,22 @@ public:
 	/// exec callback via `ExecInput::GetUserData<T>`. Consumed by registration: set it again before
 	/// re-registering.
 	template <class T, class... ARGS>
-	auto SetUserData(ARGS &&... args) & -> CastFunction & {
+	auto SetUserData(ARGS &&...args) & -> CastFunction & {
 		auto ptr = new T(std::forward<ARGS>(args)...);
 		SetUserDataInternal(ptr, detail::TypedDelete<T>);
 		return *this;
 	}
 
 	auto SetExecCallback(ExecCallback callback) & -> CastFunction &;
+
+	/// Sets the optional bind callback, invoked each time the cast is bound. It can read the source and target type,
+	/// set bind data for the exec callback, and reject the cast by throwing. Pass `nullptr` to remove it.
+	auto SetBindCallback(BindCallback callback) & -> CastFunction &;
+
+	/// How stable the cast's result is. Defaults to `CONSISTENT`. A cast that reads a setting (such as the time zone)
+	/// must declare `CONSISTENT_WITHIN_QUERY`: it is then not folded into a prepared statement nor accepted in an
+	/// index expression.
+	auto SetStability(FunctionStability value) & -> CastFunction &;
 
 private:
 	explicit CastFunction(void *impl);
@@ -6221,14 +6567,66 @@ private:
 	auto SetUserDataInternal(void *data, void (*destructor)(void *)) -> void;
 
 	ExecCallback exec_callback = nullptr;
+	BindCallback bind_callback = nullptr;
 	detail::UserData user_data;
 
 public:
+	/// What the bind callback works with. Borrowed, valid only for the callback duration.
+	class BindInput {
+		friend detail::HandleFactory;
+
+	public:
+		~BindInput();
+
+		/// The user data set via `CastFunction::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// The type the cast is bound to convert from.
+		auto GetSourceType() const -> LogicalType;
+
+		/// The type the cast is bound to convert to.
+		auto GetTargetType() const -> LogicalType;
+
+		/// Constructs bind data of type `T`, owned by the bound cast and readable from the exec callback via
+		/// `ExecInput::GetBindData<T>`. Calling this again replaces the previous bind data.
+		template <class T, class... ARGS>
+		void SetBindData(ARGS &&...args) {
+			auto ptr = new T(std::forward<ARGS>(args)...);
+			SetBindDataInternal(ptr, detail::TypedDelete<T>);
+		}
+
+		/// The context of the query binding the cast, or nullptr when the engine binds the cast without a client
+		/// context (for example when it probes the cast to compute implicit cast costs).
+		auto GetContext() -> Context * {
+			return context.get();
+		}
+
+	private:
+		BindInput(void *args, void *context_handle);
+
+		void *args;
+		std::unique_ptr<Context> context;
+
+		void SetBindDataInternal(void *data, void (*destructor)(void *));
+		void *GetUserDataInternal() const;
+	};
+
 	/// What the exec callback works with. Borrowed, valid only for the callback duration.
 	class ExecInput {
 		friend detail::HandleFactory;
 
 	public:
+		/// The bind data set via `BindInput::SetBindData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetBindData() const -> T & {
+			return *static_cast<T *>(GetBindDataInternal());
+		}
+
 		/// The user data set via `CastFunction::SetUserData`.
 		/// @throws InvalidInputException When none was set.
 		template <class T>
@@ -6252,16 +6650,22 @@ public:
 		auto GetMode() const -> CastMode;
 
 		/// The execution context. Borrowed, valid only for the callback duration.
+		/// @throws InvalidInputException When the cast runs without a client context, e.g. while an index is built.
 		auto GetContext() -> Context &;
+		/// Whether the cast runs with a client context.
+		auto HasContext() const -> bool;
 
 	private:
-		ExecInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		ExecInput(void *args, void *context)
+		    : args(args),
+		      context(context ? std::optional<Context>(detail::HandleFactory::Make<Context>(context)) : std::nullopt) {
 		}
 
 		void *args;
-		Context context;
+		std::optional<Context> context;
 
 		void *GetUserDataInternal() const;
+		void *GetBindDataInternal() const;
 	};
 };
 
@@ -6331,7 +6735,7 @@ public:
 	/// Constructs user data of type `T`, carried by the registered pragma and freed at engine teardown; read it from
 	/// the callback via the input's `GetUserData<T>`. Consumed by registration: set it again before re-registering.
 	template <class T, class... ARGS>
-	auto SetUserData(ARGS &&... args) & -> PragmaFunction & {
+	auto SetUserData(ARGS &&...args) & -> PragmaFunction & {
 		auto ptr = new T(std::forward<ARGS>(args)...);
 		SetUserDataInternal(ptr, detail::TypedDelete<T>);
 		return *this;
@@ -6515,7 +6919,7 @@ public:
 	/// Constructs user data of type `T`, carried by the registered sink and freed at database teardown; read it
 	/// from the callbacks via `GetUserData<T>`. Consumed by registration.
 	template <class T, class... ARGS>
-	auto SetUserData(ARGS &&... args) & -> LogSink & {
+	auto SetUserData(ARGS &&...args) & -> LogSink & {
 		auto ptr = new T(std::forward<ARGS>(args)...);
 		SetUserDataInternal(ptr, detail::TypedDelete<T>);
 		return *this;
@@ -6638,6 +7042,19 @@ enum class FileFlags : uint8_t {
 	EXTERNAL_FILE_CACHE = 8,
 };
 
+/// How the contents of a file are compressed, as set with `FileOpenOptions::SetCompression`.
+enum class FileCompression : uint8_t {
+	/// Determine the compression from the extension of the file (e.g. `.gz`, `.zst`). A file without such an
+	/// extension is read and written as it is, whatever its contents.
+	AUTO_DETECT = 0,
+	/// The file is not compressed, whatever its name. This is what a file opened without a compression gets.
+	NONE = 1,
+	/// The file is gzip compressed.
+	GZIP = 2,
+	/// The file is Zstandard compressed. The implementation is provided by the `parquet` extension.
+	ZSTD = 3,
+};
+
 /// An open file, obtained from `FileSystem::OpenFile`. Closes on destruction.
 /// Only usable while the `FileSystem` it came from is still valid.
 class FileHandle final : public detail::Handle<FileHandle> {
@@ -6713,6 +7130,13 @@ public:
 	/// Attaches a named value, a hint for whichever file system ends up handling the path. What a name means is that
 	/// file system's business, and one it does not recognize is ignored. Setting the same name again replaces it.
 	auto SetValue(std::string_view name, const Value &value) & -> FileOpenOptions &;
+
+	/// Sets the compression of the files opened with the options, for reading as well as for writing: the engine
+	/// decompresses what is read and compresses what is written. Without it files are opened with
+	/// `FileCompression::NONE`. A compressed file can only be read and written sequentially, so `FileHandle::ReadAt`,
+	/// `FileHandle::WriteAt` and `FileHandle::Seek` can fail on it. Unstable API.
+	/// @throws InvalidInputException When the value is not a `FileCompression`.
+	auto SetCompression(FileCompression compression) & -> FileOpenOptions &;
 
 	/// Attaches the options a file is specified with, as table functions that read files take it: a STRUCT holding
 	/// the path of the file in its `filename` field, and an option to open the file with in every other field - e.g.
@@ -7020,7 +7444,7 @@ public:
 	/// Constructs user data of type `T`, carried by the registered scan and freed when its scope ends; read it from
 	/// the callback via `Input::GetUserData<T>`. Consumed by registration.
 	template <class T, class... ARGS>
-	auto SetUserData(ARGS &&... args) & -> ReplacementScan & {
+	auto SetUserData(ARGS &&...args) & -> ReplacementScan & {
 		auto ptr = new T(std::forward<ARGS>(args)...);
 		SetUserDataInternal(ptr, detail::TypedDelete<T>);
 		return *this;

@@ -122,17 +122,23 @@ private:
 //! The arguments of a table or pragma function call: constants, the positional arguments and the named ones held apart
 class CV2ConstantBindInfo final : public CV2FunctionBindInfo {
 public:
+	//! `input_types` are the types of the positional arguments of an in-out table function that reach it as columns of
+	//! its input: `positional` then holds fewer values than the call has positional arguments.
 	CV2ConstantBindInfo(const BoundSimpleFunction &function, const FunctionSignature &signature, void *user_data,
-	                    const vector<Value> &positional, const named_argument_map_t &named);
+	                    const vector<Value> &positional, const named_argument_map_t &named,
+	                    const vector<LogicalType> *input_types = nullptr);
 
 	LogicalType GetArgType(idx_t index) const override;
 	Value GetArgValue(idx_t index) const override;
 
 private:
 	const Value &GetArg(idx_t index) const;
+	//! Whether the argument is a column of the input of an in-out table function: it has a type but no value
+	bool IsInputColumn(idx_t index) const;
 
 	const vector<Value> &positional;
 	const named_argument_map_t &named;
+	const vector<LogicalType> *input_types;
 };
 
 //! The statistics a stats callback reads or narrows. Argument statistics are read-only: they have no mutable view
