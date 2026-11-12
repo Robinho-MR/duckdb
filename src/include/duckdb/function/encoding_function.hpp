@@ -29,6 +29,22 @@ typedef void (*encode_t)(CSVEncoderBuffer &encoded_buffer, char *decoded_buffer,
                          const idx_t decoded_buffer_size, char *remaining_bytes_buffer, idx_t &remaining_bytes_size,
                          EncodingFunction *encoding_function);
 
+//! Extra information attached to an encoding function, e.g. by an API that wraps a decoder.
+struct EncodingFunctionInfo {
+	virtual ~EncodingFunctionInfo() = default;
+
+	template <class TARGET>
+	TARGET &Cast() {
+		DynamicCastCheck<TARGET>(this);
+		return reinterpret_cast<TARGET &>(*this);
+	}
+	template <class TARGET>
+	const TARGET &Cast() const {
+		DynamicCastCheck<TARGET>(this);
+		return reinterpret_cast<const TARGET &>(*this);
+	}
+};
+
 class EncodingFunction {
 public:
 	DUCKDB_API EncodingFunction() : encode_function(nullptr), max_bytes_per_iteration(0) {
@@ -70,6 +86,8 @@ public:
 	//! Optional conversion map, that indicates byte replacements.
 	const map_entry_encoding *conversion_map {};
 	size_t map_size {};
+	//! Optional extra information, available to the encode function through its EncodingFunction argument.
+	shared_ptr<EncodingFunctionInfo> function_info;
 
 protected:
 	//! The encoding type of this function (e.g., utf-8)

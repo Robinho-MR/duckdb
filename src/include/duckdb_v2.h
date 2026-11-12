@@ -2370,6 +2370,324 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_data_chunk_get_vector(duckdb_v2_data_chun
 /* --- Struct definitions for data_chunk --- */
 
 /* ============================================================================
+ * MODULE: encoding
+ * ============================================================================ */
+
+/* --- Enums for encoding --- */
+
+/* --- Struct forward declarations for encoding --- */
+
+/* --- Types for encoding --- */
+
+/*!
+ * An owned opaque handle to an encoding function being built. Created with `duckdb_v2_encoding_function_create()`,
+ * configured with the setter functions (e.g. `duckdb_v2_encoding_function_set_name()`,
+ * `duckdb_v2_encoding_function_set_decode_callback()`, etc.), made available with
+ * `duckdb_v2_connection_register_encoding_function()` or `duckdb_v2_extension_register_encoding_function()`, and
+ * destroyed with `duckdb_v2_encoding_function_destroy()`.
+ */
+typedef struct _duckdb_v2_encoding_function {
+	void *internal_ptr;
+} * duckdb_v2_encoding_function_handle;
+
+/*!
+ * An owned snapshot of the encodings registered at the time it was taken, in no particular order. Create it with
+ * `duckdb_v2_context_list_encodings()`, read it with `duckdb_v2_encoding_list_get_count()` and
+ * `duckdb_v2_encoding_list_get_entry()`, and destroy it with `duckdb_v2_encoding_list_destroy()`. Encodings registered
+ * later are not added to it.
+ */
+typedef struct _duckdb_v2_encoding_list {
+	void *internal_ptr;
+} * duckdb_v2_encoding_list_handle;
+
+/* --- Constants for encoding --- */
+
+/* --- Function pointer typedefs for encoding --- */
+
+typedef void (*duckdb_v2_encoding_function_decode_callback_fn)(void *user_data, const uint8_t *input,
+                                                               idx_t input_length, bool is_last, uint8_t *output,
+                                                               idx_t output_capacity, idx_t *input_consumed,
+                                                               idx_t *output_written, duckdb_v2_error_info_handle *err);
+
+/* --- Functions for encoding --- */
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Creates a new encoding function through a factory.
+ *
+ * The function starts out empty: configure it with the setter functions (e.g. `duckdb_v2_encoding_function_set_name()`,
+ * `duckdb_v2_encoding_function_set_decode_callback()`, etc.), then make it available with
+ * `duckdb_v2_connection_register_encoding_function()` or `duckdb_v2_extension_register_encoding_function()`. The caller
+ * owns the returned handle and must destroy it with `duckdb_v2_encoding_function_destroy()`, also after registration.
+ *
+ * The encoding function can only be registered on the database the factory belongs to.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param factory The factory to create the encoding function through.
+ * @param function On success, receives the newly created encoding function. Owned by the caller.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_encoding_function_create(duckdb_v2_factory_handle factory,
+                                                                duckdb_v2_encoding_function_handle *function,
+                                                                duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the name of the encoding, as `read_csv(..., encoding = 'name')` refers to it.
+ *
+ * The name is borrowed and copied, and is matched case-insensitively. Calling this again replaces the previous name,
+ * which allows registering the same function under several names. A name must be set before registration.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the name of.
+ * @param name The name to set. Borrowed and copied.
+ * @param name_length The length of `name` in bytes. `name` must be valid UTF-8, need not be null-terminated, and may be
+ * NULL only when this is 0.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_encoding_function_set_name(duckdb_v2_encoding_function_handle function,
+                                                                  const char *name, idx_t name_length,
+                                                                  duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the length in bytes of the longest sequence of encoded bytes the decode callback needs to look at to decode one
+ * character.
+ *
+ * Unless the chunk is the last one, the engine hands the callback at least this many bytes whenever there are that many
+ * left in the file. Must be set to a value of at least 1 before registration.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the maximum input bytes of.
+ * @param max_input_bytes The maximum number of encoded bytes that decode to one character.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_encoding_function_set_max_input_bytes(
+    duckdb_v2_encoding_function_handle function, idx_t max_input_bytes, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the length in bytes of the longest UTF-8 sequence the decode callback writes for one decoded unit, the bytes it
+ * consumes at once.
+ *
+ * Must be set to a value of at least 1 before registration.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the maximum output bytes of.
+ * @param max_output_bytes The maximum number of UTF-8 bytes written for one decoded unit.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_encoding_function_set_max_output_bytes(
+    duckdb_v2_encoding_function_handle function, idx_t max_output_bytes, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets arbitrary user data on the encoding function.
+ *
+ * Associates an opaque pointer with the function, passed to the decode callback. The opaque handle bundles the pointer
+ * with an optional destructor, invoked when the data is no longer needed. The data is read-only during decoding: the
+ * same pointer is shared by every thread decoding with the encoding.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the user data of.
+ * @param data Opaque handle bundling the user data pointer plus an optional destructor.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_encoding_function_set_user_data(duckdb_v2_encoding_function_handle function,
+                                                                       duckdb_v2_opaque *data,
+                                                                       duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the decode callback of the encoding function.
+ *
+ * The decode callback converts encoded bytes to UTF-8. It must be set before registration.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the decode callback of.
+ * @param callback The decode callback to set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_encoding_function_set_decode_callback(
+    duckdb_v2_encoding_function_handle function, duckdb_v2_encoding_function_decode_callback_fn callback,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Registers the encoding function, making it available to `read_csv`.
+ *
+ * The encoding is registered on the connection's database and takes effect immediately for every connection; it is not
+ * part of the connection's transaction, so a rollback does not undo it. Registration requires a name, a maximum number
+ * of input and output bytes, and a decode callback, and fails when an encoding of the same name is already registered.
+ * The encoding function must have been created through a factory of the same database. The caller still owns the handle
+ * after registration and must destroy it with `duckdb_v2_encoding_function_destroy()`, which does not affect the
+ * registered encoding.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param conn The connection to register on.
+ * @param function The encoding function to register.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_connection_register_encoding_function(
+    duckdb_v2_connection_handle conn, duckdb_v2_encoding_function_handle function, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Registers the encoding function, making it available to `read_csv`.
+ *
+ * The encoding is registered on the loading extension's database. Use this from the extension's load callback.
+ * Registration requires a name, a maximum number of input and output bytes, and a decode callback, and fails when an
+ * encoding of the same name is already registered. The encoding function must have been created through a factory of
+ * the same database. The caller still owns the handle after registration and must destroy it with
+ * `duckdb_v2_encoding_function_destroy()`, which does not affect the registered encoding.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param extension The loading extension.
+ * @param function The encoding function to register.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_extension_register_encoding_function(duckdb_v2_extension_handle extension,
+                                                                            duckdb_v2_encoding_function_handle function,
+                                                                            duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Destroys the encoding function, releasing its resources.
+ *
+ * Null-safe: passing a null pointer or null handle is a no-op. The handle is set to null on return to prevent
+ * double-destruction. Destroying the handle after registration does not affect the registered encoding.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to destroy.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_encoding_function_destroy(duckdb_v2_encoding_function_handle *function);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Snapshots the encodings registered on the context's database.
+ *
+ * Includes the encodings DuckDB provides itself, and every name an encoding was registered under. The caller owns the
+ * returned list and must destroy it with `duckdb_v2_encoding_list_destroy()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param ctx The context whose database to list the encodings of.
+ * @param list On success, receives the snapshot. Owned by the caller; destroy via `duckdb_v2_encoding_list_destroy()`.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_context_list_encodings(duckdb_v2_context_handle ctx,
+                                                              duckdb_v2_encoding_list_handle *list,
+                                                              duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Returns the number of encodings in the list.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param list The list.
+ * @param count Receives the number of encodings.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_encoding_list_get_count(duckdb_v2_encoding_list_handle list, idx_t *count,
+                                                               duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Reads one encoding of the list.
+ *
+ * Fails when `index` is not smaller than the count from `duckdb_v2_encoding_list_get_count()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param list The list.
+ * @param index The index of the encoding.
+ * @param name Receives a borrowed pointer to the name of the encoding. Valid until the list is destroyed.
+ * @param name_length Receives the length of `*name` in bytes. `*name` is not guaranteed to be null-terminated.
+ * @param max_input_bytes Receives the maximum number of encoded bytes that decode to one character.
+ * @param max_output_bytes Receives the maximum number of UTF-8 bytes written for one decoded unit.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_encoding_list_get_entry(duckdb_v2_encoding_list_handle list, idx_t index,
+                                                               const char **name, idx_t *name_length,
+                                                               idx_t *max_input_bytes, idx_t *max_output_bytes,
+                                                               duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Destroys the list, releasing its resources.
+ *
+ * Null-safe: passing a null pointer or null handle is a no-op. The handle is set to null on return to prevent
+ * double-destruction.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param list The list to destroy.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_encoding_list_destroy(duckdb_v2_encoding_list_handle *list);
+#endif
+
+/* --- Struct definitions for encoding --- */
+
+/* ============================================================================
  * MODULE: environment
  * ============================================================================ */
 
