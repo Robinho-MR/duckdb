@@ -18,8 +18,22 @@ TransactionContext::TransactionContext(ClientContext &context)
       auto_rollback(false), current_transaction(nullptr) {
 }
 
+bool TransactionContext::IsSharedTransaction() const {
+	return current_transaction && current_transaction->IsShared();
+}
+
+void TransactionContext::LeaveSharedTransaction() {
+	if (!IsSharedTransaction() || auto_commit) {
+		return;
+	}
+	try {
+		Rollback(nullptr);
+	} catch (...) { // NOLINT
+	}
+}
+
 TransactionContext::~TransactionContext() {
-	if (current_transaction) {
+	if (HasActiveTransaction()) {
 		try {
 			Rollback(nullptr);
 		} catch (std::exception &ex) {
@@ -40,7 +54,8 @@ void TransactionContext::BeginTransaction() {
 	}
 	auto start_timestamp = Timestamp::GetCurrentTimestamp();
 	auto global_transaction_id = context.db->GetDatabaseManager().GetNewTransactionNumber();
-	current_transaction = make_uniq<MetaTransaction>(*context.db, start_timestamp, global_transaction_id);
+	current_transaction = make_shared_ptr<MetaTransaction>(*context.db, context.client_data->temporary_objects,
+	                                                       start_timestamp, global_transaction_id);
 
 	// Notify any registered state of transaction begin
 	for (auto &state : context.GetContext().GetRegisteredState().States()) {
@@ -67,6 +82,16 @@ void TransactionContext::Commit() {
 	autocheckpoint_error = ErrorData();
 	auto transaction = std::move(current_transaction);
 	ClearTransaction();
+	bool commit_result = true;
+	if (!LeaveTransaction(*transaction, true, commit_result)) {
+		// other connections still participate in the transaction, the last one to leave ends it
+		return;
+	}
+	if (!commit_result) {
+		// a participant rolled back: the transaction cannot be committed
+		RollbackTransaction(std::move(transaction), nullptr);
+		throw TransactionException("Failed to commit: a connection sharing the transaction rolled it back");
+	}
 	auto error = transaction->Commit(context);
 	// Notify any registered state of transaction commit
 	if (error.HasError()) {
@@ -107,7 +132,14 @@ void TransactionContext::Rollback(optional_ptr<ErrorData> error) {
 	}
 	auto transaction = std::move(current_transaction);
 	ClearTransaction();
+	bool commit_result = false;
+	if (!LeaveTransaction(*transaction, false, commit_result)) {
+		return;
+	}
+	RollbackTransaction(std::move(transaction), error);
+}
 
+void TransactionContext::RollbackTransaction(shared_ptr<MetaTransaction> transaction, optional_ptr<ErrorData> error) {
 	ErrorData rollback_error;
 	try {
 		transaction->Rollback();
@@ -130,6 +162,63 @@ void TransactionContext::Rollback(optional_ptr<ErrorData> error) {
 	transaction->Finalize(context);
 }
 
+bool TransactionContext::LeaveTransaction(MetaTransaction &transaction, bool commit, bool &commit_result) {
+	if (!transaction.IsShared()) {
+		transaction.MarkFinished();
+		commit_result = commit;
+		return true;
+	}
+	auto result = transaction.Leave(commit);
+	commit_result = result.commit;
+	if (result.last) {
+		auto snapshot_id = transaction.GetSnapshotId();
+		context.db->GetDatabaseManager().RemoveExportedTransaction(snapshot_id);
+		return true;
+	}
+	return false;
+}
+
+string TransactionContext::ExportSnapshot() {
+	if (!HasActiveTransaction() || auto_commit) {
+		throw TransactionException("a snapshot can only be exported from within a transaction");
+	}
+	auto snapshot_id = current_transaction->GetSnapshotId();
+	if (!snapshot_id.empty()) {
+		return snapshot_id;
+	}
+	snapshot_id = context.db->GetDatabaseManager().ExportTransaction(current_transaction);
+	current_transaction->Share(snapshot_id);
+	return snapshot_id;
+}
+
+void TransactionContext::ImportSnapshot(const string &snapshot_id) {
+	if (!HasActiveTransaction() || auto_commit) {
+		throw TransactionException("SET TRANSACTION SNAPSHOT must be called within a transaction");
+	}
+	if (current_transaction->IsShared() || !current_transaction->OpenedTransactions().empty()) {
+		throw TransactionException("SET TRANSACTION SNAPSHOT must be called before any query in the transaction");
+	}
+	auto source = context.db->GetDatabaseManager().GetExportedTransaction(snapshot_id);
+	if (!source || source->IsFinished()) {
+		throw TransactionException("invalid snapshot identifier: \"%s\"", snapshot_id);
+	}
+	if (!source->Join()) {
+		throw TransactionException("invalid snapshot identifier: \"%s\"", snapshot_id);
+	}
+	// discard our own (empty) transaction and continue in the shared one
+	auto previous = std::move(current_transaction);
+	current_transaction = source;
+	previous->MarkFinished();
+	previous->Rollback();
+	for (auto const &s : context.GetContext().GetRegisteredState().States()) {
+		s->TransactionRollback(*previous, context, nullptr);
+	}
+	previous->Finalize(context);
+	for (auto &state : context.GetContext().GetRegisteredState().States()) {
+		state->TransactionBegin(*current_transaction, context);
+	}
+}
+
 void TransactionContext::ClearTransaction() {
 	SetAutoCommit(true);
 	current_transaction = nullptr;
@@ -139,7 +228,7 @@ idx_t TransactionContext::GetActiveQuery() {
 	if (!current_transaction) {
 		throw InternalException("GetActiveQuery called without active transaction");
 	}
-	return current_transaction->GetActiveQuery();
+	return active_query_id;
 }
 
 void TransactionContext::ResetActiveQuery() {
@@ -152,6 +241,7 @@ void TransactionContext::SetActiveQuery(transaction_t query_number) {
 	if (!current_transaction) {
 		throw InternalException("SetActiveQuery called without active transaction");
 	}
+	active_query_id = query_number;
 	current_transaction->SetActiveQuery(query_number);
 }
 

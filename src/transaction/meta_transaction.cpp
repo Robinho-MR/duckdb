@@ -3,6 +3,7 @@
 #include "duckdb/common/exception/transaction_exception.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/main/client_data.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/transaction/transaction_manager.hpp"
 #include "duckdb/catalog/catalog.hpp"
@@ -10,9 +11,11 @@
 
 namespace duckdb {
 
-MetaTransaction::MetaTransaction(DatabaseInstance &db, timestamp_t start_timestamp_p, transaction_t transaction_id_p)
+MetaTransaction::MetaTransaction(DatabaseInstance &db, shared_ptr<AttachedDatabase> temporary_objects_p,
+                                 timestamp_t start_timestamp_p, transaction_t transaction_id_p)
     : start_timestamp(start_timestamp_p), global_transaction_id(transaction_id_p), transaction_validity(db),
-      active_query(MAXIMUM_QUERY_ID), modified_database(nullptr), is_read_only(false) {
+      active_query(MAXIMUM_QUERY_ID), modified_database(nullptr), is_read_only(false),
+      temporary_objects(std::move(temporary_objects_p)), finished(false) {
 }
 
 MetaTransaction::~MetaTransaction() = default;
@@ -78,7 +81,6 @@ Transaction &MetaTransaction::GetTransaction(ClientContext &context, AttachedDat
 
 		return new_transaction;
 	} else {
-		D_ASSERT(entry->second.transaction.active_query == active_query);
 		return entry->second.transaction;
 	}
 }
@@ -191,12 +193,60 @@ void MetaTransaction::Rollback() {
 	}
 }
 
+void MetaTransaction::Share(const string &snapshot_id_p) {
+	lock_guard<mutex> guard(shared_lock);
+	shared = true;
+	snapshot_id = snapshot_id_p;
+	participants = 1;
+}
+
+bool MetaTransaction::IsShared() {
+	lock_guard<mutex> guard(shared_lock);
+	return shared;
+}
+
+string MetaTransaction::GetSnapshotId() {
+	lock_guard<mutex> guard(shared_lock);
+	return snapshot_id;
+}
+
+bool MetaTransaction::Join() {
+	lock_guard<mutex> guard(shared_lock);
+	if (finished) {
+		return false;
+	}
+	participants++;
+	return true;
+}
+
+MetaTransaction::LeaveResult MetaTransaction::Leave(bool commit) {
+	lock_guard<mutex> guard(shared_lock);
+	D_ASSERT(participants > 0);
+	if (!commit) {
+		rollback_vote = true;
+	}
+	participants--;
+	LeaveResult result;
+	result.last = participants == 0;
+	result.commit = !rollback_vote;
+	if (result.last) {
+		finished = true;
+	}
+	return result;
+}
+
 void MetaTransaction::Finalize(ClientContext &context) {
 	// Try to checkpoint any attached databases potentially still held by this transaction.
 	for (auto &database : referenced_databases) {
 		// If the use count is down to one, then we already detached the database.
 		// That means new transactions can no longer obtain a shared pointer to it.
 		AttachedDatabase::InvokeCloseIfLastReference(database.second, context);
+	}
+	if (IsShared()) {
+		// other connections may keep the finished transaction around until their next query
+		lock_guard<mutex> guard(referenced_database_lock);
+		referenced_databases.clear();
+		used_databases.clear();
 	}
 }
 

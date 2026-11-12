@@ -30,7 +30,7 @@ public:
 	~TransactionContext();
 
 	MetaTransaction &ActiveTransaction() {
-		if (!current_transaction) {
+		if (!HasActiveTransaction()) {
 			throw InternalException("TransactionContext::ActiveTransaction called without active transaction");
 		}
 		return *current_transaction;
@@ -53,6 +53,15 @@ public:
 
 	void SetReadOnly();
 
+	//! Exports the current transaction so that other connections can join it, returns its snapshot identifier
+	string ExportSnapshot();
+	//! Replaces the (still unused) current transaction by the exported transaction with the given identifier
+	void ImportSnapshot(const string &snapshot_id);
+	//! Whether the current transaction is shared with other connections
+	bool IsSharedTransaction() const;
+	//! Leaves the shared transaction (voting to roll back), if any
+	void LeaveSharedTransaction();
+
 	idx_t GetActiveQuery();
 	void ResetActiveQuery();
 	void SetActiveQuery(transaction_t query_number);
@@ -74,8 +83,14 @@ private:
 	TransactionInvalidationPolicy invalidation_policy = TransactionInvalidationPolicy::STANDARD_POLICY;
 	bool auto_rollback = false;
 
-	unique_ptr<MetaTransaction> current_transaction;
+	shared_ptr<MetaTransaction> current_transaction;
+	//! The query id of the current query of this connection
+	transaction_t active_query_id = MAXIMUM_QUERY_ID;
 	ErrorData autocheckpoint_error;
+
+	//! Leaves the transaction. Returns true if the caller is the last participant and has to end it
+	bool LeaveTransaction(MetaTransaction &transaction, bool commit, bool &commit_result);
+	void RollbackTransaction(shared_ptr<MetaTransaction> transaction, optional_ptr<ErrorData> error);
 
 	TransactionContext(const TransactionContext &) = delete;
 };
