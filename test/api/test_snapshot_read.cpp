@@ -1,6 +1,9 @@
 #include "catch.hpp"
 #include "test_helpers.hpp"
 
+#include "duckdb/common/file_system.hpp"
+#include "duckdb/storage/storage_info.hpp"
+
 #include <atomic>
 #include <thread>
 
@@ -39,6 +42,36 @@ void ChurnBlocks(Connection &con) {
 		                          "FROM range(1000000)"));
 		REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
 	}
+}
+
+//! The contents of the metadata blocks a snapshot reader uses, read from the database file
+vector<string> ReadReaderMetadata(Connection &reader, const string &database, const string &path) {
+	auto result = reader.Query("SELECT block_id, free_list FROM pragma_metadata_info('" + database + "')");
+	REQUIRE_NO_FAIL(*result);
+	auto &fs = FileSystem::GetFileSystem(*reader.context);
+	auto handle = fs.OpenFile(path, FileFlags::FILE_FLAGS_READ);
+	static constexpr idx_t METADATA_BLOCK_SIZE = AlignValueFloor(Storage::DEFAULT_BLOCK_SIZE / 64);
+	vector<string> contents;
+	auto &rows = result->Collection();
+	for (idx_t row = 0; row < rows.Count(); row++) {
+		auto block_id = rows.GetValue(0, row).GetValue<idx_t>();
+		auto free_list = ListValue::GetChildren(rows.GetValue(1, row));
+		auto block_start = Storage::FILE_HEADER_SIZE * 3 + block_id * DEFAULT_BLOCK_ALLOC_SIZE;
+		for (idx_t index = 0; index < 64; index++) {
+			bool is_free = false;
+			for (auto &free_index : free_list) {
+				is_free = is_free || free_index.GetValue<idx_t>() == index;
+			}
+			if (is_free) {
+				continue;
+			}
+			string data(METADATA_BLOCK_SIZE, '\0');
+			auto location = block_start + Storage::DEFAULT_BLOCK_HEADER_SIZE + index * METADATA_BLOCK_SIZE;
+			handle->Read(QueryContext(), &data[0], METADATA_BLOCK_SIZE, location);
+			contents.push_back(std::move(data));
+		}
+	}
+	return contents;
 }
 
 } // namespace
@@ -226,6 +259,109 @@ TEST_CASE("A restarted writer does not re-use blocks of attached snapshot reader
 		REQUIRE_NO_FAIL(writer->Query("CHECKPOINT"));
 	}
 	VerifyBigTable(reader, "s.");
+}
+
+TEST_CASE("Writers do not rewrite metadata blocks of attached snapshot readers", "[storage][snapshot]") {
+	auto path = TestCreatePath("snapshot_metadata.db");
+	DeleteDatabase(path);
+
+	DuckDB writer_db(path);
+	Connection writer(writer_db);
+	for (idx_t i = 0; i < 50; i++) {
+		REQUIRE_NO_FAIL(writer.Query("CREATE TABLE t" + to_string(i) + " AS SELECT range AS b FROM range(3000)"));
+	}
+	REQUIRE_NO_FAIL(writer.Query("CHECKPOINT"));
+
+	DuckDB reader_db(nullptr);
+	Connection reader(reader_db);
+	REQUIRE_NO_FAIL(reader.Query("ATTACH '" + path + "' AS s (READ_ONLY, SNAPSHOT)"));
+	auto metadata = ReadReaderMetadata(reader, "s", path);
+	REQUIRE(!metadata.empty());
+
+	// the checkpoints free metadata of the reader's checkpoint, which must not be filled in place
+	for (idx_t round = 0; round < 3; round++) {
+		for (idx_t i = 0; i < 50; i++) {
+			REQUIRE_NO_FAIL(writer.Query("UPDATE t" + to_string(i) + " SET b = b + 1"));
+		}
+		REQUIRE_NO_FAIL(writer.Query("CHECKPOINT"));
+	}
+	REQUIRE(ReadReaderMetadata(reader, "s", path) == metadata);
+	auto result = reader.Query("SELECT SUM(b) FROM s.t49");
+	REQUIRE(CHECK_COLUMN(result, 0, {Value::HUGEINT(4498500)}));
+
+	// without readers the writer fills metadata blocks in place again
+	REQUIRE_NO_FAIL(reader.Query("DETACH s"));
+	for (idx_t i = 0; i < 50; i++) {
+		REQUIRE_NO_FAIL(writer.Query("UPDATE t" + to_string(i) + " SET b = b + 1"));
+	}
+	REQUIRE_NO_FAIL(writer.Query("CHECKPOINT"));
+	result = writer.Query("SELECT SUM(b) FROM t49");
+	REQUIRE(CHECK_COLUMN(result, 0, {Value::HUGEINT(4510500)}));
+}
+
+TEST_CASE("Snapshot readers in the writer's process keep the writer lock", "[storage][snapshot]") {
+	auto path = TestCreatePath("snapshot_writer_lock.db");
+	DeleteDatabase(path);
+
+	DuckDB writer_db(path);
+	Connection writer(writer_db);
+	CreateSnapshotDatabase(writer);
+
+	// attaching and detaching opens and closes handles to the file in this process
+	DuckDB reader_db(nullptr);
+	Connection reader(reader_db);
+	REQUIRE_NO_FAIL(reader.Query("ATTACH '" + path + "' AS s (READ_ONLY, SNAPSHOT)"));
+	REQUIRE_THROWS(DuckDB(path));
+	REQUIRE_NO_FAIL(reader.Query("DETACH s"));
+	REQUIRE_THROWS(DuckDB(path));
+
+	REQUIRE_NO_FAIL(writer.Query("INSERT INTO small VALUES (100)"));
+	REQUIRE_NO_FAIL(writer.Query("CHECKPOINT"));
+}
+
+TEST_CASE("A restarted writer replays WAL data blocks while snapshot readers are attached", "[storage][snapshot]") {
+	auto path = TestCreatePath("snapshot_restart_wal.db");
+	DeleteDatabase(path);
+	{
+		DuckDB db(path);
+		Connection con(db);
+		REQUIRE_NO_FAIL(con.Query("CREATE TABLE tmp AS SELECT range AS a FROM range(3000000)"));
+		REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
+		REQUIRE_NO_FAIL(con.Query("DROP TABLE tmp"));
+		REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
+	}
+	{
+		// the data of "live" is written to free blocks and only referenced from the WAL
+		DuckDB db(path);
+		Connection con(db);
+		REQUIRE_NO_FAIL(con.Query("PRAGMA disable_checkpoint_on_shutdown"));
+		REQUIRE_NO_FAIL(con.Query("SET checkpoint_threshold = '10GB'"));
+		REQUIRE_NO_FAIL(con.Query("CREATE TABLE live AS SELECT range AS a, range * 7 AS b FROM range(2000000)"));
+	}
+	auto verify_live = [](Connection &con, const string &prefix) {
+		auto result = con.Query("SELECT COUNT(*), SUM(b) FROM " + prefix + "live");
+		REQUIRE_NO_FAIL(*result);
+		REQUIRE(CHECK_COLUMN(result, 0, {2000000}));
+		REQUIRE(CHECK_COLUMN(result, 1, {Value::HUGEINT(13999993000000)}));
+	};
+	{
+		DuckDB reader_db(nullptr);
+		Connection reader(reader_db);
+		REQUIRE_NO_FAIL(reader.Query("ATTACH '" + path + "' AS s (READ_ONLY, SNAPSHOT)"));
+		verify_live(reader, "s.");
+
+		// this writer holds back the free list it loads, but the WAL data blocks are in use
+		DuckDB db(path);
+		Connection con(db);
+		verify_live(con, "");
+		REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
+	}
+	DuckDB db(path);
+	Connection con(db);
+	REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE other AS SELECT range * 0 + 999 AS z FROM range(3000000)"));
+	REQUIRE_NO_FAIL(con.Query("CHECKPOINT"));
+	verify_live(con, "");
 }
 
 TEST_CASE("Snapshot readers with a regular writer and reader", "[storage][snapshot]") {

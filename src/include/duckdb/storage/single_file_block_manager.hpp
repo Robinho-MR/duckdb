@@ -142,6 +142,10 @@ public:
 	bool IsRemote() override;
 	//! Whether or not to prefetch
 	bool Prefetch() override;
+	//! Snapshot readers may read any block on disk: blocks are only rewritten in place while the writer holds the
+	//! readers range, which fails if readers are attached
+	bool TryBeginInPlaceWrites() override;
+	void EndInPlaceWrites() override;
 
 	//! Return the checkpoint iteration of the file.
 	uint64_t GetCheckpointIteration() const {
@@ -243,6 +247,11 @@ private:
 	set<block_id_t> reader_held_blocks;
 	//! Whether snapshot readers can attach while this writer is active
 	bool snapshot_readers_possible = false;
+	//! Whether this writer holds the readers range, so that no snapshot reader can attach
+	bool readers_excluded = false;
+	mutex readers_excluded_lock;
+	//! Whether the free list loaded by this writer is held back for snapshot readers
+	bool loaded_free_list_held = false;
 	//! The WAL files of a snapshot reader, until they are replayed
 	SnapshotWALHandles snapshot_wal_handles;
 	//! The current meta block id

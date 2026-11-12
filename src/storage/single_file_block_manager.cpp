@@ -648,13 +648,6 @@ struct HeaderRangeLock {
 	    : handle(handle), start(start), length(length) {
 		handle.LockRange(start, length, type);
 	}
-	//! Takes the lock without waiting; returns nullptr if a conflicting lock is held
-	static unique_ptr<HeaderRangeLock> TryLock(DatabaseHandle &handle, idx_t start, idx_t length, FileLockType type) {
-		if (!handle.TryLockRange(start, length, type)) {
-			return nullptr;
-		}
-		return unique_ptr<HeaderRangeLock>(new HeaderRangeLock(handle, start, length));
-	}
 	~HeaderRangeLock() {
 		try {
 			handle.UnlockRange(start, length);
@@ -665,11 +658,6 @@ struct HeaderRangeLock {
 	DatabaseHandle &handle;
 	idx_t start;
 	idx_t length;
-
-private:
-	//! Adopts a lock that is already held
-	HeaderRangeLock(DatabaseHandle &handle, idx_t start, idx_t length) : handle(handle), start(start), length(length) {
-	}
 };
 
 } // namespace
@@ -683,6 +671,33 @@ bool SingleFileBlockManager::SnapshotReadersAttached() {
 	} catch (std::exception &) {
 		// if we cannot tell, readers might be attached
 		return true;
+	}
+}
+
+bool SingleFileBlockManager::TryBeginInPlaceWrites() {
+	if (!snapshot_readers_possible) {
+		return true;
+	}
+	lock_guard<mutex> guard(readers_excluded_lock);
+	if (!readers_excluded) {
+		try {
+			readers_excluded = handle->TryLockRange(DatabaseLockRange::READERS_START, DatabaseLockRange::READERS_LENGTH,
+			                                        FileLockType::WRITE_LOCK);
+		} catch (std::exception &) { // NOLINT: if we cannot lock, readers might be attached
+		}
+	}
+	return readers_excluded;
+}
+
+void SingleFileBlockManager::EndInPlaceWrites() {
+	lock_guard<mutex> guard(readers_excluded_lock);
+	if (!readers_excluded) {
+		return;
+	}
+	readers_excluded = false;
+	try {
+		handle->UnlockRange(DatabaseLockRange::READERS_START, DatabaseLockRange::READERS_LENGTH);
+	} catch (std::exception &) { // NOLINT: the lock is released when the file is closed
 	}
 }
 
@@ -828,6 +843,7 @@ void SingleFileBlockManager::LoadExistingDatabase(QueryContext context) {
 			// attached readers may read an older checkpoint whose blocks are in the free list
 			reader_held_blocks = std::move(free_list);
 			free_list.clear();
+			loaded_free_list_held = true;
 		}
 	}
 }
@@ -1066,13 +1082,21 @@ void SingleFileBlockManager::MarkBlockAsUsed(block_id_t block_id) {
 		// any blocks in the middle are added to the free list
 		// i.e. if max_block = 0, and block_id = 3, we need to add blocks 1 and 2 to the free list
 		while (max_block < block_id) {
-			free_list.insert(max_block);
+			if (loaded_free_list_held) {
+				// a previous writer may have used these blocks while snapshot readers were attached
+				reader_held_blocks.insert(max_block);
+			} else {
+				free_list.insert(max_block);
+			}
 			max_block++;
 		}
 		max_block++;
 	} else if (free_list.find(block_id) != free_list.end()) {
 		// block is currently in the free list - erase
 		free_list.erase(block_id);
+	} else if (reader_held_blocks.find(block_id) != reader_held_blocks.end()) {
+		// the block was free in the loaded checkpoint, so readers of older checkpoints do not need it
+		reader_held_blocks.erase(block_id);
 	} else {
 		// block is already in use - increase reference count
 		IncreaseBlockReferenceCountInternal(block_id);
@@ -1100,7 +1124,7 @@ void SingleFileBlockManager::MarkBlockAsModified(block_id_t block_id) {
 	if (modified_blocks.find(block_id) != modified_blocks.end()) {
 		throw InternalException("MarkBlockAsModified called with already modified block id %d", block_id);
 	}
-	if (free_list.find(block_id) != free_list.end()) {
+	if (free_list.find(block_id) != free_list.end() || reader_held_blocks.find(block_id) != reader_held_blocks.end()) {
 		throw InternalException("MarkBlockAsModified called with already freed block id %d", block_id);
 	}
 	auto newly_used_entry = newly_used_blocks.find(block_id);
@@ -1316,7 +1340,7 @@ void SingleFileBlockManager::Read(QueryContext context, Block &block) {
 
 bool SingleFileBlockManager::BlockIsFreeListed(block_id_t block_id) {
 	lock_guard<mutex> lock(single_file_block_lock);
-	return free_list.find(block_id) != free_list.end();
+	return free_list.find(block_id) != free_list.end() || reader_held_blocks.find(block_id) != reader_held_blocks.end();
 }
 
 void SingleFileBlockManager::ReadBlocks(QueryContext context, FileBuffer &buffer, block_id_t start_block,
@@ -1518,13 +1542,8 @@ void SingleFileBlockManager::WriteHeader(QueryContext context, DatabaseHeader he
 	                             options.storage_version < StorageVersion::V2_0_0;
 	// snapshot readers read the main header without coordinating with the writer: hold the readers range while it
 	// is rewritten, so that no reader is attached and none can attach in the meantime
-	unique_ptr<HeaderRangeLock> readers_lock;
-	if ((upgrade_main_header || downgrade_main_header) && snapshot_readers_possible) {
-		readers_lock = HeaderRangeLock::TryLock(*handle, DatabaseLockRange::READERS_START,
-		                                        DatabaseLockRange::READERS_LENGTH, FileLockType::WRITE_LOCK);
-		if (!readers_lock) {
-			throw IOException("Cannot change the storage version of \"%s\" while snapshot readers are attached", path);
-		}
+	if ((upgrade_main_header || downgrade_main_header) && !TryBeginInPlaceWrites()) {
+		throw IOException("Cannot change the storage version of \"%s\" while snapshot readers are attached", path);
 	}
 	if (upgrade_main_header) {
 		RewriteMainHeader(context, StorageVersion::V1_2_0);
@@ -1532,7 +1551,8 @@ void SingleFileBlockManager::WriteHeader(QueryContext context, DatabaseHeader he
 	if (downgrade_main_header) {
 		RewriteMainHeader(context, options.storage_version);
 	}
-	readers_lock.reset();
+	// all blocks of this checkpoint are written: snapshot readers can attach again
+	EndInPlaceWrites();
 
 	// set the header inside the buffer
 	MemoryStream serializer(Allocator::Get(db));

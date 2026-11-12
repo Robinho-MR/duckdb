@@ -396,20 +396,42 @@ static void TryAcquireFileLock(FileSystem &fs, int fd, const string &path, FileO
 	bool require_lock = false;
 #ifdef DUCKDB_HAS_OFD_LOCKS
 	if (flags.DatabaseLock()) {
+		// OFD locks: a process-scoped lock would be dropped when any other handle to the file in this process closes
+		set_command = F_OFD_SETLK;
+		get_command = F_OFD_GETLK;
 		if (flags.Lock() == FileLockType::WRITE_LOCK) {
-			// the writer lock stays process-scoped, like the whole-file lock
 			fl.l_start = DatabaseLockRange::WRITER_START;
 			fl.l_len = DatabaseLockRange::WRITER_LENGTH;
 		} else {
 			fl.l_start = DatabaseLockRange::READERS_START;
 			fl.l_len = DatabaseLockRange::READERS_LENGTH;
-			set_command = F_OFD_SETLK;
-			get_command = F_OFD_GETLK;
 			require_lock = true;
 		}
 	}
 #endif
 	int rc = fcntl(fd, set_command, &fl);
+#ifdef DUCKDB_HAS_OFD_LOCKS
+	// a writer holds the readers range while it rewrites blocks in place: wait for it instead of failing
+	while (rc == -1 && require_lock && (errno == EAGAIN || errno == EACCES)) {
+		auto holder = fl;
+		if (fcntl(fd, F_OFD_GETLK, &holder) == -1) {
+			errno = EAGAIN;
+			break;
+		}
+		bool writer_holds_readers_range = holder.l_type == F_WRLCK &&
+		                                  holder.l_start == static_cast<off_t>(DatabaseLockRange::READERS_START) &&
+		                                  holder.l_len == static_cast<off_t>(DatabaseLockRange::READERS_LENGTH);
+		if (holder.l_type != F_UNLCK && !writer_holds_readers_range) {
+			// e.g. a whole-file lock of an older version
+			errno = EAGAIN;
+			break;
+		}
+		if (writer_holds_readers_range) {
+			ThreadUtil::SleepMs(1);
+		}
+		rc = fcntl(fd, set_command, &fl);
+	}
+#endif
 	int retained_errno = errno;
 	bool has_error = rc == -1;
 	string extended_error;
@@ -464,7 +486,7 @@ static void TryAcquireFileLock(FileSystem &fs, int fd, const string &path, FileO
 		}
 #ifdef DUCKDB_HAS_OFD_LOCKS
 		if (held_by_writer && !require_lock) {
-			extended_error += ". To read the last checkpoint of a database that is being written, attach it with "
+			extended_error += ". To read a snapshot of a database that is being written, attach it with "
 			                  "(READ_ONLY, SNAPSHOT)";
 		}
 #endif
