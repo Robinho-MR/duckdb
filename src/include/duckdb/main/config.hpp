@@ -29,7 +29,6 @@
 #include "duckdb/function/cast/default_casts.hpp"
 #include "duckdb/function/replacement_scan.hpp"
 #include "duckdb/storage/compression/bitpacking.hpp"
-#include "duckdb/function/encoding_function.hpp"
 #include "duckdb/main/extension/linked_extension_registry.hpp"
 #include "duckdb/main/setting_info.hpp"
 #include "duckdb/execution/index/index_type_set.hpp"
@@ -313,12 +312,6 @@ public:
 	//! Returns a list of disabled compression methods
 	DUCKDB_API vector<CompressionType> GetDisabledCompressionMethods() const;
 
-	//! Returns the encode function matching the encoding name.
-	DUCKDB_API optional_ptr<EncodingFunction> GetEncodeFunction(const string &name) const;
-	DUCKDB_API void RegisterEncodeFunction(const EncodingFunction &function) const;
-	//! Returns the encode function names.
-	DUCKDB_API vector<reference<EncodingFunction>> GetLoadedEncodedFunctions() const;
-	//! Returns the encode function matching the encoding name.
 	DUCKDB_API ArrowTypeExtension GetArrowExtension(ArrowExtensionMetadata info) const;
 	DUCKDB_API ArrowTypeExtension GetArrowExtension(const LogicalType &type) const;
 	DUCKDB_API bool HasArrowExtension(const LogicalType &type) const;
@@ -403,7 +396,6 @@ private:
 	//! Whether disabled_optimizers is non-empty
 	atomic<bool> has_disabled_optimizers {false};
 	unique_ptr<CompressionFunctionSet> compression_functions;
-	unique_ptr<EncodingFunctionSet> encoding_functions;
 	unique_ptr<ArrowTypeExtensionSet> arrow_extensions;
 	unique_ptr<TypeManager> type_manager;
 	unique_ptr<CollationBinding> collation_bindings;
