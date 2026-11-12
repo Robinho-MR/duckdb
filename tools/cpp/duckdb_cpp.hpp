@@ -514,16 +514,6 @@ private:
 };
 
 /// A borrowed handle to a client context: the one a callback is handed, valid only for the duration of that callback.
-/// An encoding `read_csv` can decode, as listed by `Context::ListEncodings`.
-struct EncodingInformation {
-	/// The name the encoding is registered under.
-	std::string name;
-	/// The length in bytes of the longest sequence of encoded bytes that decodes to one character.
-	idx_t max_input_bytes = 0;
-	/// The length in bytes of the longest UTF-8 sequence written for one decoded unit.
-	idx_t max_output_bytes = 0;
-};
-
 class Context final : public detail::Handle<Context> {
 	friend detail::HandleFactory;
 
@@ -556,10 +546,6 @@ public:
 	/// @param message The message body.
 	/// @param log_type The log type to record under, matched case-sensitively. Empty selects the default type.
 	auto Log(LogLevel level, std::string_view message, std::string_view log_type = {}) const -> void;
-
-	/// The encodings registered on this context's database, in no particular order: the ones DuckDB provides itself
-	/// and every name an encoding was registered under.
-	auto ListEncodings() const -> std::vector<EncodingInformation>;
 
 private:
 	explicit Context(void *impl);

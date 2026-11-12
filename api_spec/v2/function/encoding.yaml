@@ -6,8 +6,6 @@ module: encoding
 # The single decode callback is handed a chunk of encoded bytes and a buffer to write UTF-8 into, and converts as many
 # whole characters as it can. It is stateless: the engine keeps hold of the input that was not consumed, and hands it
 # back, followed by more bytes, on the next call.
-#
-# The registered encodings can be listed with `[[context_list_encodings]]`.
 
 #-----------------------------------------------------------------------------------------------------------------------
 # Handles
@@ -20,12 +18,6 @@ handles:
       `[[encoding_function_set_decode_callback]]`, etc.), made available with
       `[[connection_register_encoding_function]]` or `[[extension_register_encoding_function]]`, and destroyed with
       `[[encoding_function_destroy]]`.
-
-  encoding_list:
-    description: |
-      An owned snapshot of the encodings registered at the time it was taken, in no particular order. Create it with
-      `[[context_list_encodings]]`, read it with `[[encoding_list_get_count]]` and `[[encoding_list_get_entry]]`, and
-      destroy it with `[[encoding_list_destroy]]`. Encodings registered later are not added to it.
 
 #-----------------------------------------------------------------------------------------------------------------------
 # Callbacks
@@ -304,112 +296,5 @@ functions:
       function:
         type: encoding_function
         description: The function to destroy.
-        indirection: 1
-    return_type: ERROR
-
-  #---------------------------------------------------------------------------------------------------------------------
-  # Encoding List
-  #---------------------------------------------------------------------------------------------------------------------
-  context_list_encodings:
-    lifecycle:
-      - [ "unstable", "v2.0.0", "2026-11-12" ]
-    description: |
-      Snapshots the encodings registered on the context's database.
-
-      Includes the encodings DuckDB provides itself, and every name an encoding was registered under. The caller owns
-      the returned list and must destroy it with `[[encoding_list_destroy]]`.
-    role: constructor
-    belongs_to: encoding_list
-    parameters:
-      ctx:
-        type: context
-        description: The context whose database to list the encodings of.
-      list:
-        type: encoding_list
-        indirection: 1
-        kind: OUT
-        description: On success, receives the snapshot. Owned by the caller; destroy via `[[encoding_list_destroy]]`.
-      err:
-        type: error_info
-        indirection: 1
-        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
-    return_type: ERROR
-
-  encoding_list_get_count:
-    lifecycle:
-      - [ "unstable", "v2.0.0", "2026-11-12" ]
-    description: Returns the number of encodings in the list.
-    role: getter
-    belongs_to: encoding_list
-    parameters:
-      list:
-        type: encoding_list
-        description: The list.
-      count:
-        type: idx
-        indirection: 1
-        kind: OUT
-        description: Receives the number of encodings.
-      err:
-        type: error_info
-        indirection: 1
-        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
-    return_type: ERROR
-
-  encoding_list_get_entry:
-    lifecycle:
-      - [ "unstable", "v2.0.0", "2026-11-12" ]
-    description: |
-      Reads one encoding of the list.
-
-      Fails when `index` is not smaller than the count from `[[encoding_list_get_count]]`.
-    role: getter
-    belongs_to: encoding_list
-    parameters:
-      list:
-        type: encoding_list
-        description: The list.
-      index:
-        type: idx
-        description: The index of the encoding.
-      name:
-        type: char
-        indirection: 2
-        const: true
-        kind: OUT_BORROW
-        description: Receives a borrowed pointer to the name of the encoding. Valid until the list is destroyed.
-      name_length:
-        type: idx
-        indirection: 1
-        kind: OUT
-        description: Receives the length of `*name` in bytes. `*name` is not guaranteed to be null-terminated.
-      max_input_bytes:
-        type: idx
-        indirection: 1
-        kind: OUT
-        description: Receives the maximum number of encoded bytes that decode to one character.
-      max_output_bytes:
-        type: idx
-        indirection: 1
-        kind: OUT
-        description: Receives the maximum number of UTF-8 bytes written for one decoded unit.
-      err:
-        type: error_info
-        indirection: 1
-        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
-    return_type: ERROR
-
-  encoding_list_destroy:
-    lifecycle:
-      - [ "unstable", "v2.0.0", "2026-11-12" ]
-    description: |
-      Destroys the list, releasing its resources.
-
-      Null-safe: passing a null pointer or null handle is a no-op. The handle is set to null on return to
-      prevent double-destruction.
-    parameters:
-      list:
-        type: encoding_list
-        description: The list to destroy.
         indirection: 1
     return_type: ERROR

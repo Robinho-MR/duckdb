@@ -2390,16 +2390,6 @@ typedef struct _duckdb_v2_encoding_function {
 	void *internal_ptr;
 } * duckdb_v2_encoding_function_handle;
 
-/*!
- * An owned snapshot of the encodings registered at the time it was taken, in no particular order. Create it with
- * `duckdb_v2_context_list_encodings()`, read it with `duckdb_v2_encoding_list_get_count()` and
- * `duckdb_v2_encoding_list_get_entry()`, and destroy it with `duckdb_v2_encoding_list_destroy()`. Encodings registered
- * later are not added to it.
- */
-typedef struct _duckdb_v2_encoding_list {
-	void *internal_ptr;
-} * duckdb_v2_encoding_list_handle;
-
 /* --- Constants for encoding --- */
 
 /* --- Function pointer typedefs for encoding --- */
@@ -2604,85 +2594,6 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_extension_register_encoding_function(duck
  * @return DUCKDB_V2_ERROR
  */
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_encoding_function_destroy(duckdb_v2_encoding_function_handle *function);
-#endif
-
-#if DUCKDB_V2_API_ALLOW_UNSTABLE
-/*!
- * Snapshots the encodings registered on the context's database.
- *
- * Includes the encodings DuckDB provides itself, and every name an encoding was registered under. The caller owns the
- * returned list and must destroy it with `duckdb_v2_encoding_list_destroy()`.
- *
- * history:
- * - unstable: v2.0.0
- *
- * @param ctx The context whose database to list the encodings of.
- * @param list On success, receives the snapshot. Owned by the caller; destroy via `duckdb_v2_encoding_list_destroy()`.
- * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
- * `duckdb_v2_error_info_destroy()`.
- * @return DUCKDB_V2_ERROR
- */
-DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_context_list_encodings(duckdb_v2_context_handle ctx,
-                                                              duckdb_v2_encoding_list_handle *list,
-                                                              duckdb_v2_error_info_handle *err);
-#endif
-
-#if DUCKDB_V2_API_ALLOW_UNSTABLE
-/*!
- * Returns the number of encodings in the list.
- *
- * history:
- * - unstable: v2.0.0
- *
- * @param list The list.
- * @param count Receives the number of encodings.
- * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
- * `duckdb_v2_error_info_destroy()`.
- * @return DUCKDB_V2_ERROR
- */
-DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_encoding_list_get_count(duckdb_v2_encoding_list_handle list, idx_t *count,
-                                                               duckdb_v2_error_info_handle *err);
-#endif
-
-#if DUCKDB_V2_API_ALLOW_UNSTABLE
-/*!
- * Reads one encoding of the list.
- *
- * Fails when `index` is not smaller than the count from `duckdb_v2_encoding_list_get_count()`.
- *
- * history:
- * - unstable: v2.0.0
- *
- * @param list The list.
- * @param index The index of the encoding.
- * @param name Receives a borrowed pointer to the name of the encoding. Valid until the list is destroyed.
- * @param name_length Receives the length of `*name` in bytes. `*name` is not guaranteed to be null-terminated.
- * @param max_input_bytes Receives the maximum number of encoded bytes that decode to one character.
- * @param max_output_bytes Receives the maximum number of UTF-8 bytes written for one decoded unit.
- * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
- * `duckdb_v2_error_info_destroy()`.
- * @return DUCKDB_V2_ERROR
- */
-DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_encoding_list_get_entry(duckdb_v2_encoding_list_handle list, idx_t index,
-                                                               const char **name, idx_t *name_length,
-                                                               idx_t *max_input_bytes, idx_t *max_output_bytes,
-                                                               duckdb_v2_error_info_handle *err);
-#endif
-
-#if DUCKDB_V2_API_ALLOW_UNSTABLE
-/*!
- * Destroys the list, releasing its resources.
- *
- * Null-safe: passing a null pointer or null handle is a no-op. The handle is set to null on return to prevent
- * double-destruction.
- *
- * history:
- * - unstable: v2.0.0
- *
- * @param list The list to destroy.
- * @return DUCKDB_V2_ERROR
- */
-DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_encoding_list_destroy(duckdb_v2_encoding_list_handle *list);
 #endif
 
 /* --- Struct definitions for encoding --- */

@@ -126,24 +126,6 @@ static auto Convert(CV2EncodingFunction *func) -> duckdb_v2_encoding_function_ha
 	return reinterpret_cast<duckdb_v2_encoding_function_handle>(func);
 }
 
-struct CV2EncodingEntry {
-	string name;
-	idx_t max_input_bytes;
-	idx_t max_output_bytes;
-};
-
-class CV2EncodingList {
-public:
-	vector<CV2EncodingEntry> entries;
-};
-
-static auto Convert(duckdb_v2_encoding_list_handle list) -> CV2EncodingList * {
-	return reinterpret_cast<CV2EncodingList *>(list);
-}
-static auto Convert(CV2EncodingList *list) -> duckdb_v2_encoding_list_handle {
-	return reinterpret_cast<duckdb_v2_encoding_list_handle>(list);
-}
-
 } // namespace duckdb::capiv2
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -234,67 +216,6 @@ DUCKDB_V2_ERROR duckdb_v2_encoding_function_destroy(duckdb_v2_encoding_function_
 		if (*function) {
 			delete Convert(*function);
 			*function = nullptr;
-		}
-	});
-}
-
-DUCKDB_V2_ERROR duckdb_v2_context_list_encodings(duckdb_v2_context_handle ctx, duckdb_v2_encoding_list_handle *list,
-                                                 duckdb_v2_error_info_handle *err) {
-	DUCKDB_CHECK_ARG(ctx);
-	DUCKDB_CHECK_ARG(list);
-	*list = nullptr;
-	return WithErrorHandler(err, [&]() {
-		auto result = duckdb::make_uniq<CV2EncodingList>();
-		auto &config = duckdb::DBConfig::GetConfig(Convert(ctx)->context);
-		for (auto &function_ref : config.GetLoadedEncodedFunctions()) {
-			auto &function = function_ref.get();
-			result->entries.push_back({function.GetName(), function.GetLookupBytes(), function.GetBytesPerIteration()});
-		}
-		*list = Convert(result.release());
-	});
-}
-
-DUCKDB_V2_ERROR duckdb_v2_encoding_list_get_count(duckdb_v2_encoding_list_handle list, idx_t *count,
-                                                  duckdb_v2_error_info_handle *err) {
-	DUCKDB_CHECK_ARG(list);
-	DUCKDB_CHECK_ARG(count);
-	return WithErrorHandler(err, [&]() { *count = Convert(list)->entries.size(); });
-}
-
-DUCKDB_V2_ERROR duckdb_v2_encoding_list_get_entry(duckdb_v2_encoding_list_handle list, idx_t index, const char **name,
-                                                  idx_t *name_length, idx_t *max_input_bytes, idx_t *max_output_bytes,
-                                                  duckdb_v2_error_info_handle *err) {
-	DUCKDB_CHECK_ARG(list);
-	DUCKDB_CHECK_ARG(name);
-	DUCKDB_CHECK_ARG(name_length);
-	DUCKDB_CHECK_ARG(max_input_bytes);
-	DUCKDB_CHECK_ARG(max_output_bytes);
-	*name = nullptr;
-	*name_length = 0;
-	return WithErrorHandler(err, [&]() {
-		auto &entries = Convert(list)->entries;
-		if (index >= entries.size()) {
-			throw duckdb::Exception(duckdb::ExceptionType::OUT_OF_RANGE,
-			                        duckdb::StringUtil::Format("Encoding index %llu is out of range for a list of %llu "
-			                                                   "encodings in duckdb_v2_encoding_list_get_entry.",
-			                                                   static_cast<uint64_t>(index),
-			                                                   static_cast<uint64_t>(entries.size())));
-		}
-		auto &entry = entries[index];
-		SetStringOut(name, name_length, std::string_view(entry.name));
-		*max_input_bytes = entry.max_input_bytes;
-		*max_output_bytes = entry.max_output_bytes;
-	});
-}
-
-DUCKDB_V2_ERROR duckdb_v2_encoding_list_destroy(duckdb_v2_encoding_list_handle *list) {
-	return WithErrorHandler(nullptr, [&]() {
-		if (!list) {
-			return;
-		}
-		if (*list) {
-			delete Convert(*list);
-			*list = nullptr;
 		}
 	});
 }

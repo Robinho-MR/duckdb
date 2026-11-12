@@ -1424,30 +1424,6 @@ auto Context::GetFileSystem() const -> FileSystem {
 	return detail::HandleFactory::Make<FileSystem>(fs);
 }
 
-auto Context::ListEncodings() const -> std::vector<EncodingInformation> {
-	duckdb_v2_encoding_list_handle list = nullptr;
-	CheckedAPICall(duckdb_v2_context_list_encodings, handle(), &list);
-	std::vector<EncodingInformation> result;
-	try {
-		idx_t count = 0;
-		CheckedAPICall(duckdb_v2_encoding_list_get_count, list, &count);
-		for (idx_t i = 0; i < count; i++) {
-			const char *name = nullptr;
-			idx_t name_length = 0;
-			EncodingInformation info;
-			CheckedAPICall(duckdb_v2_encoding_list_get_entry, list, i, &name, &name_length, &info.max_input_bytes,
-			               &info.max_output_bytes);
-			info.name.assign(name, name_length);
-			result.push_back(std::move(info));
-		}
-	} catch (...) {
-		duckdb_v2_encoding_list_destroy(&list);
-		throw;
-	}
-	duckdb_v2_encoding_list_destroy(&list);
-	return result;
-}
-
 auto Connection::GetFileSystem() const -> FileSystem {
 	duckdb_v2_file_system_handle fs = nullptr;
 	CheckedAPICall(duckdb_v2_connection_get_file_system, handle(), &fs);

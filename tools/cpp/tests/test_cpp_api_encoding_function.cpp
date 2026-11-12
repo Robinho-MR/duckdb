@@ -216,44 +216,6 @@ TEST_CASE("Stable C++API: encoding function user data", "[cpp_api]") {
 	REQUIRE(CollectStrings(conn.Execute(ReadCSV(path, "shift_down"))) == std::vector<std::string> {"abc\t"});
 }
 
-// encoding_info(name) -> BIGINT: max_input_bytes * 100 + max_output_bytes of the registered encoding, or -1 for none.
-void EncodingInfoExec(ScalarFunction::ExecInput &input) {
-	const auto encodings = input.GetContext().ListEncodings();
-	auto view = input.GetArg(0).GetView();
-	auto *out = input.GetResult().GetDataMutable<int64_t>();
-	for (idx_t i = 0; i < input.GetRowCount(); i++) {
-		const auto name = std::string(view.Data<varchar_t>()[view.SelAt(i)].view());
-		out[i] = -1;
-		for (auto &encoding : encodings) {
-			if (encoding.name == name) {
-				out[i] = static_cast<int64_t>(encoding.max_input_bytes * 100 + encoding.max_output_bytes);
-			}
-		}
-	}
-}
-
-TEST_CASE("Stable C++API: list encodings", "[cpp_api]") {
-	auto db = Instance(":memory:");
-	auto conn = db.Connect();
-	auto &factory = conn.GetFactory();
-	RegisterToy(conn, "toy2", 2, 3, Toy2Decode);
-
-	auto function = ScalarFunction::Create(conn.GetFactory());
-	function.SetName("encoding_info");
-	function.WithSignature([&](FunctionSignature &sig) {
-		sig.AddParameter("name", factory.ParseType("VARCHAR"));
-		sig.SetReturnType(factory.ParseType("BIGINT"));
-	});
-	function.SetExecCallback(EncodingInfoExec);
-	conn.Register(function);
-
-	REQUIRE(CollectInts(conn.Execute("SELECT encoding_info('toy2')")) == std::vector<int64_t> {203});
-	// The built-in encodings are listed too.
-	REQUIRE(CollectInts(conn.Execute("SELECT encoding_info('utf-16')")) == std::vector<int64_t> {403});
-	REQUIRE(CollectInts(conn.Execute("SELECT encoding_info('utf-8')")) == std::vector<int64_t> {101});
-	REQUIRE(CollectInts(conn.Execute("SELECT encoding_info('toy3')")) == std::vector<int64_t> {-1});
-}
-
 TEST_CASE("Stable C++API: encoding function errors", "[cpp_api]") {
 	auto db = Instance(":memory:");
 	auto conn = db.Connect();

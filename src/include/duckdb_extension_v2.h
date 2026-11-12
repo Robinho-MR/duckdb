@@ -1601,8 +1601,6 @@ typedef struct {
 	(duckdb_v2_stats_handle stats, duckdb_v2_value_handle value, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_connection_register_encoding_function)
 	(duckdb_v2_connection_handle conn, duckdb_v2_encoding_function_handle function, duckdb_v2_error_info_handle *err);
-	DUCKDB_V2_ERROR(*duckdb_v2_context_list_encodings)
-	(duckdb_v2_context_handle ctx, duckdb_v2_encoding_list_handle *list, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_encoding_function_create)
 	(duckdb_v2_factory_handle factory, duckdb_v2_encoding_function_handle *function, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR (*duckdb_v2_encoding_function_destroy)(duckdb_v2_encoding_function_handle *function);
@@ -1618,12 +1616,6 @@ typedef struct {
 	 duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_encoding_function_set_user_data)
 	(duckdb_v2_encoding_function_handle function, duckdb_v2_opaque *data, duckdb_v2_error_info_handle *err);
-	DUCKDB_V2_ERROR (*duckdb_v2_encoding_list_destroy)(duckdb_v2_encoding_list_handle *list);
-	DUCKDB_V2_ERROR(*duckdb_v2_encoding_list_get_count)
-	(duckdb_v2_encoding_list_handle list, idx_t *count, duckdb_v2_error_info_handle *err);
-	DUCKDB_V2_ERROR(*duckdb_v2_encoding_list_get_entry)
-	(duckdb_v2_encoding_list_handle list, idx_t index, const char **name, idx_t *name_length, idx_t *max_input_bytes,
-	 idx_t *max_output_bytes, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_extension_register_encoding_function)
 	(duckdb_v2_extension_handle extension, duckdb_v2_encoding_function_handle function,
 	 duckdb_v2_error_info_handle *err);
@@ -3684,9 +3676,6 @@ typedef struct {
 #define duckdb_v2_connection_register_encoding_function duckdb_ext_api.duckdb_v2_connection_register_encoding_function
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
-#define duckdb_v2_context_list_encodings duckdb_ext_api.duckdb_v2_context_list_encodings
-#endif
-#if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_encoding_function_create duckdb_ext_api.duckdb_v2_encoding_function_create
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
@@ -3706,15 +3695,6 @@ typedef struct {
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_encoding_function_set_user_data duckdb_ext_api.duckdb_v2_encoding_function_set_user_data
-#endif
-#if DUCKDB_V2_API_ALLOW_UNSTABLE
-#define duckdb_v2_encoding_list_destroy duckdb_ext_api.duckdb_v2_encoding_list_destroy
-#endif
-#if DUCKDB_V2_API_ALLOW_UNSTABLE
-#define duckdb_v2_encoding_list_get_count duckdb_ext_api.duckdb_v2_encoding_list_get_count
-#endif
-#if DUCKDB_V2_API_ALLOW_UNSTABLE
-#define duckdb_v2_encoding_list_get_entry duckdb_ext_api.duckdb_v2_encoding_list_get_entry
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_extension_register_encoding_function duckdb_ext_api.duckdb_v2_extension_register_encoding_function
