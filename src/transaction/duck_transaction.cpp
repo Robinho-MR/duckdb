@@ -15,6 +15,7 @@
 
 #include "duckdb/transaction/append_info.hpp"
 #include "duckdb/transaction/delete_info.hpp"
+#include "duckdb/storage/table/row_version_manager.hpp"
 #include "duckdb/transaction/update_info.hpp"
 #include "duckdb/transaction/local_storage.hpp"
 #include "duckdb/main/config.hpp"
@@ -98,12 +99,9 @@ void DuckTransaction::PushAttach(AttachedDatabase &db) {
 	Store<CatalogEntry *>(&db, ptr);
 }
 
-void DuckTransaction::PushWrite(UndoFlags type, DuckTableEntry &table_entry, RowVersionManager &info, idx_t vector_idx,
-                                idx_t base_row, const WrittenRows &written) {
-	auto alloc_size = DeleteInfo::GetAllocationSize(written.count, written.is_consecutive, written.previous_id_count);
-
-	auto undo_entry = undo_buffer.CreateEntry(type, alloc_size);
-	auto delete_info = reinterpret_cast<DeleteInfo *>(undo_entry.GetDataMutable());
+static void InitializeDeleteInfo(data_ptr_t target, DuckTableEntry &table_entry, RowVersionManager &info,
+                                 idx_t vector_idx, idx_t base_row, const WrittenRows &written) {
+	auto delete_info = reinterpret_cast<DeleteInfo *>(target);
 	delete_info->version_info = &info;
 	delete_info->vector_idx = vector_idx;
 	delete_info->table = &table_entry;
@@ -115,6 +113,40 @@ void DuckTransaction::PushWrite(UndoFlags type, DuckTableEntry &table_entry, Row
 		std::copy_n(written.rows, written.count, delete_info->GetRows());
 	}
 	std::copy_n(written.previous_ids, written.previous_id_count, delete_info->GetPreviousIds());
+}
+
+void DuckTransaction::PushWrite(UndoFlags type, DuckTableEntry &table_entry, RowVersionManager &info, idx_t vector_idx,
+                                idx_t base_row, const WrittenRows &written) {
+	auto alloc_size = DeleteInfo::GetAllocationSize(written.count, written.is_consecutive, written.previous_id_count);
+
+	auto undo_entry = undo_buffer.CreateEntry(type, alloc_size);
+	InitializeDeleteInfo(undo_entry.GetDataMutable(), table_entry, info, vector_idx, base_row, written);
+}
+
+void DuckTransaction::PushWrites(const StagedWrites &staged) {
+	undo_buffer.CreateEntries(staged.Data(), staged.Size());
+}
+
+void StagedWrites::Add(UndoFlags type, DuckTableEntry &table_entry, RowVersionManager &info, idx_t vector_idx,
+                       idx_t base_row, const WrittenRows &written) {
+	auto alloc_size = DeleteInfo::GetAllocationSize(written.count, written.is_consecutive, written.previous_id_count);
+	auto entry_start = data.size();
+	data.resize(entry_start + UndoBuffer::GetEntrySize(alloc_size));
+	auto payload = UndoBuffer::FormatEntry(data.data() + entry_start, type, alloc_size);
+	InitializeDeleteInfo(payload, table_entry, info, vector_idx, base_row, written);
+}
+
+void StagedWrites::Rollback() {
+	idx_t position = 0;
+	while (position < data.size()) {
+		auto entry = data.data() + position;
+		auto len = Load<uint32_t>(entry + sizeof(UndoFlags));
+		auto &info = *reinterpret_cast<DeleteInfo *>(entry + sizeof(UndoFlags) + sizeof(uint32_t));
+		info.version_info->RollbackWrite(info.vector_idx, info.GetStoredRows(), info.count, info.GetPreviousIds(),
+		                                 info.previous_id_count);
+		position += sizeof(UndoFlags) + sizeof(uint32_t) + len;
+	}
+	data.clear();
 }
 
 void DuckTransaction::PushAppend(DuckTableEntry &table_entry, idx_t start_row, idx_t row_count) {

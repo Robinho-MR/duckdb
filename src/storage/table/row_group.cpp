@@ -1383,14 +1383,6 @@ void RowGroup::Update(TransactionData transaction, DuckTableEntry &table_entry, 
 		D_ASSERT(ids[i] >= row_t(row_group_start) && ids[i] < row_t(row_group_start + this->count));
 	}
 #endif
-	if (transaction.transaction) {
-		// mark the rows before updating them: an update conflicts with any write of a row the transaction does not see
-		auto vector_idx = (UnsafeNumericCast<idx_t>(ids[offset]) - row_group_start) / STANDARD_VECTOR_SIZE;
-		auto vector_start = row_group_start + vector_idx * STANDARD_VECTOR_SIZE;
-		WrittenRows written;
-		WriteRows(transaction, table_entry, vector_idx, vector_start, ids + offset, count,
-		          UnsafeNumericCast<row_t>(vector_start), true, written);
-	}
 	for (idx_t i = 0; i < column_ids.size(); i++) {
 		auto column = column_ids[i];
 		auto &col_data = GetColumn(column.index);
@@ -1404,6 +1396,29 @@ void RowGroup::Update(TransactionData transaction, DuckTableEntry &table_entry, 
 			col_data.Update(transaction, table_entry, column.index, update_chunk.data[i], ids, count, row_group_start);
 		}
 		MergeStatistics(column.index, *col_data.GetUpdateStatistics());
+	}
+}
+
+void RowGroup::MarkUpdatedRows(TransactionData transaction, DuckTableEntry &table_entry, const row_t *ids,
+                               idx_t offset, idx_t count, idx_t row_group_start, StagedWrites &staged) {
+	D_ASSERT(transaction.transaction);
+	auto &version_info = GetOrCreateVersionInfo();
+	idx_t start = offset;
+	while (start < offset + count) {
+		auto end = ColumnData::NextUpdateVectorRun(ids, start, offset + count, row_group_start);
+		auto vector_idx = (UnsafeNumericCast<idx_t>(ids[start]) - row_group_start) / STANDARD_VECTOR_SIZE;
+		auto vector_start = row_group_start + vector_idx * STANDARD_VECTOR_SIZE;
+		WrittenRows written;
+		auto run_offset = UnsafeNumericCast<row_t>(vector_start);
+		version_info.WriteRows(vector_idx, transaction, ids + start, end - start, run_offset, true, written);
+		if (written.count > 0) {
+			staged.Add(UndoFlags::UPDATE_ROWS, table_entry, version_info, vector_idx, vector_start, written);
+		}
+		if (staged.Size() >= StagedWrites::PUSH_THRESHOLD) {
+			transaction.transaction->PushWrites(staged);
+			staged.Clear();
+		}
+		start = end;
 	}
 }
 

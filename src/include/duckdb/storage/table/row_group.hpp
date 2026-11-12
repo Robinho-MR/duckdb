@@ -45,6 +45,7 @@ struct PersistentColumnData;
 struct PersistentRowGroupData;
 struct RowGroupPointer;
 struct TransactionData;
+class StagedWrites;
 class CollectionScanState;
 class TableFilter;
 class TableFilterSet;
@@ -259,8 +260,12 @@ public:
 	void Append(RowGroupAppendState &append_state, DataChunk &chunk, idx_t append_count);
 	void FinalizeAppend(RowGroupAppendState &append_state);
 
+	//! Updates the columns of the sorted rows ids[offset, offset + count), which must have been marked before
 	void Update(TransactionData transaction, DuckTableEntry &table_entry, DataChunk &updates, row_t *ids, idx_t offset,
 	            idx_t count, const vector<PhysicalIndex> &column_ids, idx_t row_group_start);
+	//! Marks the rows as updated by the transaction, staging their undo entries (pushed once enough are staged)
+	void MarkUpdatedRows(TransactionData transaction, DuckTableEntry &table_entry, const row_t *ids, idx_t offset,
+	                     idx_t count, idx_t row_group_start, StagedWrites &staged);
 	//! Update a single column; corresponds to DataTable::UpdateColumn
 	//! This method should only be called from the WAL
 	void UpdateColumn(TransactionData transaction, DuckTableEntry &table_entry, DataChunk &updates, Vector &row_ids,

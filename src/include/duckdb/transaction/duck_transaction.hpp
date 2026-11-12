@@ -25,6 +25,7 @@ class StorageLockKey;
 class StorageCommitState;
 struct UndoBufferProperties;
 struct WrittenRows;
+class StagedWrites;
 
 struct CommitInfo {
 	transaction_t commit_id;
@@ -97,6 +98,8 @@ public:
 	//! Pushes the undo entry of a delete (DELETE_TUPLE) or of an update's markers (UPDATE_ROWS) in one vector
 	void PushWrite(UndoFlags type, DuckTableEntry &table_entry, RowVersionManager &info, idx_t vector_idx,
 	               idx_t base_row, const WrittenRows &written);
+	//! Pushes the undo entries of staged writes with a single allocation
+	void PushWrites(const StagedWrites &staged);
 	void PushSequenceUsage(SequenceCatalogEntry &entry, const SequenceData &data);
 	void PushAppend(DuckTableEntry &table_entry, idx_t row_start, idx_t row_count);
 	UndoBufferReference CreateUpdateInfo(DuckTableEntry &table_entry, idx_t type_size, idx_t capacity,

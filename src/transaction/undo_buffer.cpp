@@ -25,17 +25,29 @@ UndoBuffer::UndoBuffer(DuckTransaction &transaction_p, ClientContext &context_p)
     : transaction(transaction_p), allocator(DatabaseInstance::GetDatabase(context_p).GetBufferManager(), true) {
 }
 
+idx_t UndoBuffer::GetEntrySize(idx_t len) {
+	return AlignValue<idx_t>(len + UNDO_ENTRY_HEADER_SIZE);
+}
+
+data_ptr_t UndoBuffer::FormatEntry(data_ptr_t target, UndoFlags type, idx_t len) {
+	Store<UndoFlags>(type, target);
+	auto payload_size = UnsafeNumericCast<uint32_t>(GetEntrySize(len) - UNDO_ENTRY_HEADER_SIZE);
+	Store<uint32_t>(payload_size, target + sizeof(UndoFlags));
+	return target + UNDO_ENTRY_HEADER_SIZE;
+}
+
 UndoBufferReference UndoBuffer::CreateEntry(UndoFlags type, idx_t len) {
-	idx_t alloc_len = AlignValue<idx_t>(len + UNDO_ENTRY_HEADER_SIZE);
-	auto handle = allocator.Allocate(alloc_len);
-	auto data = handle.GetDataMutable();
-	// write the undo entry metadata
-	Store<UndoFlags>(type, data);
-	data += sizeof(UndoFlags);
-	Store<uint32_t>(UnsafeNumericCast<uint32_t>(alloc_len - UNDO_ENTRY_HEADER_SIZE), data);
+	auto handle = allocator.Allocate(GetEntrySize(len));
+	FormatEntry(handle.GetDataMutable(), type, len);
 	// increment the position of the header past the undo entry metadata
 	handle.position += UNDO_ENTRY_HEADER_SIZE;
 	return handle;
+}
+
+void UndoBuffer::CreateEntries(const_data_ptr_t entries, idx_t size) {
+	D_ASSERT(size > 0);
+	auto handle = allocator.Allocate(size);
+	memcpy(handle.GetDataMutable(), entries, size);
 }
 
 template <class T>

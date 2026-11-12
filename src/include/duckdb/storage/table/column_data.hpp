@@ -199,8 +199,11 @@ public:
 	void FetchScannedRows(ColumnScanState &state, const SelectionVector &sel, idx_t count, Vector &result,
 	                      idx_t result_offset);
 
+	//! Updates the rows of row_ids, which may span multiple vectors of the row group
 	virtual void Update(TransactionData transaction, DuckTableEntry &table_entry, idx_t column_index,
 	                    Vector &update_vector, row_t *row_ids, idx_t update_count, idx_t row_group_start);
+	//! Returns the end of the run of row ids starting at start that lie in the same vector as row_ids[start]
+	static idx_t NextUpdateVectorRun(const row_t *row_ids, idx_t start, idx_t end, idx_t row_group_start);
 	virtual void UpdateColumn(TransactionData transaction, DuckTableEntry &table_entry,
 	                          const vector<column_t> &column_path, Vector &update_vector, row_t *row_ids,
 	                          idx_t update_count, idx_t depth, idx_t row_group_start);
