@@ -584,12 +584,70 @@ struct ArrowVariant {
 		}
 	}
 
+	static idx_t FindField(const child_list_t<LogicalType> &fields, const char *name) {
+		for (idx_t i = 0; i < fields.size(); i++) {
+			if (fields[i].first == name) {
+				return i;
+			}
+		}
+		return DConstants::INVALID_INDEX;
+	}
+
+	//! A shredded group is struct<value: binary, typed_value: T> (either field may be absent, not both)
+	static void ValidateShreddedGroup(const LogicalType &type) {
+		if (type.id() != LogicalTypeId::STRUCT) {
+			throw InvalidInputException("arrow.parquet.variant shredded group must be a struct, got %s",
+			                            type.ToString());
+		}
+		auto &fields = StructType::GetChildTypes(type);
+		for (auto &field : fields) {
+			if (field.first != "value" && field.first != "typed_value") {
+				throw InvalidInputException(
+				    "arrow.parquet.variant shredded group has an unexpected field '%s' (expected 'value' and "
+				    "'typed_value')",
+				    field.first);
+			}
+		}
+		auto value_idx = FindField(fields, "value");
+		auto typed_value_idx = FindField(fields, "typed_value");
+		if (value_idx == DConstants::INVALID_INDEX && typed_value_idx == DConstants::INVALID_INDEX) {
+			throw InvalidInputException("arrow.parquet.variant shredded group needs a 'value' or 'typed_value' field");
+		}
+		if (value_idx != DConstants::INVALID_INDEX && fields[value_idx].second.id() != LogicalTypeId::BLOB) {
+			throw InvalidInputException("arrow.parquet.variant field 'value' must be a binary type, got %s",
+			                            fields[value_idx].second.ToString());
+		}
+		if (typed_value_idx != DConstants::INVALID_INDEX) {
+			ValidateTypedValue(fields[typed_value_idx].second);
+		}
+	}
+
+	//! A typed_value is a primitive, a struct of shredded groups (object) or a list of one (array)
+	static void ValidateTypedValue(const LogicalType &type) {
+		switch (type.id()) {
+		case LogicalTypeId::STRUCT:
+			for (auto &field : StructType::GetChildTypes(type)) {
+				ValidateShreddedGroup(field.second);
+			}
+			break;
+		case LogicalTypeId::LIST:
+			ValidateShreddedGroup(ListType::GetChildType(type));
+			break;
+		default:
+			if (type.IsNested()) {
+				throw InvalidInputException("arrow.parquet.variant typed_value cannot have type %s", type.ToString());
+			}
+			break;
+		}
+	}
+
 	//! Maps a tagged schema back: the VARIANT logical type, with type info describing the storage struct
 	//! for the reader's buffer walk. The spec allows the fields in ANY order, in any binary layout
 	//! (binary / large binary / view), and dictionary- or run-end-encoded — so the fields are resolved by
 	//! NAME and the children are parsed from the actual schema. The resolved order is recorded on a
 	//! per-column ArrowTypeExtensionData whose internal type is the storage struct in the schema's OWN
 	//! field order (the buffer walk is positional), so the conversion can normalize by name.
+	//! A shredded variant additionally has a typed_value field (a tree of shredded groups, validated here).
 	static unique_ptr<ArrowType> GetType(ClientContext &context, const ArrowSchema &schema,
 	                                     const ArrowSchemaMetadata &schema_metadata) {
 		if (!schema.format || string(schema.format) != "+s") {
@@ -598,29 +656,27 @@ struct ArrowVariant {
 		}
 		idx_t metadata_idx = DConstants::INVALID_INDEX;
 		idx_t value_idx = DConstants::INVALID_INDEX;
+		idx_t typed_value_idx = DConstants::INVALID_INDEX;
 		for (idx_t i = 0; i < NumericCast<idx_t>(schema.n_children); i++) {
 			const string name = schema.children[i]->name ? schema.children[i]->name : "";
 			if (name == "metadata" && metadata_idx == DConstants::INVALID_INDEX) {
 				metadata_idx = i;
 			} else if (name == "value" && value_idx == DConstants::INVALID_INDEX) {
 				value_idx = i;
-			} else if (name == "typed_value") {
-				// TODO: support shredded variants — the value has to be re-assembled from typed_value
-				// (and, when both are present, merged with the residual value field).
-				throw NotImplementedException(
-				    "arrow.parquet.variant column with a 'typed_value' field (a shredded variant) is not supported "
-				    "yet");
+			} else if (name == "typed_value" && typed_value_idx == DConstants::INVALID_INDEX) {
+				typed_value_idx = i;
 			} else {
 				throw InvalidInputException(
-				    "arrow.parquet.variant column has an unexpected or duplicate field '%s' (expected 'metadata' and "
-				    "'value')",
+				    "arrow.parquet.variant column has an unexpected or duplicate field '%s' (expected 'metadata', "
+				    "'value' and 'typed_value')",
 				    name);
 			}
 		}
-		if (metadata_idx == DConstants::INVALID_INDEX || value_idx == DConstants::INVALID_INDEX) {
-			throw InvalidInputException(
-			    "arrow.parquet.variant column must have a 'metadata' and a 'value' field, got %lld children",
-			    schema.n_children);
+		if (metadata_idx == DConstants::INVALID_INDEX ||
+		    (value_idx == DConstants::INVALID_INDEX && typed_value_idx == DConstants::INVALID_INDEX)) {
+			throw InvalidInputException("arrow.parquet.variant column must have a 'metadata' field and a 'value' "
+			                            "and/or 'typed_value' field, got %lld children",
+			                            schema.n_children);
 		}
 		vector<shared_ptr<ArrowType>> children;
 		child_list_t<LogicalType> storage_children;
@@ -628,9 +684,14 @@ struct ArrowVariant {
 			// GetArrowLogicalType, not GetTypeFromSchema: a dictionary-encoded child carries its value
 			// type in schema.dictionary, which only this entry point resolves.
 			children.push_back(ArrowType::GetArrowLogicalType(context, *schema.children[i]));
-			// Both fields are binary by the spec. Without this check a non-binary field would be
+			auto child_type = children.back()->GetDuckType(true);
+			if (i == typed_value_idx) {
+				ValidateTypedValue(child_type);
+				storage_children.emplace_back(schema.children[i]->name, std::move(child_type));
+				continue;
+			}
+			// 'metadata' and 'value' are binary by the spec. Without this check a non-binary field would be
 			// declared BLOB storage here and then reinterpreted as bytes by the decode.
-			const auto child_type = children.back()->GetDuckType(true);
 			if (child_type.id() != LogicalTypeId::BLOB) {
 				throw InvalidInputException("arrow.parquet.variant field '%s' must be a binary type, got %s",
 				                            schema.children[i]->name, child_type.ToString());
@@ -698,16 +759,53 @@ struct ArrowVariant {
 		FlatVector::ValidityMutable(value_entry).SetAllValid(count);
 	}
 
+	//! Shredded: a row that is NULL (itself, or through a NULL metadata) has garbage children, so NULL out
+	//! its 'value' and 'typed_value' (both NULL is a SQL NULL), then convert like the Parquet reader does.
+	static void ShreddedArrowToDuck(Vector &source, idx_t metadata_idx, idx_t value_idx, idx_t typed_value_idx,
+	                                Vector &result, idx_t count) {
+		auto &entries = StructVector::GetEntries(source);
+		child_list_t<LogicalType> group_children;
+		vector<idx_t> group_indexes;
+		if (value_idx != DConstants::INVALID_INDEX) {
+			group_children.emplace_back("value", LogicalType::BLOB);
+			group_indexes.push_back(value_idx);
+		}
+		group_children.emplace_back("typed_value", entries[typed_value_idx].GetType());
+		group_indexes.push_back(typed_value_idx);
+
+		Vector &metadata = entries[metadata_idx];
+		metadata.Flatten();
+		Vector group(LogicalType::STRUCT(std::move(group_children)), count);
+		auto &group_entries = StructVector::GetEntries(group);
+		for (idx_t i = 0; i < group_indexes.size(); i++) {
+			entries[group_indexes[i]].Flatten();
+			group_entries[i].Reference(entries[group_indexes[i]]);
+		}
+		for (idx_t row = 0; row < count; row++) {
+			if (FlatVector::IsNull(source, row) || FlatVector::IsNull(metadata, row)) {
+				for (auto &entry : group_entries) {
+					FlatVector::SetNull(entry, row, true);
+				}
+			}
+		}
+		ParquetVariantConversion::ConvertShredded(metadata, group, result, count);
+	}
+
 	//! Arrow -> DuckDB: concatenate each row's metadata and value bytes (the self-delimiting Variant
-	//! binary form) and decode through the Parquet Variant binary decode.
+	//! binary form) and decode through the Parquet Variant binary decode; a shredded variant (with a
+	//! typed_value) goes through the shredded conversion instead.
 	static void ArrowToDuck(ClientContext &, Vector &source, Vector &result, idx_t count) {
 		source.Flatten();
 		// The storage vector's type records the incoming schema's own field order (see GetType,
-		// which already established that these are exactly the two fields) - so only their order
-		// is open here, the spec allowing them either way round.
+		// which validated the fields) - so only their order is open here, the spec allowing any.
 		auto &source_children = StructType::GetChildTypes(source.GetType());
-		const idx_t metadata_idx = source_children[0].first == "metadata" ? 0 : 1;
-		const idx_t value_idx = 1 - metadata_idx;
+		const idx_t metadata_idx = FindField(source_children, "metadata");
+		const idx_t value_idx = FindField(source_children, "value");
+		const idx_t typed_value_idx = FindField(source_children, "typed_value");
+		if (typed_value_idx != DConstants::INVALID_INDEX) {
+			ShreddedArrowToDuck(source, metadata_idx, value_idx, typed_value_idx, result, count);
+			return;
+		}
 		auto &entries = StructVector::GetEntries(source);
 		Vector &metadata = entries[metadata_idx];
 		Vector &value = entries[value_idx];

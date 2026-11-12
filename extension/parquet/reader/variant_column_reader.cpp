@@ -193,7 +193,7 @@ idx_t VariantColumnReader::Read(ColumnReaderInput &input, Vector &result) {
 		}
 	}
 	// convert the actual columns
-	Convert(metadata_intermediate, intermediate_group, result, num_values);
+	ParquetVariantConversion::ConvertShredded(metadata_intermediate, intermediate_group, result, num_values);
 	if (index.IsPushdownExtract()) {
 		D_ASSERT(!extract_path.empty());
 		Vector extract_result(LogicalType::VARIANT(), num_values);

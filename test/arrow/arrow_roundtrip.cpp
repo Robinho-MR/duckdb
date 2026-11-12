@@ -705,15 +705,15 @@ TEST_CASE("Test Arrow VARIANT roundtrip", "[arrow]") {
 // DuckDB's own export always produces struct<metadata, value> in that order, with plain binary
 // children. The canonical spec is wider: the fields may appear in ANY order, may be dictionary- or
 // run-end-encoded, and a shredded variant carries a typed_value field. These tests imitate such
-// foreign writers — by mutating a DuckDB-exported schema/array, or by hand-building the Arrow C Data
-// structures outright.
+// foreign writers — by mutating a DuckDB-exported schema/array, by tagging a plain struct column built
+// in SQL as the extension type, or by hand-building the Arrow C Data structures outright.
 
 namespace {
 
 enum class VariantMutation : uint8_t {
 	NONE,             // control
 	SWAP_FIELD_ORDER, // struct<value, metadata> — spec-valid, must be resolved by name
-	SHREDDED_FIELD,   // value renamed typed_value — a (fully) shredded variant, unsupported
+	TAG_STORAGE,      // a plain struct column tagged as arrow.parquet.variant (e.g. a shredded layout built in SQL)
 	UNKNOWN_FIELD,    // value renamed to a foreign name — invalid
 	UNION_FORMAT      // parent format +us:0,1 — not a struct
 };
@@ -725,6 +725,7 @@ struct MutatedVariantData {
 	ClientProperties options;
 	ClientContext *context;
 	VariantMutation mutation;
+	unsafe_unique_array<char> tag;
 };
 
 void ApplyVariantSchemaMutation(ArrowSchema &column, VariantMutation mutation) {
@@ -732,8 +733,7 @@ void ApplyVariantSchemaMutation(ArrowSchema &column, VariantMutation mutation) {
 	case VariantMutation::SWAP_FIELD_ORDER:
 		std::swap(column.children[0], column.children[1]);
 		break;
-	case VariantMutation::SHREDDED_FIELD:
-		column.children[1]->name = "typed_value";
+	case VariantMutation::TAG_STORAGE:
 		break;
 	case VariantMutation::UNKNOWN_FIELD:
 		column.children[1]->name = "sidecar";
@@ -750,6 +750,10 @@ int MutatedVariantGetSchema(ArrowArrayStream *stream, ArrowSchema *out) {
 	auto &data = *reinterpret_cast<MutatedVariantData *>(stream->private_data);
 	ArrowConverter::ToArrowSchema(out, data.types, data.names, data.options);
 	ApplyVariantSchemaMutation(*out->children[0], data.mutation);
+	if (data.mutation == VariantMutation::TAG_STORAGE) {
+		data.tag = ArrowSchemaMetadata::ArrowCanonicalType("arrow.parquet.variant").SerializeMetadata();
+		out->children[0]->metadata = data.tag.get();
+	}
 	return 0;
 }
 
@@ -816,6 +820,7 @@ void ExpectVariantScanError(Connection &con, ArrowArrayStream &stream, const str
 		error_message = ex.what();
 	}
 	REQUIRE(refused);
+	INFO(error_message);
 	REQUIRE(StringUtil::Contains(error_message, expected_error));
 	if (stream.release) {
 		stream.release(&stream);
@@ -839,11 +844,6 @@ TEST_CASE("Test Arrow VARIANT foreign field order and refusals", "[arrow]") {
 		MakeMutatedVariantStream(con, query, VariantMutation::SWAP_FIELD_ORDER, stream);
 		REQUIRE(ArrowTestHelper::RunArrowComparison(con, query, stream));
 	}
-	{ // a fully shredded variant (metadata + typed_value) is refused clearly, not misread as value bytes
-		ArrowArrayStream stream;
-		MakeMutatedVariantStream(con, query, VariantMutation::SHREDDED_FIELD, stream);
-		ExpectVariantScanError(con, stream, "shredded");
-	}
 	{ // an unknown field name is refused
 		ArrowArrayStream stream;
 		MakeMutatedVariantStream(con, query, VariantMutation::UNKNOWN_FIELD, stream);
@@ -854,6 +854,148 @@ TEST_CASE("Test Arrow VARIANT foreign field order and refusals", "[arrow]") {
 		MakeMutatedVariantStream(con, query, VariantMutation::UNION_FORMAT, stream);
 		ExpectVariantScanError(con, stream, "must have a struct storage type");
 	}
+}
+
+//===--------------------------------------------------------------------===//
+// arrow.parquet.variant — shredded variants (typed_value)
+//===--------------------------------------------------------------------===//
+
+namespace {
+
+// The SQL struct is exported to Arrow as a plain struct column and tagged as arrow.parquet.variant, so the
+// scan has to decode it as a shredded variant; the result must equal `expected` (a regular VARIANT query).
+void RequireShreddedVariant(Connection &con, const string &storage_query, const string &expected) {
+	ArrowArrayStream stream;
+	MakeMutatedVariantStream(con, storage_query, VariantMutation::TAG_STORAGE, stream);
+	REQUIRE(ArrowTestHelper::RunArrowComparison(con, expected, stream));
+}
+
+// An empty metadata dictionary (v1, no keys), and a metadata dictionary holding the key "c"
+const string EMPTY_METADATA = "'\\x01\\x00\\x00'::BLOB";
+const string KEY_C_METADATA = "'\\x01\\x01\\x00\\x01c'::BLOB";
+
+} // namespace
+
+TEST_CASE("Test Arrow VARIANT shredded primitives", "[arrow]") {
+	DuckDB db;
+	Connection con(db);
+	// UUID is only exported as a (lossless) arrow.uuid with this setting, a string otherwise
+	REQUIRE_NO_FAIL(con.Query("SET arrow_lossless_conversion = true"));
+	const string metadata = "'metadata': " + EMPTY_METADATA;
+
+	// fully shredded: no 'value' field at all
+	const vector<string> leaves = {"true",
+	                               "i::TINYINT",
+	                               "i::SMALLINT",
+	                               "i::INTEGER",
+	                               "i::BIGINT",
+	                               "i::FLOAT",
+	                               "i::DOUBLE",
+	                               "(i / 10.0)::DECIMAL(9, 2)",
+	                               "'s' || i::VARCHAR",
+	                               "('s' || i::VARCHAR)::BLOB",
+	                               "DATE '2020-01-01' + i::INTEGER",
+	                               "TIMESTAMP '2020-01-01 10:00:00' + to_seconds(i)",
+	                               "TIMESTAMPTZ '2020-01-01 10:00:00+00' + to_seconds(i)",
+	                               "TIME '10:00:00' + to_seconds(i)",
+	                               "('00000000-0000-0000-0000-' || lpad(i::VARCHAR, 12, '0'))::UUID"};
+	for (auto &leaf : leaves) {
+		RequireShreddedVariant(con, "SELECT {" + metadata + ", 'typed_value': " + leaf + "} AS v FROM range(100) t(i)",
+		                       "SELECT (" + leaf + ")::VARIANT AS v FROM range(100) t(i)");
+	}
+
+	// typed_value and the residual 'value' side by side, in either field order
+	const string mixed_struct = "{'typed_value': i::INTEGER, " + metadata + ", 'value': NULL::BLOB}";
+	const string mixed_value = "{'typed_value': NULL::INTEGER, " + metadata + ", 'value': '\\x09hi'::BLOB}";
+	RequireShreddedVariant(con,
+	                       "SELECT CASE WHEN i % 2 = 0 THEN " + mixed_struct + " ELSE " + mixed_value +
+	                           " END AS v FROM range(100) t(i)",
+	                       "SELECT CASE WHEN i % 2 = 0 THEN i::INTEGER::VARIANT ELSE 'hi'::VARIANT END AS v "
+	                       "FROM range(100) t(i)");
+
+	// NULL rows: a NULL struct, and a present struct holding neither a value nor a typed_value
+	RequireShreddedVariant(
+	    con,
+	    "SELECT CASE WHEN i % 3 = 0 THEN NULL WHEN i % 3 = 1 THEN {" + metadata +
+	        ", 'value': NULL::BLOB, 'typed_value': NULL::INTEGER} ELSE {" + metadata +
+	        ", 'value': NULL::BLOB, 'typed_value': i::INTEGER} END AS v FROM range(99) t(i)",
+	    "SELECT CASE WHEN i % 3 = 2 THEN i::INTEGER::VARIANT ELSE NULL END AS v FROM range(99) t(i)");
+}
+
+TEST_CASE("Test Arrow VARIANT shredded objects and arrays", "[arrow]") {
+	DuckDB db;
+	Connection con(db);
+	const string metadata = "'metadata': " + EMPTY_METADATA;
+	const string group_int = "STRUCT(value BLOB, typed_value INTEGER)";
+	const string group_str = "STRUCT(value BLOB, typed_value VARCHAR)";
+
+	// a fully shredded object
+	RequireShreddedVariant(
+	    con,
+	    "SELECT {" + metadata + ", 'typed_value': {'a': {'value': NULL, 'typed_value': i::INTEGER}::" + group_int +
+	        ", 'b': {'value': NULL, 'typed_value': 's' || i::VARCHAR}::" + group_str + "}} AS v FROM range(50) t(i)",
+	    "SELECT {'a': i::INTEGER, 'b': 's' || i::VARCHAR}::VARIANT AS v FROM range(50) t(i)");
+
+	// a partially shredded object: the residual field 'c' lives in the object's binary 'value'
+	// (object header, 1 field, field id 0, offsets 0 and 2, then the int8 5)
+	RequireShreddedVariant(con,
+	                       "SELECT {'metadata': " + KEY_C_METADATA +
+	                           ", 'value': '\\x02\\x01\\x00\\x00\\x02\\x0c\\x05'::BLOB"
+	                           ", 'typed_value': {'a': {'value': NULL, 'typed_value': i::INTEGER}::" +
+	                           group_int + "}} AS v FROM range(50) t(i)",
+	                       "SELECT {'a': i::INTEGER, 'c': 5::TINYINT}::VARIANT AS v FROM range(50) t(i)");
+
+	// an object field that is absent in some rows (neither value nor typed_value) is left out
+	RequireShreddedVariant(
+	    con,
+	    "SELECT {" + metadata + ", 'typed_value': {'a': {'value': NULL, 'typed_value': i::INTEGER}::" + group_int +
+	        ", 'b': {'value': NULL, 'typed_value': CASE WHEN i % 2 = 0 THEN 'x' END}::" + group_str +
+	        "}} AS v FROM range(50) t(i)",
+	    "SELECT CASE WHEN i % 2 = 0 THEN {'a': i::INTEGER, 'b': 'x'}::VARIANT ELSE {'a': i::INTEGER}::VARIANT "
+	    "END AS v FROM range(50) t(i)");
+
+	// shredded arrays, including empty and NULL ones
+	RequireShreddedVariant(con,
+	                       "SELECT {" + metadata +
+	                           ", 'typed_value': CASE WHEN i % 5 = 0 THEN NULL ELSE [{'value': NULL, 'typed_value': "
+	                           "(i + j)::INTEGER}::" +
+	                           group_int +
+	                           " FOR j IN range(i % 4)] END, 'value': CASE WHEN i % 5 = 0 THEN "
+	                           "'\\x0c\\x07'::BLOB END} AS v FROM range(100) t(i)",
+	                       "SELECT CASE WHEN i % 5 = 0 THEN 7::TINYINT::VARIANT ELSE [(i + j)::INTEGER FOR j IN "
+	                       "range(i % 4)]::VARIANT END AS v FROM range(100) t(i)");
+
+	// more rows than a vector
+	RequireShreddedVariant(con,
+	                       "SELECT {" + metadata +
+	                           ", 'typed_value': {'a': {'value': NULL, 'typed_value': i}::STRUCT(value BLOB, "
+	                           "typed_value BIGINT)}} AS v FROM range(5000) t(i)",
+	                       "SELECT {'a': i}::VARIANT AS v FROM range(5000) t(i)");
+}
+
+TEST_CASE("Test Arrow VARIANT shredded schema refusals", "[arrow]") {
+	DuckDB db;
+	Connection con(db);
+	const string metadata = "'metadata': " + EMPTY_METADATA;
+	const auto expect_refused = [&](const string &query, const string &error) {
+		ArrowArrayStream stream;
+		MakeMutatedVariantStream(con, query, VariantMutation::TAG_STORAGE, stream);
+		ExpectVariantScanError(con, stream, error);
+	};
+	// neither a value nor a typed_value
+	expect_refused("SELECT {" + metadata + "} AS v", "must have a 'metadata' field and a 'value' and/or 'typed_value'");
+	// an object field that is not a group
+	expect_refused("SELECT {" + metadata + ", 'typed_value': {'a': 1}} AS v", "shredded group must be a struct");
+	// an array element that is not a group
+	expect_refused("SELECT {" + metadata + ", 'typed_value': [1, 2]} AS v", "shredded group must be a struct");
+	// a group with an unknown field
+	expect_refused("SELECT {" + metadata + ", 'typed_value': {'a': {'other': 1}}} AS v",
+	               "shredded group has an unexpected field");
+	// a group whose 'value' is not binary
+	expect_refused("SELECT {" + metadata + ", 'typed_value': {'a': {'value': 1}}} AS v",
+	               "field 'value' must be a binary type");
+	// a typed_value that cannot be a variant value
+	expect_refused("SELECT {" + metadata + ", 'typed_value': MAP {1: 2}} AS v", "typed_value cannot have type");
 }
 
 //===--------------------------------------------------------------------===//
@@ -890,9 +1032,9 @@ struct HandBuiltVariantHolder {
 
 	// schema nodes
 	unsafe_unique_array<char> extension_metadata;
-	ArrowSchema s_root {}, s_col {}, s_metadata {}, s_value {}, s_typed_value {}, s_dict {}, s_run_ends {}, s_values {};
+	ArrowSchema s_root {}, s_col {}, s_metadata {}, s_value {}, s_dict {}, s_run_ends {}, s_values {};
 	ArrowSchema *s_root_children[1] = {nullptr};
-	ArrowSchema *s_col_children[3] = {nullptr, nullptr, nullptr};
+	ArrowSchema *s_col_children[2] = {nullptr, nullptr};
 	ArrowSchema *s_ree_children[2] = {nullptr, nullptr};
 
 	// array nodes
@@ -912,8 +1054,7 @@ void HandBuiltArrayRelease(ArrowArray *array) {
 }
 
 duckdb::unique_ptr<HandBuiltVariantHolder> BuildEncodedVariant(Connection &con, idx_t count,
-                                                               HandBuiltVariantHolder::Encoding encoding,
-                                                               bool with_typed_value = false) {
+                                                               HandBuiltVariantHolder::Encoding encoding) {
 	auto holder = make_uniq<HandBuiltVariantHolder>();
 	holder->encoding = encoding;
 	holder->count = count;
@@ -985,14 +1126,6 @@ duckdb::unique_ptr<HandBuiltVariantHolder> BuildEncodedVariant(Connection &con, 
 	holder->s_col_children[1] = &s_value;
 	s_col.n_children = 2;
 	s_col.children = holder->s_col_children;
-	if (with_typed_value) {
-		holder->s_typed_value.format = "z";
-		holder->s_typed_value.name = "typed_value";
-		holder->s_typed_value.flags = ARROW_FLAG_NULLABLE;
-		holder->s_typed_value.release = HandBuiltSchemaRelease;
-		holder->s_col_children[2] = &holder->s_typed_value;
-		s_col.n_children = 3;
-	}
 
 	auto &s_root = holder->s_root;
 	s_root.format = "+s";
@@ -1116,13 +1249,6 @@ TEST_CASE("Test Arrow VARIANT dictionary and run-end encoded metadata", "[arrow]
 		ArrowArrayStream stream;
 		MakeHandBuiltStream(BuildEncodedVariant(con, count, encoding), stream);
 		REQUIRE(ArrowTestHelper::RunArrowComparison(con, expected, stream));
-	}
-
-	{ // a partially shredded variant (metadata + value + typed_value) is refused with the clear message
-		ArrowArrayStream stream;
-		MakeHandBuiltStream(BuildEncodedVariant(con, count, HandBuiltVariantHolder::Encoding::DICTIONARY, true),
-		                    stream);
-		ExpectVariantScanError(con, stream, "shredded");
 	}
 }
 

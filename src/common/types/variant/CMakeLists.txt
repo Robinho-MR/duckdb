@@ -7,7 +7,8 @@ add_library_unity(
   variant_value_convert.cpp
   variant_binary_decoder.cpp
   parquet_variant_iterator.cpp
-  parquet_variant_encoding.cpp)
+  parquet_variant_encoding.cpp
+  parquet_variant_shredding.cpp)
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:duckdb_common_variant>
     PARENT_SCOPE)
