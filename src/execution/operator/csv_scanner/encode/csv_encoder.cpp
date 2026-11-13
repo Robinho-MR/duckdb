@@ -42,30 +42,6 @@ void CSVEncoderBuffer::Reset() {
 	actual_encoded_buffer_size = 0;
 }
 
-static optional_ptr<ScalarFunctionCatalogEntry> FindEncoding(ClientContext &context, const string &encoding_name) {
-	auto &catalog = Catalog::GetSystemCatalog(context);
-	return catalog.GetEntry<ScalarFunctionCatalogEntry>(
-	    context,
-	    QualifiedName(catalog.GetName(), Identifier(EncodingFunction::SCHEMA),
-	                  Identifier(EncodingFunction::FunctionName(encoding_name))),
-	    OnEntryNotFound::RETURN_NULL);
-}
-
-//! The names of all encodings: the scalar functions in the encodings schema
-static vector<string> GetLoadedEncodings(ClientContext &context) {
-	vector<string> result {"utf-8"};
-	auto &catalog = Catalog::GetSystemCatalog(context);
-	auto &schema = catalog.GetSchema(context, Identifier(EncodingFunction::SCHEMA));
-	schema.Scan(context, CatalogType::SCALAR_FUNCTION_ENTRY, [&](CatalogEntry &entry) {
-		if (entry.type != CatalogType::SCALAR_FUNCTION_ENTRY) {
-			return;
-		}
-		result.push_back(entry.name.GetIdentifierName());
-	});
-	std::sort(result.begin(), result.end());
-	return result;
-}
-
 CSVEncoder::CSVEncoder(ClientContext &context_p, const string &encoding_name_to_find, idx_t buffer_size)
     : context(context_p), pass_on_byte(0) {
 	encoding_name = StringUtil::Lower(encoding_name_to_find);
@@ -73,15 +49,8 @@ CSVEncoder::CSVEncoder(ClientContext &context_p, const string &encoding_name_to_
 		// UTF-8 is read straight into the CSV buffers (see CSVFileHandle::Read), the encoder buffers are never used
 		return;
 	}
-	auto entry = FindEncoding(context_p, encoding_name);
+	auto entry = EncodingFunction::Find(context_p, encoding_name);
 	if (!entry) {
-		// Maybe we can try to auto-load from our encodings extension, if this somehow fails, we just error.
-		if (Catalog::TryAutoLoad(context_p, "encodings")) {
-			entry = FindEncoding(context_p, encoding_name);
-		}
-	}
-	if (!entry) {
-		// If at this point we still do not have a function we throw an error.
 		std::ostringstream error;
 		error << "The CSV Reader does not support the encoding: \"" << encoding_name_to_find << "\"\n";
 		if (!context_p.db->ExtensionIsLoaded("encodings")) {
@@ -90,7 +59,7 @@ CSVEncoder::CSVEncoder(ClientContext &context_p, const string &encoding_name_to_
 			      << "\n";
 		}
 		error << "The currently supported encodings are: " << '\n';
-		for (auto &name : GetLoadedEncodings(context_p)) {
+		for (auto &name : EncodingFunction::GetEncodings(context_p)) {
 			error << "*  " << name << '\n';
 		}
 		throw InvalidInputException(error.str());
@@ -105,6 +74,13 @@ CSVEncoder::CSVEncoder(ClientContext &context_p, const string &encoding_name_to_
 	decode_executor = make_uniq<ExpressionExecutor>(context_p, *decode_expression);
 	decode_input.Initialize(context_p, {LogicalType::BLOB, LogicalType::BOOLEAN}, 1);
 
+	if (function->HasExtraFunctionInfo()) {
+		auto info = dynamic_cast<EncodingFunctionInfo *>(&function->GetExtraFunctionInfo());
+		if (info) {
+			direct_decode = info->decode;
+			max_output_bytes = info->max_output_bytes;
+		}
+	}
 	auto window = function->GetProperties().GetProperty(EncodingFunction::MINIMUM_INPUT_WINDOW_PROPERTY);
 	if (window) {
 		minimum_input_window = MaxValue<idx_t>(window->GetValue<idx_t>(), 1);
@@ -123,6 +99,14 @@ void CSVEncoder::Reset() {
 }
 
 idx_t CSVEncoder::Decode(const char *input, idx_t input_size, bool is_last, string &decoded) {
+	if (direct_decode) {
+		decoded.resize(input_size * max_output_bytes);
+		idx_t consumed = 0;
+		idx_t written = 0;
+		direct_decode(input, input_size, is_last, &decoded[0], consumed, written);
+		decoded.resize(written);
+		return consumed;
+	}
 	decode_input.Reset();
 	FlatVector::GetDataMutable<string_t>(decode_input.data[0])[0] =
 	    string_t(input, UnsafeNumericCast<uint32_t>(input_size));
@@ -141,6 +125,24 @@ idx_t CSVEncoder::DecodeBuffer(char *output_buffer, idx_t output_pos, idx_t outp
 	string decoded;
 	while (encoded_buffer.HasDataToRead() && output_pos < output_size) {
 		const idx_t available = encoded_buffer.GetSize() - encoded_buffer.cur_pos;
+		if (direct_decode) {
+			// Decode straight into the output buffer if the worst case fits
+			const idx_t fitting = MinValue<idx_t>((output_size - output_pos) / max_output_bytes, available);
+			if (fitting >= minimum_input_window || fitting == available) {
+				const bool is_last = encoded_buffer.last_buffer && fitting == available;
+				idx_t consumed = 0;
+				idx_t written = 0;
+				direct_decode(encoded_buffer.Ptr() + encoded_buffer.cur_pos, fitting, is_last,
+				              output_buffer + output_pos, consumed, written);
+				if (consumed == 0) {
+					// An incomplete character at the end of the buffer
+					break;
+				}
+				encoded_buffer.cur_pos += consumed;
+				output_pos += written;
+				continue;
+			}
+		}
 		// Decode as much input as there is room in the output, extended until it holds a complete character
 		idx_t slice = MinValue<idx_t>(MaxValue<idx_t>(output_size - output_pos, minimum_input_window), available);
 		idx_t consumed = 0;
