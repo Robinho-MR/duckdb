@@ -404,7 +404,7 @@ void CSVSniffer::AnalyzeDialectCandidate(unique_ptr<ColumnCountScanner> scanner,
 						}
 						sniffing_state_machine.dialect_options.skip_rows = options.dialect_options.skip_rows.GetValue();
 					} else if (!options.null_padding) {
-						sniffing_state_machine.dialect_options.skip_rows = dirty_notes;
+						sniffing_state_machine.dialect_options.skip_rows = dirty_notes_minus_comments;
 					}
 					sniffing_state_machine.dialect_options.num_cols = num_cols;
 					lines_sniffed = sniffed_column_counts.result_position;
