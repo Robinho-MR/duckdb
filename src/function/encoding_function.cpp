@@ -82,6 +82,7 @@ ScalarFunctionSet EncodingFunction::Create(const string &encoding_name, decode_t
 		    }
 	    });
 	decode_stream.SetFallible();
+	decode_stream.SetExtraFunctionInfo(make_shared_ptr<EncodingFunctionInfo>(decode, max_output_bytes));
 	decode_stream.GetProperties().SetProperty(MINIMUM_INPUT_WINDOW_PROPERTY, Value::BIGINT(minimum_input_window));
 
 	ScalarFunctionSet set(name);
