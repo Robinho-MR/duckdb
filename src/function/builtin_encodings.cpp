@@ -1,4 +1,5 @@
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/exception/conversion_exception.hpp"
 #include "duckdb/function/built_in_functions.hpp"
 #include "duckdb/function/encoding_function.hpp"
 #include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
@@ -30,6 +31,75 @@ void DecodeLatin1ToUTF8(const char *input, idx_t input_size, bool is_last, char 
 uint16_t LoadUTF16(const char *input, idx_t pos) {
 	return static_cast<uint16_t>(static_cast<unsigned char>(input[pos]) |
 	                             (static_cast<unsigned char>(input[pos + 1]) << 8));
+}
+
+void EncodeUTF8ToLatin1(const char *input, idx_t input_size, char *output, idx_t &written) {
+	idx_t out = 0;
+	idx_t pos = 0;
+	while (pos < input_size) {
+		const auto lead = static_cast<unsigned char>(input[pos]);
+		if (lead <= 0x7F) {
+			output[out++] = static_cast<char>(lead);
+			pos++;
+			continue;
+		}
+		// a two byte sequence U+0080..U+07FF, valid UTF-8 is guaranteed by VARCHAR
+		uint32_t code_point = 0;
+		idx_t length = 1;
+		if (lead >= 0xF0) {
+			length = 4;
+		} else if (lead >= 0xE0) {
+			length = 3;
+		} else {
+			length = 2;
+			code_point = ((lead & 0x1F) << 6) | (static_cast<unsigned char>(input[pos + 1]) & 0x3F);
+		}
+		if (length != 2 || code_point > 0xFF || code_point <= 0x9F) {
+			throw ConversionException("Could not encode the character at byte %llu in latin-1", pos);
+		}
+		output[out++] = static_cast<char>(code_point);
+		pos += length;
+	}
+	written = out;
+}
+
+void EncodeUTF8ToUTF16(const char *input, idx_t input_size, char *output, idx_t &written) {
+	idx_t out = 0;
+	idx_t pos = 0;
+	auto store = [&](uint16_t unit) {
+		output[out++] = static_cast<char>(unit & 0xFF);
+		output[out++] = static_cast<char>(unit >> 8);
+	};
+	while (pos < input_size) {
+		const auto lead = static_cast<unsigned char>(input[pos]);
+		uint32_t code_point;
+		idx_t length;
+		if (lead <= 0x7F) {
+			code_point = lead;
+			length = 1;
+		} else if (lead < 0xE0) {
+			code_point = ((lead & 0x1F) << 6) | (static_cast<unsigned char>(input[pos + 1]) & 0x3F);
+			length = 2;
+		} else if (lead < 0xF0) {
+			code_point = ((lead & 0x0F) << 12) | ((static_cast<unsigned char>(input[pos + 1]) & 0x3F) << 6) |
+			             (static_cast<unsigned char>(input[pos + 2]) & 0x3F);
+			length = 3;
+		} else {
+			code_point = ((lead & 0x07) << 18) | ((static_cast<unsigned char>(input[pos + 1]) & 0x3F) << 12) |
+			             ((static_cast<unsigned char>(input[pos + 2]) & 0x3F) << 6) |
+			             (static_cast<unsigned char>(input[pos + 3]) & 0x3F);
+			length = 4;
+		}
+		if (code_point >= 0x10000) {
+			code_point -= 0x10000;
+			store(static_cast<uint16_t>(0xD800 + (code_point >> 10)));
+			store(static_cast<uint16_t>(0xDC00 + (code_point & 0x3FF)));
+		} else {
+			store(static_cast<uint16_t>(code_point));
+		}
+		pos += length;
+	}
+	written = out;
 }
 
 void DecodeUTF16ToUTF8(const char *input, idx_t input_size, bool is_last, char *output, idx_t &consumed,
@@ -93,8 +163,8 @@ void BuiltinFunctions::RegisterEncodingFunctions() {
 	schema.on_conflict = OnCreateConflict::IGNORE_ON_CONFLICT;
 	catalog.CreateSchema(transaction, schema);
 
-	for (auto &set : {EncodingFunction::Create("latin-1", DecodeLatin1ToUTF8, 1, 2),
-	                  EncodingFunction::Create("utf-16", DecodeUTF16ToUTF8, 4, 2)}) {
+	for (auto &set : {EncodingFunction::Create("latin-1", DecodeLatin1ToUTF8, EncodeUTF8ToLatin1, 1, 2),
+	                  EncodingFunction::Create("utf-16", DecodeUTF16ToUTF8, EncodeUTF8ToUTF16, 4, 2)}) {
 		CreateScalarFunctionInfo info(set);
 		EncodingFunction::SetSchema(info);
 		info.internal = true;
