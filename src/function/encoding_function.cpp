@@ -28,7 +28,8 @@ ScalarFunctionSet EncodingFunction::Create(const string &encoding_name, decode_t
                                            idx_t max_output_bytes) {
 	D_ASSERT(decode && lookup_bytes > 0 && max_output_bytes > 0);
 	const Identifier name(FunctionName(encoding_name));
-	auto info = make_shared_ptr<EncodingFunctionInfo>(StringUtil::Lower(encoding_name), lookup_bytes, max_output_bytes);
+	auto info =
+	    make_shared_ptr<EncodingFunctionInfo>(StringUtil::Lower(encoding_name), lookup_bytes, max_output_bytes, decode);
 
 	ScalarFunction decode_all(name, vector<LogicalType> {LogicalType::BLOB}, LogicalType::VARCHAR,
 	                          [decode, max_output_bytes](DataChunk &args, ExpressionState &, Vector &result) {

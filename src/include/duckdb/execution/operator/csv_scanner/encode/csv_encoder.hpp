@@ -77,6 +77,8 @@ private:
 	DataChunk decode_input;
 	idx_t lookup_bytes = 1;
 	idx_t max_output_bytes = 1;
+	//! The native decoder of the encoding (if any), called directly instead of through the executor
+	decode_t direct_decode = nullptr;
 	//! Pass-on Byte, used to check if we are done with the file, but must be appended to next buffer
 	char pass_on_byte;
 	bool has_pass_on_byte = false;

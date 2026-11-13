@@ -23,9 +23,9 @@ typedef void (*decode_t)(const char *input, idx_t input_size, bool is_last, char
 
 //! Describes an encoding scalar function, which is how the CSV reader finds the encodings it can decode.
 struct EncodingFunctionInfo : public ScalarFunctionInfo {
-	EncodingFunctionInfo(string encoding_name_p, idx_t lookup_bytes_p, idx_t max_output_bytes_p)
-	    : encoding_name(std::move(encoding_name_p)), lookup_bytes(lookup_bytes_p),
-	      max_output_bytes(max_output_bytes_p) {
+	EncodingFunctionInfo(string encoding_name_p, idx_t lookup_bytes_p, idx_t max_output_bytes_p, decode_t decode_p)
+	    : encoding_name(std::move(encoding_name_p)), lookup_bytes(lookup_bytes_p), max_output_bytes(max_output_bytes_p),
+	      decode(decode_p) {
 	}
 
 	//! The name of the encoding, as passed to e.g. read_csv(encoding := ...)
@@ -34,6 +34,8 @@ struct EncodingFunctionInfo : public ScalarFunctionInfo {
 	idx_t lookup_bytes;
 	//! The maximum number of UTF-8 bytes produced for a single input byte
 	idx_t max_output_bytes;
+	//! The native decoder, which the CSV reader calls directly to skip the scalar function call overhead
+	decode_t decode;
 };
 
 //! An encoding is a set of scalar functions named after the encoding in the system.encodings schema:

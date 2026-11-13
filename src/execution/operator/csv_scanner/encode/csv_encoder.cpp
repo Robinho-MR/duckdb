@@ -117,6 +117,7 @@ CSVEncoder::CSVEncoder(ClientContext &context_p, const string &encoding_name_to_
 	auto &info = function->GetExtraFunctionInfo().Cast<EncodingFunctionInfo>();
 	lookup_bytes = info.lookup_bytes;
 	max_output_bytes = info.max_output_bytes;
+	direct_decode = info.decode;
 
 	// The encoded buffer is even for the two byte lookup of utf-16, and fits a full lookup plus the probe byte
 	encoded_buffer.Initialize(MaxValue<idx_t>(buffer_size - buffer_size % 2, 2 * lookup_bytes + 2));
@@ -150,11 +151,36 @@ idx_t CSVEncoder::DecodeBuffer(char *output_buffer, idx_t output_pos, idx_t outp
 	string decoded;
 	while (encoded_buffer.HasDataToRead() && output_pos < output_size) {
 		const idx_t available = encoded_buffer.GetSize() - encoded_buffer.cur_pos;
-		// Decode as much as is guaranteed to fit in the output, but always enough to complete one character
-		idx_t slice = MaxValue<idx_t>((output_size - output_pos) / max_output_bytes, lookup_bytes);
-		slice = MinValue<idx_t>(slice, available);
+		const char *input = encoded_buffer.Ptr() + encoded_buffer.cur_pos;
+		// Decode as much as is guaranteed to fit in the output
+		idx_t slice = MinValue<idx_t>((output_size - output_pos) / max_output_bytes, available);
+		if (direct_decode && (slice >= lookup_bytes || slice == available)) {
+			// Decode straight into the output buffer
+			const bool is_last = encoded_buffer.last_buffer && slice == available;
+			idx_t consumed = 0;
+			idx_t written = 0;
+			direct_decode(input, slice, is_last, output_buffer + output_pos, consumed, written);
+			if (consumed == 0) {
+				// An incomplete character at the end of the buffer
+				break;
+			}
+			encoded_buffer.cur_pos += consumed;
+			output_pos += written;
+			continue;
+		}
+		// Not enough room for the worst case: always decode enough to complete one character
+		slice = MinValue<idx_t>(MaxValue<idx_t>(slice, lookup_bytes), available);
 		const bool is_last = encoded_buffer.last_buffer && slice == available;
-		const idx_t consumed = Decode(encoded_buffer.Ptr() + encoded_buffer.cur_pos, slice, is_last, decoded);
+		idx_t consumed;
+		if (direct_decode) {
+			decoded.resize(slice * max_output_bytes);
+			idx_t written = 0;
+			consumed = 0;
+			direct_decode(input, slice, is_last, &decoded[0], consumed, written);
+			decoded.resize(written);
+		} else {
+			consumed = Decode(input, slice, is_last, decoded);
+		}
 		if (consumed == 0) {
 			// An incomplete character at the end of the buffer
 			break;
