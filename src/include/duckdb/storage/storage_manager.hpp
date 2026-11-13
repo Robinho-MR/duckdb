@@ -136,6 +136,13 @@ public:
 	bool HasStorageVersion() const {
 		return storage_version != StorageVersion::INVALID;
 	}
+	//! The library version that created the database file, or empty if unknown
+	const string &GetCreatedByLibraryVersion() const {
+		return created_by_library_version;
+	}
+	void SetCreatedByLibraryVersion(string version) {
+		created_by_library_version = std::move(version);
+	}
 	string_t GetDuckDBVersionString() const {
 		D_ASSERT(HasStorageVersion());
 		return StorageVersionInfo::GetStorageVersionString(storage_version);
@@ -187,6 +194,8 @@ protected:
 	bool load_complete = false;
 	//! The storage compatibility version when reading and writing from this database
 	StorageVersion storage_version;
+	//! The library version stored in the main header of the database file
+	string created_by_library_version;
 	//! Estimated size of changes for determining automatic checkpointing on in-memory databases and databases without a
 	//! WAL.
 	atomic<idx_t> wal_size;

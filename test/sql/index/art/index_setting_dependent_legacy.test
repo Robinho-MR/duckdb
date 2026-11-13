@@ -1,5 +1,5 @@
 # name: test/sql/index/art/index_setting_dependent_legacy.test
-# description: Setting-dependent index keys that v2.0.0 accepted keep their tables writable
+# description: Setting-dependent index keys keep their tables writable in databases created by DuckDB <= v2.0.0
 # group: [art]
 
 require icu
@@ -74,3 +74,22 @@ statement error
 CREATE INDEX i3 ON db.t((ts::DATE))
 ----
 Index keys cannot contain expressions with side effects. They also cannot depend on settings such as TimeZone.
+
+statement ok
+DETACH db
+
+# The same file with its main header patched to say it was created by v2.0.1, which rejects such keys.
+unzip data/storage/index_setting_dependent_v2_0_1.db.gz {TEST_DIR}/index_setting_dependent_v2_0_1.db
+
+statement ok
+ATTACH '{TEST_DIR}/index_setting_dependent_v2_0_1.db' AS db
+
+query II
+SELECT ts::DATE, k FROM db.t
+----
+2024-01-01	1
+
+statement error
+INSERT INTO db.t VALUES ('2024-01-02 23:30:00+00', 2)
+----
+Data Corruption Error: Invalid index "i1": Index keys cannot contain expressions with side effects. They also cannot depend on settings such as TimeZone.

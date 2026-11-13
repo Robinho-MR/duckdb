@@ -2,6 +2,9 @@
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/error_data.hpp"
 #include "duckdb/logging/logger.hpp"
+#include "duckdb/main/attached_database.hpp"
+#include "duckdb/main/extension.hpp"
+#include "duckdb/storage/storage_manager.hpp"
 
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/parser/parsed_data/create_index_info.hpp"
@@ -44,7 +47,18 @@ static optional_ptr<const BoundFunctionExpression> FindLambdaFunction(const Expr
 	return result;
 }
 
-//! Setting-dependent keys are rejected for new indexes, but are allowed when rebinding: earlier versions created them
+//! Whether the database file was created by DuckDB v2.0.0 or earlier, which accepted setting-dependent index keys
+static bool CreatedByV200OrEarlier(AttachedDatabase &db) {
+	auto version = db.GetStorageManager().GetCreatedByLibraryVersion();
+	version = version.substr(0, version.find('-'));
+	idx_t major, minor, patch;
+	if (!VersioningUtils::ParseSemver(version, major, minor, patch)) {
+		return false;
+	}
+	return major < 2 || (major == 2 && minor == 0 && patch == 0);
+}
+
+//! Setting-dependent keys are rejected, unless they are rebound in a database that could have created them
 static bool IsValidIndexExpression(Binder &binder, const Expression &expr, ErrorData &error,
                                    bool allow_setting_dependent = false) {
 	// casts are bound without the binder, so a cast that reads settings such as TimeZone is found in the key
@@ -84,15 +98,16 @@ unique_ptr<BoundIndex> IndexBinder::BindIndex(const UnboundIndex &unbound_index)
 	// bind the parsed expressions to create unbound expressions
 	auto &properties = binder.GetStatementProperties();
 	const auto statement_requires_rebind = properties.always_require_rebind;
+	const auto allow_setting_dependent = CreatedByV200OrEarlier(unbound_index.db);
 	vector<unique_ptr<Expression>> unbound_expressions;
 	unbound_expressions.reserve(parsed_expressions.size());
 	for (auto &expr : parsed_expressions) {
 		auto copy = expr->Copy();
 		properties.always_require_rebind = false;
 		unbound_expressions.push_back(Bind(copy));
-		// Stored keys must satisfy the same requirements as newly created keys, except for setting-dependent keys.
+		// Stored keys must satisfy the same requirements as newly created keys.
 		ErrorData error;
-		if (!IsValidIndexExpression(binder, *unbound_expressions.back(), error, true)) {
+		if (!IsValidIndexExpression(binder, *unbound_expressions.back(), error, allow_setting_dependent)) {
 			throw DataCorruptionException("Invalid index %s: %s", create_info.GetIndexName(), error.RawMessage());
 		}
 		if (unbound_expressions.back()->RequiresRebind()) {
