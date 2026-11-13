@@ -23,8 +23,6 @@ class ExecutionContext;
 
 //! ExpressionExecutor is responsible for executing a set of expressions and storing the result in a data chunk
 class ExpressionExecutor {
-	friend class BoundIndex;
-
 public:
 	DUCKDB_API explicit ExpressionExecutor(Context &context);
 	DUCKDB_API ExpressionExecutor(Context &context, const Expression *expression);
