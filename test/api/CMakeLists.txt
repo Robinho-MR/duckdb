@@ -102,6 +102,7 @@ set(TEST_API_OBJECTS
 
 if(NOT WIN32)
   set(TEST_API_OBJECTS ${TEST_API_OBJECTS} test_read_only.cpp)
+  set(TEST_API_OBJECTS ${TEST_API_OBJECTS} test_snapshot_read.cpp)
 endif()
 
 if(DUCKDB_EXTENSION_TPCH_SHOULD_LINK)

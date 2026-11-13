@@ -97,6 +97,12 @@ public:
 	virtual bool Prefetch() {
 		return false;
 	}
+	//! Whether blocks that are already on disk may be rewritten in place until EndInPlaceWrites is called
+	virtual bool TryBeginInPlaceWrites() {
+		return true;
+	}
+	virtual void EndInPlaceWrites() {
+	}
 
 	//! Sync changes made to the block manager
 	virtual void FileSync() = 0;

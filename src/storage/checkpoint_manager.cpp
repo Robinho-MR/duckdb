@@ -223,6 +223,23 @@ static catalog_entry_vector_t GetCatalogEntries(vector<reference<DuckSchemaEntry
 	return entries;
 }
 
+namespace {
+
+struct InPlaceWritesGuard {
+	explicit InPlaceWritesGuard(BlockManager &block_manager) : block_manager(block_manager) {
+	}
+	~InPlaceWritesGuard() {
+		try {
+			block_manager.EndInPlaceWrites();
+		} catch (...) { // NOLINT
+		}
+	}
+
+	BlockManager &block_manager;
+};
+
+} // namespace
+
 void SingleFileCheckpointWriter::CreateCheckpoint() {
 	auto &storage_manager = db.GetStorageManager().Cast<SingleFileStorageManager>();
 	if (storage_manager.InMemory()) {
@@ -237,6 +254,8 @@ void SingleFileCheckpointWriter::CreateCheckpoint() {
 
 	auto &block_manager = GetBlockManager();
 	auto &metadata_manager = GetMetadataManager();
+	// blocks rewritten in place are written by the end of the checkpoint, also if it fails
+	InPlaceWritesGuard in_place_writes_guard(block_manager);
 
 	//! Set up the writers for the checkpoints
 	metadata_writer = make_uniq<MetadataWriter>(metadata_manager);

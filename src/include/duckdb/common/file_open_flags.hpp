@@ -32,6 +32,7 @@ public:
 	static constexpr idx_t FILE_FLAGS_MULTI_CLIENT_ACCESS = idx_t(1 << 11);
 	static constexpr idx_t FILE_FLAGS_DISABLE_LOGGING = idx_t(1 << 12);
 	static constexpr idx_t FILE_FLAGS_ENABLE_EXTENSION_INSTALL = idx_t(1 << 13);
+	static constexpr idx_t FILE_FLAGS_DATABASE_LOCK = idx_t(1 << 14);
 
 public:
 	FileOpenFlags() = default;
@@ -147,6 +148,9 @@ public:
 	inline bool EnableExtensionInstall() const {
 		return flags & FILE_FLAGS_ENABLE_EXTENSION_INSTALL;
 	}
+	inline bool DatabaseLock() const {
+		return flags & FILE_FLAGS_DATABASE_LOCK;
+	}
 	inline idx_t GetFlagsInternal() const {
 		return flags;
 	}
@@ -190,6 +194,19 @@ public:
 	DUCKDB_API static const FileOpenFlags FILE_FLAGS_DISABLE_LOGGING;
 	//! Opened file is allowed to be a duckdb_extension
 	DUCKDB_API static const FileOpenFlags FILE_FLAGS_ENABLE_EXTENSION_INSTALL;
+	//! Lock the database file using the byte ranges in DatabaseLockRange instead of the whole file. File systems
+	//! that do not support this fall back to whole-file locks.
+	DUCKDB_API static const FileOpenFlags FILE_FLAGS_DATABASE_LOCK;
+};
+
+//! Byte ranges of the database file locks taken with FILE_FLAGS_DATABASE_LOCK. They lie in the main header block.
+//! A writer write-locks the writer range, snapshot readers read-lock the reader range. Whole-file locks (taken by
+//! older versions, or when byte-range locks are unavailable) conflict with both.
+struct DatabaseLockRange {
+	static constexpr idx_t READERS_START = 0;
+	static constexpr idx_t READERS_LENGTH = 4095;
+	static constexpr idx_t WRITER_START = 4095;
+	static constexpr idx_t WRITER_LENGTH = 1;
 };
 
 } // namespace duckdb

@@ -46,8 +46,16 @@ struct EncryptionOptions {
 	EncryptionTypes::EncryptionVersion encryption_version = EncryptionTypes::NONE;
 };
 
+//! The WAL files of a snapshot reader, opened while the header it loaded was the active header
+struct SnapshotWALHandles {
+	unique_ptr<FileHandle> checkpoint_wal;
+	unique_ptr<FileHandle> main_wal;
+};
+
 struct StorageManagerOptions {
 	bool read_only = false;
+	//! Read a snapshot of the last commit while a writer may be active (requires read_only)
+	bool snapshot = false;
 	FileIOMode io_mode = FileIOMode::BUFFERED_IO;
 	//! Reserve size for MMAP mode; empty uses the built-in default.
 	optional_idx mmap_reserve_size;
@@ -134,6 +142,10 @@ public:
 	bool IsRemote() override;
 	//! Whether or not to prefetch
 	bool Prefetch() override;
+	//! Snapshot readers may read any block on disk: blocks are only rewritten in place while the writer holds the
+	//! readers range, which fails if readers are attached
+	bool TryBeginInPlaceWrites() override;
+	void EndInPlaceWrites() override;
 
 	//! Return the checkpoint iteration of the file.
 	uint64_t GetCheckpointIteration() const {
@@ -144,6 +156,10 @@ public:
 	//! Return the database identifier.
 	data_ptr_t GetDBIdentifier() {
 		return options.db_identifier;
+	}
+	//! Hands over the WAL files that match the loaded header (snapshot readers only)
+	SnapshotWALHandles TakeSnapshotWALHandles() {
+		return std::move(snapshot_wal_handles);
 	}
 
 private:
@@ -199,6 +215,10 @@ private:
 	void ReleaseFreeBlockInUse(unique_lock<mutex> &lock, block_id_t id);
 	//! Returns true, if the block is in the free list. Takes the lock (verification only).
 	bool BlockIsFreeListed(block_id_t block_id);
+	//! Whether snapshot readers might be reading an older checkpoint of the file
+	bool SnapshotReadersAttached();
+	//! Reads both database headers, under a read lock for snapshot readers
+	void ReadDatabaseHeaders(QueryContext context, MainHeader &main_header, DatabaseHeader &h1, DatabaseHeader &h2);
 
 private:
 	AttachedDatabase &db;
@@ -222,6 +242,18 @@ private:
 	unordered_map<block_id_t, uint32_t> multi_use_blocks;
 	//! The list of blocks that are no longer in-use, but cannot be re-used until the next checkpoint
 	unordered_set<block_id_t> modified_blocks;
+	//! Blocks freed while snapshot readers were attached. These readers may still read them, so they are only
+	//! re-used after a checkpoint at which no reader is attached
+	set<block_id_t> reader_held_blocks;
+	//! Whether snapshot readers can attach while this writer is active
+	bool snapshot_readers_possible = false;
+	//! Whether this writer holds the readers range, so that no snapshot reader can attach
+	bool readers_excluded = false;
+	mutex readers_excluded_lock;
+	//! Whether the free list loaded by this writer is held back for snapshot readers
+	bool loaded_free_list_held = false;
+	//! The WAL files of a snapshot reader, until they are replayed
+	SnapshotWALHandles snapshot_wal_handles;
 	//! The current meta block id
 	idx_t meta_block;
 	//! The current maximum block id, this id will be given away first after the free_list runs out

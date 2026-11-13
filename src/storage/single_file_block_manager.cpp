@@ -533,6 +533,7 @@ void SingleFileBlockManager::CreateNewDatabase(QueryContext context) {
 
 	// MAP mode opens only the mmap; other modes open the FileHandle.
 	handle = DatabaseHandle::Open(context, db, path, options, DatabaseOpenMode::CREATE_NEW_FILE);
+	snapshot_readers_possible = handle->SupportsRangeLocks();
 	header_buffer.Clear();
 
 	if (options.storage_version == StorageVersion::INVALID) {
@@ -636,6 +637,85 @@ void SingleFileBlockManager::CreateNewDatabase(QueryContext context) {
 	max_block = 0;
 }
 
+static_assert(DatabaseLockRange::WRITER_START + DatabaseLockRange::WRITER_LENGTH == Storage::FILE_HEADER_SIZE,
+              "the database lock ranges must lie in the main header block");
+
+namespace {
+
+//! Holds a byte-range lock on the database headers for the lifetime of the object
+struct HeaderRangeLock {
+	HeaderRangeLock(DatabaseHandle &handle, idx_t start, idx_t length, FileLockType type)
+	    : handle(handle), start(start), length(length) {
+		handle.LockRange(start, length, type);
+	}
+	~HeaderRangeLock() {
+		try {
+			handle.UnlockRange(start, length);
+		} catch (...) { // NOLINT: the lock is released when the file is closed
+		}
+	}
+
+	DatabaseHandle &handle;
+	idx_t start;
+	idx_t length;
+};
+
+} // namespace
+
+bool SingleFileBlockManager::SnapshotReadersAttached() {
+	if (!snapshot_readers_possible) {
+		return false;
+	}
+	try {
+		return handle->RangeIsLocked(DatabaseLockRange::READERS_START, DatabaseLockRange::READERS_LENGTH);
+	} catch (std::exception &) {
+		// if we cannot tell, readers might be attached
+		return true;
+	}
+}
+
+bool SingleFileBlockManager::TryBeginInPlaceWrites() {
+	if (!snapshot_readers_possible) {
+		return true;
+	}
+	lock_guard<mutex> guard(readers_excluded_lock);
+	if (!readers_excluded) {
+		try {
+			readers_excluded = handle->TryLockRange(DatabaseLockRange::READERS_START, DatabaseLockRange::READERS_LENGTH,
+			                                        FileLockType::WRITE_LOCK);
+		} catch (std::exception &) { // NOLINT: if we cannot lock, readers might be attached
+		}
+	}
+	return readers_excluded;
+}
+
+void SingleFileBlockManager::EndInPlaceWrites() {
+	lock_guard<mutex> guard(readers_excluded_lock);
+	if (!readers_excluded) {
+		return;
+	}
+	readers_excluded = false;
+	try {
+		handle->UnlockRange(DatabaseLockRange::READERS_START, DatabaseLockRange::READERS_LENGTH);
+	} catch (std::exception &) { // NOLINT: the lock is released when the file is closed
+	}
+}
+
+void SingleFileBlockManager::ReadDatabaseHeaders(QueryContext context, MainHeader &main_header, DatabaseHeader &h1,
+                                                 DatabaseHeader &h2) {
+	// a snapshot reader holds a read lock while reading, so that it never sees a partially written header
+	unique_ptr<HeaderRangeLock> header_lock;
+	if (options.snapshot) {
+		header_lock = make_uniq<HeaderRangeLock>(*handle, Storage::FILE_HEADER_SIZE, Storage::FILE_HEADER_SIZE * 2,
+		                                         FileLockType::READ_LOCK);
+	}
+	ReadAndChecksum(context, header_buffer, Storage::FILE_HEADER_SIZE);
+	h1 = DeserializeDatabaseHeader(main_header, header_buffer.GetDataMutable());
+
+	ReadAndChecksum(context, header_buffer, Storage::FILE_HEADER_SIZE * 2ULL);
+	h2 = DeserializeDatabaseHeader(main_header, header_buffer.GetDataMutable());
+}
+
 void SingleFileBlockManager::LoadExistingDatabase(QueryContext context) {
 	handle = DatabaseHandle::Open(context, db, path, options, DatabaseOpenMode::OPEN_EXISTING_FILE);
 	handle->CheckMagicBytes(context);
@@ -711,12 +791,38 @@ void SingleFileBlockManager::LoadExistingDatabase(QueryContext context) {
 
 	// read the database headers from disk
 	DatabaseHeader h1;
-	ReadAndChecksum(context, header_buffer, Storage::FILE_HEADER_SIZE);
-	h1 = DeserializeDatabaseHeader(main_header, header_buffer.GetDataMutable());
-
 	DatabaseHeader h2;
-	ReadAndChecksum(context, header_buffer, Storage::FILE_HEADER_SIZE * 2ULL);
-	h2 = DeserializeDatabaseHeader(main_header, header_buffer.GetDataMutable());
+	ReadDatabaseHeaders(context, main_header, h1, h2);
+	if (options.snapshot) {
+		// a snapshot reader replays the WAL files that belong to the header it loaded: open them, then check that the
+		// header did not change in the meantime. The checkpoint WAL is opened first, as a finishing checkpoint moves
+		// it over the main WAL.
+		static constexpr idx_t MAX_SNAPSHOT_ATTEMPTS = 10;
+		auto &fs = FileSystem::Get(db);
+		auto &storage_manager = db.GetStorageManager();
+		auto wal_flags = FileFlags::FILE_FLAGS_READ | FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS;
+		for (idx_t attempt = 0;; attempt++) {
+			if (attempt >= MAX_SNAPSHOT_ATTEMPTS) {
+				throw IOException("Cannot open database \"%s\" in snapshot mode: the database was checkpointed "
+				                  "concurrently %llu times while opening it",
+				                  path, MAX_SNAPSHOT_ATTEMPTS);
+			}
+			SnapshotWALHandles wal_handles;
+			wal_handles.checkpoint_wal = fs.OpenFile(storage_manager.GetCheckpointWALPath(), wal_flags);
+			wal_handles.main_wal = fs.OpenFile(storage_manager.GetWALPath(), wal_flags);
+
+			DatabaseHeader new_h1;
+			DatabaseHeader new_h2;
+			ReadDatabaseHeaders(context, main_header, new_h1, new_h2);
+			bool header_changed = MaxValue(h1.iteration, h2.iteration) != MaxValue(new_h1.iteration, new_h2.iteration);
+			h1 = new_h1;
+			h2 = new_h2;
+			if (!header_changed) {
+				snapshot_wal_handles = std::move(wal_handles);
+				break;
+			}
+		}
+	}
 
 	// check the header with the highest iteration count
 	if (h1.iteration > h2.iteration) {
@@ -730,6 +836,16 @@ void SingleFileBlockManager::LoadExistingDatabase(QueryContext context) {
 	}
 	AddStorageVersionTag();
 	LoadFreeList(context);
+
+	if (!options.read_only) {
+		snapshot_readers_possible = handle->SupportsRangeLocks();
+		if (SnapshotReadersAttached()) {
+			// attached readers may read an older checkpoint whose blocks are in the free list
+			reader_held_blocks = std::move(free_list);
+			free_list.clear();
+			loaded_free_list_held = true;
+		}
+	}
 }
 
 void SingleFileBlockManager::CheckChecksum(data_ptr_t start_ptr, uint64_t delta, bool skip_block_header) const {
@@ -966,13 +1082,21 @@ void SingleFileBlockManager::MarkBlockAsUsed(block_id_t block_id) {
 		// any blocks in the middle are added to the free list
 		// i.e. if max_block = 0, and block_id = 3, we need to add blocks 1 and 2 to the free list
 		while (max_block < block_id) {
-			free_list.insert(max_block);
+			if (loaded_free_list_held) {
+				// a previous writer may have used these blocks while snapshot readers were attached
+				reader_held_blocks.insert(max_block);
+			} else {
+				free_list.insert(max_block);
+			}
 			max_block++;
 		}
 		max_block++;
 	} else if (free_list.find(block_id) != free_list.end()) {
 		// block is currently in the free list - erase
 		free_list.erase(block_id);
+	} else if (reader_held_blocks.find(block_id) != reader_held_blocks.end()) {
+		// the block was free in the loaded checkpoint, so readers of older checkpoints do not need it
+		reader_held_blocks.erase(block_id);
 	} else {
 		// block is already in use - increase reference count
 		IncreaseBlockReferenceCountInternal(block_id);
@@ -1000,7 +1124,7 @@ void SingleFileBlockManager::MarkBlockAsModified(block_id_t block_id) {
 	if (modified_blocks.find(block_id) != modified_blocks.end()) {
 		throw InternalException("MarkBlockAsModified called with already modified block id %d", block_id);
 	}
-	if (free_list.find(block_id) != free_list.end()) {
+	if (free_list.find(block_id) != free_list.end() || reader_held_blocks.find(block_id) != reader_held_blocks.end()) {
 		throw InternalException("MarkBlockAsModified called with already freed block id %d", block_id);
 	}
 	auto newly_used_entry = newly_used_blocks.find(block_id);
@@ -1070,6 +1194,9 @@ void SingleFileBlockManager::VerifyBlocks(const unordered_map<block_id_t, idx_t>
 	}
 	for (auto &free_block : free_blocks_in_use) {
 		referenced_blocks.insert(free_block);
+	}
+	for (auto &held_block : reader_held_blocks) {
+		referenced_blocks.insert(held_block);
 	}
 	if (referenced_blocks.size() != NumericCast<idx_t>(max_block)) {
 		// not all blocks are accounted for
@@ -1213,7 +1340,7 @@ void SingleFileBlockManager::Read(QueryContext context, Block &block) {
 
 bool SingleFileBlockManager::BlockIsFreeListed(block_id_t block_id) {
 	lock_guard<mutex> lock(single_file_block_lock);
-	return free_list.find(block_id) != free_list.end();
+	return free_list.find(block_id) != free_list.end() || reader_held_blocks.find(block_id) != reader_held_blocks.end();
 }
 
 void SingleFileBlockManager::ReadBlocks(QueryContext context, FileBuffer &buffer, block_id_t start_block,
@@ -1279,8 +1406,8 @@ vector<MetadataHandle> SingleFileBlockManager::GetFreeListBlocks() {
 		idx_t multi_use_blocks_count;
 		{
 			lock_guard<mutex> guard(single_file_block_lock);
-			free_list_count =
-			    free_list.size() + modified_blocks.size() + free_blocks_in_use.size() + newly_used_blocks.size();
+			free_list_count = free_list.size() + modified_blocks.size() + free_blocks_in_use.size() +
+			                  newly_used_blocks.size() + reader_held_blocks.size();
 			multi_use_blocks_count = multi_use_blocks.size();
 		}
 		auto free_list_size = sizeof(uint64_t) + sizeof(block_id_t) * free_list_count;
@@ -1354,6 +1481,7 @@ void SingleFileBlockManager::WriteHeader(QueryContext context, DatabaseHeader he
 
 	set<block_id_t> all_free_blocks = free_list;
 	all_free_blocks.insert(free_blocks_in_use.begin(), free_blocks_in_use.end());
+	all_free_blocks.insert(reader_held_blocks.begin(), reader_held_blocks.end());
 	auto checkpoint_freed_blocks = modified_blocks;
 	for (auto &block : checkpoint_freed_blocks) {
 		all_free_blocks.insert(block);
@@ -1406,16 +1534,25 @@ void SingleFileBlockManager::WriteHeader(QueryContext context, DatabaseHeader he
 
 	header_buffer.Clear();
 	// if we are upgrading the database from version 64 -> version 65, we need to re-write the main header
-	if (options.version_number == StorageVersion::V0_10_2 && options.storage_version >= StorageVersion::V1_2_0) {
-		RewriteMainHeader(context, StorageVersion::V1_2_0);
-	}
-
+	bool upgrade_main_header =
+	    options.version_number == StorageVersion::V0_10_2 && options.storage_version >= StorageVersion::V1_2_0;
 	// if we are downgrading the database from v2.0.0 to an earlier version
 	// we also need to re-write the main header
-	if (options.version_number == MainHeader::DEPRECATED_VERSION_NUMBER &&
-	    options.storage_version < StorageVersion::V2_0_0) {
+	bool downgrade_main_header = options.version_number == MainHeader::DEPRECATED_VERSION_NUMBER &&
+	                             options.storage_version < StorageVersion::V2_0_0;
+	// snapshot readers read the main header without coordinating with the writer: hold the readers range while it
+	// is rewritten, so that no reader is attached and none can attach in the meantime
+	if ((upgrade_main_header || downgrade_main_header) && !TryBeginInPlaceWrites()) {
+		throw IOException("Cannot change the storage version of \"%s\" while snapshot readers are attached", path);
+	}
+	if (upgrade_main_header) {
+		RewriteMainHeader(context, StorageVersion::V1_2_0);
+	}
+	if (downgrade_main_header) {
 		RewriteMainHeader(context, options.storage_version);
 	}
+	// all blocks of this checkpoint are written: snapshot readers can attach again
+	EndInPlaceWrites();
 
 	// set the header inside the buffer
 	MemoryStream serializer(Allocator::Get(db));
@@ -1424,18 +1561,42 @@ void SingleFileBlockManager::WriteHeader(QueryContext context, DatabaseHeader he
 	// now write the header to the file, active_header determines whether we write to h1 or h2
 	// note that if active_header is h1 we write to h2, and vice versa
 	auto location = active_header == 1 ? Storage::FILE_HEADER_SIZE : Storage::FILE_HEADER_SIZE * 2;
-	ChecksumAndWrite(context, header_buffer, location);
-	// switch active header to the other header
-	active_header = 1 - active_header;
-	//! Ensure the header write ends up on disk
-	handle->Sync();
+	{
+		// snapshot readers must not read the header while it is partially written
+		unique_ptr<HeaderRangeLock> header_lock;
+		if (snapshot_readers_possible) {
+			try {
+				header_lock =
+				    make_uniq<HeaderRangeLock>(*handle, location, Storage::FILE_HEADER_SIZE, FileLockType::WRITE_LOCK);
+			} catch (std::exception &) { // NOLINT: readers cannot lock the headers either
+			}
+		}
+		ChecksumAndWrite(context, header_buffer, location);
+		// switch active header to the other header
+		active_header = 1 - active_header;
+		//! Ensure the header write ends up on disk
+		handle->Sync();
+	}
+	// readers that attach from now on read the new header, so only the readers attached now can read freed blocks
+	bool readers_attached = SnapshotReadersAttached();
 	set<block_id_t> fully_freed_blocks;
 	{
 		unique_lock<mutex> release_lock(single_file_block_lock);
 		for (auto &block : checkpoint_freed_blocks) {
 			modified_blocks.erase(block);
-			if (AddFreeBlock(release_lock, block)) {
+			if (readers_attached) {
+				reader_held_blocks.insert(block);
+			} else if (AddFreeBlock(release_lock, block)) {
 				fully_freed_blocks.insert(block);
+			}
+		}
+		if (!readers_attached && !reader_held_blocks.empty()) {
+			auto held_blocks = std::move(reader_held_blocks);
+			reader_held_blocks.clear();
+			for (auto &block : held_blocks) {
+				if (AddFreeBlock(release_lock, block)) {
+					fully_freed_blocks.insert(block);
+				}
 			}
 		}
 	}

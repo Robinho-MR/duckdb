@@ -64,6 +64,8 @@ public:
 	optional_idx checkpoint_position;
 	optional_idx checkpoint_end_position;
 	optional_idx expected_checkpoint_id;
+	//! The checkpoint iteration the WAL was created for (if stored)
+	optional_idx wal_checkpoint_iteration;
 	WALReplayState replay_state;
 	//! Blocks referenced by ROW_GROUP_DATA entries, collected during the deserialize-only scan. They are marked as used
 	//! only once we have decided to replay the WAL, so if log replay is not needed, these blocks won't be
@@ -355,6 +357,8 @@ private:
 struct WriteAheadLogReplayer {
 public:
 	WriteAheadLogReplayer(QueryContext context, StorageManager &storage_manager, const string &wal_path);
+	WriteAheadLogReplayer(QueryContext context, StorageManager &storage_manager, const string &wal_path,
+	                      SnapshotWALHandles &&snapshot_handles);
 
 	unique_ptr<WriteAheadLog> Replay();
 
@@ -372,11 +376,22 @@ private:
 	AttachedDatabase &database;
 	const string &main_wal_path;
 	FileSystem &fs;
+	//! Snapshot readers replay WAL files opened together with the database header, which may still be appended to
+	bool snapshot = false;
+	SnapshotWALHandles snapshot_handles;
+	//! The checkpoint iteration of the main WAL
+	optional_idx main_wal_iteration;
 };
 
 unique_ptr<WriteAheadLog> WriteAheadLog::Replay(QueryContext context, StorageManager &storage_manager,
                                                 const string &main_wal_path) {
 	WriteAheadLogReplayer wal_replay(context, storage_manager, main_wal_path);
+	return wal_replay.Replay();
+}
+
+unique_ptr<WriteAheadLog> WriteAheadLog::Replay(QueryContext context, StorageManager &storage_manager,
+                                                const string &main_wal_path, SnapshotWALHandles &&snapshot_handles) {
+	WriteAheadLogReplayer wal_replay(context, storage_manager, main_wal_path, std::move(snapshot_handles));
 	return wal_replay.Replay();
 }
 
@@ -386,8 +401,21 @@ WriteAheadLogReplayer::WriteAheadLogReplayer(QueryContext context, StorageManage
       main_wal_path(main_wal_path), fs(FileSystem::Get(storage_manager.GetAttached())) {
 }
 
+WriteAheadLogReplayer::WriteAheadLogReplayer(QueryContext context, StorageManager &storage_manager,
+                                             const string &main_wal_path, SnapshotWALHandles &&snapshot_handles_p)
+    : WriteAheadLogReplayer(context, storage_manager, main_wal_path) {
+	D_ASSERT(storage_manager.GetAttached().IsReadOnly());
+	snapshot = true;
+	snapshot_handles = std::move(snapshot_handles_p);
+}
+
 unique_ptr<WriteAheadLog> WriteAheadLogReplayer::Replay() {
-	auto handle = fs.OpenFile(main_wal_path, FileFlags::FILE_FLAGS_READ | FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS);
+	unique_ptr<FileHandle> handle;
+	if (snapshot) {
+		handle = std::move(snapshot_handles.main_wal);
+	} else {
+		handle = fs.OpenFile(main_wal_path, FileFlags::FILE_FLAGS_READ | FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS);
+	}
 	if (!handle) {
 		// WAL does not exist - instantiate an empty WAL
 		return make_uniq<WriteAheadLog>(storage_manager, main_wal_path);
@@ -527,11 +555,32 @@ unique_ptr<WriteAheadLog> WriteAheadLogReplayer::ReplayLog(unique_ptr<FileHandle
 	} catch (std::exception &ex) { // LCOV_EXCL_START
 		ErrorData error(ex);
 		// ignore serialization exceptions - they signal a torn WAL
-		if (Settings::Get<DebugAbortOnWalFailureSetting>(config) || error.Type() != ExceptionType::SERIALIZATION) {
+		bool torn_wal =
+		    !Settings::Get<DebugAbortOnWalFailureSetting>(config) && error.Type() == ExceptionType::SERIALIZATION;
+		if (snapshot) {
+			// the writer may be appending to the WAL: an incomplete or partially written entry ends it
+			torn_wal = error.Type() == ExceptionType::SERIALIZATION || error.Type() == ExceptionType::DATA_CORRUPTION ||
+			           error.Type() == ExceptionType::INVALID_INPUT;
+		}
+		if (!torn_wal) {
 			con.Rollback();
 			error.Throw("Failure while replaying WAL file \"" + wal_path + "\": ");
 		}
 	} // LCOV_EXCL_STOP
+	if (replay_state == WALReplayState::MAIN_WAL) {
+		main_wal_iteration = checkpoint_state.wal_checkpoint_iteration;
+	} else if (snapshot && main_wal_iteration.IsValid() && checkpoint_state.wal_checkpoint_iteration.IsValid() &&
+	           checkpoint_state.wal_checkpoint_iteration.GetIndex() != main_wal_iteration.GetIndex() + 1) {
+		if (checkpoint_state.wal_checkpoint_iteration.GetIndex() != main_wal_iteration.GetIndex()) {
+			con.Rollback();
+			throw IOException("Failure while replaying checkpoint WAL file \"%s\" in snapshot mode: the checkpoint "
+			                  "WAL does not belong to the main WAL",
+			                  wal_path);
+		}
+		// a finished checkpoint moved the checkpoint WAL over the main WAL in between opening both: it was replayed
+		con.Rollback();
+		return nullptr;
+	}
 
 	// Discard row group blocks from uncommitted transactions.
 	// Notice, this must happen before apply any WAL entries to block manager.
@@ -560,8 +609,12 @@ unique_ptr<WriteAheadLog> WriteAheadLogReplayer::ReplayLog(unique_ptr<FileHandle
 		// first check if there is a checkpoint WAL
 		auto &manager = database.GetStorageManager();
 		auto checkpoint_wal = manager.GetCheckpointWALPath();
-		checkpoint_handle =
-		    fs.OpenFile(checkpoint_wal, FileFlags::FILE_FLAGS_READ | FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS);
+		if (snapshot) {
+			checkpoint_handle = std::move(snapshot_handles.checkpoint_wal);
+		} else {
+			checkpoint_handle =
+			    fs.OpenFile(checkpoint_wal, FileFlags::FILE_FLAGS_READ | FileFlags::FILE_FLAGS_NULL_IF_NOT_EXISTS);
+		}
 		bool checkpoint_was_successful = manager.IsCheckpointClean(checkpoint_state.checkpoint_id);
 		if (!checkpoint_handle) {
 			// no checkpoint WAL - either we just need to replay this WAL, or we are done
@@ -825,6 +878,7 @@ void WriteAheadLogDeserializer::ReplayVersion() {
 		is_set = true;
 	});
 	auto checkpoint_iteration = deserializer.ReadPropertyWithDefault<optional_idx>(103, "checkpoint_iteration");
+	state.wal_checkpoint_iteration = checkpoint_iteration;
 	if (!is_set || !checkpoint_iteration.IsValid()) {
 		return;
 	}
