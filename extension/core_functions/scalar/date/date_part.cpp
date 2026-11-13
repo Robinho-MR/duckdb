@@ -1379,6 +1379,12 @@ int64_t DatePart::EpochMillisOperator::Operation(timestamp_t input) {
 }
 
 template <>
+int64_t DatePart::EpochMillisOperator::Operation(timestamp_ns_t input) {
+	D_ASSERT(input.IsFinite());
+	return Truncate<timestamp_ns_t, timestamp_ms_t>(input).value;
+}
+
+template <>
 int64_t DatePart::EpochMicrosecondsOperator::Operation(dtime_t input) {
 	return input.value;
 }
