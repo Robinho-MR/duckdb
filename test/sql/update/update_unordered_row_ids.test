@@ -8,8 +8,9 @@ SET threads=4;
 statement ok
 CREATE TABLE tgt AS SELECT i AS id, i AS v, i::VARCHAR AS s, {'a': i, 'b': i::VARCHAR} AS st FROM range(300000) t(i);
 
+# the sources are larger than tgt, so the hash join builds on tgt and emits its row ids out of order
 statement ok
-CREATE TABLE src AS SELECT i AS id FROM range(300000) t(i) ORDER BY hash(i);
+CREATE TABLE src AS SELECT i AS id FROM range(400000) t(i) ORDER BY hash(i);
 
 statement ok
 UPDATE tgt SET v = tgt.v + 1, s = CASE WHEN src.id % 7 = 0 THEN NULL ELSE 'x' || src.id END,
@@ -90,7 +91,7 @@ statement ok
 INSERT INTO tgt SELECT i AS id, 0 AS v, NULL AS s, NULL AS st FROM range(300000, 600000) t(i);
 
 statement ok
-CREATE TABLE src2 AS SELECT i AS id FROM range(300000, 600000) t(i) ORDER BY hash(i);
+CREATE TABLE src2 AS SELECT i AS id FROM range(300000, 1000000) t(i) ORDER BY hash(i);
 
 statement ok
 UPDATE tgt SET v = src2.id FROM src2 WHERE tgt.id = src2.id
@@ -110,12 +111,24 @@ SELECT count(*), count(*) FILTER (v = id) FROM tgt WHERE id >= 300000
 
 # duplicate row ids within a chunk: every row receives one of its matches
 statement ok
-CREATE TABLE dup AS SELECT i % 100000 AS id, i AS w FROM range(200000) t(i) ORDER BY hash(i);
+CREATE TABLE dup AS SELECT i % 100000 AS id, i AS w FROM range(700000) t(i) ORDER BY hash(i);
 
 statement ok
 UPDATE tgt SET v = dup.w FROM dup WHERE tgt.id = dup.id
 
 query I
-SELECT count(*) FROM tgt WHERE id < 100000 AND v <> id AND v <> id + 100000
+SELECT count(*) FROM tgt WHERE id < 100000 AND v % 100000 <> id
 ----
 0
+
+# a small memory limit makes every thread apply its staged updates many times
+statement ok
+SET memory_limit = '200MB'
+
+statement ok
+UPDATE tgt SET v = -src.id, s = 'staged with a small memory limit ' || src.id FROM src WHERE tgt.id = src.id
+
+query III
+SELECT count(*) FILTER (v = -id), count(*) FILTER (s = 'staged with a small memory limit ' || id), count(*) FROM tgt WHERE id < 300000
+----
+300000	300000	300000
