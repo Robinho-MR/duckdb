@@ -1,0 +1,23 @@
+--- a/src/include/storage/delta_transaction.hpp
++++ b/src/include/storage/delta_transaction.hpp
+@@ -26,6 +26,9 @@
+ 
+ class DeltaTransaction : public Transaction {
+ public:
++	//! The client context the transaction was started in
++	weak_ptr<ClientContext> context;
++
+ 	DeltaTransaction(DeltaCatalog &delta_catalog, TransactionManager &manager, ClientContext &context);
+ 	~DeltaTransaction() override;
+ 
+--- a/src/storage/delta_transaction.cpp
++++ b/src/storage/delta_transaction.cpp
+@@ -30,7 +30,7 @@
+ namespace duckdb {
+ 
+ DeltaTransaction::DeltaTransaction(DeltaCatalog &delta_catalog, TransactionManager &manager, ClientContext &context)
+-    : Transaction(manager, context), access_mode(delta_catalog.access_mode), parent_commit(delta_catalog.parent_commit),
++    : Transaction(manager), context(context.shared_from_this()), access_mode(delta_catalog.access_mode), parent_commit(delta_catalog.parent_commit),
+       parent_catalog_name(delta_catalog.parent_catalog_name), unity_table_id(delta_catalog.unity_table_id) {
+ 	commit_function = delta_catalog.commit_function;
+ }

@@ -46,7 +46,7 @@ public:
 	};
 
 public:
-	explicit UndoBuffer(DuckTransaction &transaction, ClientContext &context);
+	explicit UndoBuffer(DuckTransaction &transaction);
 
 	//! Write a specified entry to the undo buffer
 	UndoBufferReference CreateEntry(UndoFlags type, idx_t len);
@@ -60,9 +60,9 @@ public:
 	void WriteToWAL(WriteAheadLog &wal, optional_ptr<StorageCommitState> commit_state);
 	//! Iterate the undo buffer and commit each entry. Deferred drop side effects accumulate in
 	//! info.drop_state so they can be applied after the commit chain succeeds.
-	void Commit(UndoBuffer::IteratorState &iterator_state, CommitInfo &info);
+	void Commit(ClientContext &context, UndoBuffer::IteratorState &iterator_state, CommitInfo &info);
 	//! Revert committed changes made in the UndoBuffer up until the currently committed state
-	void RevertCommit(UndoBuffer::IteratorState &iterator_state, transaction_t transaction_id);
+	void RevertCommit(ClientContext &context, UndoBuffer::IteratorState &iterator_state, transaction_t transaction_id);
 	//! Rollback the changes made in this UndoBuffer: should be called on
 	//! rollback
 	void Rollback();

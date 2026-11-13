@@ -35,11 +35,10 @@ TransactionData::TransactionData(transaction_t transaction_id_p, VisibilityBound
     : transaction(nullptr), view(transaction_id_p, visibility_bound_p) {
 }
 
-DuckTransaction::DuckTransaction(DuckTransactionManager &manager, ClientContext &context_p, transaction_t start_time,
+DuckTransaction::DuckTransaction(DuckTransactionManager &manager, Context &services, transaction_t start_time,
                                  SnapshotView view_p, idx_t catalog_version_p)
-    : Transaction(manager, context_p), start_time(start_time), view(view_p), commit_id(0),
-      catalog_version(catalog_version_p), awaiting_cleanup(false), undo_buffer(*this, context_p),
-      storage(make_uniq<LocalStorage>(context_p.GetContext(), *this)) {
+    : Transaction(manager), start_time(start_time), view(view_p), commit_id(0), catalog_version(catalog_version_p),
+      awaiting_cleanup(false), undo_buffer(*this), storage(make_uniq<LocalStorage>(services, *this)) {
 	D_ASSERT(IsCommitted(start_time) && !IsCommitted(view.transaction_id));
 }
 
@@ -273,7 +272,7 @@ ErrorData DuckTransaction::WriteToWAL(ClientContext &context, AttachedDatabase &
 	return error_data;
 }
 
-ErrorData DuckTransaction::Commit(AttachedDatabase &db, CommitInfo &commit_info,
+ErrorData DuckTransaction::Commit(ClientContext &context, AttachedDatabase &db, CommitInfo &commit_info,
                                   unique_ptr<StorageCommitState> commit_state) noexcept {
 	this->commit_id = commit_info.commit_id;
 	if (!ChangesMade()) {
@@ -293,7 +292,7 @@ ErrorData DuckTransaction::Commit(AttachedDatabase &db, CommitInfo &commit_info,
 	ErrorData error_data;
 	try {
 		storage->Commit(commit_state.get());
-		undo_buffer.Commit(iterator_state, commit_info);
+		undo_buffer.Commit(context, iterator_state, commit_info);
 		if (!db.IsSystem() && !db.IsTemporary() && Settings::Get<DebugForceCommitFailureSetting>(db.GetDatabase())) {
 			throw InvalidInputException("Forced commit failure (debug_force_commit_failure)");
 		}
@@ -314,7 +313,7 @@ ErrorData DuckTransaction::Commit(AttachedDatabase &db, CommitInfo &commit_info,
 	}
 
 	try {
-		undo_buffer.RevertCommit(iterator_state, GetTransactionId());
+		undo_buffer.RevertCommit(context, iterator_state, GetTransactionId());
 		if (!db.IsSystem() && !db.IsTemporary() &&
 		    Settings::Get<DebugForceCommitRevertFailureSetting>(db.GetDatabase())) {
 			throw IOException("Forced RevertCommit failure (debug_force_commit_revert_failure)");

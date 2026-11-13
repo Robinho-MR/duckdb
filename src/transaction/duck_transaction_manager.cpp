@@ -104,7 +104,7 @@ Transaction &DuckTransactionManager::StartTransaction(ClientContext &context) {
 	}
 
 	// create the actual transaction
-	auto transaction = make_uniq<DuckTransaction>(*this, context, start_time, view, catalog_version);
+	auto transaction = make_uniq<DuckTransaction>(*this, context.GetContext(), start_time, view, catalog_version);
 	auto &transaction_ref = *transaction;
 
 	// store it in the set of active transactions
@@ -448,7 +448,7 @@ ErrorData DuckTransactionManager::CommitTransaction(ClientContext &context, Tran
 		} else {
 			info.active_transactions = ActiveTransactionState::NO_OTHER_TRANSACTIONS;
 		}
-		error = transaction.Commit(db, info, std::move(commit_state));
+		error = transaction.Commit(context, db, info, std::move(commit_state));
 	}
 
 	if (error.HasError()) {

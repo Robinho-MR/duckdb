@@ -1,0 +1,23 @@
+--- a/src/include/storage/postgres_transaction.hpp
++++ b/src/include/storage/postgres_transaction.hpp
+@@ -24,6 +24,9 @@
+ 
+ class PostgresTransaction : public Transaction {
+ public:
++	//! The client context the transaction was started in
++	weak_ptr<ClientContext> context;
++
+ 	PostgresTransaction(PostgresCatalog &postgres_catalog, TransactionManager &manager, ClientContext &context);
+ 	~PostgresTransaction() override;
+ 
+--- a/src/storage/postgres_transaction.cpp
++++ b/src/storage/postgres_transaction.cpp
+@@ -13,7 +13,7 @@
+ 
+ PostgresTransaction::PostgresTransaction(PostgresCatalog &postgres_catalog, TransactionManager &manager,
+                                          ClientContext &context)
+-    : Transaction(manager, context), access_mode(postgres_catalog.access_mode),
++    : Transaction(manager), context(context.shared_from_this()), access_mode(postgres_catalog.access_mode),
+       isolation_level(postgres_catalog.isolation_level) {
+ 	auto oauth_token_holder = SetThreadLocalOAuthTokenFromSessionOption(context);
+ 	connection = postgres_catalog.GetConnectionPool().Acquire();
