@@ -4,6 +4,8 @@
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/common/algorithm.hpp"
 #include "duckdb/common/sorting/sort.hpp"
+#include "duckdb/parallel/task_scheduler.hpp"
+#include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/expression_executor.hpp"
@@ -77,6 +79,12 @@ public:
 			projection_map.push_back(i);
 		}
 		staged_sort = make_uniq<Sort>(context, orders, staged_types, std::move(projection_map));
+		// every thread stages at most an equal share of a fraction of the memory limit
+		auto max_memory = BufferManager::GetBufferManager(context).GetMaxMemory();
+		auto threads = MaxValue<idx_t>(TaskScheduler::GetScheduler(context).NumberOfThreads(), 1);
+		staged_memory_budget = MinValue(max_memory / PhysicalUpdate::STAGED_UPDATE_MEMORY_FRACTION / threads,
+		                                PhysicalUpdate::STAGED_UPDATE_MAX_MEMORY);
+		staged_memory_budget = MaxValue(staged_memory_budget, PhysicalUpdate::STAGED_UPDATE_MIN_MEMORY);
 	}
 
 	mutex lock;
@@ -87,6 +95,8 @@ public:
 	vector<LogicalType> staged_types;
 	//! Sorts the staged in-place updates of each thread by row id
 	unique_ptr<Sort> staged_sort;
+	//! The memory a thread stages before it applies its staged updates
+	idx_t staged_memory_budget = 0;
 };
 
 class UpdateLocalState : public LocalSinkState {
@@ -351,9 +361,6 @@ void PhysicalUpdate::StageUpdates(ExecutionContext &context, GlobalSinkState &gs
 		return;
 	}
 	auto &sort = *g_state.staged_sort;
-	if (l_state.staged_count + updates.size() > STAGED_UPDATE_CAPACITY) {
-		FlushStagedUpdates(context, gstate, lstate, interrupt_state);
-	}
 	if (!l_state.staged_sort_gstate) {
 		l_state.staged_sort_gstate = sort.GetGlobalSinkState(context.client);
 		l_state.staged_sort_lstate = sort.GetLocalSinkState(context);
@@ -370,6 +377,9 @@ void PhysicalUpdate::StageUpdates(ExecutionContext &context, GlobalSinkState &gs
 	OperatorSinkInput sink_input {*l_state.staged_sort_gstate, *l_state.staged_sort_lstate, interrupt_state};
 	sort.Sink(context, input, sink_input);
 	l_state.staged_count += updates.size();
+	if (sort.GetLocalSizeInBytes(*l_state.staged_sort_lstate) >= g_state.staged_memory_budget) {
+		FlushStagedUpdates(context, gstate, lstate, interrupt_state);
+	}
 }
 
 void PhysicalUpdate::FlushStagedUpdates(ExecutionContext &context, GlobalSinkState &gstate, LocalSinkState &lstate,
