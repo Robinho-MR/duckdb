@@ -1049,6 +1049,12 @@ public:
 			bool bail = false;
 
 			for (auto &subplan : subplan_info.subplans) {
+				if (HasRepeatedCanonicalTableIndex(*subplan.op.get())) {
+					// Subplan exposes columns of the same canonical table read more than once (e.g., a self-join):
+					// the canonical bindings cannot tell those reads apart between duplicate subplans
+					bail = true;
+					break;
+				}
 				column_binding_set_t subplan_bindings;
 				for (auto &cb : subplan.canonical_bindings) {
 					if (subplan_bindings.find(cb) != subplan_bindings.end()) {
@@ -1451,6 +1457,22 @@ private:
 			}
 		}
 		return result;
+	}
+
+	//! Whether the bindings exposed by the subplan come from two occurrences of the same canonical table
+	bool HasRepeatedCanonicalTableIndex(LogicalOperator &op) const {
+		unordered_map<TableIndex, TableIndex> canonical_to_original;
+		for (auto &binding : GetExpandedColumnBindings(op)) {
+			auto entry = to_canonical_table_index.find(binding.table_index);
+			if (entry == to_canonical_table_index.end()) {
+				continue;
+			}
+			auto inserted = canonical_to_original.emplace(entry->second, binding.table_index);
+			if (!inserted.second && inserted.first->second != binding.table_index) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	//! Moves a subplan that can expose every binding required by the duplicate occurrences to the front
