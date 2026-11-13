@@ -1,6 +1,7 @@
 #include "duckdb/planner/expression_binder/index_binder.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/error_data.hpp"
+#include "duckdb/logging/logger.hpp"
 
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/parser/parsed_data/create_index_info.hpp"
@@ -43,9 +44,11 @@ static optional_ptr<const BoundFunctionExpression> FindLambdaFunction(const Expr
 	return result;
 }
 
-static bool IsValidIndexExpression(Binder &binder, const Expression &expr, ErrorData &error) {
+//! Setting-dependent keys are rejected for new indexes, but are allowed when rebinding: earlier versions created them
+static bool IsValidIndexExpression(Binder &binder, const Expression &expr, ErrorData &error,
+                                   bool allow_setting_dependent = false) {
 	// casts are bound without the binder, so a cast that reads settings such as TimeZone is found in the key
-	if (binder.GetStatementProperties().always_require_rebind || expr.RequiresRebind()) {
+	if (binder.GetStatementProperties().always_require_rebind || (!allow_setting_dependent && expr.RequiresRebind())) {
 		error = BinderException("Index keys cannot contain expressions with side effects. They also cannot depend on "
 		                        "settings such as TimeZone.");
 		return false;
@@ -87,10 +90,17 @@ unique_ptr<BoundIndex> IndexBinder::BindIndex(const UnboundIndex &unbound_index)
 		auto copy = expr->Copy();
 		properties.always_require_rebind = false;
 		unbound_expressions.push_back(Bind(copy));
-		// Stored keys must satisfy the same requirements as newly created keys.
+		// Stored keys must satisfy the same requirements as newly created keys, except for setting-dependent keys.
 		ErrorData error;
-		if (!IsValidIndexExpression(binder, *unbound_expressions.back(), error)) {
+		if (!IsValidIndexExpression(binder, *unbound_expressions.back(), error, true)) {
 			throw DataCorruptionException("Invalid index %s: %s", create_info.GetIndexName(), error.RawMessage());
+		}
+		if (unbound_expressions.back()->RequiresRebind()) {
+			DUCKDB_LOG_WARNING(context,
+			                   "Index %s depends on settings such as TimeZone, so its keys can change between "
+			                   "sessions. Such keys are no longer allowed: drop the index and recreate it without "
+			                   "the setting-dependent expression.",
+			                   create_info.GetIndexName());
 		}
 	}
 	properties.always_require_rebind = statement_requires_rebind;
