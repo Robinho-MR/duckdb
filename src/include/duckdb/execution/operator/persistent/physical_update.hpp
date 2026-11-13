@@ -73,8 +73,10 @@ private:
 	//! The number of in-place updates a thread stages before sorting them by row id and applying them
 	static constexpr idx_t STAGED_UPDATE_CAPACITY = STANDARD_VECTOR_SIZE * 64;
 
-	void StageUpdates(ClientContext &context, LocalSinkState &lstate, DataChunk &updates, Vector &row_ids) const;
-	void FlushStagedUpdates(ClientContext &context, LocalSinkState &lstate) const;
+	void StageUpdates(ExecutionContext &context, GlobalSinkState &gstate, LocalSinkState &lstate, DataChunk &updates,
+	                  Vector &row_ids, InterruptState &interrupt_state) const;
+	void FlushStagedUpdates(ExecutionContext &context, GlobalSinkState &gstate, LocalSinkState &lstate,
+	                        InterruptState &interrupt_state) const;
 };
 
 } // namespace duckdb
