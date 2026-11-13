@@ -89,7 +89,8 @@ public:
 	buffer_ptr<VectorBuffer> SliceWithCache(SelCache &cache, const LogicalType &type, const SelectionVector &sel,
 	                                        idx_t count) override;
 	bool TrySerialize(Serializer &serializer, const LogicalType &type, bool compressed_serialization) const override;
-	static buffer_ptr<VectorBuffer> Deserialize(Deserializer &deserializer, const LogicalType &type, idx_t count);
+	static buffer_ptr<VectorBuffer> Deserialize(Deserializer &deserializer, const LogicalType &type, idx_t count,
+	                                            idx_t depth);
 
 protected:
 	buffer_ptr<VectorBuffer> SliceInternal(const LogicalType &type, idx_t offset, idx_t end) override;
