@@ -1,0 +1,133 @@
+# name: test/sql/catalog/view/view_ambiguous_catalog_schema.test
+# description: Views resolve a qualifier that names both a catalog and a schema of the view's catalog as the schema
+# group: [view]
+
+statement ok
+ATTACH ':memory:' AS db;
+
+statement ok
+ATTACH ':memory:' AS s;
+
+statement ok
+CREATE SCHEMA db.db;
+
+statement ok
+CREATE SCHEMA db.s;
+
+statement ok
+CREATE TABLE db.db.t AS SELECT 1 AS x;
+
+statement ok
+CREATE TABLE db.s.u AS SELECT 2 AS y;
+
+# outside of a view the reference stays ambiguous
+statement ok
+USE db
+
+statement error
+SELECT x FROM db.t
+----
+Ambiguous reference to catalog or schema
+
+statement ok
+USE memory
+
+statement ok
+CREATE VIEW db.db.v AS SELECT x FROM db.db.t;
+
+statement ok
+CREATE VIEW db.main.w AS SELECT y FROM db.s.u;
+
+query I
+SELECT x FROM db.db.v
+----
+1
+
+query I
+SELECT y FROM db.main.w
+----
+2
+
+# view body in a nested subquery
+statement ok
+CREATE VIEW db.main.w2 AS SELECT * FROM (SELECT y FROM db.s.u) q;
+
+query I
+SELECT y FROM db.main.w2
+----
+2
+
+# views across catalogs that each have a schema named like the other catalog
+statement ok
+ATTACH ':memory:' AS db1;
+
+statement ok
+ATTACH ':memory:' AS db2;
+
+statement ok
+CREATE SCHEMA db1.db2;
+
+statement ok
+CREATE SCHEMA db2.db1;
+
+statement ok
+CREATE TABLE db1.db2.t AS SELECT 'db1.db2.t' AS src;
+
+statement ok
+CREATE TABLE db2.db1.t AS SELECT 'db2.db1.t' AS src;
+
+statement ok
+CREATE VIEW db2.main.v2 AS SELECT * FROM db1.t;
+
+statement ok
+CREATE VIEW db1.main.v1 AS SELECT * FROM db2.t UNION ALL SELECT * FROM db2.main.v2;
+
+statement ok
+CREATE VIEW db1.db2.v3 AS SELECT * FROM db2.main.v2;
+
+query I
+SELECT * FROM db2.main.v2
+----
+db2.db1.t
+
+query I
+SELECT * FROM db1.main.v1 ORDER BY src
+----
+db1.db2.t
+db2.db1.t
+
+query I
+SELECT * FROM db1.db2.v3
+----
+db2.db1.t
+
+# a qualified macro call in a DEFAULT expression binds to the attached catalog, not to the schema of the table
+statement ok
+CREATE MACRO s.main.g() AS 11;
+
+statement ok
+CREATE TABLE db.s.defaults(z INTEGER DEFAULT s.g());
+
+statement ok
+INSERT INTO db.s.defaults DEFAULT VALUES;
+
+query I
+SELECT z FROM db.s.defaults
+----
+11
+
+# the preference also applies to the aggregates of a USING KEY clause in a view
+statement ok
+CREATE MACRO db.s.h() AS 5;
+
+statement ok
+CREATE VIEW db.main.vk AS
+WITH RECURSIVE r(a, b) USING KEY (a, max(db.s.h()) AS b) AS (
+    SELECT 1, 1 UNION SELECT a, b + 1 FROM r WHERE b < 3
+)
+SELECT a, b FROM r;
+
+query II
+SELECT a, b FROM db.main.vk
+----
+1	5
