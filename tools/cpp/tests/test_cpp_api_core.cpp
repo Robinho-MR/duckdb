@@ -405,11 +405,11 @@ TEST_CASE("Stable C++API: StartupOptions::Set passes options by name", "[cpp_api
 	// Startup-only options without a dedicated setter.
 	auto instance = Instance(":memory:", StartupOptions()
 	                                         .Set("duckdb_api", "cpp_api_test")
-	                                         .Set("vacuum_rebuild_indexes", "0.5")
+	                                         .Set("extension_repository_directory", "cpp_api_test_extensions")
 	                                         .Set("threads", "1"));
 	auto &config = instance.GetConfig();
 	REQUIRE(config.GetOption("duckdb_api").value.ToText() == "cpp_api_test");
-	REQUIRE(config.GetOption("vacuum_rebuild_indexes").value.ToText() == "0.5");
+	REQUIRE(config.GetOption("extension_repository_directory").value.ToText() == "cpp_api_test_extensions");
 	REQUIRE(config.GetOption("threads").value.ToText() == "1");
 
 	// Aliases resolve, and a later value wins, also over a dedicated setter.
