@@ -111,9 +111,9 @@ void ListFlattenFunction(DataChunk &args, ExpressionState &, Vector &result) {
 
 			for (idx_t elem_raw_idx = inner_entry.offset; elem_raw_idx < inner_entry.offset + inner_entry.length;
 			     elem_raw_idx++) {
-				const auto elem_idx = items_format.sel->get_index(elem_raw_idx);
-
-				sel.set_index(sel_idx, elem_idx);
+				// elem_raw_idx is the logical index into items_vec; Slice (below) composes it with
+				// items_vec's own dictionary itself, so the physical index must not be used here.
+				sel.set_index(sel_idx, elem_raw_idx);
 				sel_idx++;
 			}
 		}
