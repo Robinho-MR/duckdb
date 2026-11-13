@@ -40,8 +40,16 @@ UnifiedVariantVectorData::UnifiedVariantVectorData(const RecursiveUnifiedVectorF
 bool UnifiedVariantVectorData::RowIsValid(idx_t row) const {
 	return variant.unified.validity.RowIsValid(variant.unified.sel->get_index(row));
 }
+static void CheckVariantListIndex(idx_t index, idx_t length, const char *list_name) {
+	if (index >= length) {
+		throw DataCorruptionException("Variant %s index (%d) is out of bounds for a list of length %d", list_name,
+		                              index, length);
+	}
+}
+
 bool UnifiedVariantVectorData::KeysIndexIsValid(idx_t row, idx_t index) const {
 	auto list_entry = GetChildrenListEntry(row);
+	CheckVariantListIndex(index, list_entry.length, "children");
 	return keys_index_validity.RowIsValid(keys_index.sel->get_index(list_entry.offset + index));
 }
 
@@ -53,10 +61,12 @@ list_entry_t UnifiedVariantVectorData::GetValuesListEntry(idx_t row) const {
 }
 const string_t &UnifiedVariantVectorData::GetKey(idx_t row, idx_t index) const {
 	auto list_entry = keys_data[keys.sel->get_index(row)];
+	CheckVariantListIndex(index, list_entry.length, "keys");
 	return keys_entry_data[keys_entry.sel->get_index(list_entry.offset + index)];
 }
 uint32_t UnifiedVariantVectorData::GetKeysIndex(idx_t row, idx_t child_index) const {
 	auto list_entry = GetChildrenListEntry(row);
+	CheckVariantListIndex(child_index, list_entry.length, "children");
 	return keys_index_data[keys_index.sel->get_index(list_entry.offset + child_index)];
 }
 
@@ -67,14 +77,17 @@ idx_t UnifiedVariantVectorData::GetKeysCount(idx_t row) const {
 
 uint32_t UnifiedVariantVectorData::GetValuesIndex(idx_t row, idx_t child_index) const {
 	auto list_entry = GetChildrenListEntry(row);
+	CheckVariantListIndex(child_index, list_entry.length, "children");
 	return values_index_data[values_index.sel->get_index(list_entry.offset + child_index)];
 }
 VariantLogicalType UnifiedVariantVectorData::GetTypeId(idx_t row, idx_t value_index) const {
 	auto list_entry = values_data[values.sel->get_index(row)];
+	CheckVariantListIndex(value_index, list_entry.length, "values");
 	return static_cast<VariantLogicalType>(type_id_data[type_id.sel->get_index(list_entry.offset + value_index)]);
 }
 uint32_t UnifiedVariantVectorData::GetByteOffset(idx_t row, idx_t value_index) const {
 	auto list_entry = values_data[values.sel->get_index(row)];
+	CheckVariantListIndex(value_index, list_entry.length, "values");
 	return byte_offset_data[byte_offset.sel->get_index(list_entry.offset + value_index)];
 }
 const string_t &UnifiedVariantVectorData::GetData(idx_t row) const {
