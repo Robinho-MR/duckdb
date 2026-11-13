@@ -362,8 +362,35 @@ void ColumnData::UpdateInternal(TransactionData transaction, DuckTableEntry &tab
 	if (!updates) {
 		updates = make_uniq<UpdateSegment>(*this);
 	}
-	updates->Update(transaction, table_entry, column_index, update_vector, row_ids, update_count, base_vector,
-	                row_group_start);
+	idx_t start = 0;
+	while (start < update_count) {
+		auto end = NextUpdateVectorRun(row_ids, start, update_count, row_group_start);
+		if (start == 0 && end == update_count) {
+			updates->Update(transaction, table_entry, column_index, update_vector, row_ids, update_count, base_vector,
+			                row_group_start);
+			return;
+		}
+		Vector update_slice(update_vector, start, end);
+		Vector base_slice(base_vector, start, end);
+		updates->Update(transaction, table_entry, column_index, update_slice, row_ids + start, end - start, base_slice,
+		                row_group_start);
+		start = end;
+	}
+}
+
+idx_t ColumnData::NextUpdateVectorRun(const row_t *row_ids, idx_t start, idx_t end, idx_t row_group_start) {
+	D_ASSERT(start < end);
+	auto vector_idx = (UnsafeNumericCast<idx_t>(row_ids[start]) - row_group_start) / STANDARD_VECTOR_SIZE;
+	auto vector_start = row_group_start + vector_idx * STANDARD_VECTOR_SIZE;
+	auto vector_end = vector_start + STANDARD_VECTOR_SIZE;
+	idx_t pos;
+	for (pos = start + 1; pos < end; pos++) {
+		auto row_id = UnsafeNumericCast<idx_t>(row_ids[pos]);
+		if (row_id < vector_start || row_id >= vector_end) {
+			break;
+		}
+	}
+	return pos;
 }
 
 idx_t ColumnData::ScanVector(TransactionData transaction, idx_t vector_index, ColumnScanState &state, Vector &result,

@@ -11,6 +11,8 @@
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/helper.hpp"
 #include "duckdb/common/vector_size.hpp"
+#include "duckdb/common/vector.hpp"
+#include "duckdb/common/enums/undo_flags.hpp"
 
 namespace duckdb {
 class DuckTableEntry;
@@ -75,6 +77,34 @@ struct WrittenRows {
 	const uint16_t *GetStoredRows() const {
 		return is_consecutive ? nullptr : rows;
 	}
+};
+
+//! Undo entries of writes staged locally, so that DuckTransaction::PushWrites pushes them with a single allocation
+class StagedWrites {
+public:
+	//! The size from which staged writes should be pushed
+	static constexpr idx_t PUSH_THRESHOLD = 32768;
+
+public:
+	void Add(UndoFlags type, DuckTableEntry &table_entry, RowVersionManager &info, idx_t vector_idx, idx_t base_row,
+	         const WrittenRows &written);
+	//! Restores the version info of all staged writes, for when they cannot be pushed
+	void Rollback();
+	void Clear() {
+		data.clear();
+	}
+	bool Empty() const {
+		return data.empty();
+	}
+	idx_t Size() const {
+		return data.size();
+	}
+	const_data_ptr_t Data() const {
+		return data.data();
+	}
+
+private:
+	unsafe_vector<data_t> data;
 };
 
 } // namespace duckdb

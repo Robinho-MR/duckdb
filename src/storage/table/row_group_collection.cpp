@@ -25,6 +25,7 @@
 #include "duckdb/storage/table/scan_state.hpp"
 #include "duckdb/storage/table_storage_info.hpp"
 #include "duckdb/transaction/duck_transaction.hpp"
+#include "duckdb/transaction/delete_info.hpp"
 #include "duckdb/transaction/duck_transaction_manager.hpp"
 #include "duckdb/common/storage_compatibility.hpp"
 #include "duckdb/common/type_visitor.hpp"
@@ -1022,26 +1023,95 @@ optional_ptr<SegmentNode<RowGroup>> RowGroupCollection::NextUpdateRowGroup(RowGr
 void RowGroupCollection::Update(TransactionData transaction, DuckTableEntry &table_entry, row_t *ids,
                                 const vector<PhysicalIndex> &column_ids, DataChunk &updates) {
 	D_ASSERT(updates.size() >= 1);
-	idx_t pos = 0;
+	const auto count = updates.size();
+	// sort the updates by row id, so that every row group (and every vector) is updated only once
+	reference<DataChunk> update_chunk(updates);
+	DataChunk sorted_updates;
+	unsafe_unique_array<row_t> sorted_ids;
+	if (!std::is_sorted(ids, ids + count)) {
+		SelectionVector sel(count);
+		for (idx_t i = 0; i < count; i++) {
+			sel.set_index(i, i);
+		}
+		// stable, so that the order of duplicate row ids is preserved
+		std::stable_sort(sel.data(), sel.data() + count, [&](sel_t a, sel_t b) { return ids[a] < ids[b]; });
+		sorted_ids = make_unsafe_uniq_array<row_t>(count);
+		for (idx_t i = 0; i < count; i++) {
+			sorted_ids[i] = ids[sel.get_index(i)];
+		}
+		sorted_updates.InitializeEmpty(updates.GetTypes());
+		sorted_updates.Slice(updates, sel, count);
+		sorted_updates.Flatten();
+		ids = sorted_ids.get();
+		update_chunk = sorted_updates;
+	}
+
+	// split the updates into the ranges of the row groups they update
+	struct RowGroupUpdateRange {
+		reference<SegmentNode<RowGroup>> row_group;
+		idx_t start;
+		idx_t count;
+	};
 	auto row_groups = GetRowGroups();
+	vector<RowGroupUpdateRange> ranges;
+	idx_t pos = 0;
 	do {
 		idx_t start = pos;
-		auto row_group = NextUpdateRowGroup(*row_groups, ids, pos, updates.size());
-
-		auto &current_row_group = row_group->GetNode();
-		current_row_group.Update(transaction, table_entry, updates, ids, start, pos - start, column_ids,
-		                         row_group->GetRowStart());
-
-		auto l = stats.GetLock();
-		for (idx_t i = 0; i < column_ids.size(); i++) {
-			auto column_id = column_ids[i];
-			// Use EXPAND_BOUNDS here: the row group stats include original data already counted in collection stats,
-			// so additive stats (like total_string_length) cannot be maintained correctly here. EXPAND_BOUNDS
-			// correctly expands min/max bounds while invalidating total_string_length until the next checkpoint.
-			stats.MergeStats(*l, column_id.index, *current_row_group.GetStatistics(column_id.index),
-			                 StatsMergeType::EXPAND_BOUNDS);
+		auto &row_group = *row_groups->GetSegment(UnsafeNumericCast<idx_t>(ids[pos]));
+		auto row_group_end = row_group.GetRowStart() + row_group.GetNode().count;
+		for (pos++; pos < count; pos++) {
+			D_ASSERT(ids[pos] >= ids[pos - 1]);
+			if (UnsafeNumericCast<idx_t>(ids[pos]) >= row_group_end) {
+				break;
+			}
 		}
-	} while (pos < updates.size());
+		ranges.push_back(RowGroupUpdateRange {row_group, start, pos - start});
+	} while (pos < count);
+
+	if (transaction.transaction) {
+		// mark the rows before updating them: an update conflicts with any write of a row the transaction does not see
+		StagedWrites staged;
+		try {
+			for (auto &range : ranges) {
+				auto &row_group = range.row_group.get();
+				row_group.GetNode().MarkUpdatedRows(transaction, table_entry, ids, range.start, range.count,
+				                                    row_group.GetRowStart(), staged);
+			}
+			if (!staged.Empty()) {
+				transaction.transaction->PushWrites(staged);
+			}
+		} catch (...) {
+			try {
+				// without their undo entries, nothing would restore the ids - restore them as the entries would have
+				staged.Rollback();
+			} catch (std::exception &ex) {
+				throw FatalException("Failed to restore the version info after failing to push its undo entries: %s",
+				                     ErrorData(ex).Message());
+			}
+			throw;
+		}
+	}
+	for (auto &range : ranges) {
+		auto &row_group = range.row_group.get();
+		row_group.GetNode().Update(transaction, table_entry, update_chunk.get(), ids, range.start, range.count,
+		                           column_ids, row_group.GetRowStart());
+	}
+
+	vector<unique_ptr<BaseStatistics>> row_group_stats;
+	row_group_stats.reserve(ranges.size() * column_ids.size());
+	for (auto &range : ranges) {
+		for (auto &column_id : column_ids) {
+			row_group_stats.push_back(range.row_group.get().GetNode().GetStatistics(column_id.index));
+		}
+	}
+	auto l = stats.GetLock();
+	for (idx_t i = 0; i < row_group_stats.size(); i++) {
+		auto column_id = column_ids[i % column_ids.size()];
+		// Use EXPAND_BOUNDS here: the row group stats include original data already counted in collection stats,
+		// so additive stats (like total_string_length) cannot be maintained correctly here. EXPAND_BOUNDS
+		// correctly expands min/max bounds while invalidating total_string_length until the next checkpoint.
+		stats.MergeStats(*l, column_id.index, *row_group_stats[i], StatsMergeType::EXPAND_BOUNDS);
+	}
 }
 
 void RowGroupCollection::RemoveFromIndexes(const QueryContext &context, TableIndexList &indexes,

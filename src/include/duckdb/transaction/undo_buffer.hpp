@@ -50,6 +50,12 @@ public:
 
 	//! Write a specified entry to the undo buffer
 	UndoBufferReference CreateEntry(UndoFlags type, idx_t len);
+	//! Write entries formatted with FormatEntry to the undo buffer with a single allocation
+	void CreateEntries(const_data_ptr_t entries, idx_t size);
+	//! The size an entry with a payload of len bytes occupies in the undo buffer
+	static idx_t GetEntrySize(idx_t len);
+	//! Writes the header of an entry of GetEntrySize(len) bytes to target and returns its payload
+	static data_ptr_t FormatEntry(data_ptr_t target, UndoFlags type, idx_t len);
 
 	bool ChangesMade();
 	UndoBufferProperties GetProperties();
