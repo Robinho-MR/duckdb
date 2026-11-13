@@ -1,0 +1,42 @@
+diff --git a/src/planning/scan_plan/iceberg_manifest_store.cpp b/src/planning/scan_plan/iceberg_manifest_store.cpp
+index 6423e32b5..24097e3e0 100644
+--- a/src/planning/scan_plan/iceberg_manifest_store.cpp
++++ b/src/planning/scan_plan/iceberg_manifest_store.cpp
+@@ -147,7 +147,9 @@ void IcebergManifestStore::LoadManifestList() {
+ 
+ 			idx_t reserve_size =
+ 			    *counts->existing_files_count + *counts->added_files_count + *counts->deleted_files_count;
+-			list_entry.GetOrCreateManifestEntries().reserve(reserve_size);
++			//! The counts come from the manifest list and are only a hint, so bound the up-front allocation
++			static constexpr idx_t MAX_RESERVED_MANIFEST_ENTRIES = 65536;
++			list_entry.GetOrCreateManifestEntries().reserve(MinValue<idx_t>(reserve_size, MAX_RESERVED_MANIFEST_ENTRIES));
+ 		}
+ 
+ 		if (!manifests_to_eagerly_load.empty()) {
+diff --git a/src/planning/scan_plan/iceberg_scan_statistics.cpp b/src/planning/scan_plan/iceberg_scan_statistics.cpp
+index 34b835f1d..04560f4ae 100644
+--- a/src/planning/scan_plan/iceberg_scan_statistics.cpp
++++ b/src/planning/scan_plan/iceberg_scan_statistics.cpp
+@@ -22,7 +22,21 @@ optional<idx_t> IcebergScanStatistics::CountDataRows() const {
+ 		if (!counts || !counts->added_rows_count || !counts->existing_rows_count) {
+ 			return nullopt;
+ 		}
+-		count += *counts->added_rows_count + *counts->existing_rows_count;
++		//! The counts come from the manifest list: if they are implausible the cardinality is unknown
++		static constexpr idx_t MAX_ROW_COUNT = NumericLimits<int64_t>::Maximum();
++		auto added_rows = *counts->added_rows_count;
++		auto existing_rows = *counts->existing_rows_count;
++		if (added_rows > MAX_ROW_COUNT || existing_rows > MAX_ROW_COUNT || count > MAX_ROW_COUNT) {
++			return nullopt;
++		}
++		count += added_rows;
++		if (count > MAX_ROW_COUNT) {
++			return nullopt;
++		}
++		count += existing_rows;
++		if (count > MAX_ROW_COUNT) {
++			return nullopt;
++		}
+ 	}
+ 	return count;
+ }
