@@ -1,0 +1,300 @@
+module: encoding
+#
+# Encoding functions decode the bytes of a file in a given character encoding to UTF-8, so that `read_csv` can read
+# files in an encoding other than UTF-8 (`read_csv(..., encoding = 'name')`). An encoding is registered by name.
+#
+# The single decode callback is handed a chunk of encoded bytes and a buffer to write UTF-8 into, and converts as many
+# whole characters as it can. It is stateless: the engine keeps hold of the input that was not consumed, and hands it
+# back, followed by more bytes, on the next call.
+
+#-----------------------------------------------------------------------------------------------------------------------
+# Handles
+#-----------------------------------------------------------------------------------------------------------------------
+handles:
+  encoding_function:
+    description: |
+      An owned opaque handle to an encoding function being built. Created with `[[encoding_function_create]]`,
+      configured with the setter functions (e.g. `[[encoding_function_set_name]]`,
+      `[[encoding_function_set_decode_callback]]`, etc.), made available with
+      `[[connection_register_encoding_function]]` or `[[extension_register_encoding_function]]`, and destroyed with
+      `[[encoding_function_destroy]]`.
+
+#-----------------------------------------------------------------------------------------------------------------------
+# Callbacks
+#-----------------------------------------------------------------------------------------------------------------------
+callbacks:
+  encoding_function_decode_callback:
+    parameters:
+      user_data:
+        type: void
+        indirection: 1
+        description: The user data set via `[[encoding_function_set_user_data]]`, or null if none was set.
+      input:
+        type: u8
+        indirection: 1
+        const: true
+        kind: IN
+        description: The encoded bytes to decode. Borrowed for the duration of the call.
+      input_length:
+        type: idx
+        description: The length of `input` in bytes. May be 0.
+      is_last:
+        type: bool
+        description: |
+          Whether `input` ends the file. Unless this is set, the callback may stop at the end of `input` when fewer
+          than the registered `max_input_bytes` remain, because the character they start may continue in the next
+          chunk. When it is set, the callback must decode, or otherwise consume, every remaining byte.
+      output:
+        type: u8
+        indirection: 1
+        kind: OUT
+        description: The buffer to write the UTF-8 bytes into. Borrowed for the duration of the call.
+      output_capacity:
+        type: idx
+        description: The size of `output` in bytes. May be smaller than the registered `max_output_bytes`, including 0.
+      input_consumed:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: |
+          Receives the number of bytes of `input` that were decoded, a multiple of whole characters. The remaining
+          bytes are passed again, ahead of more input, on the next call.
+      output_written:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: |
+          Receives the number of bytes written to `output`. The callback decodes as many whole characters as fit in
+          `output_capacity`: it never writes part of a character, and stops before one that does not fit.
+      err:
+        type: error_info
+        indirection: 1
+        description: Borrowed error info handle to use to report errors that occur during the callback. A reported error aborts the query.
+    return_type: void
+
+#-----------------------------------------------------------------------------------------------------------------------
+# Functions
+#-----------------------------------------------------------------------------------------------------------------------
+functions:
+  #---------------------------------------------------------------------------------------------------------------------
+  # Constructors
+  #---------------------------------------------------------------------------------------------------------------------
+  encoding_function_create:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-12" ]
+    description: |
+      Creates a new encoding function through a factory.
+
+      The function starts out empty: configure it with the setter functions (e.g. `[[encoding_function_set_name]]`,
+      `[[encoding_function_set_decode_callback]]`, etc.), then make it available with
+      `[[connection_register_encoding_function]]` or `[[extension_register_encoding_function]]`. The caller owns the
+      returned handle and must destroy it with `[[encoding_function_destroy]]`, also after registration.
+
+      The encoding function can only be registered on the database the factory belongs to.
+    role: constructor
+    belongs_to: encoding_function
+    parameters:
+      factory:
+        type: factory
+        description: The factory to create the encoding function through.
+      function:
+        type: encoding_function
+        indirection: 1
+        kind: OUT
+        description: On success, receives the newly created encoding function. Owned by the caller.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  #---------------------------------------------------------------------------------------------------------------------
+  # Properties
+  #---------------------------------------------------------------------------------------------------------------------
+  encoding_function_set_name:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-12" ]
+    description: |
+      Sets the name of the encoding, as `read_csv(..., encoding = 'name')` refers to it.
+
+      The name is borrowed and copied, and is matched case-insensitively. Calling this again replaces the previous name,
+      which allows registering the same function under several names. A name must be set before registration.
+    parameters:
+      function:
+        type: encoding_function
+        description: The function to set the name of.
+      name:
+        type: char
+        indirection: 1
+        const: true
+        kind: IN
+        description: The name to set. Borrowed and copied.
+      name_length:
+        type: idx
+        description: The length of `name` in bytes. `name` must be valid UTF-8, need not be null-terminated, and may be NULL only when this is 0.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  encoding_function_set_max_input_bytes:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-12" ]
+    description: |
+      Sets the length in bytes of the longest sequence of encoded bytes the decode callback needs to look at to decode
+      one character.
+
+      Unless the chunk is the last one, the engine hands the callback at least this many bytes whenever there are
+      that many left in the file. Must be set to a value of at least 1 before registration.
+    parameters:
+      function:
+        type: encoding_function
+        description: The function to set the maximum input bytes of.
+      max_input_bytes:
+        type: idx
+        description: The maximum number of encoded bytes that decode to one character.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  encoding_function_set_max_output_bytes:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-12" ]
+    description: |
+      Sets the length in bytes of the longest UTF-8 sequence the decode callback writes for one decoded unit, the
+      bytes it consumes at once.
+
+      Must be set to a value of at least 1 before registration.
+    parameters:
+      function:
+        type: encoding_function
+        description: The function to set the maximum output bytes of.
+      max_output_bytes:
+        type: idx
+        description: The maximum number of UTF-8 bytes written for one decoded unit.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  encoding_function_set_user_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-12" ]
+    description: |
+      Sets arbitrary user data on the encoding function.
+
+      Associates an opaque pointer with the function, passed to the decode callback. The opaque handle bundles the
+      pointer with an optional destructor, invoked when the data is no longer needed. The data is read-only during
+      decoding: the same pointer is shared by every thread decoding with the encoding.
+    parameters:
+      function:
+        type: encoding_function
+        description: The function to set the user data of.
+      data:
+        type: opaque
+        indirection: 1
+        description: Opaque handle bundling the user data pointer plus an optional destructor.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  encoding_function_set_decode_callback:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-12" ]
+    description: |
+      Sets the decode callback of the encoding function.
+
+      The decode callback converts encoded bytes to UTF-8. It must be set before registration.
+    parameters:
+      function:
+        type: encoding_function
+        description: The function to set the decode callback of.
+      callback:
+        type: encoding_function_decode_callback
+        description: The decode callback to set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  #---------------------------------------------------------------------------------------------------------------------
+  # Register
+  #---------------------------------------------------------------------------------------------------------------------
+  connection_register_encoding_function:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-12" ]
+    description: |
+      Registers the encoding function, making it available to `read_csv`.
+
+      The encoding is registered on the connection's database and takes effect immediately for every connection; it is
+      not part of the connection's transaction, so a rollback does not undo it. Registration requires a name, a
+      maximum number of input and output bytes, and a decode callback, and fails when an encoding of the same name is
+      already registered. The encoding function must have been created through a factory of the same database. The
+      caller still owns the handle after registration and must destroy it with `[[encoding_function_destroy]]`, which
+      does not affect the registered encoding.
+    role: method
+    belongs_to: connection
+    parameters:
+      conn:
+        type: connection
+        description: The connection to register on.
+      function:
+        type: encoding_function
+        description: The encoding function to register.
+      err:
+        type: error_info
+        indirection: 1
+        description: "Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`."
+    return_type: ERROR
+
+  extension_register_encoding_function:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-12" ]
+    description: |
+      Registers the encoding function, making it available to `read_csv`.
+
+      The encoding is registered on the loading extension's database. Use this from the extension's load callback.
+      Registration requires a name, a maximum number of input and output bytes, and a decode callback, and fails when an
+      encoding of the same name is already registered. The encoding function must have been created through a factory of
+      the same database. The caller still owns the handle after registration and must destroy it with
+      `[[encoding_function_destroy]]`, which does not affect the registered encoding.
+    role: method
+    belongs_to: extension
+    parameters:
+      extension:
+        type: extension
+        description: The loading extension.
+      function:
+        type: encoding_function
+        description: The encoding function to register.
+      err:
+        type: error_info
+        indirection: 1
+        description: "Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`."
+    return_type: ERROR
+
+  #---------------------------------------------------------------------------------------------------------------------
+  # Destroy
+  #---------------------------------------------------------------------------------------------------------------------
+  encoding_function_destroy:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-12" ]
+    description: |
+      Destroys the encoding function, releasing its resources.
+
+      Null-safe: passing a null pointer or null handle is a no-op. The handle is set to null on return to
+      prevent double-destruction. Destroying the handle after registration does not affect the registered
+      encoding.
+    parameters:
+      function:
+        type: encoding_function
+        description: The function to destroy.
+        indirection: 1
+    return_type: ERROR

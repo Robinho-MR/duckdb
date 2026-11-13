@@ -93,6 +93,7 @@ template <class CTX>
 class TypeBuilder;
 class CustomType;
 class CastFunction;
+class EncodingFunction;
 class PragmaFunction;
 class LogSink;
 class MacroFunction;
@@ -954,6 +955,12 @@ public:
 	/// @throws InvalidInputException When the source type, target type, or exec callback is missing, or either type is
 	/// not concrete.
 	auto Register(CastFunction &cast_function) -> void;
+	/// Registers the encoding, making it available to `read_csv(..., encoding = 'name')`. The function object remains
+	/// valid and may be renamed and registered again; user data set via `SetUserData` is consumed by the first
+	/// registration.
+	/// @throws InvalidInputException When the name, the maximum input or output bytes, or the decode callback is
+	/// missing, or an encoding of the same name is already registered.
+	auto Register(EncodingFunction &encoding_function) -> void;
 	/// Registers the pragma. The function object remains valid; user data set via `SetUserData` is consumed by the
 	/// first registration.
 	/// @throws InvalidInputException When the name is missing, not exactly one of the query and exec callbacks is set,
@@ -1364,6 +1371,12 @@ public:
 	/// @throws InvalidInputException When the source type, target type, or exec callback is missing, or either type is
 	/// not concrete.
 	auto Register(CastFunction &cast_function) -> void;
+	/// Registers the encoding, making it available to `read_csv(..., encoding = 'name')`. The function object remains
+	/// valid and may be renamed and registered again; user data set via `SetUserData` is consumed by the first
+	/// registration.
+	/// @throws InvalidInputException When the name, the maximum input or output bytes, or the decode callback is
+	/// missing, or an encoding of the same name is already registered.
+	auto Register(EncodingFunction &encoding_function) -> void;
 	/// Registers the pragma. The function object remains valid; user data set via `SetUserData` is consumed by the
 	/// first registration.
 	/// @throws InvalidInputException When the name is missing, not exactly one of the query and exec callbacks is set,
@@ -6370,6 +6383,133 @@ public:
 
 		void *args;
 		Context context;
+
+		void *GetUserDataInternal() const;
+	};
+};
+
+//----------------------------------------------------------------------------------------------------------------------
+// Encoding Function
+//----------------------------------------------------------------------------------------------------------------------
+
+/// A character encoding `read_csv` can decode, selected with `read_csv(..., encoding = 'name')`. Create one through a
+/// `Factory` of the database it will be registered in, describe it (name, byte limits, decode callback), then register
+/// it with `Connection::Register` or `Extension::Register`. The function object may be destroyed after registration;
+/// the registered encoding lives on.
+///
+/// The decode callback converts as many whole characters as it can from a chunk of encoded bytes to UTF-8. It keeps no
+/// state of its own: the engine holds on to the input it did not consume and hands it back, followed by more bytes,
+/// on the next call.
+class EncodingFunction final : public detail::Handle<EncodingFunction> {
+	friend detail::HandleFactory;
+	friend class Connection;
+	friend class Extension;
+
+public:
+	class DecodeInput;
+
+	/// Called for every chunk of encoded bytes; decodes it into `DecodeInput::GetOutput`. Required.
+	using DecodeCallback = void (*)(DecodeInput &input);
+
+	EncodingFunction(EncodingFunction &&) noexcept = default;
+	EncodingFunction &operator=(EncodingFunction &&) noexcept = default;
+
+	~EncodingFunction() override;
+
+	/// Creates an empty EncodingFunction through `factory`. Register it through a `Connection` or an `Extension` of
+	/// the factory's database.
+	static auto Create(Factory &factory) -> EncodingFunction;
+
+	/// Sets the name of the encoding, matched case-insensitively. Setting it again replaces the name, so the same
+	/// function object can be registered under several names (give each registration its own user data).
+	auto SetName(std::string_view name) & -> EncodingFunction &;
+
+	/// Sets the length in bytes of the longest sequence of encoded bytes the decode callback needs to look at to
+	/// decode one character. Unless the chunk is the last one, the callback gets at least this many bytes whenever
+	/// that many are left in the file. At least 1.
+	auto SetMaxInputBytes(idx_t max_input_bytes) & -> EncodingFunction &;
+
+	/// Sets the length in bytes of the longest UTF-8 sequence the decode callback writes for one decoded unit. At
+	/// least 1.
+	auto SetMaxOutputBytes(idx_t max_output_bytes) & -> EncodingFunction &;
+
+	/// Constructs user data of type `T`, carried by the registered encoding and freed at engine teardown; read it from
+	/// the decode callback via `DecodeInput::GetUserData<T>`. Consumed by registration: set it again before
+	/// re-registering.
+	template <class T, class... ARGS>
+	auto SetUserData(ARGS &&... args) & -> EncodingFunction & {
+		auto ptr = new T(std::forward<ARGS>(args)...);
+		SetUserDataInternal(ptr, detail::TypedDelete<T>);
+		return *this;
+	}
+
+	auto SetDecodeCallback(DecodeCallback callback) & -> EncodingFunction &;
+
+private:
+	explicit EncodingFunction(void *impl);
+	//! Moves what the callbacks need into the C handle, right before it is registered.
+	auto PrepareRegistration() -> void;
+
+	auto SetUserDataInternal(void *data, void (*destructor)(void *)) -> void;
+
+	DecodeCallback decode_callback = nullptr;
+	detail::UserData user_data;
+
+public:
+	/// What the decode callback works with. Borrowed, valid only for the callback duration.
+	class DecodeInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// The user data set via `EncodingFunction::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// The encoded bytes to decode. May be empty.
+		auto GetInput() const -> std::string_view {
+			return std::string_view(reinterpret_cast<const char *>(input), input_length);
+		}
+
+		/// Whether the input ends the file. Unless it does, the callback may stop at the end of the input when fewer
+		/// than the maximum input bytes remain, since the character they start may continue in the next chunk. When
+		/// it does, the callback must consume every remaining byte.
+		auto IsLast() const -> bool {
+			return is_last;
+		}
+
+		/// The buffer to write UTF-8 into; its size may be smaller than the maximum output bytes, or even 0. The
+		/// callback decodes as many whole characters as fit and stops before one that does not: it never writes part
+		/// of a character.
+		auto GetOutput() const -> std::pair<char *, idx_t> {
+			return {reinterpret_cast<char *>(output), output_capacity};
+		}
+
+		/// Reports the result: how many bytes of the input were decoded, and how many bytes were written to the output.
+		/// Unconsumed input is passed again, ahead of more input, on the next call. Not calling this reports nothing
+		/// consumed and nothing written.
+		auto SetResult(idx_t consumed, idx_t written) -> void {
+			*input_consumed = consumed;
+			*output_written = written;
+		}
+
+	private:
+		DecodeInput(void *user_data, const uint8_t *input, idx_t input_length, bool is_last, uint8_t *output,
+		            idx_t output_capacity, idx_t *input_consumed, idx_t *output_written)
+		    : user_data(user_data), input(input), input_length(input_length), is_last(is_last), output(output),
+		      output_capacity(output_capacity), input_consumed(input_consumed), output_written(output_written) {
+		}
+
+		void *user_data;
+		const uint8_t *input;
+		idx_t input_length;
+		bool is_last;
+		uint8_t *output;
+		idx_t output_capacity;
+		idx_t *input_consumed;
+		idx_t *output_written;
 
 		void *GetUserDataInternal() const;
 	};

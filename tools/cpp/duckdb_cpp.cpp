@@ -196,6 +196,10 @@ struct HandleTraits<CastFunction> {
 	using handle = duckdb_v2_cast_function_handle;
 };
 template <>
+struct HandleTraits<EncodingFunction> {
+	using handle = duckdb_v2_encoding_function_handle;
+};
+template <>
 struct HandleTraits<ReplacementScan> {
 	using handle = duckdb_v2_replacement_scan_handle;
 };
@@ -1299,6 +1303,16 @@ auto Connection::Register(CastFunction &cast_function) -> void {
 auto Extension::Register(CastFunction &cast_function) -> void {
 	cast_function.PrepareRegistration();
 	CheckedAPICall(duckdb_v2_extension_register_cast_function, handle(), cast_function.handle());
+}
+
+auto Connection::Register(EncodingFunction &encoding_function) -> void {
+	encoding_function.PrepareRegistration();
+	CheckedAPICall(duckdb_v2_connection_register_encoding_function, handle(), encoding_function.handle());
+}
+
+auto Extension::Register(EncodingFunction &encoding_function) -> void {
+	encoding_function.PrepareRegistration();
+	CheckedAPICall(duckdb_v2_extension_register_encoding_function, handle(), encoding_function.handle());
 }
 
 auto Connection::Register(PragmaFunction &pragma_function) -> void {
@@ -6463,6 +6477,107 @@ auto CastFunction::ExecInput::GetMode() const -> CastMode {
 
 auto CastFunction::ExecInput::GetContext() -> Context & {
 	return context;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Encoding Function
+//----------------------------------------------------------------------------------------------------------------------
+
+namespace {
+
+// The callback table for one registered encoding: rides the C user_data slot, which is handed to the decode callback,
+// so the trampoline can find it; the user's own slot (SetUserData) rides inside it. Owned by the registered encoding,
+// freed at engine teardown.
+struct EncodingFunctionInfo {
+	EncodingFunction::DecodeCallback decode_callback = nullptr;
+	detail::UserData user_data;
+
+	EncodingFunctionInfo(EncodingFunction::DecodeCallback decode_callback, detail::UserData user_data)
+	    : decode_callback(decode_callback), user_data(std::move(user_data)) {
+	}
+
+	bool operator==(const EncodingFunctionInfo &other) const {
+		return decode_callback == other.decode_callback && user_data.get() == other.user_data.get();
+	}
+};
+
+} // namespace
+
+EncodingFunction::EncodingFunction(void *impl) : detail::Handle<EncodingFunction>(impl) {
+}
+
+EncodingFunction::~EncodingFunction() {
+	auto _h = handle();
+	duckdb_v2_encoding_function_destroy(&_h);
+}
+
+auto EncodingFunction::Create(Factory &factory) -> EncodingFunction {
+	duckdb_v2_encoding_function_handle _h = nullptr;
+	CheckedAPICall(duckdb_v2_encoding_function_create, factory.handle(), &_h);
+	return detail::HandleFactory::Make<EncodingFunction>(_h);
+}
+
+auto EncodingFunction::SetName(std::string_view name) & -> EncodingFunction & {
+	CheckedAPICall(duckdb_v2_encoding_function_set_name, handle(), name.data(), name.size());
+	return *this;
+}
+
+auto EncodingFunction::SetMaxInputBytes(idx_t max_input_bytes) & -> EncodingFunction & {
+	CheckedAPICall(duckdb_v2_encoding_function_set_max_input_bytes, handle(), max_input_bytes);
+	return *this;
+}
+
+auto EncodingFunction::SetMaxOutputBytes(idx_t max_output_bytes) & -> EncodingFunction & {
+	CheckedAPICall(duckdb_v2_encoding_function_set_max_output_bytes, handle(), max_output_bytes);
+	return *this;
+}
+
+auto EncodingFunction::SetUserDataInternal(void *data, void (*destructor)(void *)) -> void {
+	user_data = detail::UserData(data, destructor);
+}
+
+auto EncodingFunction::SetDecodeCallback(DecodeCallback callback) & -> EncodingFunction & {
+	if (!callback) {
+		CheckedAPICall(duckdb_v2_encoding_function_set_decode_callback, handle(), nullptr);
+		decode_callback = nullptr;
+		return *this;
+	}
+
+	// The C-side callback is one shared trampoline; the user's callback is looked up through the info table riding the
+	// user_data slot (set by Register).
+	static auto trampoline = [](void *info, const uint8_t *input, idx_t input_length, bool is_last, uint8_t *output,
+	                            idx_t output_capacity, idx_t *input_consumed, idx_t *output_written,
+	                            duckdb_v2_error_info_handle *err) {
+		WithExceptionGuard(err, [&]() {
+			const auto &function = *static_cast<EncodingFunctionInfo *>(info);
+			auto decode_input =
+			    detail::HandleFactory::Make<DecodeInput>(function.user_data.get(), input, input_length, is_last, output,
+			                                             output_capacity, input_consumed, output_written);
+			function.decode_callback(decode_input);
+		});
+	};
+
+	CheckedAPICall(duckdb_v2_encoding_function_set_decode_callback, handle(), trampoline);
+	decode_callback = callback;
+	return *this;
+}
+
+auto EncodingFunction::PrepareRegistration() -> void {
+	// The callback table rides the C user_data slot so the trampoline can find it; the user's own data (SetUserData,
+	// moved out here) rides inside it.
+	auto info = std::unique_ptr<EncodingFunctionInfo>(new EncodingFunctionInfo(decode_callback, std::move(user_data)));
+	duckdb_v2_opaque opaque {info.get(), detail::TypedDelete<EncodingFunctionInfo>,
+	                         detail::TypedEquals<EncodingFunctionInfo>};
+	CheckedAPICall(duckdb_v2_encoding_function_set_user_data, handle(), &opaque);
+	// The encoding owns the table now.
+	info.release(); // NOLINT(bugprone-unused-return-value)
+}
+
+void *EncodingFunction::DecodeInput::GetUserDataInternal() const {
+	if (!user_data) {
+		throw InvalidInputException("no user data was set; call EncodingFunction::SetUserData before Register");
+	}
+	return user_data;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
