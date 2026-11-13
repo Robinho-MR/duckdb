@@ -1,0 +1,20 @@
+# name: test/sql/json/scalar/test_json_wildcard_path_depth.test
+# description: json_extract with a path containing many wildcard components over a deeply nested document does not overflow the stack
+# group: [scalar]
+
+require json
+
+statement error
+SELECT json_extract(repeat('[', 200000) || '1' || repeat(']', 200000), '$' || repeat('[*]', 200000));
+----
+<REGEX>:.*JSON path exceeds maximum recursion depth.*
+
+query I
+SELECT json_extract('{"a":{"b":1}}', '$.a.b');
+----
+1
+
+query I
+SELECT json_extract('[[1,2],[3,4]]', '$[*][*]');
+----
+[1, 2, 3, 4]
