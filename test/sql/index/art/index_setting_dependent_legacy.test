@@ -1,0 +1,95 @@
+# name: test/sql/index/art/index_setting_dependent_legacy.test
+# description: Setting-dependent index keys keep their tables writable in databases created by DuckDB <= v2.0.0
+# group: [art]
+
+require icu
+
+# Created by v2.0.0 with TimeZone UTC:
+# CREATE TABLE t(ts TIMESTAMPTZ, k INT); INSERT INTO t VALUES ('2024-01-01 23:30:00+00', 1);
+# CREATE INDEX i1 ON t((ts::DATE));
+# CREATE TABLE w(ts TIMESTAMPTZ, k INT); INSERT INTO w VALUES ('2024-01-01 23:30:00+00', 1);
+# CREATE UNIQUE INDEX i2 ON w((ts::DATE));
+# CHECKPOINT; then, left in the WAL:
+# INSERT INTO w VALUES ('2024-01-02 23:30:00+00', 2); DELETE FROM w WHERE k = 1;
+unzip data/storage/index_setting_dependent_v2_0_0.db.gz {TEST_DIR}/index_setting_dependent.db
+
+unzip data/storage/index_setting_dependent_v2_0_0.db.wal.gz {TEST_DIR}/index_setting_dependent.db.wal
+
+statement ok
+SET TimeZone = 'UTC'
+
+statement ok
+ATTACH '{TEST_DIR}/index_setting_dependent.db' AS db
+
+statement ok
+INSERT INTO db.t VALUES ('2024-01-02 23:30:00+00', 2)
+
+statement ok
+UPDATE db.t SET k = 3 WHERE k = 2
+
+statement ok
+DELETE FROM db.t WHERE k = 1
+
+query II
+SELECT ts::DATE, k FROM db.t
+----
+2024-01-02	3
+
+# the WAL replay buffered operations on the unique index, which the checkpoint applies
+query II
+SELECT ts::DATE, k FROM db.w
+----
+2024-01-02	2
+
+statement ok
+CHECKPOINT db
+
+statement error
+INSERT INTO db.w VALUES ('2024-01-02 10:00:00+00', 4)
+----
+Constraint Error: Duplicate key "CAST(ts AS DATE): 2024-01-02" violates unique constraint.
+
+statement ok
+INSERT INTO db.w VALUES ('2024-01-03 10:00:00+00', 4)
+
+statement ok
+DETACH db
+
+statement ok
+ATTACH '{TEST_DIR}/index_setting_dependent.db' AS db
+
+query II
+SELECT ts::DATE, k FROM db.w ORDER BY k
+----
+2024-01-02	2
+2024-01-03	4
+
+statement error
+INSERT INTO db.w VALUES ('2024-01-03 12:00:00+00', 5)
+----
+Constraint Error: Duplicate key "CAST(ts AS DATE): 2024-01-03" violates unique constraint.
+
+# new indexes still cannot depend on settings
+statement error
+CREATE INDEX i3 ON db.t((ts::DATE))
+----
+Index keys cannot contain expressions with side effects. They also cannot depend on settings such as TimeZone.
+
+statement ok
+DETACH db
+
+# The same file with its main header patched to say it was created by v2.0.1, which rejects such keys.
+unzip data/storage/index_setting_dependent_v2_0_1.db.gz {TEST_DIR}/index_setting_dependent_v2_0_1.db
+
+statement ok
+ATTACH '{TEST_DIR}/index_setting_dependent_v2_0_1.db' AS db
+
+query II
+SELECT ts::DATE, k FROM db.t
+----
+2024-01-01	1
+
+statement error
+INSERT INTO db.t VALUES ('2024-01-02 23:30:00+00', 2)
+----
+Data Corruption Error: Invalid index "i1": Index keys cannot contain expressions with side effects. They also cannot depend on settings such as TimeZone.

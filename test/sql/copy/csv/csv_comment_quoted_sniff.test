@@ -32,3 +32,22 @@ SELECT * FROM read_csv('{TEST_DIR}/comment_quote_middle.csv', comment = '#')
 1	a, b
 2	c, d
 3	e, f
+
+# leading comment lines are not counted as rows to skip when the quoted dialect wins
+statement ok
+COPY (SELECT l FROM (SELECT 0 i, '#x' l UNION ALL SELECT 1, '#y' UNION ALL SELECT 2, 'a,b' UNION ALL SELECT range + 3, range::VARCHAR || ',"t"' FROM range(2047)) ORDER BY i) TO '{TEST_DIR}/comment_quote_many.csv' (HEADER false, QUOTE '');
+
+query III
+SELECT count(*), min(a), max(a) FROM read_csv('{TEST_DIR}/comment_quote_many.csv', comment = '#')
+----
+2047	0	2046
+
+query III
+SELECT count(*), min(a), max(a) FROM read_csv('{TEST_DIR}/comment_quote_many.csv', comment = '#', header = true)
+----
+2047	0	2046
+
+query III
+SELECT Quote, SkipRows, HasHeader FROM sniff_csv('{TEST_DIR}/comment_quote_many.csv', comment = '#')
+----
+"	0	true

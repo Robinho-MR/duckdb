@@ -999,3 +999,22 @@ FROM (VALUES ('2026-07-01 09:59:59.999999533'::TIMESTAMP_NS),
 2026-07-01 09:32:06.999999533	9	32	6	6	6999999	999999533
 2026-07-01 09:32:06.999999499	9	32	6	6	6999999	999999499
 
+# epoch_ms truncates TIMESTAMP_NS to milliseconds, like the other date parts
+query IIII
+SELECT epoch_ms(t), epoch_ms(t::TIMESTAMP_NS), millisecond(t), epoch_us(t)
+FROM (VALUES ('2020-01-01 10:20:45.1239'::TIMESTAMP_NS),
+             ('1969-12-31 23:59:59.9999995'::TIMESTAMP_NS),
+             (NULL::TIMESTAMP_NS)) v(t);
+----
+1577874045123	1577874045123	45123	1577874045123900
+-1	-1	59999	-1
+NULL	NULL	NULL	NULL
+
+foreach value infinity -infinity
+
+query I
+SELECT epoch_ms('{value}'::TIMESTAMP_NS)
+----
+NULL
+
+endloop

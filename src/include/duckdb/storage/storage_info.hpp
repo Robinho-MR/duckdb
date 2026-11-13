@@ -283,7 +283,8 @@ public:
 	static void CheckMagicBytes(MemoryMappedFile &handle);
 
 	string LibraryGitDesc() {
-		return string(char_ptr_cast(library_git_desc), MAX_VERSION_SIZE);
+		string result(char_ptr_cast(library_git_desc), MAX_VERSION_SIZE);
+		return result.substr(0, result.find('\0'));
 	}
 	string LibraryGitHash() {
 		return string(char_ptr_cast(library_git_hash), MAX_VERSION_SIZE);
