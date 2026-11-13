@@ -586,6 +586,7 @@ auto Instance::StartupOptionPairs(const StartupOptions &options) -> std::vector<
 	if (options.custom_user_agent) {
 		result.emplace_back("custom_user_agent", *options.custom_user_agent);
 	}
+	result.insert(result.end(), options.options.begin(), options.options.end());
 	return result;
 }
 

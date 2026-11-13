@@ -1190,12 +1190,24 @@ public:
 		return *this;
 	}
 
+	/// Sets any option by name, for options without a dedicated setter above, e.g. `duckdb_api` or `access_mode`.
+	/// Options are applied in the order they are set, after the dedicated setters, so a later value wins. An option
+	/// that needs a running instance (such as `allowed_directories`) makes `Instance` construction throw: write it
+	/// through `Instance::GetConfig` instead.
+	/// @param name The option's canonical name or one of its aliases.
+	/// @param value The value, in the textual form SQL `SET` accepts.
+	auto Set(std::string_view name, std::string_view value) -> StartupOptions & {
+		options.emplace_back(std::string(name), std::string(value));
+		return *this;
+	}
+
 private:
 	std::optional<bool> allow_community_extensions;
 	std::optional<bool> allow_unsigned_extensions;
 	std::optional<bool> allow_unredacted_secrets;
 	std::optional<bool> disable_database_invalidation;
 	std::optional<std::string> custom_user_agent;
+	std::vector<std::pair<std::string, std::string>> options;
 };
 
 class Instance final : public detail::Handle<Instance> {
