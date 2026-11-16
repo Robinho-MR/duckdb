@@ -5,6 +5,7 @@
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 #include "duckdb/common/multi_file/table_function_multi_file.hpp"
 #include "duckdb/execution/partition_info.hpp"
+#include "duckdb/main/profiler/metrics.hpp"
 #include "duckdb/function/partition_stats.hpp"
 #include "duckdb/parallel/pipeline.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
@@ -245,6 +246,52 @@ static auto Convert(CV2TableProgressInfo *info) -> duckdb_v2_table_function_prog
 	return reinterpret_cast<duckdb_v2_table_function_progress_info_handle>(info);
 }
 
+class CV2TableMetricsInfo {
+public:
+	void *in_user_data = nullptr;
+	void *in_bind_data = nullptr;
+	void *in_global_state = nullptr;
+
+	//! The metrics the callback reported, by name, applied to the scan's metrics afterwards
+	vector<pair<string, uint64_t>> out_metrics;
+};
+
+//! The operator metrics a table function scan can report, by the name the profiler uses for them
+static auto CV2TableApplyMetric(OperatorMetrics &metrics, const string &name, uint64_t value) -> bool {
+	if (name == MetricOperatorRowsScanned::Name) {
+		metrics.rows_scanned = value;
+	} else if (name == MetricOperatorRowGroupsScanned::Name) {
+		metrics.row_groups_scanned = value;
+	} else if (name == MetricOperatorTotalRowGroupsToScan::Name) {
+		metrics.total_row_groups_to_scan = value;
+	} else if (name == MetricOperatorBytesScanned::Name) {
+		metrics.bytes_scanned = value;
+		metrics.bytes_scanned_reported = true;
+	} else {
+		return false;
+	}
+	return true;
+}
+
+static void CV2TableAddMetric(CV2TableMetricsInfo &info, const char *name, idx_t name_length, uint64_t value) {
+	string metric_name(name, name_length);
+	OperatorMetrics probe;
+	if (!CV2TableApplyMetric(probe, metric_name, value)) {
+		throw InvalidInputException("\"%s\" is not a metric a table function can report, expected one of "
+		                            "\"%s\", \"%s\", \"%s\" or \"%s\"",
+		                            metric_name, MetricOperatorRowsScanned::Name, MetricOperatorRowGroupsScanned::Name,
+		                            MetricOperatorTotalRowGroupsToScan::Name, MetricOperatorBytesScanned::Name);
+	}
+	info.out_metrics.emplace_back(std::move(metric_name), value);
+}
+
+static auto Convert(duckdb_v2_table_function_metrics_info_handle info) -> CV2TableMetricsInfo * {
+	return reinterpret_cast<CV2TableMetricsInfo *>(info);
+}
+static auto Convert(CV2TableMetricsInfo *info) -> duckdb_v2_table_function_metrics_info_handle {
+	return reinterpret_cast<duckdb_v2_table_function_metrics_info_handle>(info);
+}
+
 class CV2TableClaimBatchInfo {
 public:
 	void *in_user_data = nullptr;
@@ -397,6 +444,7 @@ public:
 	duckdb_v2_table_function_in_out_callback_fn in_out_cb = nullptr;
 	duckdb_v2_table_function_in_out_callback_fn in_out_final_cb = nullptr;
 	duckdb_v2_table_function_progress_callback_fn progress_cb = nullptr;
+	duckdb_v2_table_function_metrics_callback_fn metrics_cb = nullptr;
 	duckdb_v2_table_function_filter_pushdown_callback_fn filter_pushdown_cb = nullptr;
 	duckdb_v2_table_function_partition_data_callback_fn partition_data_cb = nullptr;
 	duckdb_v2_table_function_partitioning_callback_fn partitioning_cb = nullptr;
@@ -926,6 +974,35 @@ static auto CV2TableProgress(ClientContext &context, const FunctionData *bind_da
 	return MinValue<double>(MaxValue<double>(args.out_progress, 0.0), 1.0) * 100.0;
 }
 
+static auto CV2TableGetMetrics(TableFunctionGetMetricsInput &input) -> void {
+	if (!input.bind_data) {
+		return;
+	}
+	const auto &data = input.bind_data->Cast<CV2TableFunctionData>();
+	const auto &info = *data.info;
+
+	CV2TableMetricsInfo args = {};
+	args.in_user_data = info.user_data ? info.user_data->GetData() : nullptr;
+	args.in_bind_data = data.handle ? data.handle->GetData() : nullptr;
+	if (input.global_state) {
+		// The callback can run while the scan does, so the state it reads is the shared one, unsynchronized.
+		args.in_global_state = input.global_state->Cast<CV2TableGlobalState>().handle.GetData();
+	}
+
+	CV2ErrorInfo err = {};
+	auto err_ptr = Convert(&err);
+	CV2CallbackContext callback_context(input.context);
+	info.metrics_cb(Convert(&args), Convert(&callback_context), &err_ptr);
+
+	if (err.HasError()) {
+		err.ThrowAsException();
+	}
+
+	for (auto &metric : args.out_metrics) {
+		CV2TableApplyMetric(input.operator_metrics, metric.first, metric.second);
+	}
+}
+
 //! The optimizer hands over the predicates it would otherwise evaluate above the scan; whatever the callback accepts
 //! is removed from the list, and the engine keeps applying the rest itself.
 static auto CV2TableFilterPushdown(ClientContext &context, LogicalGet &get, FunctionData *bind_data_p,
@@ -1095,6 +1172,9 @@ public:
 		function.cardinality = CV2TableCardinality;
 		if (info.progress_cb) {
 			function.table_scan_progress = CV2TableProgress;
+		}
+		if (info.metrics_cb) {
+			function.get_metrics = CV2TableGetMetrics;
 		}
 		if (info.filter_pushdown_cb) {
 			function.pushdown_complex_filter = CV2TableFilterPushdown;
@@ -1331,6 +1411,14 @@ DUCKDB_V2_ERROR duckdb_v2_table_function_set_progress_callback(duckdb_v2_table_f
                                                                duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(function);
 	return WithErrorHandler(err, [&]() { Convert(function)->info.progress_cb = callback; });
+}
+
+DUCKDB_V2_ERROR
+duckdb_v2_table_function_set_metrics_callback(duckdb_v2_table_function_handle function,
+                                              duckdb_v2_table_function_metrics_callback_fn callback,
+                                              duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() { Convert(function)->info.metrics_cb = callback; });
 }
 
 DUCKDB_V2_ERROR duckdb_v2_table_function_set_projection_pushdown(duckdb_v2_table_function_handle function, bool enable,
@@ -1640,6 +1728,35 @@ DUCKDB_V2_ERROR duckdb_v2_table_function_exec_get_column_index(duckdb_v2_table_f
 		}
 		*column_index = columns[index];
 	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_metrics_get_user_data(duckdb_v2_table_function_metrics_info_handle info,
+                                                               void **data, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->in_user_data; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_metrics_get_bind_data(duckdb_v2_table_function_metrics_info_handle info,
+                                                               void **data, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->in_bind_data; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_metrics_get_global_state(duckdb_v2_table_function_metrics_info_handle info,
+                                                                  void **data, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->in_global_state; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_metrics_set(duckdb_v2_table_function_metrics_info_handle info,
+                                                     const char *name, idx_t name_length, uint64_t value,
+                                                     duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(name);
+	return WithErrorHandler(err, [&]() { CV2TableAddMetric(*Convert(info), name, name_length, value); });
 }
 
 DUCKDB_V2_ERROR duckdb_v2_table_function_progress_get_user_data(duckdb_v2_table_function_progress_info_handle info,

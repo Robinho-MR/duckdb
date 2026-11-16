@@ -3438,6 +3438,28 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_file_tell(duckdb_v2_file_handle file, idx
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
+ * Returns how many bytes of the stored file have been consumed by the reads so far.
+ *
+ * For a file opened with a compression (see `duckdb_v2_file_open_options_set_compression()`) this is the number of
+ * compressed bytes read from the underlying file, which is what a read of decompressed data costs in I/O (a compressed
+ * file cannot report a position with `duckdb_v2_file_tell()`). For any other file it is the same as
+ * `duckdb_v2_file_tell()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param file The file to query.
+ * @param progress Receives the number of stored bytes consumed.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_file_get_progress(duckdb_v2_file_handle file, idx_t *progress,
+                                                         duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
  * Returns the total size of the file in bytes.
  *
  * history:
@@ -4408,6 +4430,112 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_connection_log(duckdb_v2_connection_handl
 #endif
 
 /* --- Struct definitions for logging --- */
+
+/* ============================================================================
+ * MODULE: memory
+ * ============================================================================ */
+
+/* --- Enums for memory --- */
+
+/* --- Struct forward declarations for memory --- */
+
+/* --- Types for memory --- */
+
+/*!
+ * An owned opaque handle to memory reserved with `duckdb_v2_context_reserve_memory()`. The reservation is released with
+ * `duckdb_v2_memory_reservation_destroy()`. It belongs to the database of the context it was reserved in, and must be
+ * destroyed before that database is.
+ */
+typedef struct _duckdb_v2_memory_reservation {
+	void *internal_ptr;
+} * duckdb_v2_memory_reservation_handle;
+
+/* --- Constants for memory --- */
+
+/* --- Function pointer typedefs for memory --- */
+
+/* --- Functions for memory --- */
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Reserves memory in the buffer manager of the database of the context.
+ *
+ * The reservation only accounts for memory: it does not allocate any. The caller allocates the memory itself and keeps
+ * the reservation for as long as it holds on to it. The bytes count against `memory_limit` and are tagged `EXTENSION`
+ * in `duckdb_memory()`. If they do not fit, the buffer manager first evicts what it can, and fails with an out of
+ * memory error when that is not enough; the call then fails with that error and nothing is reserved. Reserve before
+ * allocating, so a query over the limit fails before the memory is used.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param context The context whose database to reserve in.
+ * @param size The number of bytes to reserve. May be 0.
+ * @param reservation On success, receives the reservation. Owned by the caller; destroy via
+ * `duckdb_v2_memory_reservation_destroy()`.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_context_reserve_memory(duckdb_v2_context_handle context, idx_t size,
+                                                              duckdb_v2_memory_reservation_handle *reservation,
+                                                              duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Grows or shrinks the reservation to `size` bytes.
+ *
+ * Growing reserves the additional bytes as `duckdb_v2_context_reserve_memory()` does, and fails the same way, leaving
+ * the reservation as it was. Shrinking releases the difference and cannot fail.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param reservation The reservation to resize.
+ * @param size The new number of bytes the reservation holds in all.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_memory_reservation_resize(duckdb_v2_memory_reservation_handle reservation,
+                                                                 idx_t size, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Returns the number of bytes the reservation holds.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param reservation The reservation to query.
+ * @param size Receives the number of bytes.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_memory_reservation_get_size(duckdb_v2_memory_reservation_handle reservation,
+                                                                   idx_t *size, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Destroys the reservation, releasing the bytes it holds.
+ *
+ * Null-safe: passing a null pointer or null handle is a no-op. The handle is set to null on return to prevent
+ * double-destruction.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param reservation The reservation to destroy.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_memory_reservation_destroy(duckdb_v2_memory_reservation_handle *reservation);
+#endif
+
+/* --- Struct definitions for memory --- */
 
 /* ============================================================================
  * MODULE: qname
@@ -13241,6 +13369,15 @@ typedef struct _duckdb_v2_table_function_in_out_info {
 } * duckdb_v2_table_function_in_out_info_handle;
 
 /*!
+ * A borrowed opaque handle to the arguments supplied to a table function when the engine collects the metrics of a
+ * scan. The "metrics" callback receives this handle and can use it to report the operator metrics of the scan, e.g. how
+ * many row groups it read.
+ */
+typedef struct _duckdb_v2_table_function_metrics_info {
+	void *internal_ptr;
+} * duckdb_v2_table_function_metrics_info_handle;
+
+/*!
  * A borrowed opaque handle to the arguments supplied to a table function when the engine asks it to describe a bound
  * call. The "get bind info" callback receives this handle, and can use it to describe the call in more detail than its
  * columns: with identifiers of its columns (e.g. field ids), and with options - key-value facts about what the call
@@ -13317,6 +13454,10 @@ typedef void (*duckdb_v2_table_function_in_out_callback_fn)(duckdb_v2_table_func
 typedef void (*duckdb_v2_table_function_progress_callback_fn)(duckdb_v2_table_function_progress_info_handle info,
                                                               duckdb_v2_context_handle context,
                                                               duckdb_v2_error_info_handle *err);
+
+typedef void (*duckdb_v2_table_function_metrics_callback_fn)(duckdb_v2_table_function_metrics_info_handle info,
+                                                             duckdb_v2_context_handle context,
+                                                             duckdb_v2_error_info_handle *err);
 
 typedef void (*duckdb_v2_table_function_filter_pushdown_callback_fn)(
     duckdb_v2_table_function_filter_pushdown_info_handle info, duckdb_v2_context_handle context,
@@ -13702,6 +13843,28 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_set_progress_callback(
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_set_projection_pushdown(duckdb_v2_table_function_handle function,
                                                                               bool enable,
                                                                               duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the optional metrics callback of the table function.
+ *
+ * The metrics callback is invoked when the engine collects the metrics of the scan, e.g. when profiling is enabled, and
+ * can report what the scan did through its `duckdb_v2_table_function_metrics_info_handle`. It may be invoked while the
+ * scan is still running.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the metrics callback of.
+ * @param callback The metrics callback to set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_set_metrics_callback(
+    duckdb_v2_table_function_handle function, duckdb_v2_table_function_metrics_callback_fn callback,
+    duckdb_v2_error_info_handle *err);
 #endif
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
@@ -15195,6 +15358,92 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_stats_get_column_index(
  */
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_stats_get_result_stats(
     duckdb_v2_table_function_stats_info_handle info, duckdb_v2_stats_handle *stats, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the user data set via `duckdb_v2_table_function_set_user_data()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The metrics info handle.
+ * @param data Receives the user data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_metrics_get_user_data(
+    duckdb_v2_table_function_metrics_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the bind data set by the function's bind callback.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The metrics info handle.
+ * @param data Receives the bind data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_metrics_get_bind_data(
+    duckdb_v2_table_function_metrics_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the global state set by the function's global init callback.
+ *
+ * The metrics callback can run while the scan is still running, so it must read the global state in a thread-safe way.
+ * The global state is null if the scan has not been initialized.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The metrics info handle.
+ * @param data Receives the global state pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_metrics_get_global_state(
+    duckdb_v2_table_function_metrics_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Reports an operator metric of the scan, by the name DuckDB's profiler uses for it (the names `tracked_metrics`
+ * accepts).
+ *
+ * The metrics a scan can report are counters:
+ * - `operator.rows_scanned`: the rows the scan read.
+ * - `operator.row_groups_scanned`: the row groups the scan read. A row group is the unit a format lets the scan skip,
+ * e.g. a Parquet row group or an ORC stripe.
+ * - `operator.total_row_groups_to_scan`: the row groups the scan read or skipped.
+ * - `operator.bytes_scanned`: the bytes the scan read.
+ *
+ * The engine may collect the metrics of a scan more than once, and adds up what it is told: each value is the amount
+ * since the metrics were last collected, except `operator.total_row_groups_to_scan`, which is the number found so far
+ * in all. Fails for a name that is not one of the above.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The metrics info handle.
+ * @param name The name of the metric. Borrowed.
+ * @param name_length The length of `name` in bytes. `name` must be valid UTF-8 and need not be null-terminated.
+ * @param value The value of the metric.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_metrics_set(duckdb_v2_table_function_metrics_info_handle info,
+                                                                  const char *name, idx_t name_length, uint64_t value,
+                                                                  duckdb_v2_error_info_handle *err);
 #endif
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE

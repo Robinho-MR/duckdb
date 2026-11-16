@@ -228,6 +228,10 @@ struct HandleTraits<FileHandle> {
 	using handle = duckdb_v2_file_handle;
 };
 template <>
+struct HandleTraits<MemoryReservation> {
+	using handle = duckdb_v2_memory_reservation_handle;
+};
+template <>
 struct HandleTraits<FileOpenOptions> {
 	using handle = duckdb_v2_file_open_options_handle;
 };
@@ -1408,6 +1412,30 @@ auto Context::GetFileSystem() const -> FileSystem {
 	duckdb_v2_file_system_handle fs = nullptr;
 	CheckedAPICall(duckdb_v2_context_get_file_system, handle(), &fs);
 	return detail::HandleFactory::Make<FileSystem>(fs);
+}
+
+auto Context::ReserveMemory(idx_t size) const -> MemoryReservation {
+	duckdb_v2_memory_reservation_handle _h = nullptr;
+	CheckedAPICall(duckdb_v2_context_reserve_memory, handle(), size, &_h);
+	return detail::HandleFactory::Make<MemoryReservation>(_h);
+}
+
+MemoryReservation::MemoryReservation(void *impl) : detail::Handle<MemoryReservation>(impl) {
+}
+
+MemoryReservation::~MemoryReservation() {
+	auto _h = handle();
+	duckdb_v2_memory_reservation_destroy(&_h);
+}
+
+auto MemoryReservation::GetSize() const -> idx_t {
+	idx_t size = 0;
+	CheckedAPICall(duckdb_v2_memory_reservation_get_size, handle(), &size);
+	return size;
+}
+
+auto MemoryReservation::Resize(idx_t size) -> void {
+	CheckedAPICall(duckdb_v2_memory_reservation_resize, handle(), size);
 }
 
 auto Connection::GetFileSystem() const -> FileSystem {
@@ -4261,6 +4289,7 @@ struct TableFunctionInfo {
 	TableFunction::GetBindInfoCallback get_bind_info_callback = nullptr;
 	TableFunction::CombineSchemaCallback combine_schema_callback = nullptr;
 	TableFunction::StatsCallback stats_callback = nullptr;
+	TableFunction::MetricsCallback metrics_callback = nullptr;
 	detail::UserData user_data;
 
 	TableFunctionInfo(TableFunction::BindCallback bind_callback, TableFunction::InitGlobalCallback init_global_callback,
@@ -4273,14 +4302,15 @@ struct TableFunctionInfo {
 	                  TableFunction::ClaimBatchCallback claim_batch_callback,
 	                  TableFunction::GetBindInfoCallback get_bind_info_callback,
 	                  TableFunction::CombineSchemaCallback combine_schema_callback,
-	                  TableFunction::StatsCallback stats_callback, detail::UserData user_data)
+	                  TableFunction::StatsCallback stats_callback, TableFunction::MetricsCallback metrics_callback,
+	                  detail::UserData user_data)
 	    : bind_callback(bind_callback), init_global_callback(init_global_callback),
 	      init_local_callback(init_local_callback), exec_callback(exec_callback), in_out_callback(in_out_callback),
 	      in_out_final_callback(in_out_final_callback), progress_callback(progress_callback),
 	      filter_pushdown_callback(filter_pushdown_callback), partition_data_callback(partition_data_callback),
 	      partitioning_callback(partitioning_callback), claim_batch_callback(claim_batch_callback),
 	      get_bind_info_callback(get_bind_info_callback), combine_schema_callback(combine_schema_callback),
-	      stats_callback(stats_callback), user_data(std::move(user_data)) {
+	      stats_callback(stats_callback), metrics_callback(metrics_callback), user_data(std::move(user_data)) {
 	}
 
 	bool operator==(const TableFunctionInfo &other) const {
@@ -4294,7 +4324,7 @@ struct TableFunctionInfo {
 		       claim_batch_callback == other.claim_batch_callback &&
 		       get_bind_info_callback == other.get_bind_info_callback &&
 		       combine_schema_callback == other.combine_schema_callback && stats_callback == other.stats_callback &&
-		       user_data.get() == other.user_data.get();
+		       metrics_callback == other.metrics_callback && user_data.get() == other.user_data.get();
 	}
 };
 
@@ -4555,6 +4585,31 @@ auto TableFunction::SetProgressCallback(ProgressCallback callback) & -> TableFun
 	return *this;
 }
 
+auto TableFunction::SetMetricsCallback(MetricsCallback callback) & -> TableFunction & {
+	if (!callback) {
+		CheckedAPICall(duckdb_v2_table_function_set_metrics_callback, handle(), nullptr);
+		metrics_callback = nullptr;
+		return *this;
+	}
+
+	static auto trampoline = [](duckdb_v2_table_function_metrics_info_handle info, duckdb_v2_context_handle context,
+	                            duckdb_v2_error_info_handle *err) {
+		WithExceptionGuard(err, [&]() {
+			void *user_data = nullptr;
+			CheckedAPICall(duckdb_v2_table_function_metrics_get_user_data, info, &user_data);
+			const auto &function = *static_cast<TableFunctionInfo *>(user_data);
+
+			auto input =
+			    detail::HandleFactory::Make<MetricsInput>(static_cast<void *>(info), static_cast<void *>(context));
+			function.metrics_callback(input);
+		});
+	};
+
+	CheckedAPICall(duckdb_v2_table_function_set_metrics_callback, handle(), trampoline);
+	metrics_callback = callback;
+	return *this;
+}
+
 auto TableFunction::SetFilterPushdownCallback(FilterPushdownCallback callback) & -> TableFunction & {
 	if (!callback) {
 		CheckedAPICall(duckdb_v2_table_function_set_filter_pushdown_callback, handle(), nullptr);
@@ -4741,7 +4796,8 @@ auto TableFunction::PrepareRegistration() -> void {
 	auto info = std::unique_ptr<TableFunctionInfo>(new TableFunctionInfo(
 	    bind_callback, init_global_callback, init_local_callback, exec_callback, in_out_callback, in_out_final_callback,
 	    progress_callback, filter_pushdown_callback, partition_data_callback, partitioning_callback,
-	    claim_batch_callback, get_bind_info_callback, combine_schema_callback, stats_callback, std::move(user_data)));
+	    claim_batch_callback, get_bind_info_callback, combine_schema_callback, stats_callback, metrics_callback,
+	    std::move(user_data)));
 	duckdb_v2_opaque opaque {info.get(), detail::TypedDelete<TableFunctionInfo>,
 	                         detail::TypedEquals<TableFunctionInfo>};
 	CheckedAPICall(duckdb_v2_table_function_set_user_data, handle(), &opaque);
@@ -5052,6 +5108,37 @@ auto TableFunction::ProgressInput::SetProgress(double progress) -> void {
 }
 
 auto TableFunction::ProgressInput::GetContext() -> Context & {
+	return context;
+}
+
+void *TableFunction::MetricsInput::GetBindDataInternal() const {
+	void *bind_data = nullptr;
+	CheckedAPICall(duckdb_v2_table_function_metrics_get_bind_data,
+	               static_cast<duckdb_v2_table_function_metrics_info_handle>(args), &bind_data);
+	return RequireTableBindData(bind_data);
+}
+
+void *TableFunction::MetricsInput::GetGlobalStateInternal() const {
+	void *global_state = nullptr;
+	CheckedAPICall(duckdb_v2_table_function_metrics_get_global_state,
+	               static_cast<duckdb_v2_table_function_metrics_info_handle>(args), &global_state);
+	return global_state;
+}
+
+void *TableFunction::MetricsInput::GetUserDataInternal() const {
+	void *user_data = nullptr;
+	CheckedAPICall(duckdb_v2_table_function_metrics_get_user_data,
+	               static_cast<duckdb_v2_table_function_metrics_info_handle>(args), &user_data);
+	const auto &function = *static_cast<const TableFunctionInfo *>(user_data);
+	return RequireTableUserData(function.user_data);
+}
+
+auto TableFunction::MetricsInput::SetMetric(std::string_view name, uint64_t value) -> void {
+	CheckedAPICall(duckdb_v2_table_function_metrics_set,
+	               static_cast<duckdb_v2_table_function_metrics_info_handle>(args), name.data(), name.size(), value);
+}
+
+auto TableFunction::MetricsInput::GetContext() -> Context & {
 	return context;
 }
 
@@ -7270,6 +7357,12 @@ auto FileHandle::Tell() const -> idx_t {
 	idx_t position = 0;
 	CheckedAPICall(duckdb_v2_file_tell, handle(), &position);
 	return position;
+}
+
+auto FileHandle::GetProgress() const -> idx_t {
+	idx_t progress = 0;
+	CheckedAPICall(duckdb_v2_file_get_progress, handle(), &progress);
+	return progress;
 }
 
 auto FileHandle::Size() const -> idx_t {

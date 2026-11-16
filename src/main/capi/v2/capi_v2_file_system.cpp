@@ -1,5 +1,6 @@
 #include "duckdb/main/capi_v2/capi_v2_internal.hpp"
 
+#include "duckdb/common/exception.hpp"
 #include "duckdb/common/file_open_flags.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/open_file_info.hpp"
@@ -359,6 +360,21 @@ DUCKDB_V2_ERROR duckdb_v2_file_tell(duckdb_v2_file_handle file, idx_t *position,
 	DUCKDB_CHECK_ARG(file);
 	DUCKDB_CHECK_ARG(position);
 	return WithErrorHandler(err, [&]() { *position = Convert(file)->Handle().SeekPosition(); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_file_get_progress(duckdb_v2_file_handle file, idx_t *progress,
+                                            duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(file);
+	DUCKDB_CHECK_ARG(progress);
+	return WithErrorHandler(err, [&]() {
+		auto &handle = Convert(file)->Handle();
+		try {
+			*progress = handle.GetProgress();
+		} catch (duckdb::NotImplementedException &) {
+			// only compressed files track the stored bytes they consumed
+			*progress = handle.SeekPosition();
+		}
+	});
 }
 
 DUCKDB_V2_ERROR duckdb_v2_file_size(duckdb_v2_file_handle file, idx_t *size, duckdb_v2_error_info_handle *err) {

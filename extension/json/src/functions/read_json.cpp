@@ -679,6 +679,7 @@ idx_t JSONScanToVectors(Context &context, JSONScanGlobalState &gstate, JSONScanL
 	auto &state = lstate.scan_state;
 	auto &reader = *gstate.reader;
 	auto &data = gstate.data;
+	state.ReserveBuffer(context, reader.BufferCapacity());
 	const auto count = reader.Scan(state);
 	if (count == 0) {
 		return 0;
@@ -916,6 +917,14 @@ static void ReadJSONProgress(TableFunction::ProgressInput &input) {
 	}
 }
 
+static void ReadJSONMetrics(TableFunction::MetricsInput &input) {
+	// a file the scan has not started on has no state yet
+	auto gstate = input.GetGlobalState<JSONScanGlobalState>();
+	if (gstate && gstate->reader) {
+		input.SetMetric("operator.bytes_scanned", gstate->reader->TakeBytesScanned());
+	}
+}
+
 //! The named parameters of the scan functions: unspecified ones are NULL
 struct JSONNamedParameter {
 	const char *name;
@@ -981,6 +990,7 @@ static void RegisterSingleFileFunction(Extension &extension, Context &context, J
 	function.SetClaimBatchCallback(ReadJSONClaimBatch);
 	function.SetExecCallback(ReadJSONExec);
 	function.SetProgressCallback(ReadJSONProgress);
+	function.SetMetricsCallback(ReadJSONMetrics);
 	function.SetProjectionPushdown(true);
 	function.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
 	extension.Register(function);

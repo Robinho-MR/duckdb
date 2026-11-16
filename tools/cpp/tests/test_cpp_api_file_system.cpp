@@ -326,6 +326,19 @@ TEST_CASE("Stable C++API: file compression on open", "[cpp_api]") {
 	// Detected from the extension only.
 	REQUIRE(read_raw(gzip_path) != text);
 
+	// The progress of a compressed file counts compressed bytes, that of a plain file is its position.
+	{
+		auto options = fs.CreateOpenOptions();
+		options.SetFlag(FileFlags::READ).SetCompression(FileCompression::GZIP);
+		auto file = fs.OpenFile(gzip_path, options);
+		REQUIRE(ReadAll(file, 128) == text);
+		REQUIRE(file.GetProgress() == fs.OpenFile(gzip_path, {FileFlags::READ}).Size());
+		auto plain = fs.OpenFile(gzip_path, {FileFlags::READ});
+		REQUIRE(plain.GetProgress() == 0);
+		plain.Seek(5);
+		REQUIRE(plain.GetProgress() == 5);
+	}
+
 	auto detect_path = duckdb::TestCreatePath("cpp_fs_compression_detect.txt.gz");
 	write(detect_path, FileCompression::AUTO_DETECT);
 	REQUIRE(is_gzip(read_raw(detect_path)));

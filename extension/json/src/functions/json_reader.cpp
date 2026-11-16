@@ -62,6 +62,15 @@ void JSONReaderScanState::EnsureCapacity(idx_t capacity, idx_t keep) {
 	buffer_allocated = required;
 }
 
+void JSONReaderScanState::ReserveBuffer(Context &context, idx_t capacity) {
+	const idx_t required = capacity + YYJSON_PADDING_SIZE;
+	if (!buffer_reservation) {
+		buffer_reservation.emplace(context.ReserveMemory(required));
+	} else if (buffer_reservation->GetSize() < required) {
+		buffer_reservation->Resize(required);
+	}
+}
+
 void JSONReaderScanState::ResetForNextParse() {
 	allocator.Reset();
 	scan_count = 0;
@@ -444,7 +453,7 @@ void JSONReader::Open(Context &context, const Value &file, bool allow_partial) {
 	handle.emplace(OpenFileHandle(context, file, file_name, options));
 	file_size = TryGetFileSize(*handle);
 	// a compressed file is read front to back, and its size does not bound the size of what is read
-	const bool compressed = IsCompressed(options, file_name);
+	compressed = IsCompressed(options, file_name);
 	partial = allow_partial && format == JSONFormat::NEWLINE_DELIMITED && file_size != 0 && !compressed;
 	buffer_capacity = options.maximum_object_size * 2;
 	if (partial) {
@@ -597,6 +606,10 @@ double JSONReader::GetProgress() const {
 		return 0;
 	}
 	return std::min(static_cast<double>(bytes_read.load()) / static_cast<double>(file_size), 1.0);
+}
+
+idx_t JSONReader::TakeBytesScanned() {
+	return bytes_scanned.exchange(0);
 }
 
 void JSONReader::ThrowObjectSizeError(const idx_t object_size) {
@@ -845,6 +858,8 @@ void JSONReader::ReadChunk(JSONReaderScanState &state) {
 	state.EnsureCapacity(size, 0);
 	handle->ReadAt(state.buffer_ptr, size, read_from);
 	bytes_read += end - start;
+	// the chunks partition the file, so the lines read past the end of a chunk are not counted again
+	bytes_scanned += end - start;
 	state.buffer_size = size;
 	state.buffer_offset = 0;
 	// the buffer holds complete lines only
@@ -925,6 +940,13 @@ bool JSONReader::ReadNextBuffer(JSONReaderScanState &state) {
 	}
 	const auto read_size = ReadSequential(state.buffer_ptr + read_offset, request_size);
 	bytes_read += read_size;
+	if (compressed) {
+		const auto stored = handle->GetProgress();
+		const auto counted = stored_bytes_counted.exchange(stored);
+		bytes_scanned += stored > counted ? stored - counted : 0;
+	} else {
+		bytes_scanned += read_size;
+	}
 	{
 		std::lock_guard<std::mutex> guard(lock);
 		state.buffer_index = GetBufferIndex();

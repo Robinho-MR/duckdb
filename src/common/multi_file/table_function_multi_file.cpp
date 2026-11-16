@@ -32,6 +32,8 @@ public:
 	idx_t collected_scanned = 0;
 	idx_t collected_total = 0;
 	idx_t collected_bytes_scanned = 0;
+	//! Whether the wrapped function reports bytes scanned
+	bool collected_bytes_reported = false;
 };
 
 class TableFunctionMultiFileLocalState : public LocalTableFunctionState {
@@ -239,6 +241,7 @@ void TableFunctionFileReader::CollectMetrics(ClientContext &context, GlobalTable
 	function.get_metrics(input);
 	gstate.collected_scanned += file_metrics.row_groups_scanned;
 	gstate.collected_bytes_scanned += file_metrics.bytes_scanned;
+	gstate.collected_bytes_reported = gstate.collected_bytes_reported || file_metrics.bytes_scanned_reported;
 	// the function reports the size of its file as a whole - only add what it has grown by since we last asked
 	gstate.collected_total += file_metrics.total_row_groups_to_scan - collected_file_total;
 	collected_file_total = file_metrics.total_row_groups_to_scan;
@@ -892,6 +895,8 @@ static void TableFunctionMultiFileGetMetrics(TableFunctionGetMetricsInput &input
 	scan_state.collected_scanned = 0;
 	input.operator_metrics.bytes_scanned += scan_state.collected_bytes_scanned;
 	scan_state.collected_bytes_scanned = 0;
+	input.operator_metrics.bytes_scanned_reported =
+	    input.operator_metrics.bytes_scanned_reported || scan_state.collected_bytes_reported;
 	// the size of the scan is reported as-is - it is not summed across the threads that report it
 	input.operator_metrics.total_row_groups_to_scan = scan_state.collected_total;
 }
