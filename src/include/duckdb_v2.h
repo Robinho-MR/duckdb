@@ -6710,6 +6710,25 @@ typedef struct _duckdb_v2_copy_to_statistics_info {
 } * duckdb_v2_copy_to_statistics_info_handle;
 
 /*!
+ * A borrowed opaque handle to the arguments supplied to a copy function during the "select" phase of a `COPY ... TO`
+ * statement, which runs before the bind phase. The "select" callback receives this handle and can use it to inspect the
+ * names and types of the columns being copied and the statement's options, and to have the engine apply a scalar
+ * function to a column before the rows are partitioned and handed to the bind callback.
+ */
+typedef struct _duckdb_v2_copy_to_select_info {
+	void *internal_ptr;
+} * duckdb_v2_copy_to_select_info_handle;
+
+/*!
+ * A borrowed opaque handle to the arguments supplied to a copy function during the "file size" phase of a `COPY ... TO`
+ * statement. The "file size" callback receives this handle and must use it to report how many bytes the file being
+ * written holds so far.
+ */
+typedef struct _duckdb_v2_copy_to_file_size_info {
+	void *internal_ptr;
+} * duckdb_v2_copy_to_file_size_info_handle;
+
+/*!
  * A borrowed opaque handle to the arguments supplied to a copy function during the query preparation "bind" phase of a
  * `COPY ... FROM` statement. The "bind" callback receives this handle and can use it to e.g. read the path of the file
  * to read, inspect the names and types of the columns the target table expects, read the statement's options, hint at
@@ -6781,6 +6800,14 @@ typedef void (*duckdb_v2_copy_to_finalize_callback_fn)(duckdb_v2_copy_to_finaliz
 typedef void (*duckdb_v2_copy_to_statistics_callback_fn)(duckdb_v2_copy_to_statistics_info_handle info,
                                                          duckdb_v2_context_handle context,
                                                          duckdb_v2_error_info_handle *err);
+
+typedef void (*duckdb_v2_copy_to_select_callback_fn)(duckdb_v2_copy_to_select_info_handle info,
+                                                     duckdb_v2_context_handle context,
+                                                     duckdb_v2_error_info_handle *err);
+
+typedef void (*duckdb_v2_copy_to_file_size_callback_fn)(duckdb_v2_copy_to_file_size_info_handle info,
+                                                        duckdb_v2_context_handle context,
+                                                        duckdb_v2_error_info_handle *err);
 
 typedef void (*duckdb_v2_copy_from_bind_callback_fn)(duckdb_v2_copy_from_bind_info_handle info,
                                                      duckdb_v2_context_handle context,
@@ -8404,6 +8431,324 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_statistics_set_row_count(duckdb_v
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_statistics_set_file_size(duckdb_v2_copy_to_statistics_info_handle info,
                                                                         idx_t file_size_bytes,
                                                                         duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the optional select callback of the `COPY ... TO` side.
+ *
+ * The select callback is invoked during query planning of each `COPY ... TO` statement that uses the function, before
+ * the bind callback. It can have the engine apply a scalar function to the columns being copied via
+ * `duckdb_v2_copy_to_select_apply_function()`. The result of the function replaces the column: the engine applies it
+ * before the rows are partitioned (`PARTITION_BY`) and before the bind callback sees the column, so the bind callback
+ * and every later callback observe the new type of the column, while partition directories are named after the new
+ * values. Without a select callback, the columns are copied as they are.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the callback of.
+ * @param callback The callback to set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_set_select_callback(duckdb_v2_copy_function_handle function,
+                                                                   duckdb_v2_copy_to_select_callback_fn callback,
+                                                                   duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the user data set via `duckdb_v2_copy_function_set_user_data()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The select info handle.
+ * @param data Receives the user data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_select_get_user_data(duckdb_v2_copy_to_select_info_handle info,
+                                                                    void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Returns the number of columns of the query being copied, before any function was applied to them. This includes the
+ * partition columns of `PARTITION_BY`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The select info handle.
+ * @param count Receives the number of columns.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_select_get_column_count(duckdb_v2_copy_to_select_info_handle info,
+                                                                       idx_t *count, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the type of the column at the given index.
+ *
+ * Fails if the index is out of bounds. The returned type is owned by the caller and must be destroyed via
+ * `duckdb_v2_logical_type_destroy()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The select info handle.
+ * @param index The index of the column to get the type of.
+ * @param type Receives the column type. Owned by the caller; destroy via `duckdb_v2_logical_type_destroy()`.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_select_get_column_type(duckdb_v2_copy_to_select_info_handle info,
+                                                                      idx_t index, duckdb_v2_logical_type_handle *type,
+                                                                      duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the name of the column at the given index.
+ *
+ * Fails if the index is out of bounds.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The select info handle.
+ * @param index The index of the column to get the name of.
+ * @param name Receives a borrowed pointer to the column name. Valid only for the duration of the callback.
+ * @param name_length Receives the length of `*name` in bytes. `*name` is not guaranteed to be null-terminated.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_select_get_column_name(duckdb_v2_copy_to_select_info_handle info,
+                                                                      idx_t index, const char **name,
+                                                                      idx_t *name_length,
+                                                                      duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Returns the number of options given in the statement, in an order that is stable for the statement.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The select info handle.
+ * @param count Receives the number of options.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_select_get_option_count(duckdb_v2_copy_to_select_info_handle info,
+                                                                       idx_t *count, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the name of the option at the given index, as written in the statement.
+ *
+ * Fails if the index is out of bounds.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The select info handle.
+ * @param index The index of the option.
+ * @param name Receives a borrowed pointer to the option name. Valid only for the duration of the callback.
+ * @param name_length Receives the length of `*name` in bytes. `*name` is not guaranteed to be null-terminated.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_select_get_option_name(duckdb_v2_copy_to_select_info_handle info,
+                                                                      idx_t index, const char **name,
+                                                                      idx_t *name_length,
+                                                                      duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the value of the option at the given index, with the semantics of
+ * `duckdb_v2_copy_to_bind_get_option_value()`.
+ *
+ * Fails if the index is out of bounds. The returned value is owned by the caller and must be destroyed via
+ * `duckdb_v2_value_destroy()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The select info handle.
+ * @param index The index of the option.
+ * @param value Receives the option's value. Owned by the caller; destroy via `duckdb_v2_value_destroy()`.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_select_get_option_value(duckdb_v2_copy_to_select_info_handle info,
+                                                                       idx_t index, duckdb_v2_value_handle *value,
+                                                                       duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Returns whether the column at the given index is one of the `PARTITION_BY` columns of the statement.
+ *
+ * Fails if the index is out of bounds.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The select info handle.
+ * @param index The index of the column.
+ * @param is_partition_column Receives true if the column is a partition column.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_select_is_partition_column(duckdb_v2_copy_to_select_info_handle info,
+                                                                          idx_t index, bool *is_partition_column,
+                                                                          duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Has the engine apply a scalar function to a column of the query being copied.
+ *
+ * The function is looked up by name in the default schema of the system catalog and bound as in a SQL expression, with
+ * the column as its first argument followed by the given constant arguments (overload resolution and implicit casts are
+ * as in SQL, e.g. `strftime(column, '%Y%m%d')`). The result replaces the column under the same name; its type becomes
+ * the type of the column that the later phases of the statement observe. The replacement is applied before the rows are
+ * partitioned, so with `PARTITION_BY` the partition directories are named after the result. Applying a function to a
+ * column that already has one replaces the earlier application. Binding failures (an unknown function, no matching
+ * overload) are errors of the statement.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The select info handle.
+ * @param column_index The index of the column to apply the function to.
+ * @param function_name The name of the scalar function. Borrowed and copied.
+ * @param function_name_length The length of `function_name` in bytes. `function_name` must be valid UTF-8 and need not
+ * be null-terminated.
+ * @param arguments An array of `argument_count` constant arguments that follow the column. Borrowed (copied in). Pass
+ * NULL when `argument_count` is 0.
+ * @param argument_count The number of constant arguments.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_select_apply_function(duckdb_v2_copy_to_select_info_handle info,
+                                                                     idx_t column_index, const char *function_name,
+                                                                     idx_t function_name_length,
+                                                                     const duckdb_v2_value_handle *arguments,
+                                                                     idx_t argument_count,
+                                                                     duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the optional file size callback of the `COPY ... TO` side.
+ *
+ * The file size callback reports how many bytes the file being written holds so far. It lets the engine rotate files:
+ * with it, the `FILE_SIZE_BYTES` option is accepted, and once the reported size of a file reaches the limit (checked as
+ * batches are flushed) the engine finalizes the file and starts a new one, with its own init callback and init data.
+ * The size should include everything written to the file so far, such as a header, but need not count what the finalize
+ * callback will still write. Without a file size callback, `FILE_SIZE_BYTES` is rejected for the function. The callback
+ * is never invoked concurrently with the flush callback of the same file.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the callback of.
+ * @param callback The callback to set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_set_file_size_callback(duckdb_v2_copy_function_handle function,
+                                                                      duckdb_v2_copy_to_file_size_callback_fn callback,
+                                                                      duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the user data set via `duckdb_v2_copy_function_set_user_data()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The file size info handle.
+ * @param data Receives the user data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_file_size_get_user_data(duckdb_v2_copy_to_file_size_info_handle info,
+                                                                       void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the bind data set by the function's `COPY ... TO` bind callback.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The file size info handle.
+ * @param data Receives the bind data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_file_size_get_bind_data(duckdb_v2_copy_to_file_size_info_handle info,
+                                                                       void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the init data set by the function's `COPY ... TO` init callback for the file being measured.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The file size info handle.
+ * @param data Receives the init data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_file_size_get_init_data(duckdb_v2_copy_to_file_size_info_handle info,
+                                                                       void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Reports how many bytes the file holds so far. Reported as 0 when the callback does not set it.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The file size info handle.
+ * @param file_size_bytes The current size of the file in bytes.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_file_size_set_size(duckdb_v2_copy_to_file_size_info_handle info,
+                                                                  idx_t file_size_bytes,
+                                                                  duckdb_v2_error_info_handle *err);
 #endif
 
 /* --- Struct definitions for copy --- */

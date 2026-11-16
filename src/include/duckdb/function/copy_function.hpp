@@ -110,6 +110,10 @@ struct CopyToSelectInput {
 	identifier_map_t<vector<Value>> &options;
 	vector<unique_ptr<Expression>> select_list;
 	CopyToType copy_to_type;
+	//! The info of the copy function (as in CopyFunctionBindInput)
+	shared_ptr<CopyFunctionInfo> function_info;
+	//! The indices of the PARTITION_BY columns
+	const vector<idx_t> &partition_columns;
 };
 
 struct CopyOption {

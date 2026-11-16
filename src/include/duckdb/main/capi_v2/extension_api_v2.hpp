@@ -1578,6 +1578,45 @@ typedef struct {
 	DUCKDB_V2_ERROR(*duckdb_v2_table_function_set_combine_schema_callback)
 	(duckdb_v2_table_function_handle function, duckdb_v2_table_function_combine_schema_callback_fn callback,
 	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_file_size_get_bind_data)
+	(duckdb_v2_copy_to_file_size_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_file_size_get_init_data)
+	(duckdb_v2_copy_to_file_size_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_file_size_get_user_data)
+	(duckdb_v2_copy_to_file_size_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_file_size_set_size)
+	(duckdb_v2_copy_to_file_size_info_handle info, idx_t file_size_bytes, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_select_apply_function)
+	(duckdb_v2_copy_to_select_info_handle info, idx_t column_index, const char *function_name,
+	 idx_t function_name_length, const duckdb_v2_value_handle *arguments, idx_t argument_count,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_select_get_column_count)
+	(duckdb_v2_copy_to_select_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_select_get_column_name)
+	(duckdb_v2_copy_to_select_info_handle info, idx_t index, const char **name, idx_t *name_length,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_select_get_column_type)
+	(duckdb_v2_copy_to_select_info_handle info, idx_t index, duckdb_v2_logical_type_handle *type,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_select_get_option_count)
+	(duckdb_v2_copy_to_select_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_select_get_option_name)
+	(duckdb_v2_copy_to_select_info_handle info, idx_t index, const char **name, idx_t *name_length,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_select_get_option_value)
+	(duckdb_v2_copy_to_select_info_handle info, idx_t index, duckdb_v2_value_handle *value,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_select_get_user_data)
+	(duckdb_v2_copy_to_select_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_select_is_partition_column)
+	(duckdb_v2_copy_to_select_info_handle info, idx_t index, bool *is_partition_column,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_set_file_size_callback)
+	(duckdb_v2_copy_function_handle function, duckdb_v2_copy_to_file_size_callback_fn callback,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_set_select_callback)
+	(duckdb_v2_copy_function_handle function, duckdb_v2_copy_to_select_callback_fn callback,
+	 duckdb_v2_error_info_handle *err);
 } duckdb_ext_api_v2;
 
 //===--------------------------------------------------------------------===//
@@ -2305,6 +2344,21 @@ inline duckdb_ext_api_v2 CreateAPIv2(void) {
 	result.duckdb_v2_table_function_combine_schema_set_bind_data =
 	    duckdb_v2_table_function_combine_schema_set_bind_data;
 	result.duckdb_v2_table_function_set_combine_schema_callback = duckdb_v2_table_function_set_combine_schema_callback;
+	result.duckdb_v2_copy_to_file_size_get_bind_data = duckdb_v2_copy_to_file_size_get_bind_data;
+	result.duckdb_v2_copy_to_file_size_get_init_data = duckdb_v2_copy_to_file_size_get_init_data;
+	result.duckdb_v2_copy_to_file_size_get_user_data = duckdb_v2_copy_to_file_size_get_user_data;
+	result.duckdb_v2_copy_to_file_size_set_size = duckdb_v2_copy_to_file_size_set_size;
+	result.duckdb_v2_copy_to_select_apply_function = duckdb_v2_copy_to_select_apply_function;
+	result.duckdb_v2_copy_to_select_get_column_count = duckdb_v2_copy_to_select_get_column_count;
+	result.duckdb_v2_copy_to_select_get_column_name = duckdb_v2_copy_to_select_get_column_name;
+	result.duckdb_v2_copy_to_select_get_column_type = duckdb_v2_copy_to_select_get_column_type;
+	result.duckdb_v2_copy_to_select_get_option_count = duckdb_v2_copy_to_select_get_option_count;
+	result.duckdb_v2_copy_to_select_get_option_name = duckdb_v2_copy_to_select_get_option_name;
+	result.duckdb_v2_copy_to_select_get_option_value = duckdb_v2_copy_to_select_get_option_value;
+	result.duckdb_v2_copy_to_select_get_user_data = duckdb_v2_copy_to_select_get_user_data;
+	result.duckdb_v2_copy_to_select_is_partition_column = duckdb_v2_copy_to_select_is_partition_column;
+	result.duckdb_v2_copy_to_set_file_size_callback = duckdb_v2_copy_to_set_file_size_callback;
+	result.duckdb_v2_copy_to_set_select_callback = duckdb_v2_copy_to_set_select_callback;
 	return result;
 }
 

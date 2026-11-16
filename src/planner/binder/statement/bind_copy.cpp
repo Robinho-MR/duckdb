@@ -550,7 +550,8 @@ BoundStatement Binder::BindCopyTo(CopyStatement &stmt, const CopyFunction &funct
 	if (function.copy_to_select) {
 		auto bindings = select_node.plan->GetColumnBindings();
 
-		CopyToSelectInput input = {context, stmt.info->options, {}, copy_to_type};
+		CopyToSelectInput input = {context,      stmt.info->options,     {},
+		                           copy_to_type, function.function_info, resolved_options.partition_cols};
 		input.select_list.reserve(bindings.size());
 
 		// Create column references for the select list
