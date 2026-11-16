@@ -23,6 +23,7 @@ add_library_unity(
   test_capi_v2_log_sink.cpp
   test_capi_v2_query_metrics.cpp
   test_capi_v2_logging.cpp
+  test_capi_v2_memory.cpp
   test_capi_v2_logical_type.cpp
   test_capi_v2_multi_file_function.cpp
   test_capi_v2_option.cpp

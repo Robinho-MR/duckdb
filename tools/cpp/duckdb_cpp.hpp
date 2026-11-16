@@ -105,6 +105,7 @@ class QueryMetricsNode;
 class FileSystem;
 class FileHandle;
 class FileOpenOptions;
+class MemoryReservation;
 class MultiFileFunction;
 class ScalarFunction;
 class AggregateFunction;
@@ -533,6 +534,14 @@ public:
 	/// The file system this context reads and writes through. Borrowed, and valid only while the context is.
 	auto GetFileSystem() const -> FileSystem;
 
+	/// Reserves memory the caller allocates itself in the buffer manager of the database, so that it counts against
+	/// `memory_limit` and shows up as `EXTENSION` in `duckdb_memory()`. Reserve before allocating: when the bytes do
+	/// not fit, DuckDB first evicts what it can. Unstable API.
+	/// @param size The number of bytes to reserve. May be 0.
+	/// @return The reservation, which releases the bytes when destroyed. It must not outlive the database.
+	/// @throws Exception With the out of memory error code when the memory does not fit within the memory limit.
+	auto ReserveMemory(idx_t size) const -> MemoryReservation;
+
 	/// The factory values, types and data chunks are created through in this context.
 	auto GetFactory() -> Factory & {
 		return factory;
@@ -551,6 +560,30 @@ private:
 
 	Factory factory;
 	Config config;
+};
+
+/// Memory reserved with `Context::ReserveMemory`, released when the reservation is destroyed. A reservation only
+/// accounts for memory the owner allocates itself: it counts against `memory_limit` and shows up as `EXTENSION` in
+/// `duckdb_memory()`. Unstable API.
+class MemoryReservation final : public detail::Handle<MemoryReservation> {
+	friend detail::HandleFactory;
+
+public:
+	MemoryReservation(MemoryReservation &&) noexcept = default;
+	MemoryReservation &operator=(MemoryReservation &&) noexcept = default;
+
+	~MemoryReservation() override;
+
+	/// The number of bytes the reservation holds.
+	auto GetSize() const -> idx_t;
+
+	/// Grows or shrinks the reservation to `size` bytes in all. Growing can fail like `Context::ReserveMemory`, in
+	/// which case the reservation is left as it was; shrinking cannot fail.
+	/// @throws Exception With the out of memory error code when the additional memory does not fit.
+	auto Resize(idx_t size) -> void;
+
+private:
+	explicit MemoryReservation(void *impl);
 };
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -4533,6 +4566,7 @@ public:
 	class ExecInput;
 	class InOutInput;
 	class ProgressInput;
+	class MetricsInput;
 	class FilterPushdownInput;
 	class PartitionDataInput;
 	class PartitioningInput;
@@ -4619,6 +4653,9 @@ public:
 	/// Called while the query is optimized, once per declared column the query reads, to narrow that column's
 	/// statistics. Optional; without it the engine knows nothing about the columns. Unstable API.
 	using StatsCallback = void (*)(StatsInput &input);
+	/// Called when the engine collects the metrics of the scan, possibly while the scan is still running, to report
+	/// what the scan did. Optional; unstable API.
+	using MetricsCallback = void (*)(MetricsInput &input);
 
 	TableFunction(TableFunction &&) noexcept = default;
 	TableFunction &operator=(TableFunction &&) noexcept = default;
@@ -4704,6 +4741,8 @@ public:
 	auto SetCombineSchemaCallback(CombineSchemaCallback callback) & -> TableFunction &;
 	/// Lets the function narrow the statistics of the columns it produces: see `StatsCallback`. Unstable API.
 	auto SetStatsCallback(StatsCallback callback) & -> TableFunction &;
+	/// Lets the function report what the scan did: see `MetricsCallback`. Unstable API.
+	auto SetMetricsCallback(MetricsCallback callback) & -> TableFunction &;
 
 	/// Declares whether the function supports projection pushdown. Defaults to false. With it, the engine asks for
 	/// only the columns a query uses: the exec callback's output chunk holds one vector per requested column, and
@@ -4732,6 +4771,7 @@ private:
 	GetBindInfoCallback get_bind_info_callback = nullptr;
 	CombineSchemaCallback combine_schema_callback = nullptr;
 	StatsCallback stats_callback = nullptr;
+	MetricsCallback metrics_callback = nullptr;
 	detail::UserData user_data;
 
 public:
@@ -5067,6 +5107,58 @@ public:
 		void *GetBindDataInternal() const;
 		void *GetGlobalStateInternal() const;
 		void *GetLocalStateInternal() const;
+		void *GetUserDataInternal() const;
+	};
+
+	/// What the metrics callback works with. Borrowed, valid only for the callback duration. Unstable API.
+	///
+	/// The callback runs when the engine collects the metrics of the scan, which can be while the scan is still
+	/// running, and possibly more than once: it adds up what it is told.
+	class MetricsInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// The bind data set via `BindInput::SetBindData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetBindData() const -> const T & {
+			return *static_cast<const T *>(GetBindDataInternal());
+		}
+
+		/// The user data set via `TableFunction::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// The global state set via `InitGlobalInput::SetGlobalState`, or nullptr when the scan has not been
+		/// initialized or set none. The scan can be running, so the state must be read in a thread-safe way.
+		template <class T>
+		auto GetGlobalState() const -> T * {
+			return static_cast<T *>(GetGlobalStateInternal());
+		}
+
+		/// Reports an operator metric of the scan by its profiler name: "operator.rows_scanned",
+		/// "operator.row_groups_scanned", "operator.total_row_groups_to_scan" or "operator.bytes_scanned". Reporting
+		/// "operator.bytes_scanned" also makes the query's total bytes scanned count this scan.
+		/// @param name The name of the metric.
+		/// @param value The value since the metrics were last collected ("operator.total_row_groups_to_scan": in all).
+		/// @throws InvalidInputException When the name is not a metric a table function can report.
+		auto SetMetric(std::string_view name, uint64_t value) -> void;
+
+		/// The query's context. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context &;
+
+	private:
+		MetricsInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+
+		void *args;
+		Context context;
+
+		void *GetBindDataInternal() const;
+		void *GetGlobalStateInternal() const;
 		void *GetUserDataInternal() const;
 	};
 
@@ -6962,6 +7054,11 @@ public:
 
 	/// The current read/write position, as a byte offset from the start of the file.
 	auto Tell() const -> idx_t;
+
+	/// How many bytes of the stored file the reads have consumed so far. For a compressed file that is the number of
+	/// compressed bytes read from the underlying file (`Tell` can fail on a compressed file); for any other file it is
+	/// the same as `Tell`. Unstable API.
+	auto GetProgress() const -> idx_t;
 
 	/// The total size of the file in bytes.
 	auto Size() const -> idx_t;

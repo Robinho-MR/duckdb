@@ -297,6 +297,8 @@ TEST_CASE("V2 file system: null arguments and destroy null-safety", "[capi_v2][f
 	REQUIRE(duckdb_v2_file_write(handle, nullptr, 4, &count, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
 	REQUIRE(duckdb_v2_file_tell(nullptr, &count, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
 	REQUIRE(duckdb_v2_file_tell(handle, nullptr, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_file_get_progress(nullptr, &count, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_file_get_progress(handle, nullptr, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
 	REQUIRE(duckdb_v2_file_size(nullptr, &count, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
 	REQUIRE(duckdb_v2_file_size(handle, nullptr, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
 	REQUIRE(duckdb_v2_file_seek(nullptr, 0, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);

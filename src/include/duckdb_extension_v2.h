@@ -1570,6 +1570,18 @@ typedef struct {
 	(duckdb_v2_sql_statement_handle statement, const char *name, idx_t name_length,
 	 duckdb_v2_column_data_collection_handle collection, const char **column_names, const idx_t *column_names_lengths,
 	 idx_t column_count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_metrics_get_bind_data)
+	(duckdb_v2_table_function_metrics_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_metrics_get_global_state)
+	(duckdb_v2_table_function_metrics_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_metrics_get_user_data)
+	(duckdb_v2_table_function_metrics_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_metrics_set)
+	(duckdb_v2_table_function_metrics_info_handle info, const char *name, idx_t name_length, uint64_t value,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_set_metrics_callback)
+	(duckdb_v2_table_function_handle function, duckdb_v2_table_function_metrics_callback_fn callback,
+	 duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_cast_function_set_source_kind)
 	(duckdb_v2_cast_function_handle function, DUCKDB_V2_CAST_WILDCARD_KIND kind, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_cast_function_set_target_kind)
@@ -1652,6 +1664,16 @@ typedef struct {
 	DUCKDB_V2_ERROR(*duckdb_v2_table_function_set_combine_schema_callback)
 	(duckdb_v2_table_function_handle function, duckdb_v2_table_function_combine_schema_callback_fn callback,
 	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_context_reserve_memory)
+	(duckdb_v2_context_handle context, idx_t size, duckdb_v2_memory_reservation_handle *reservation,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_file_get_progress)
+	(duckdb_v2_file_handle file, idx_t *progress, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_memory_reservation_destroy)(duckdb_v2_memory_reservation_handle *reservation);
+	DUCKDB_V2_ERROR(*duckdb_v2_memory_reservation_get_size)
+	(duckdb_v2_memory_reservation_handle reservation, idx_t *size, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_memory_reservation_resize)
+	(duckdb_v2_memory_reservation_handle reservation, idx_t size, duckdb_v2_error_info_handle *err);
 #endif
 	// capigen:end appended
 } duckdb_ext_api_v2;
@@ -3666,6 +3688,22 @@ typedef struct {
 #define duckdb_v2_statement_add_collection duckdb_ext_api.duckdb_v2_statement_add_collection
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_table_function_metrics_get_bind_data duckdb_ext_api.duckdb_v2_table_function_metrics_get_bind_data
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_table_function_metrics_get_global_state                                                              \
+	duckdb_ext_api.duckdb_v2_table_function_metrics_get_global_state
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_table_function_metrics_get_user_data duckdb_ext_api.duckdb_v2_table_function_metrics_get_user_data
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_table_function_metrics_set duckdb_ext_api.duckdb_v2_table_function_metrics_set
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_table_function_set_metrics_callback duckdb_ext_api.duckdb_v2_table_function_set_metrics_callback
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_cast_function_set_source_kind duckdb_ext_api.duckdb_v2_cast_function_set_source_kind
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
@@ -3777,6 +3815,21 @@ typedef struct {
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_table_function_set_combine_schema_callback                                                           \
 	duckdb_ext_api.duckdb_v2_table_function_set_combine_schema_callback
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_context_reserve_memory duckdb_ext_api.duckdb_v2_context_reserve_memory
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_file_get_progress duckdb_ext_api.duckdb_v2_file_get_progress
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_memory_reservation_destroy duckdb_ext_api.duckdb_v2_memory_reservation_destroy
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_memory_reservation_get_size duckdb_ext_api.duckdb_v2_memory_reservation_get_size
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_memory_reservation_resize duckdb_ext_api.duckdb_v2_memory_reservation_resize
 #endif
 // capigen:end appended
 #endif // DUCKDB_BUILD_STATIC_EXTENSION
