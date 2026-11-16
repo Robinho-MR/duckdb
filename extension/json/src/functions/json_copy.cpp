@@ -116,6 +116,10 @@ static string GetStringOption(const JSONCopyUserData &user, const string &option
 	if (value.IsNull()) {
 		ThrowParameterNull(user, option);
 	}
+	if (value.GetLogicalType().GetTypeId() == LogicalTypeId::BOOLEAN) {
+		// an option given without an argument
+		throw InvalidInputException("Copy option %s requires an argument of type VARCHAR", option);
+	}
 	if (value.GetLogicalType().GetTypeId() != LogicalTypeId::VARCHAR) {
 		ThrowParameterType(user, option, value, "VARCHAR");
 	}

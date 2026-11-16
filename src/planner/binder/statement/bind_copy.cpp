@@ -52,7 +52,13 @@ static void ValidateUndeclaredCopyToOption(const string &format, const Identifie
 	    "use_tmp_file",        "overwrite_or_ignore",     "overwrite",        "append",           "filename_pattern",
 	    "file_extension",      "per_thread_output",       "return_files",     "preserve_order",   "return_stats",
 	    "return_column_types", "write_partition_columns", "write_empty_file", "hive_file_pattern"};
-	if (values.size() != 1 || ENGINE_OPTIONS.find(name) == ENGINE_OPTIONS.end()) {
+	if (ENGINE_OPTIONS.find(name) == ENGINE_OPTIONS.end()) {
+		return;
+	}
+	if (values.size() > 1) {
+		throw InvalidInputException("Copy option %s did not expect a list as argument", name);
+	}
+	if (values.size() != 1) {
 		return;
 	}
 	if (values[0].IsNull()) {
