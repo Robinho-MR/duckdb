@@ -982,6 +982,7 @@ static void RegisterSingleFileFunction(Extension &extension, Context &context, J
 	function.SetExecCallback(ReadJSONExec);
 	function.SetProgressCallback(ReadJSONProgress);
 	function.SetProjectionPushdown(true);
+	function.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
 	extension.Register(function);
 }
 
