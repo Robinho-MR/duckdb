@@ -24,6 +24,7 @@ namespace duckdb {
 namespace json {
 
 using cxx::FileHandle;
+using cxx::MemoryReservation;
 
 enum class JSONScanType : uint8_t {
 	INVALID = 0,
@@ -135,6 +136,8 @@ public:
 
 	//! Makes room for `capacity` bytes (plus padding), keeping the first `keep` bytes
 	void EnsureCapacity(idx_t capacity, idx_t keep);
+	//! Counts the buffer, which can grow to `capacity` bytes, against the memory limit
+	void ReserveBuffer(Context &context, idx_t capacity);
 	//! Reset for parsing the next batch of JSON from the current buffer
 	void ResetForNextParse();
 	//! Reports the documents of the buffer that was scanned, and forgets it
@@ -146,6 +149,8 @@ public:
 	//! The buffer
 	char *buffer_ptr = nullptr;
 	idx_t buffer_allocated = 0;
+	//! The memory of the buffer, as the buffer manager accounts for it
+	std::optional<MemoryReservation> buffer_reservation;
 	idx_t buffer_size = 0;
 	idx_t buffer_offset = 0;
 	//! Whether the buffer holds the end of the file (an unterminated last document is then complete)
@@ -220,8 +225,15 @@ public:
 	idx_t BytesRead() const {
 		return bytes_read.load();
 	}
+	//! The size in bytes the buffer of a scan state can grow to when scanning this file
+	idx_t BufferCapacity() const {
+		return buffer_capacity;
+	}
 	//! Scan progress in [0, 1]
 	double GetProgress() const;
+	//! The bytes of the file scanned since the last call, as the profiler counts them: the stored bytes of a
+	//! compressed file
+	idx_t TakeBytesScanned();
 
 	//! Reports the number of documents of a buffer that is done (grabs the lock)
 	void SetBufferLineOrObjectCount(idx_t buffer_index, idx_t count);
@@ -270,6 +282,10 @@ private:
 	idx_t buffer_capacity = 0;
 
 	std::atomic<idx_t> bytes_read {0};
+	//! The bytes scanned that were not taken yet, and for a compressed file the stored bytes counted so far
+	std::atomic<idx_t> bytes_scanned {0};
+	std::atomic<idx_t> stored_bytes_counted {0};
+	bool compressed = false;
 
 	mutable std::mutex lock;
 	//! Next chunk to hand out (partial) / whether the file was handed out (entire file)
