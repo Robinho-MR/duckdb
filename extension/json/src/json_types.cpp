@@ -39,6 +39,7 @@ static void CastVarcharToJSON(CastFunction::ExecInput &input) {
 	auto target = input.GetOutput();
 	ValueView<varchar_t> values(source);
 	StringWriter writer(target, count);
+	string first_error;
 	for (idx_t i = 0; i < count; i++) {
 		if (!values.IsValid(i)) {
 			writer.WriteNull();
@@ -48,13 +49,21 @@ static void CastVarcharToJSON(CastFunction::ExecInput &input) {
 		yyjson_read_err error;
 		auto doc = JSONCommon::ReadDocumentUnsafe(value, JSONCommon::READ_FLAG, alc, &error);
 		if (!doc) {
+			auto message = JSONCommon::FormatParseError(value.data(), value.size(), error);
 			if (!try_cast) {
-				throw ConversionException(JSONCommon::FormatParseError(value.data(), value.size(), error));
+				throw ConversionException(message);
+			}
+			if (first_error.empty()) {
+				first_error = std::move(message);
 			}
 			writer.WriteNull();
 			continue;
 		}
 		writer.WriteValue(value.view());
+	}
+	// In a try cast the failed rows are NULL, and the error tells the engine that not every row converted
+	if (!first_error.empty()) {
+		throw ConversionException(first_error);
 	}
 }
 
@@ -119,6 +128,7 @@ static void CastVarcharToJSONList(CastFunction::ExecInput &input) {
 	auto target = input.GetOutput();
 	ValueView<varchar_t> values(source);
 	ResultWriter<ListResult<string_view>> writer(target, count);
+	string first_error;
 	for (idx_t i = 0; i < count; i++) {
 		if (!values.IsValid(i)) {
 			writer.Write(std::optional<ListResult<string_view>>());
@@ -128,13 +138,19 @@ static void CastVarcharToJSONList(CastFunction::ExecInput &input) {
 		yyjson_read_err error;
 		const auto doc = JSONCommon::ReadDocumentUnsafe(value, JSONCommon::READ_FLAG, alc, &error);
 		if (!doc || !unsafe_yyjson_is_arr(doc->root)) {
-			if (!try_cast) {
-				if (!doc) {
-					throw ConversionException(JSONCommon::FormatParseError(value.data(), value.size(), error));
-				}
+			string message;
+			if (!doc) {
+				message = JSONCommon::FormatParseError(value.data(), value.size(), error);
+			} else {
 				auto truncated_input =
 				    value.size() > 50 ? string(value.data(), 47) + "..." : string(value.data(), value.size());
-				throw ConversionException("Cannot cast to list of JSON. Input \"%s\"", truncated_input);
+				message = "Cannot cast to list of JSON. Input \"" + truncated_input + "\"";
+			}
+			if (!try_cast) {
+				throw ConversionException(message);
+			}
+			if (first_error.empty()) {
+				first_error = std::move(message);
 			}
 			writer.Write(std::optional<ListResult<string_view>>());
 			continue;
@@ -148,6 +164,10 @@ static void CastVarcharToJSONList(CastFunction::ExecInput &input) {
 		writer.Write(std::move(list));
 	}
 	writer.Finish();
+	// In a try cast the failed rows are NULL, and the error tells the engine that not every row converted
+	if (!first_error.empty()) {
+		throw ConversionException(first_error);
+	}
 }
 
 //===--------------------------------------------------------------------===//

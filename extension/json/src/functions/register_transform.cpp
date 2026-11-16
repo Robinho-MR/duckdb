@@ -162,7 +162,8 @@ static void CastJSONToAny(CastFunction::ExecInput &input) {
 	auto source = input.GetInput();
 	auto target = input.GetOutput();
 	auto success = TransformFunctionInternal(source, input.GetRowCount(), target, alc, options);
-	if (!success && input.GetMode() == cxx::CastMode::NORMAL) {
+	// In a try cast the failed rows are NULL, and the error tells the engine that not every row converted
+	if (!success) {
 		throw ConversionException(options.error_message);
 	}
 }
