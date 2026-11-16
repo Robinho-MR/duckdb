@@ -868,6 +868,8 @@ void JSONReader::ReadChunk(JSONReaderScanState &state) {
 				break;
 			}
 		}
+		// leading whitespace is not part of the line
+		SkipWhitespace(state.buffer_ptr, line_start, size);
 		idx_t block = 64 * 1024;
 		bool found = false;
 		while (!found && read_from + size < file_size) {
@@ -882,6 +884,7 @@ void JSONReader::ReadChunk(JSONReaderScanState &state) {
 			} else {
 				size += n;
 			}
+			SkipWhitespace(state.buffer_ptr, line_start, size);
 			if (!found && size - line_start > options.maximum_object_size) {
 				ThrowObjectSizeError(size - line_start);
 			}
