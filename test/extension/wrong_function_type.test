@@ -8,14 +8,8 @@ Catalog Error: Table Function with name "json" is not in the catalog, a function
 
 require no_extension_autoloading "EXPECTED: Test relies on autoloading being disabled"
 
-# Multiple options exist, none are scalar
+# json_execute_serialized_sql is a builtin: calling the table function as a scalar function is a binder error
 statement error
 select json_execute_serialized_sql(42) from range(5);
 ----
-Catalog Error: Scalar Function with name "json_execute_serialized_sql" is not in the catalog, functions with this name exist in the json extension, but they are of different types, namely Pragma Function, Table Function
-
-# One of the two options is Table Function
-statement error
-CALL json_execute_serialized_sql('test');
-----
-Catalog Error: Table Function with name "json_execute_serialized_sql" is not in the catalog, but it exists in the json extension.
+<REGEX>:Binder Error:.*is a table function but it was used as a scalar function.*
