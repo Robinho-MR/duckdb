@@ -73,7 +73,8 @@ static void JSONTransformResolveTypes(ScalarFunction::ResolveTypesInput &input) 
 	auto &factory = input.GetContext().GetFactory();
 	auto structure_val = input.TryGetConstantArgument(1);
 	if (!structure_val) {
-		throw BinderException("json_transform: the structure must be a constant");
+		throw BinderException("The \"structure\" argument in function \"%s\" must be a constant expression",
+		                      input.GetUserData<string>());
 	}
 	if (structure_val->IsNull() || input.GetArgType(1).GetTypeId() == LogicalTypeId::SQLNULL) {
 		input.SetReturnType(factory.ParseType("\"NULL\""));
@@ -83,6 +84,9 @@ static void JSONTransformResolveTypes(ScalarFunction::ResolveTypesInput &input) 
 	try {
 		json_structure_val.emplace(structure_val->Cast(factory, JSONType(factory)));
 	} catch (cxx::Exception &) {
+		throw BinderException("Cannot cast JSON structure to string");
+	}
+	if (json_structure_val->IsNull()) {
 		throw BinderException("Cannot cast JSON structure to string");
 	}
 	auto structure_string = json_structure_val->Get<varchar_t>();
@@ -138,6 +142,7 @@ static void RegisterTransformFunction(Extension &extension, Factory &factory, co
 		function.SetFallibility(FunctionFallibility::FALLIBLE);
 		for (auto &name : names) {
 			function.SetName(name);
+			function.SetUserData<string>(name);
 			extension.Register(function);
 		}
 	}
