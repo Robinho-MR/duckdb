@@ -5758,6 +5758,8 @@ public:
 	class CopyToFlushInput;
 	class CopyToFinalizeInput;
 	class CopyToStatisticsInput;
+	class CopyToSelectInput;
+	class CopyToFileSizeInput;
 	class CopyFromBindInput;
 	class CopyFromInitGlobalInput;
 	class CopyFromInitLocalInput;
@@ -5781,6 +5783,13 @@ public:
 	/// Called once per output file after its finalize callback, to report the statistics of the written file when the
 	/// statement asks for them (`RETURN_STATS`). Optional: without it, `RETURN_STATS` is rejected. Unstable API.
 	using CopyToStatisticsCallback = void (*)(CopyToStatisticsInput &input);
+	/// Called once per `COPY ... TO` statement before the bind callback, to have the engine apply scalar functions to
+	/// columns before the rows are partitioned (see `CopyToSelectInput::ApplyFunction`). Optional. Unstable API.
+	using CopyToSelectCallback = void (*)(CopyToSelectInput &input);
+	/// Called after a batch is flushed to report the current size of the file being written, which lets the engine
+	/// rotate files for `FILE_SIZE_BYTES`; must call `SetFileSize`. Optional: without it, `FILE_SIZE_BYTES` is
+	/// rejected. Unstable API.
+	using CopyToFileSizeCallback = void (*)(CopyToFileSizeInput &input);
 
 	/// Called once per `COPY ... FROM` statement while it is bound. Required for the side.
 	using CopyFromBindCallback = void (*)(CopyFromBindInput &input);
@@ -5827,6 +5836,8 @@ public:
 	auto SetCopyToFlushCallback(CopyToFlushCallback callback) & -> CopyFunction &;
 	auto SetCopyToFinalizeCallback(CopyToFinalizeCallback callback) & -> CopyFunction &;
 	auto SetCopyToStatisticsCallback(CopyToStatisticsCallback callback) & -> CopyFunction &;
+	auto SetCopyToSelectCallback(CopyToSelectCallback callback) & -> CopyFunction &;
+	auto SetCopyToFileSizeCallback(CopyToFileSizeCallback callback) & -> CopyFunction &;
 
 	auto SetCopyFromBindCallback(CopyFromBindCallback callback) & -> CopyFunction &;
 	auto SetCopyFromInitGlobalCallback(CopyFromInitGlobalCallback callback) & -> CopyFunction &;
@@ -5848,6 +5859,8 @@ private:
 	CopyToFlushCallback copy_to_flush_callback = nullptr;
 	CopyToFinalizeCallback copy_to_finalize_callback = nullptr;
 	CopyToStatisticsCallback copy_to_statistics_callback = nullptr;
+	CopyToSelectCallback copy_to_select_callback = nullptr;
+	CopyToFileSizeCallback copy_to_file_size_callback = nullptr;
 	CopyFromBindCallback copy_from_bind_callback = nullptr;
 	CopyFromInitGlobalCallback copy_from_init_global_callback = nullptr;
 	CopyFromInitLocalCallback copy_from_init_local_callback = nullptr;
@@ -6201,6 +6214,115 @@ public:
 
 	private:
 		CopyToStatisticsInput(void *args, void *context)
+		    : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+
+		void *args;
+		Context context;
+
+		void *GetBindDataInternal() const;
+		void *GetInitDataInternal() const;
+		void *GetUserDataInternal() const;
+	};
+
+	/// What the `COPY ... TO` select callback works with. Borrowed, valid only for the callback duration. Unstable API.
+	class CopyToSelectInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// The user data set via `CopyFunction::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// How many columns the copied query has, before any function is applied. Includes the `PARTITION_BY`
+		/// columns. Valid indices for `GetColumnName` and `GetColumnType` are [0, GetColumnCount()).
+		auto GetColumnCount() const -> idx_t;
+
+		/// One column's name.
+		/// @throws InvalidInputException When the index is out of range.
+		auto GetColumnName(idx_t index) const -> std::string;
+
+		/// One column's type.
+		/// @throws InvalidInputException When the index is out of range.
+		auto GetColumnType(idx_t index) const -> LogicalType;
+
+		/// Whether the column is one of the statement's `PARTITION_BY` columns.
+		/// @throws InvalidInputException When the index is out of range.
+		auto IsPartitionColumn(idx_t index) const -> bool;
+
+		/// How many options the statement passed to the function, ordered by name.
+		auto GetOptionCount() const -> idx_t;
+
+		/// One option's name, a SQL identifier matched case-insensitively.
+		/// @throws InvalidInputException When the index is out of range.
+		auto GetOptionName(idx_t index) const -> std::string;
+
+		/// One option's value, as in `CopyToBindInput::GetOptionValue`.
+		/// @throws InvalidInputException When the index is out of range.
+		auto GetOptionValue(idx_t index) const -> Value;
+
+		/// Has the engine replace a column with the result of the scalar function `function` called with the column
+		/// followed by the constant `arguments`, as in `SELECT function(column, arguments...) AS column`. The function
+		/// is looked up in the default schema, overload resolution is as in SQL. The replacement happens before the
+		/// rows are partitioned and before the bind callback, which then sees the new column type; with
+		/// `PARTITION_BY`, the partition directories are named after the new values. A second call for the same
+		/// column replaces the first.
+		/// @throws InvalidInputException When the column index is out of range.
+		auto ApplyFunction(idx_t column_index, const std::string &function, const std::vector<Value> &arguments = {})
+		    -> void;
+
+		/// The binding context. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context &;
+
+	private:
+		CopyToSelectInput(void *args, void *context)
+		    : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+
+		void *args;
+		Context context;
+
+		void *GetUserDataInternal() const;
+	};
+
+	/// What the `COPY ... TO` file size callback works with. Borrowed, valid only for the callback duration. Unstable
+	/// API.
+	class CopyToFileSizeInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// The bind data set via `CopyToBindInput::SetBindData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetBindData() const -> const T & {
+			return *static_cast<const T *>(GetBindDataInternal());
+		}
+
+		/// The init data set via `CopyToInitInput::SetInitData` for the file being measured.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetInitData() const -> T & {
+			return *static_cast<T *>(GetInitDataInternal());
+		}
+
+		/// The user data set via `CopyFunction::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// Reports how many bytes the file holds so far. Reported as 0 when not set.
+		auto SetFileSize(idx_t file_size_bytes) -> void;
+
+		/// The query context. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context &;
+
+	private:
+		CopyToFileSizeInput(void *args, void *context)
 		    : args(args), context(detail::HandleFactory::Make<Context>(context)) {
 		}
 

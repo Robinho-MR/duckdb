@@ -629,3 +629,212 @@ TEST_CASE("Stable C++API: copy function registration validation", "[cpp_api]") {
 		                       HasErrorCode(DUCKDB_V2_ERROR_INPUT_INVALID));
 	}
 }
+
+// ---------------------------------------------------------------------------
+// COPY TO select: the function has the engine format a DATE column as VARCHAR before the rows are partitioned.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct {
+	LogicalTypeId first_column_type = LogicalTypeId::INVALID;
+	std::string column_names;
+	std::string options;
+
+	void Reset() {
+		first_column_type = LogicalTypeId::INVALID;
+		column_names.clear();
+		options.clear();
+	}
+} select_seen;
+
+void SelectSelect(CopyFunction::CopyToSelectInput &input) {
+	for (idx_t i = 0; i < input.GetColumnCount(); i++) {
+		select_seen.column_names += input.GetColumnName(i) + ":" + input.GetColumnType(i).ToText() + ",";
+		if (input.GetColumnType(i).GetTypeId() == LogicalTypeId::DATE && input.IsPartitionColumn(i)) {
+			auto &factory = input.GetContext().GetFactory();
+			std::vector<Value> arguments;
+			arguments.push_back(Value::Create(factory, varchar_t(std::string_view("%Y%m%d"))));
+			input.ApplyFunction(i, "strftime", arguments);
+		}
+	}
+	for (idx_t i = 0; i < input.GetOptionCount(); i++) {
+		select_seen.options += input.GetOptionName(i) + "=" + input.GetOptionValue(i).ToText() + "\n";
+	}
+}
+
+void SelectBind(CopyFunction::CopyToBindInput &input) {
+	select_seen.first_column_type = input.GetColumnType(0).GetTypeId();
+	input.SetBindData<idx_t>(input.GetColumnCount());
+}
+
+void BadSelect(CopyFunction::CopyToSelectInput &input) {
+	input.ApplyFunction(input.GetColumnCount(), "strftime");
+}
+
+void UnknownFunctionSelect(CopyFunction::CopyToSelectInput &input) {
+	input.ApplyFunction(0, "no_such_function_exists");
+}
+
+} // namespace
+
+TEST_CASE("Stable C++API: copy function select applies a function before partitioning", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	conn.Execute("SET threads = 1").Drain();
+	auto function = CopyFunction::Create(conn.GetFactory());
+	function.SetName("cpp_copy_select")
+	    .SetFileExtension("summary")
+	    .SetCopyToSelectCallback(SelectSelect)
+	    .SetCopyToBindCallback(SelectBind)
+	    .SetCopyToInitCallback(SummaryInit)
+	    .SetCopyToBatchCallback(SummaryBatch)
+	    .SetCopyToFlushCallback(SummaryFlush)
+	    .SetCopyToFinalizeCallback(SummaryFinalize);
+	conn.Register(function);
+
+	select_seen.Reset();
+	const auto dir = duckdb::TestCreatePath("cpp_copy_select_dir");
+	REQUIRE(conn.Execute("COPY (SELECT DATE '2024-01-02' AS dt, 7 AS v) TO '" + dir +
+	                     "' (FORMAT cpp_copy_select, PARTITION_BY dt, OVERWRITE_OR_IGNORE, TAG 'x')")
+	            .Drain() == 1);
+	// The select callback ran before bind: it saw the original columns and the options
+	REQUIRE(select_seen.column_names == "dt:DATE,v:INTEGER,");
+	REQUIRE(select_seen.options == "tag=x\n");
+	// the partition directory is named after the formatted value
+	auto files = conn.GetFileSystem().Glob(dir + "/*/*");
+	REQUIRE(files.size() == 1);
+	REQUIRE(files[0].find("dt=20240102") != std::string::npos);
+
+	// the bind callback sees the replaced column
+	select_seen.Reset();
+	const auto written_dir = duckdb::TestCreatePath("cpp_copy_select_written");
+	REQUIRE(
+	    conn.Execute("COPY (SELECT DATE '2024-01-02' AS dt, 7 AS v) TO '" + written_dir +
+	                 "' (FORMAT cpp_copy_select, PARTITION_BY dt, OVERWRITE_OR_IGNORE, WRITE_PARTITION_COLUMNS true)")
+	        .Drain() == 1);
+	REQUIRE(select_seen.first_column_type == LogicalTypeId::VARCHAR);
+	files = conn.GetFileSystem().Glob(written_dir + "/*/*");
+	REQUIRE(files.size() == 1);
+	REQUIRE(files[0].find("dt=20240102") != std::string::npos);
+	REQUIRE(ReadFile(files[0]) == "2 1");
+
+	// columns that are not partition columns are left alone
+	select_seen.Reset();
+	const auto path = duckdb::TestCreatePath("cpp_copy_select_plain.summary");
+	REQUIRE(conn.Execute("COPY (SELECT DATE '2024-01-02' AS dt) TO '" + path + "' (FORMAT cpp_copy_select)").Drain() ==
+	        1);
+	REQUIRE(select_seen.first_column_type == LogicalTypeId::DATE);
+}
+
+TEST_CASE("Stable C++API: copy function select errors fail the query", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	const auto path = duckdb::TestCreatePath("cpp_copy_select_error.summary");
+	for (auto select : {BadSelect, UnknownFunctionSelect}) {
+		auto function = CopyFunction::Create(conn.GetFactory());
+		function.SetName("cpp_copy_bad_select")
+		    .SetCopyToSelectCallback(select)
+		    .SetCopyToBindCallback(SelectBind)
+		    .SetCopyToInitCallback(SummaryInit)
+		    .SetCopyToBatchCallback(SummaryBatch)
+		    .SetCopyToFlushCallback(SummaryFlush)
+		    .SetCopyToFinalizeCallback(SummaryFinalize);
+		conn.Register(function);
+		REQUIRE_THROWS(conn.Execute("COPY (SELECT 1 AS i) TO '" + path + "' (FORMAT cpp_copy_bad_select)").Drain());
+	}
+}
+
+// ---------------------------------------------------------------------------
+// COPY TO file size: FILE_SIZE_BYTES rotates the files by the size the function reports.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct RotatedFile {
+	std::string path;
+	idx_t rows = 0;
+	idx_t bytes = 0;
+};
+
+constexpr idx_t ROW_BYTES = 10;
+
+void RotateBind(CopyFunction::CopyToBindInput &input) {
+	input.SetBindData<idx_t>(input.GetColumnCount());
+}
+
+void RotateInit(CopyFunction::CopyToInitInput &input) {
+	input.SetInitData<RotatedFile>(RotatedFile {input.GetFilePath(), 0, 0});
+}
+
+void RotateFlush(CopyFunction::CopyToFlushInput &input) {
+	auto &file = input.GetInitData<RotatedFile>();
+	const auto rows = input.GetBatchData<ColumnDataCollection>().GetRowCount();
+	file.rows += rows;
+	file.bytes += rows * ROW_BYTES;
+}
+
+void RotateFileSize(CopyFunction::CopyToFileSizeInput &input) {
+	input.SetFileSize(input.GetInitData<RotatedFile>().bytes);
+}
+
+void RotateFinalize(CopyFunction::CopyToFinalizeInput &input) {
+	const auto &file = input.GetInitData<RotatedFile>();
+	const auto contents = std::to_string(file.rows);
+	auto fs = input.GetContext().GetFileSystem();
+	auto handle = fs.OpenFile(file.path, {FileFlags::WRITE, FileFlags::FILE_CREATE});
+	handle.Write(contents.data(), contents.size());
+}
+
+} // namespace
+
+TEST_CASE("Stable C++API: copy function file size callback rotates files", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	conn.Execute("SET threads = 1").Drain();
+
+	auto rotating = CopyFunction::Create(conn.GetFactory());
+	rotating.SetName("cpp_copy_rotate")
+	    .SetFileExtension("summary")
+	    .SetCopyToBindCallback(RotateBind)
+	    .SetCopyToInitCallback(RotateInit)
+	    .SetCopyToBatchCallback(SummaryBatch)
+	    .SetCopyToFlushCallback(RotateFlush)
+	    .SetCopyToFileSizeCallback(RotateFileSize)
+	    .SetCopyToFinalizeCallback(RotateFinalize);
+	conn.Register(rotating);
+
+	auto fixed = CopyFunction::Create(conn.GetFactory());
+	fixed.SetName("cpp_copy_no_rotate")
+	    .SetFileExtension("summary")
+	    .SetCopyToBindCallback(RotateBind)
+	    .SetCopyToInitCallback(RotateInit)
+	    .SetCopyToBatchCallback(SummaryBatch)
+	    .SetCopyToFlushCallback(RotateFlush)
+	    .SetCopyToFinalizeCallback(RotateFinalize);
+	conn.Register(fixed);
+
+	// 10000 rows in batches of 1000 rows = 10000 bytes: a file is full after two batches
+	const auto dir = duckdb::TestCreatePath("cpp_copy_rotate_dir");
+	REQUIRE(conn.Execute("COPY (SELECT r FROM range(10000) t(r)) TO '" + dir +
+	                     "' (FORMAT cpp_copy_rotate, FILE_SIZE_BYTES 20000, BATCH_SIZE 1000, OVERWRITE_OR_IGNORE)")
+	            .Drain() == 10000);
+	auto files = conn.GetFileSystem().Glob(dir + "/*");
+	REQUIRE(files.size() >= 3);
+	idx_t total = 0;
+	for (auto &file : files) {
+		const auto rows = std::stoull(ReadFile(file));
+		// a file is finalized once it reaches the limit, so it holds a fraction of the rows
+		REQUIRE(rows >= 1000);
+		REQUIRE(rows <= 4000);
+		total += rows;
+	}
+	REQUIRE(total == 10000);
+
+	// without the callback the option is refused
+	const auto other_dir = duckdb::TestCreatePath("cpp_copy_no_rotate_dir");
+	REQUIRE_THROWS_WITH(conn.Execute("COPY (SELECT r FROM range(10) t(r)) TO '" + other_dir +
+	                                 "' (FORMAT cpp_copy_no_rotate, FILE_SIZE_BYTES 20000)")
+	                        .Drain(),
+	                    Catch::Contains("FILE_SIZE_BYTES not implemented"));
+}
