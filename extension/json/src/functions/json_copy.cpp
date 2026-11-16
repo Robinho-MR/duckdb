@@ -231,6 +231,56 @@ static void ResolveGeoJSONLayout(JSONCopyBindData &data, const ColumnOption &geo
 	}
 }
 
+//! Partition values are named with the date and timestamp formats: the engine formats the partition columns that have
+//! one before it partitions the rows. The files themselves are written with the JSON time formats.
+static void CopyToSelect(CopyFunction::CopyToSelectInput &input) {
+	string date_format;
+	string timestamp_format;
+	for (idx_t i = 0; i < input.GetOptionCount(); i++) {
+		const auto name = LowerCase(input.GetOptionName(i));
+		const bool is_date = name == "dateformat" || name == "date_format";
+		const bool is_timestamp = name == "timestampformat" || name == "timestamp_format";
+		if (!is_date && !is_timestamp) {
+			continue;
+		}
+		// the bind callback reports malformed values
+		const auto value = input.GetOptionValue(i);
+		if (value.IsNull() || value.GetLogicalType().GetTypeId() != LogicalTypeId::VARCHAR) {
+			continue;
+		}
+		auto text = value.Get<varchar_t>();
+		(is_date ? date_format : timestamp_format) = string(text.data(), text.size());
+	}
+	if (date_format.empty() && timestamp_format.empty()) {
+		return;
+	}
+	auto &factory = input.GetContext().GetFactory();
+	for (idx_t i = 0; i < input.GetColumnCount(); i++) {
+		if (!input.IsPartitionColumn(i)) {
+			continue;
+		}
+		const string *format = nullptr;
+		switch (input.GetColumnType(i).GetTypeId()) {
+		case LogicalTypeId::DATE:
+			format = &date_format;
+			break;
+		case LogicalTypeId::TIMESTAMP:
+		case LogicalTypeId::TIMESTAMP_NS:
+		case LogicalTypeId::TIMESTAMP_TZ:
+		case LogicalTypeId::TIMESTAMP_TZ_NS:
+			format = &timestamp_format;
+			break;
+		default:
+			break;
+		}
+		if (format && !format->empty()) {
+			std::vector<Value> arguments;
+			arguments.push_back(Value::Create(factory, varchar_t(string_view(*format))));
+			input.ApplyFunction(i, "strftime", arguments);
+		}
+	}
+}
+
 static void CopyToBind(CopyFunction::CopyToBindInput &input) {
 	auto &user = input.GetUserData<JSONCopyUserData>();
 	auto &context = input.GetContext();
@@ -492,6 +542,10 @@ static void CopyToFinalize(CopyFunction::CopyToFinalizeInput &input) {
 	state.file.Close();
 }
 
+static void CopyToFileSize(CopyFunction::CopyToFileSizeInput &input) {
+	input.SetFileSize(input.GetInitData<JSONCopyFile>().bytes);
+}
+
 static void CopyToStatistics(CopyFunction::CopyToStatisticsInput &input) {
 	auto &state = input.GetInitData<JSONCopyFile>();
 	input.SetRowCount(state.rows);
@@ -507,11 +561,13 @@ static void RegisterCopyFormat(Extension &extension, Factory &factory, const str
 	function.SetName(name)
 	    .SetFileExtension(file_extension)
 	    .SetUserData<JSONCopyUserData>(geojson, default_array)
+	    .SetCopyToSelectCallback(CopyToSelect)
 	    .SetCopyToBindCallback(CopyToBind)
 	    .SetCopyToInitCallback(CopyToInit)
 	    .SetCopyToBatchCallback(CopyToBatch)
 	    .SetCopyToFlushCallback(CopyToFlush)
 	    .SetCopyToFinalizeCallback(CopyToFinalize)
+	    .SetCopyToFileSizeCallback(CopyToFileSize)
 	    .SetCopyToStatisticsCallback(CopyToStatistics);
 	SetJSONCopyFromCallbacks(function, geojson);
 	extension.Register(function);
