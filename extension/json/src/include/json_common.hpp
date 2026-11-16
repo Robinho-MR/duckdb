@@ -96,6 +96,7 @@ string Format(const char *format, const ARGS &...args) {
 
 //! The error codes of the C API (duckdb_v2.h) that select which kind of error the engine reports
 enum class ErrorCode : int {
+	IO_GENERAL = 1004,
 	INVALID_INPUT = 2001,
 	OUT_OF_RANGE = 2003,
 	CONVERSION = 4001,
@@ -122,6 +123,7 @@ public:
 		}                                                                                                              \
 	}
 
+JSON_DEFINE_EXCEPTION(IOException, IO_GENERAL);
 JSON_DEFINE_EXCEPTION(InvalidInputException, INVALID_INPUT);
 JSON_DEFINE_EXCEPTION(BinderException, BINDER);
 JSON_DEFINE_EXCEPTION(ConversionException, CONVERSION);
