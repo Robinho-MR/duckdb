@@ -40,6 +40,9 @@ public:
 	vector<LogicalType> column_types;
 	vector<Identifier> column_names;
 
+	//! Whether the filter pushdown callback accepted a predicate, which the scan then applies itself
+	bool filters_accepted = false;
+
 	auto Copy() const -> unique_ptr<FunctionData> override {
 		auto copy = make_uniq<CV2TableFunctionData>();
 		copy->handle = handle;
@@ -49,6 +52,7 @@ public:
 		copy->cardinality_set = cardinality_set;
 		copy->column_types = column_types;
 		copy->column_names = column_names;
+		copy->filters_accepted = filters_accepted;
 		return std::move(copy);
 	}
 
@@ -437,6 +441,7 @@ public:
 	duckdb_v2_table_function_claim_batch_callback_fn claim_batch_cb = nullptr;
 	duckdb_v2_table_function_get_bind_info_callback_fn get_bind_info_cb = nullptr;
 	duckdb_v2_table_function_metrics_callback_fn metrics_cb = nullptr;
+	duckdb_v2_table_function_partition_stats_callback_fn partition_stats_cb = nullptr;
 	shared_ptr<CV2UserData> user_data = nullptr;
 	bool projection_pushdown = false;
 	//! Whether the function sees the filters of the scan: it has a filter pushdown callback and projection pushdown
@@ -1068,7 +1073,7 @@ static auto CV2TableFilterPushdown(ClientContext &context, LogicalGet &get, Func
 	if (filters.empty()) {
 		return;
 	}
-	const auto &bind_data = bind_data_p->Cast<CV2TableFunctionData>();
+	auto &bind_data = bind_data_p->Cast<CV2TableFunctionData>();
 	const auto &info = *bind_data.info;
 
 	CV2TableFilterPushdownInfo args = {};
@@ -1093,6 +1098,8 @@ static auto CV2TableFilterPushdown(ClientContext &context, LogicalGet &get, Func
 	for (idx_t i = 0; i < filters.size(); i++) {
 		if (!args.out_handled[i]) {
 			remaining.push_back(std::move(filters[i]));
+		} else {
+			bind_data.filters_accepted = true;
 		}
 	}
 	filters = std::move(remaining);
@@ -1151,6 +1158,49 @@ static auto CV2TableGetPartitionData(ClientContext &context, TableFunctionGetPar
 	auto result = CV2TakePartitionData(args, info.name);
 	local_state.CheckPartitionData(info.name, result);
 	return result;
+}
+
+class CV2TablePartitionStatsInfo {
+public:
+	void *in_user_data = nullptr;
+	void *in_bind_data = nullptr;
+
+	vector<PartitionStatistics> out_partitions;
+};
+
+static auto Convert(duckdb_v2_table_function_partition_stats_info_handle info) -> CV2TablePartitionStatsInfo * {
+	return reinterpret_cast<CV2TablePartitionStatsInfo *>(info);
+}
+static auto Convert(CV2TablePartitionStatsInfo *info) -> duckdb_v2_table_function_partition_stats_info_handle {
+	return reinterpret_cast<duckdb_v2_table_function_partition_stats_info_handle>(info);
+}
+
+static auto CV2TableGetPartitionStats(ClientContext &context, GetPartitionStatsInput &input)
+    -> vector<PartitionStatistics> {
+	if (!input.bind_data) {
+		return {};
+	}
+	const auto &bind_data = input.bind_data->Cast<CV2TableFunctionData>();
+	// The engine no longer sees the predicates the scan applies itself, so it cannot count what the scan produces
+	if (bind_data.filters_accepted) {
+		return {};
+	}
+	const auto &info = *bind_data.info;
+
+	CV2TablePartitionStatsInfo args;
+	args.in_user_data = info.user_data ? info.user_data->GetData() : nullptr;
+	args.in_bind_data = bind_data.handle ? bind_data.handle->GetData() : nullptr;
+
+	CV2ErrorInfo err = {};
+	auto err_ptr = Convert(&err);
+	CV2CallbackContext callback_context(context);
+	info.partition_stats_cb(Convert(&args), Convert(&callback_context), &err_ptr);
+
+	if (err.HasError()) {
+		err.ThrowAsException();
+	}
+
+	return std::move(args.out_partitions);
 }
 
 //! Runs at plan time and must be deterministic: the optimizer may call it for a plan shape it later discards.
@@ -1245,6 +1295,9 @@ public:
 		}
 		if (info.get_bind_info_cb) {
 			function.get_bind_info = CV2TableGetBindInfo;
+		}
+		if (info.partition_stats_cb) {
+			function.get_partition_stats = CV2TableGetPartitionStats;
 		}
 
 		// a function registered through the C API makes no stability promise unless one was declared
@@ -2216,6 +2269,47 @@ duckdb_v2_table_function_get_bind_info_set_option(duckdb_v2_table_function_get_b
 	DUCKDB_CHECK_ARG(value);
 	return WithErrorHandler(err, [&]() {
 		Convert(info)->out_bind_info.options[duckdb::string(Convert(key, key_length))] = *Convert(value);
+	});
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Partition stats
+//----------------------------------------------------------------------------------------------------------------------
+
+DUCKDB_V2_ERROR
+duckdb_v2_table_function_set_partition_stats_callback(duckdb_v2_table_function_handle function,
+                                                      duckdb_v2_table_function_partition_stats_callback_fn callback,
+                                                      duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() { Convert(function)->info.partition_stats_cb = callback; });
+}
+
+DUCKDB_V2_ERROR
+duckdb_v2_table_function_partition_stats_get_user_data(duckdb_v2_table_function_partition_stats_info_handle info,
+                                                       void **data, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->in_user_data; });
+}
+
+DUCKDB_V2_ERROR
+duckdb_v2_table_function_partition_stats_get_bind_data(duckdb_v2_table_function_partition_stats_info_handle info,
+                                                       void **data, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->in_bind_data; });
+}
+
+DUCKDB_V2_ERROR
+duckdb_v2_table_function_partition_stats_add_partition(duckdb_v2_table_function_partition_stats_info_handle info,
+                                                       idx_t row_count, bool is_exact,
+                                                       duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	return WithErrorHandler(err, [&]() {
+		duckdb::PartitionStatistics partition;
+		partition.count = row_count;
+		partition.count_type = is_exact ? duckdb::CountType::COUNT_EXACT : duckdb::CountType::COUNT_APPROXIMATE;
+		Convert(info)->out_partitions.push_back(std::move(partition));
 	});
 }
 

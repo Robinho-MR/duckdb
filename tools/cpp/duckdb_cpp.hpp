@@ -4554,6 +4554,7 @@ public:
 	class GetBindInfoInput;
 	class StatsInput;
 	class MetricsInput;
+	class PartitionStatsInput;
 
 	/// Whether, and how, the scan is partitioned by a set of columns. Reported from the partitioning callback.
 	enum class PartitionInfo : uint8_t {
@@ -4603,6 +4604,11 @@ public:
 	/// Called when the engine collects the metrics of the scan, possibly while the scan is still running, to report
 	/// what the scan did. Optional; unstable API.
 	using MetricsCallback = void (*)(MetricsInput &input);
+	/// Called while the query is optimized, possibly more than once, with the bind data of a bound call; reports the
+	/// partitions of the scan (e.g. row groups) in scan order and how many rows each holds, which lets the optimizer
+	/// answer e.g. `count(*)` without scanning. Not called once the filter pushdown callback accepted a predicate.
+	/// Optional; unstable API.
+	using PartitionStatsCallback = void (*)(PartitionStatsInput &input);
 
 	/// A column a function can produce next to the columns it declares in bind: a query asks for it by name.
 	enum class VirtualColumn : uint8_t {
@@ -4700,6 +4706,10 @@ public:
 	/// Lets the function report what the scan did: see `MetricsCallback`. Unstable API.
 	auto SetMetricsCallback(MetricsCallback callback) & -> TableFunction &;
 
+	/// Lets the function report the partitions of the scan and their row counts: see `PartitionStatsCallback`.
+	/// Unstable API.
+	auto SetPartitionStatsCallback(PartitionStatsCallback callback) & -> TableFunction &;
+
 private:
 	explicit TableFunction(void *impl);
 	//! Moves what the callbacks need into the C handle, right before it is registered.
@@ -4719,6 +4729,7 @@ private:
 	GetBindInfoCallback get_bind_info_callback = nullptr;
 	StatsCallback stats_callback = nullptr;
 	MetricsCallback metrics_callback = nullptr;
+	PartitionStatsCallback partition_stats_callback = nullptr;
 	detail::UserData user_data;
 
 public:
@@ -5388,6 +5399,47 @@ public:
 
 		void *GetBindDataInternal() const;
 		void *GetGlobalStateInternal() const;
+		void *GetUserDataInternal() const;
+	};
+
+	/// What the partition stats callback works with. Borrowed, valid only for the callback duration. Unstable API.
+	///
+	/// The counts describe the rows the call produces, before the filters and samples of the query, which the engine
+	/// applies itself. A count that differs from what the scan then produces leads to wrong results.
+	class PartitionStatsInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// The bind data set via `BindInput::SetBindData` for the bound call being described.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetBindData() const -> const T & {
+			return *static_cast<const T *>(GetBindDataInternal());
+		}
+
+		/// The user data set via `TableFunction::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// Reports the next partition of the scan, in scan order, and how many rows it holds. Only exact counts let
+		/// the optimizer answer a query from them.
+		auto AddPartition(idx_t row_count, bool is_exact = true) -> void;
+
+		/// The query's context. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context &;
+
+	private:
+		PartitionStatsInput(void *args, void *context)
+		    : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+
+		void *args;
+		Context context;
+
+		void *GetBindDataInternal() const;
 		void *GetUserDataInternal() const;
 	};
 };

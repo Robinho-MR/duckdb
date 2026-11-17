@@ -13336,6 +13336,15 @@ typedef struct _duckdb_v2_table_function_get_bind_info_info {
 } * duckdb_v2_table_function_get_bind_info_info_handle;
 
 /*!
+ * A borrowed opaque handle to the arguments supplied to a table function when the query optimizer asks for the
+ * partitions of a bound call. The "partition stats" callback receives this handle and can use it to report the
+ * partitions the scan reads - e.g. the row groups or stripes of a file - and how many rows each holds.
+ */
+typedef struct _duckdb_v2_table_function_partition_stats_info {
+	void *internal_ptr;
+} * duckdb_v2_table_function_partition_stats_info_handle;
+
+/*!
  * An owned opaque handle to a multi-file table function being built. A multi-file function wraps an already registered
  * table function that reads a single file, and adds everything that is needed to read many files at once on top of it:
  * globbing, lists of files, hive partitioning, the `filename` column, `union_by_name` and the like. Created with
@@ -13400,6 +13409,10 @@ typedef void (*duckdb_v2_table_function_get_bind_info_callback_fn)(
 typedef void (*duckdb_v2_table_function_stats_callback_fn)(duckdb_v2_table_function_stats_info_handle info,
                                                            duckdb_v2_context_handle context,
                                                            duckdb_v2_error_info_handle *err);
+
+typedef void (*duckdb_v2_table_function_partition_stats_callback_fn)(
+    duckdb_v2_table_function_partition_stats_info_handle info, duckdb_v2_context_handle context,
+    duckdb_v2_error_info_handle *err);
 
 /* --- Functions for table --- */
 
@@ -15268,6 +15281,93 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_get_bind_info_set_column_i
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_get_bind_info_set_option(
     duckdb_v2_table_function_get_bind_info_info_handle info, const char *key, idx_t key_length,
     duckdb_v2_value_handle value, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the optional "partition stats" callback of the table function.
+ *
+ * The query optimizer invokes the callback with the bind data of a bound call, before execution starts, to learn how
+ * many rows the scan produces without running it. The callback reports the partitions of the scan, e.g. the row groups
+ * or stripes of the file it reads, in scan order, with `duckdb_v2_table_function_partition_stats_add_partition()`. When
+ * every partition reports an exact row count, the optimizer answers e.g. `SELECT count(*)` of the whole call from their
+ * sum, without scanning. Reporting no partitions, or leaving the callback unset, tells the optimizer nothing.
+ *
+ * The counts must be those of the rows the call produces: a count that differs from what the scan then produces leads
+ * to wrong results. The engine applies the filters and samples of the query itself, so the callback reports the rows
+ * before them; it is not invoked for a call that accepted a predicate through the filter pushdown callback (see
+ * `duckdb_v2_table_function_set_filter_pushdown_callback()`), whose rows the engine can no longer count. A function
+ * wrapped in a multi-file function is asked about the file of a scan of a single file. The callback may be invoked more
+ * than once for the same bind data, so it should only report what the bind already determined.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the callback of.
+ * @param callback The "partition stats" callback to set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_set_partition_stats_callback(
+    duckdb_v2_table_function_handle function, duckdb_v2_table_function_partition_stats_callback_fn callback,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the user data set via `duckdb_v2_table_function_set_user_data()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The partition stats info handle.
+ * @param data Receives the user data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_partition_stats_get_user_data(
+    duckdb_v2_table_function_partition_stats_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the bind data the function's bind callback set for the bound call being described.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The partition stats info handle.
+ * @param data Receives the bind data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_partition_stats_get_bind_data(
+    duckdb_v2_table_function_partition_stats_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Reports the next partition of the scan, in scan order, and how many rows it holds.
+ *
+ * An exact count is a promise that the partition produces exactly that many rows; an estimate lets the optimizer plan
+ * with the count, but not answer a query from it.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The partition stats info handle.
+ * @param row_count The number of rows of the partition.
+ * @param is_exact Whether the count is exact, rather than an estimate.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_partition_stats_add_partition(
+    duckdb_v2_table_function_partition_stats_info_handle info, idx_t row_count, bool is_exact,
+    duckdb_v2_error_info_handle *err);
 #endif
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE

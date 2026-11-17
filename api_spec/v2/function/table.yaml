@@ -123,6 +123,12 @@ handles:
       detail than its columns: with identifiers of its columns (e.g. field ids), and with options - key-value facts
       about what the call reads.
 
+  table_function_partition_stats_info:
+    description: |
+      A borrowed opaque handle to the arguments supplied to a table function when the query optimizer asks for the
+      partitions of a bound call. The "partition stats" callback receives this handle and can use it to report the
+      partitions the scan reads - e.g. the row groups or stripes of a file - and how many rows each holds.
+
   multi_file_function:
     description: |
       An owned opaque handle to a multi-file table function being built. A multi-file function wraps an already
@@ -304,6 +310,20 @@ callbacks:
       context:
         type: context
         description: Borrowed handle to the context of the query currently executing the callback.
+      err:
+        type: error_info
+        indirection: 1
+        description: Borrowed error info handle to use to report errors that occur during the callback.
+    return_type: void
+
+  table_function_partition_stats_callback:
+    parameters:
+      info:
+        type: table_function_partition_stats_info
+        description: Borrowed opaque handle providing access to the information available to the callback.
+      context:
+        type: context
+        description: Borrowed handle to the context of the query being optimized.
       err:
         type: error_info
         indirection: 1
@@ -2431,6 +2451,103 @@ functions:
       value:
         type: value
         description: The value of the option. Borrowed and copied.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  #---------------------------------------------------------------------------------------------------------------------
+  # Partition Stats Callback Functions
+  #---------------------------------------------------------------------------------------------------------------------
+  table_function_set_partition_stats_callback:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-17" ]
+    description: |
+      Sets the optional "partition stats" callback of the table function.
+
+      The query optimizer invokes the callback with the bind data of a bound call, before execution starts, to learn
+      how many rows the scan produces without running it. The callback reports the partitions of the scan, e.g. the
+      row groups or stripes of the file it reads, in scan order, with
+      `[[table_function_partition_stats_add_partition]]`. When every partition reports an exact row count, the
+      optimizer answers e.g. `SELECT count(*)` of the whole call from their sum, without scanning. Reporting no
+      partitions, or leaving the callback unset, tells the optimizer nothing.
+
+      The counts must be those of the rows the call produces: a count that differs from what the scan then produces
+      leads to wrong results. The engine applies the filters and samples of the query itself, so the callback reports
+      the rows before them; it is not invoked for a call that accepted a predicate through the filter pushdown callback
+      (see `[[table_function_set_filter_pushdown_callback]]`), whose rows the engine can no longer count. A function
+      wrapped in a multi-file function is asked about the file of a scan of a single file. The callback may be invoked
+      more than once for the same bind data, so it should only report what the bind already determined.
+    parameters:
+      function:
+        type: table_function
+        description: The function to set the callback of.
+      callback:
+        type: table_function_partition_stats_callback
+        description: The "partition stats" callback to set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_partition_stats_get_user_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-17" ]
+    description: Retrieves the user data set via `[[table_function_set_user_data]]`.
+    parameters:
+      info:
+        type: table_function_partition_stats_info
+        description: The partition stats info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the user data pointer, or null if none was set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_partition_stats_get_bind_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-17" ]
+    description: Retrieves the bind data the function's bind callback set for the bound call being described.
+    parameters:
+      info:
+        type: table_function_partition_stats_info
+        description: The partition stats info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the bind data pointer, or null if none was set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_partition_stats_add_partition:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-17" ]
+    description: |
+      Reports the next partition of the scan, in scan order, and how many rows it holds.
+
+      An exact count is a promise that the partition produces exactly that many rows; an estimate lets the optimizer
+      plan with the count, but not answer a query from it.
+    parameters:
+      info:
+        type: table_function_partition_stats_info
+        description: The partition stats info handle.
+      row_count:
+        type: idx
+        description: The number of rows of the partition.
+      is_exact:
+        type: bool
+        description: Whether the count is exact, rather than an estimate.
       err:
         type: error_info
         indirection: 1

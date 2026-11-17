@@ -1525,6 +1525,16 @@ typedef struct {
 	(duckdb_v2_stats_handle stats, duckdb_v2_value_handle *value, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_stats_set_value)
 	(duckdb_v2_stats_handle stats, duckdb_v2_value_handle value, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_partition_stats_add_partition)
+	(duckdb_v2_table_function_partition_stats_info_handle info, idx_t row_count, bool is_exact,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_partition_stats_get_bind_data)
+	(duckdb_v2_table_function_partition_stats_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_partition_stats_get_user_data)
+	(duckdb_v2_table_function_partition_stats_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_set_partition_stats_callback)
+	(duckdb_v2_table_function_handle function, duckdb_v2_table_function_partition_stats_callback_fn callback,
+	 duckdb_v2_error_info_handle *err);
 } duckdb_ext_api_v2;
 
 //===--------------------------------------------------------------------===//
@@ -2219,6 +2229,14 @@ inline duckdb_ext_api_v2 CreateAPIv2(void) {
 	result.duckdb_v2_stats_assign = duckdb_v2_stats_assign;
 	result.duckdb_v2_stats_get_value = duckdb_v2_stats_get_value;
 	result.duckdb_v2_stats_set_value = duckdb_v2_stats_set_value;
+	result.duckdb_v2_table_function_partition_stats_add_partition =
+	    duckdb_v2_table_function_partition_stats_add_partition;
+	result.duckdb_v2_table_function_partition_stats_get_bind_data =
+	    duckdb_v2_table_function_partition_stats_get_bind_data;
+	result.duckdb_v2_table_function_partition_stats_get_user_data =
+	    duckdb_v2_table_function_partition_stats_get_user_data;
+	result.duckdb_v2_table_function_set_partition_stats_callback =
+	    duckdb_v2_table_function_set_partition_stats_callback;
 	return result;
 }
 
