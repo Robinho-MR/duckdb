@@ -294,10 +294,10 @@ public:
 	ScalarFunction Build(DatabaseInstance &target) {
 		CheckRegistrationTarget(db, target, "scalar function");
 		if (name.empty()) {
-			throw duckdb::InvalidInputException("Function name cannot be empty.");
+			throw InvalidInputException("Function name cannot be empty.");
 		}
 		if (!info.exec_cb) {
-			throw duckdb::InvalidInputException("Exec callback must be set for the function.");
+			throw InvalidInputException("Exec callback must be set for the function.");
 		}
 
 		const auto &return_type = signature.GetReturnType();
@@ -306,15 +306,15 @@ public:
 		// actual type.
 		if (return_type.id() == LogicalTypeId::ANY) {
 			if (info.resolve_types_cb == nullptr) {
-				throw duckdb::InvalidInputException(
+				throw InvalidInputException(
 				    "An ANY return type requires a resolve types callback to set the concrete return type.");
 			}
 		} else {
 			if (return_type.id() == LogicalTypeId::INVALID) {
-				throw duckdb::InvalidInputException("Return type must be set for the function.");
+				throw InvalidInputException("Return type must be set for the function.");
 			}
 			if (!return_type.IsComplete()) {
-				throw duckdb::InvalidInputException("Return type must be a fully defined concrete type");
+				throw InvalidInputException("Return type must be a fully defined concrete type");
 			}
 		}
 

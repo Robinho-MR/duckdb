@@ -1599,9 +1599,6 @@ typedef struct {
 	(duckdb_v2_stats_handle stats, duckdb_v2_value_handle *value, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_stats_set_value)
 	(duckdb_v2_stats_handle stats, duckdb_v2_value_handle value, duckdb_v2_error_info_handle *err);
-	DUCKDB_V2_ERROR(*duckdb_v2_aggregate_function_bind_set_argument_type)
-	(duckdb_v2_aggregate_function_bind_info_handle info, idx_t index, duckdb_v2_logical_type_handle type,
-	 duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_resolve_types_set_argument_type)
 	(duckdb_v2_scalar_function_resolve_types_info_handle info, idx_t index, duckdb_v2_logical_type_handle type,
 	 duckdb_v2_error_info_handle *err);
@@ -3657,10 +3654,6 @@ typedef struct {
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_stats_set_value duckdb_ext_api.duckdb_v2_stats_set_value
-#endif
-#if DUCKDB_V2_API_ALLOW_UNSTABLE
-#define duckdb_v2_aggregate_function_bind_set_argument_type                                                            \
-	duckdb_ext_api.duckdb_v2_aggregate_function_bind_set_argument_type
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_scalar_function_resolve_types_set_argument_type                                                      \

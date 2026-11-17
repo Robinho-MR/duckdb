@@ -435,39 +435,6 @@ void AggArgProbeFinalize(duckdb_v2_aggregate_function_finalize_info_handle info,
 	}
 }
 
-// Run a query producing a single INTEGER cell.
-int32_t QueryAggI32(duckdb_v2_connection_handle conn, std::string_view sql) {
-	duckdb_v2_result_handle result = nullptr;
-	REQUIRE(Query(conn, sql, &result) == DUCKDB_V2_ERROR_NONE);
-	auto chunk = StepChunk(result);
-	REQUIRE(chunk != nullptr);
-	duckdb_v2_vector_handle vec = nullptr;
-	duckdb_v2_data_chunk_get_vector(chunk, 0, &vec, nullptr);
-	duckdb_v2_vector_view view {};
-	duckdb_v2_vector_get_view(vec, &view, nullptr);
-	auto out = static_cast<const int32_t *>(view.data)[SelAt(view.sel, 0)];
-	duckdb_v2_data_chunk_destroy(&chunk);
-	duckdb_v2_result_destroy(&result);
-	return out;
-}
-
-// Cast the ANY argument to INTEGER, and resolve the ANY return type to INTEGER.
-void AggNarrowBind(duckdb_v2_function_bind_info_handle, duckdb_v2_aggregate_function_bind_info_handle result,
-                   duckdb_v2_context_handle context, duckdb_v2_error_info_handle *err) {
-	duckdb_v2_factory_handle factory = nullptr;
-	duckdb_v2_context_get_factory(context, &factory, nullptr);
-	duckdb_v2_logical_type_handle integer = nullptr;
-	if (duckdb_v2_factory_create_type_from_id(factory, DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER, nullptr, nullptr, nullptr, 0,
-	                                          &integer, err) != DUCKDB_V2_ERROR_NONE) {
-		return;
-	}
-	// An index past the last argument is an input error.
-	agg_arg_probe.oob_type_rc = duckdb_v2_aggregate_function_bind_set_argument_type(result, 5, integer, nullptr);
-	duckdb_v2_aggregate_function_bind_set_argument_type(result, 0, integer, err);
-	duckdb_v2_aggregate_function_bind_set_return_type(result, integer, err);
-	duckdb_v2_logical_type_destroy(&integer);
-}
-
 } // namespace
 
 // ===========================================================================
@@ -626,37 +593,6 @@ TEST_CASE("V2 aggregate: bind reads argument count, types and constants", "[capi
 	REQUIRE(Query(fx.conn, "SELECT agg_arg_probe('hello', i) FROM (VALUES (21)) t(i)", &failed) ==
 	        DUCKDB_V2_ERROR_QUERY_BINDER);
 	duckdb_v2_result_destroy(&failed);
-}
-
-// ===========================================================================
-// Bind can set the argument types the arguments are cast to.
-// ===========================================================================
-
-TEST_CASE("V2 aggregate: bind sets the argument types", "[capi_v2][aggregate_function]") {
-	EnvFixture fx;
-	auto any = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_ANY);
-
-	// agg_narrow(x ANY) -> ANY
-	auto function = MakeAggregate(fx.conn, "agg_narrow");
-	auto sig = AggSigOf(function);
-	AggSigParam(sig, "x", any);
-	REQUIRE(duckdb_v2_function_signature_set_return_type(sig, any, nullptr) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(duckdb_v2_aggregate_function_set_bind_callback(function, AggNarrowBind, nullptr) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(duckdb_v2_aggregate_function_set_size_callback(function, AggFlowSize, nullptr) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(duckdb_v2_aggregate_function_set_init_callback(function, AggFlowInit, nullptr) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(duckdb_v2_aggregate_function_set_update_callback(function, AggFlowUpdate, nullptr) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(duckdb_v2_aggregate_function_set_combine_callback(function, AggFlowCombine, nullptr) ==
-	        DUCKDB_V2_ERROR_NONE);
-	REQUIRE(duckdb_v2_aggregate_function_set_finalize_callback(function, AggFlowFinalize, nullptr) ==
-	        DUCKDB_V2_ERROR_NONE);
-	REQUIRE(duckdb_v2_connection_register_aggregate_function(fx.conn, function, nullptr) == DUCKDB_V2_ERROR_NONE);
-	duckdb_v2_aggregate_function_destroy(&function);
-	duckdb_v2_logical_type_destroy(&any);
-
-	agg_arg_probe = {};
-	// Update reads the argument as INTEGER, so the SMALLINT must have been cast.
-	REQUIRE(QueryAggI32(fx.conn, "SELECT agg_narrow(21::SMALLINT)") == 42);
-	REQUIRE(agg_arg_probe.oob_type_rc == DUCKDB_V2_ERROR_INPUT_INVALID);
 }
 
 // ===========================================================================
