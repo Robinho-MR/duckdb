@@ -84,6 +84,11 @@ private:
 	std::optional<Vector> vec;
 };
 
+//! Whether the type is a DECIMAL wider than the fixed-size ones, which stores its digits as a bignum
+static bool IsWideDecimal(const LogicalType &type) {
+	return type.GetTypeId() == LogicalTypeId::DECIMAL && type.GetDecimalInternalTypeId() == LogicalTypeId::BIGNUM;
+}
+
 //! The size in bytes of an element of a vector of a fixed-width type
 static idx_t ElementSize(const LogicalType &type) {
 	auto id = type.GetTypeId();
@@ -317,10 +322,21 @@ static bool TransformNumeric(yyjson_val *vals[], Vector &result, const idx_t cou
 		TempVector converted(options.factory, result_type, count);
 		source.Get().TryCast(options.factory, converted.Get());
 		converted.Get().Flatten();
-		const auto size = ElementSize(result_type);
 		auto converted_view = converted.Get().GetView();
-		auto target = static_cast<uint8_t *>(result.GetDataMutable());
 		auto mask = result.GetValidityMutable();
+		if (IsWideDecimal(result_type)) {
+			// the digits of a wide decimal are a bignum that lives in the heap of its vector
+			auto source = converted_view.Data<bignum_t>();
+			for (idx_t i = 0; i < count; i++) {
+				if (kinds[i] == kind && converted_view.IsValid(i)) {
+					result.AssignString(i, source[i].view());
+					mask.SetValid(i);
+				}
+			}
+			continue;
+		}
+		const auto size = ElementSize(result_type);
+		auto target = static_cast<uint8_t *>(result.GetDataMutable());
 		for (idx_t i = 0; i < count; i++) {
 			if (kinds[i] == kind && converted_view.IsValid(i)) {
 				std::memcpy(target + i * size, converted_view.Data<uint8_t>() + i * size, size);

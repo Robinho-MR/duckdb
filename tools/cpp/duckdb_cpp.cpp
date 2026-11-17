@@ -1590,12 +1590,21 @@ auto LogicalType::GetParam(idx_t index) const -> TypeParam {
 	return TypeParam {std::string(FromStr(name, name_length)), detail::HandleFactory::Make<Value>(value)};
 }
 
-auto LogicalType::GetDecimalWidth() const -> uint8_t {
-	return GetParam(0).GetValue().Get<uint8_t>();
+// A DECIMAL's width and scale parameters are UINTEGER values; engines before the width cap was lifted hand over
+// UTINYINT.
+static auto ReadDecimalParam(const Value &param) -> uint32_t {
+	if (param.GetLogicalType().GetTypeId() == LogicalTypeId::UTINYINT) {
+		return param.Get<uint8_t>();
+	}
+	return param.Get<uint32_t>();
 }
 
-auto LogicalType::GetDecimalScale() const -> uint8_t {
-	return GetParam(1).GetValue().Get<uint8_t>();
+auto LogicalType::GetDecimalWidth() const -> uint32_t {
+	return ReadDecimalParam(GetParam(0).GetValue());
+}
+
+auto LogicalType::GetDecimalScale() const -> uint32_t {
+	return ReadDecimalParam(GetParam(1).GetValue());
 }
 
 auto LogicalType::GetEnumSize() const -> idx_t {
@@ -1653,7 +1662,7 @@ auto LogicalType::GetUnionMemberType(idx_t index) const -> LogicalType {
 
 auto LogicalType::GetDecimalInternalTypeId() const -> LogicalTypeId {
 	// The committed DECIMAL storage tiers: width <= 4 int16, <= 9 int32,
-	// <= 18 int64, <= 38 int128. Pinned against the engine in [capi_v2].
+	// <= 18 int64, <= 38 int128, wider BIGNUM. Pinned against the engine in [capi_v2].
 	auto width = GetDecimalWidth();
 	if (width <= 4) {
 		return LogicalTypeId::SMALLINT;
@@ -1664,7 +1673,10 @@ auto LogicalType::GetDecimalInternalTypeId() const -> LogicalTypeId {
 	if (width <= 18) {
 		return LogicalTypeId::BIGINT;
 	}
-	return LogicalTypeId::HUGEINT;
+	if (width <= 38) {
+		return LogicalTypeId::HUGEINT;
+	}
+	return LogicalTypeId::BIGNUM;
 }
 
 auto LogicalType::GetEnumInternalTypeId() const -> LogicalTypeId {
@@ -3251,6 +3263,16 @@ auto Stats::SetCanHaveValid(bool value) -> void {
 	CheckedAPICall(duckdb_v2_stats_set_can_have_valid, handle(), value);
 }
 
+auto Stats::GetValue() const -> Value {
+	duckdb_v2_value_handle out = nullptr;
+	CheckedAPICall(duckdb_v2_stats_get_value, handle(), &out);
+	return detail::HandleFactory::Make<Value>(out);
+}
+
+auto Stats::SetValue(const Value &value) -> void {
+	CheckedAPICall(duckdb_v2_stats_set_value, handle(), value.handle());
+}
+
 //----------------------------------------------------------------------------------------------------------------------
 // Scalar Function
 //----------------------------------------------------------------------------------------------------------------------
@@ -4790,6 +4812,30 @@ auto TableFunction::SetProjectionPushdown(bool enable) & -> TableFunction & {
 	return *this;
 }
 
+static_assert(static_cast<uint8_t>(TableFunction::VirtualColumn::FILE_ROW_NUMBER) ==
+                  DUCKDB_V2_TABLE_VIRTUAL_COLUMN_FILE_ROW_NUMBER,
+              "TableFunction::VirtualColumn::FILE_ROW_NUMBER mismatch");
+
+auto TableFunction::GetVirtualColumn(idx_t column_index) -> VirtualColumn {
+	if (!IsVirtualColumn(column_index)) {
+		throw InvalidInputException("The column index " + std::to_string(column_index) +
+		                            " stands for a declared column, not a virtual one");
+	}
+	switch (column_index - VIRTUAL_COLUMN_START) {
+	case DUCKDB_V2_TABLE_VIRTUAL_COLUMN_FILE_ROW_NUMBER:
+		return VirtualColumn::FILE_ROW_NUMBER;
+	default:
+		throw InvalidInputException("The column index " + std::to_string(column_index) +
+		                            " stands for an unknown virtual column");
+	}
+}
+
+auto TableFunction::AddVirtualColumn(VirtualColumn column) & -> TableFunction & {
+	CheckedAPICall(duckdb_v2_table_function_add_virtual_column, handle(),
+	               static_cast<DUCKDB_V2_TABLE_VIRTUAL_COLUMN>(column));
+	return *this;
+}
+
 auto TableFunction::PrepareRegistration() -> void {
 	// The callback table rides the C user_data slot so the trampolines can find
 	// it; the user's own data (SetUserData, moved out here) rides inside it.
@@ -5092,6 +5138,13 @@ void *TableFunction::ProgressInput::GetGlobalStateInternal() const {
 	CheckedAPICall(duckdb_v2_table_function_progress_get_global_state,
 	               static_cast<duckdb_v2_table_function_progress_info_handle>(args), &global_state);
 	return RequireGlobalState(global_state);
+}
+
+void *TableFunction::ProgressInput::TryGetGlobalStateInternal() const {
+	void *global_state = nullptr;
+	CheckedAPICall(duckdb_v2_table_function_progress_get_global_state,
+	               static_cast<duckdb_v2_table_function_progress_info_handle>(args), &global_state);
+	return global_state;
 }
 
 void *TableFunction::ProgressInput::GetUserDataInternal() const {

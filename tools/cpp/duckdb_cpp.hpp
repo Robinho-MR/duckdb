@@ -1562,11 +1562,11 @@ public:
 	// kind they misread that type's parameters or throw, so check the kind first. Names and dictionary entries come
 	// back as owned strings.
 
-	/// The total number of digits a DECIMAL holds.
-	auto GetDecimalWidth() const -> uint8_t;
+	/// The total number of digits a DECIMAL holds; any `uint32_t`, widths above 38 are BIGNUM-backed.
+	auto GetDecimalWidth() const -> uint32_t;
 
 	/// The number of digits a DECIMAL keeps after the point.
-	auto GetDecimalScale() const -> uint8_t;
+	auto GetDecimalScale() const -> uint32_t;
 
 	/// How many entries an ENUM's dictionary holds.
 	auto GetEnumSize() const -> idx_t;
@@ -1612,8 +1612,8 @@ public:
 	/// @param index Member index in [0, GetUnionMemberCount()).
 	auto GetUnionMemberType(idx_t index) const -> LogicalType;
 
-	/// The integer type a DECIMAL's digits are stored in, which is what its vector elements are; determined by the
-	/// width.
+	/// The type a DECIMAL's digits are stored in, which is what its vector elements are; determined by the width:
+	/// SMALLINT, INTEGER, BIGINT or HUGEINT up to 38 digits, BIGNUM (`bignum_t` elements) beyond.
 	auto GetDecimalInternalTypeId() const -> LogicalTypeId;
 
 	/// The unsigned integer type an ENUM's dictionary indices are stored in, which is what its vector elements are;
@@ -1797,10 +1797,11 @@ struct list_entry_t {
 
 /// DECIMAL(WIDTH, SCALE): an exact number, kept as an integer of WIDTH digits with the point SCALE digits from the
 /// right. The width picks the storage integer, so DECIMAL(9, 2) and DECIMAL(18, 2) are different C++ types and their
-/// payloads are not interchangeable.
+/// payloads are not interchangeable. This covers the fixed-size decimals of up to 38 digits; a wider DECIMAL stores
+/// its digits as a `bignum_t`, see `LogicalType::GetDecimalInternalTypeId`.
 template <int8_t WIDTH, uint8_t SCALE>
 struct decimal_t {
-	static_assert(WIDTH >= 1 && WIDTH <= 38, "DECIMAL type width must be between 1 and 38");
+	static_assert(WIDTH >= 1 && WIDTH <= 38, "decimal_t covers fixed-size decimals, with a width between 1 and 38");
 	static_assert(SCALE <= WIDTH, "DECIMAL scale must be less than or equal to width");
 	using storage_type = std::conditional_t<
 	    (WIDTH <= 4), int16_t,
@@ -3630,6 +3631,20 @@ public:
 	/// @throws InvalidInputException When the statistics are read-only, such as those of an argument.
 	auto SetCanHaveValid(bool value) -> void;
 
+	/// The statistics as a STRUCT value with one field per known statistic, the shape of the SQL function `stats()`:
+	/// `min` and `max` (values of the column's type), `has_null`, `has_no_null`, `approx_unique`, `child_stats` for
+	/// nested types, ... A field is absent when that statistic is unknown. Unstable API.
+	auto GetValue() const -> Value;
+
+	/// Narrows the statistics from a STRUCT value in the shape `GetValue` returns: a field that is set replaces that
+	/// statistic, a NULL or absent field leaves it unchanged. `{'min': 20, 'max': 30, 'has_null': false}` on an
+	/// INTEGER column reports exactly those bounds and the absence of NULLs. A bound is a value of the column's type,
+	/// or one that casts to it. Every statistic states what can occur: a bound that excludes a value the scan then
+	/// produces, or `has_null: false` for a column with NULLs, produces wrong query results. Unstable API.
+	/// @throws InvalidInputException When the value is not a STRUCT, a field does not exist for the type or does not
+	/// convert, or the statistics are read-only, such as those of an argument.
+	auto SetValue(const Value &value) -> void;
+
 private:
 	explicit Stats(void *impl);
 };
@@ -4657,6 +4672,22 @@ public:
 	/// what the scan did. Optional; unstable API.
 	using MetricsCallback = void (*)(MetricsInput &input);
 
+	/// A column a function can produce next to the columns it declares in bind: a query asks for it by name.
+	enum class VirtualColumn : uint8_t {
+		/// `file_row_number`, a BIGINT holding the position of the row within the file it was read from, counting
+		/// from 0. Produced by a function that reads a single file when it is wrapped in a `MultiFileFunction`.
+		FILE_ROW_NUMBER = 0,
+	};
+
+	/// Whether a column index reported by `GetColumnIndex` stands for a virtual column.
+	static auto IsVirtualColumn(idx_t column_index) -> bool {
+		return column_index >= VIRTUAL_COLUMN_START;
+	}
+
+	/// The virtual column a column index reported by `GetColumnIndex` stands for.
+	/// @throws InvalidInputException When the index stands for a declared column.
+	static auto GetVirtualColumn(idx_t column_index) -> VirtualColumn;
+
 	TableFunction(TableFunction &&) noexcept = default;
 	TableFunction &operator=(TableFunction &&) noexcept = default;
 
@@ -4749,6 +4780,11 @@ public:
 	/// the init and exec inputs' `GetColumnIndex` says which declared column each vector stands for. Without it the
 	/// output chunk always holds every declared column, and the engine drops the unused ones itself.
 	auto SetProjectionPushdown(bool enable) & -> TableFunction &;
+
+	/// Declares that the function can produce a virtual column, which a query asks for by name. It then takes up a
+	/// vector of the exec callback's output chunk, whose column index (see `GetColumnIndex`) is
+	/// `VIRTUAL_COLUMN_START` plus the value of the column. Requires projection pushdown. Unstable API.
+	auto AddVirtualColumn(VirtualColumn column) & -> TableFunction &;
 
 private:
 	explicit TableFunction(void *impl);
@@ -5182,6 +5218,14 @@ public:
 			return *static_cast<T *>(GetGlobalStateInternal());
 		}
 
+		/// The global state set via `InitGlobalInput::SetGlobalState`, or nullptr when the scan has not been
+		/// initialized yet -- which is the case when a `MultiFileFunction` asks about a file it has not started on. The
+		/// state must be read in a thread-safe way.
+		template <class T>
+		auto TryGetGlobalState() const -> T * {
+			return static_cast<T *>(TryGetGlobalStateInternal());
+		}
+
 		/// The user data set via `TableFunction::SetUserData`.
 		/// @throws InvalidInputException When none was set.
 		template <class T>
@@ -5206,6 +5250,7 @@ public:
 
 		void *GetBindDataInternal() const;
 		void *GetGlobalStateInternal() const;
+		void *TryGetGlobalStateInternal() const;
 		void *GetUserDataInternal() const;
 	};
 
@@ -5217,6 +5262,13 @@ public:
 	/// the engine as usual, so a callback that recognizes nothing can simply return. The optimizer may run the
 	/// callback more than once for the same query, each time with the predicates not yet accepted, and never with
 	/// none.
+	///
+	/// A function that also has projection pushdown is offered the predicates that apply to a single column of it
+	/// once more when a scan starts, just before the global init callback. That is how the callback of a function
+	/// wrapped in a `MultiFileFunction` sees them, since the optimizer only offers them to the wrapper; the bind data
+	/// is then the one of the file being scanned. The engine applies these predicates to the rows the function
+	/// produces itself, so the function may use them to skip what the query can never use (e.g. the parts of a file
+	/// whose statistics rule them out), and accepting one has no effect. Unstable API.
 	class FilterPushdownInput {
 		friend detail::HandleFactory;
 
@@ -5250,7 +5302,7 @@ public:
 		/// `Expression::GetColumnIndex` indexes.
 		auto GetColumnCount() const -> idx_t;
 		/// Resolves the index a column reference node reports to the declared column (in `BindInput::AddResultColumn`
-		/// order) it refers to.
+		/// order) it refers to, or to the index of a virtual column (see `IsVirtualColumn`).
 		/// @throws InvalidInputException When the index is out of bounds.
 		auto GetColumnIndex(idx_t index) const -> idx_t;
 
@@ -6979,7 +7031,7 @@ enum class LogScope : uint8_t {
 /// Code of your own that receives DuckDB's log entries. Create one through a `Factory` of the database it will be
 /// registered in, give it a name and a write callback, then register it with `Instance::Register` or
 /// `Extension::Register`, which makes it available to the logging configuration under its name; once the
-/// configuration directs entries to it (currently with `SET logging_storage = '<name>'`), the write callback receives
+/// configuration directs entries to it (currently with `SET logging_sink = '<name>'`), the write callback receives
 /// them. A log sink only receives entries: they cannot be read back through `duckdb_logs`.
 ///
 /// Which entries a sink receives, and when and on which thread its callbacks run, are up to DuckDB: the callbacks must

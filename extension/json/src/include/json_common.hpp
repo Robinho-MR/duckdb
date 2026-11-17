@@ -49,6 +49,7 @@ using std::unordered_set;
 using std::vector;
 
 using cxx::blob_t;
+using cxx::bignum_t;
 using cxx::Context;
 using cxx::Extension;
 using cxx::Factory;

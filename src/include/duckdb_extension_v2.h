@@ -1570,6 +1570,8 @@ typedef struct {
 	(duckdb_v2_sql_statement_handle statement, const char *name, idx_t name_length,
 	 duckdb_v2_column_data_collection_handle collection, const char **column_names, const idx_t *column_names_lengths,
 	 idx_t column_count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_add_virtual_column)
+	(duckdb_v2_table_function_handle function, DUCKDB_V2_TABLE_VIRTUAL_COLUMN column, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_table_function_metrics_get_bind_data)
 	(duckdb_v2_table_function_metrics_info_handle info, void **data, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_table_function_metrics_get_global_state)
@@ -1582,6 +1584,21 @@ typedef struct {
 	DUCKDB_V2_ERROR(*duckdb_v2_table_function_set_metrics_callback)
 	(duckdb_v2_table_function_handle function, duckdb_v2_table_function_metrics_callback_fn callback,
 	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_expression_check_statistics)
+	(duckdb_v2_context_handle context, duckdb_v2_expression_handle expression, duckdb_v2_stats_handle stats,
+	 DUCKDB_V2_FILTER_PROPAGATE_RESULT *result, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_stats_create)
+	(duckdb_v2_factory_handle factory, duckdb_v2_logical_type_handle type, duckdb_v2_stats_handle *stats,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_stats_destroy)(duckdb_v2_stats_handle *stats);
+	DUCKDB_V2_ERROR(*duckdb_v2_stats_merge)
+	(duckdb_v2_stats_handle stats, duckdb_v2_stats_handle other, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_stats_assign)
+	(duckdb_v2_stats_handle stats, duckdb_v2_stats_handle other, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_stats_get_value)
+	(duckdb_v2_stats_handle stats, duckdb_v2_value_handle *value, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_stats_set_value)
+	(duckdb_v2_stats_handle stats, duckdb_v2_value_handle value, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_cast_function_set_source_kind)
 	(duckdb_v2_cast_function_handle function, DUCKDB_V2_CAST_WILDCARD_KIND kind, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_cast_function_set_target_kind)
@@ -3727,6 +3744,9 @@ typedef struct {
 #define duckdb_v2_statement_add_collection duckdb_ext_api.duckdb_v2_statement_add_collection
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_table_function_add_virtual_column duckdb_ext_api.duckdb_v2_table_function_add_virtual_column
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_table_function_metrics_get_bind_data duckdb_ext_api.duckdb_v2_table_function_metrics_get_bind_data
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
@@ -3741,6 +3761,27 @@ typedef struct {
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_table_function_set_metrics_callback duckdb_ext_api.duckdb_v2_table_function_set_metrics_callback
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_expression_check_statistics duckdb_ext_api.duckdb_v2_expression_check_statistics
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_stats_create duckdb_ext_api.duckdb_v2_stats_create
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_stats_destroy duckdb_ext_api.duckdb_v2_stats_destroy
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_stats_merge duckdb_ext_api.duckdb_v2_stats_merge
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_stats_assign duckdb_ext_api.duckdb_v2_stats_assign
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_stats_get_value duckdb_ext_api.duckdb_v2_stats_get_value
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_stats_set_value duckdb_ext_api.duckdb_v2_stats_set_value
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_cast_function_set_source_kind duckdb_ext_api.duckdb_v2_cast_function_set_source_kind
