@@ -179,6 +179,31 @@ static void CreateRawValues(yyjson_mut_doc *doc, yyjson_mut_val *vals[], Vector 
 	}
 }
 
+//! DECIMAL(w, s) with w == s has no digits before the decimal point, so its VARCHAR form has no leading zero
+//! (e.g., ".5" or "-.5"). That is not a valid JSON number, so we add the zero before inserting it as a raw value.
+static void CreateRawDecimalValues(yyjson_mut_doc *doc, yyjson_mut_val *vals[], Vector &value_v, idx_t count) {
+	ValueView<varchar_t> values(value_v);
+	string buffer;
+	for (idx_t i = 0; i < count; i++) {
+		if (!values.IsValid(i)) {
+			vals[i] = yyjson_mut_null(doc);
+			continue;
+		}
+		auto value = values.Get(i);
+		const auto data = value.data();
+		const auto size = value.size();
+		const idx_t point_pos = (size > 0 && data[0] == '-') ? 1 : 0;
+		if (point_pos < size && data[point_pos] == '.') {
+			buffer.assign(data, point_pos);
+			buffer += '0';
+			buffer.append(data + point_pos, size - point_pos);
+			vals[i] = yyjson_mut_rawncpy(doc, buffer.c_str(), buffer.size());
+		} else {
+			vals[i] = yyjson_mut_rawncpy(doc, data, size);
+		}
+	}
+}
+
 static void CreateValuesFromDefaultCast(CreateState &state, yyjson_mut_val *vals[], Vector &value_v, idx_t count) {
 	auto strings = state.CastToVarchar(value_v);
 	CreateStringValues(state.doc, vals, strings.vec, count);
@@ -625,6 +650,7 @@ static void CreateValues(CreateState &state, yyjson_mut_val *vals[], Vector &val
 		CreateValuesFromDefaultCast(state, vals, value_v, count);
 		break;
 	case LogicalTypeId::GEOMETRY:
+	case LogicalTypeId::GEOGRAPHY:
 		CreateValuesGeometry(state, vals, value_v, count);
 		break;
 	case LogicalTypeId::BIGNUM: {
@@ -640,7 +666,11 @@ static void CreateValues(CreateState &state, yyjson_mut_val *vals[], Vector &val
 	case LogicalTypeId::DECIMAL: {
 		if (type.GetDecimalWidth() > 15) {
 			auto strings = state.CastToVarchar(value_v);
-			CreateRawValues(doc, vals, strings.vec, count);
+			if (type.GetDecimalWidth() == type.GetDecimalScale()) {
+				CreateRawDecimalValues(doc, vals, strings.vec, count);
+			} else {
+				CreateRawValues(doc, vals, strings.vec, count);
+			}
 		} else {
 			auto doubles = state.Cast(value_v, state.factory.CreateType(LogicalTypeId::DOUBLE));
 			CreateScalarValues<double>(doc, vals, doubles.vec, count,

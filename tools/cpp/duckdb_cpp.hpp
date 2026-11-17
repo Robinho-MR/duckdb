@@ -1491,6 +1491,7 @@ enum class LogicalTypeId : uint32_t {
 	HUGEINT = 50,
 	UUID = 54,
 	GEOMETRY = 60,
+	GEOGRAPHY = 61,
 	STRUCT = 100,
 	LIST = 101,
 	MAP = 102,
@@ -1548,7 +1549,7 @@ public:
 	/// - UNION one per member
 	/// - ENUM one per dictionary entry;
 	/// - VARCHAR 1 when a collation is set;
-	/// - GEOMETRY 1 when a coordinate system is set;
+	/// - GEOMETRY and GEOGRAPHY 1 when a coordinate system is set;
 	/// anything else 0.
 	auto GetParamCount() const -> idx_t;
 
