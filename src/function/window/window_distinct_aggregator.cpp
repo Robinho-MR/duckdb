@@ -1,3 +1,4 @@
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/function/window/window_distinct_aggregator.hpp"
 
 #include "duckdb/common/sorting/sort.hpp"
@@ -97,6 +98,8 @@ public:
 
 	//! Sorting operations
 	vector<idx_t> sort_cols;
+	//! DISTINCT FROM comparison of the aggregate arguments
+	unique_ptr<Expression> key_distinct_from;
 	unique_ptr<Sort> sort;
 	unique_ptr<GlobalSinkState> global_sink;
 	//! Local sort sets
@@ -135,6 +138,10 @@ WindowDistinctAggregatorGlobalState::WindowDistinctAggregatorGlobalState(ClientC
 		orders.emplace_back(OrderType::ASCENDING, OrderByNullType::NULLS_FIRST, std::move(expr));
 		sort_cols.emplace_back(sort_cols.size());
 	}
+
+	auto key_type = WindowCollectionChunkScanner::PrefixStructType(sort_types, aggregator.arg_types.size());
+	key_distinct_from =
+	    BoundComparisonExpression::CreateOnColumns(ExpressionType::COMPARE_DISTINCT_FROM, key_type, key_type);
 
 	sort = make_uniq<Sort>(client, orders, sort_types, sort_cols);
 	global_sink = sort->GetGlobalSinkState(client);
@@ -449,7 +456,7 @@ void WindowDistinctAggregatorLocalState::Sorted(Context &context) {
 	}
 
 	//	8:	for i ← 1 to in.size do
-	WindowDeltaScanner(context, collection, block_begin, block_end, scan_cols, key_count,
+	WindowDeltaScanner(context, *gdstate.key_distinct_from, collection, block_begin, block_end, scan_cols, key_count,
 	                   [&](const idx_t row_idx, DataChunk &prev, DataChunk &curr, const idx_t ndistinct,
 	                       SelectionVector &distinct, const SelectionVector &matching) {
 		                   const auto count = MinValue<idx_t>(prev.size(), curr.size());

@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/execution/mark_join_row_comparison.hpp"
 #include "duckdb/common/atomic.hpp"
 #include "duckdb/common/helper.hpp"
 #include "duckdb/common/optional_ptr.hpp"
@@ -310,9 +311,10 @@ public:
 	};
 
 	JoinHashTable(ClientContext &context, const PhysicalOperator &op, const vector<JoinCondition> &conditions,
-	              vector<LogicalType> build_types, JoinType type, idx_t initial_radix_bits,
-	              const vector<idx_t> &output_columns, unique_ptr<ResidualPredicateInfo> residual_p,
-	              optional_ptr<Expression> predicate_ptr = nullptr, const vector<idx_t> &output_in_probe = {});
+	              const MarkJoinComparisons &mark_comparisons, vector<LogicalType> build_types, JoinType type,
+	              idx_t initial_radix_bits, const vector<idx_t> &output_columns,
+	              unique_ptr<ResidualPredicateInfo> residual_p, optional_ptr<Expression> predicate_ptr = nullptr,
+	              const vector<idx_t> &output_in_probe = {});
 	~JoinHashTable();
 
 	//! Initialize layout-dependent state from a layout (and dict-surviving descriptor, nullptr = no narrowed column)
@@ -417,6 +419,8 @@ public:
 	BufferManager &buffer_manager;
 	//! The join conditions
 	const vector<JoinCondition> &conditions;
+	//! The comparisons of the keys of a MARK join
+	const MarkJoinComparisons &mark_comparisons;
 	//! The types of the keys used in equality comparison
 	vector<LogicalType> equality_types;
 	//! The types of the keys

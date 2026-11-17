@@ -61,6 +61,9 @@ PhysicalHashJoin::PhysicalHashJoin(PhysicalPlan &physical_plan, LogicalOperator 
       delim_types(std::move(delim_types)) {
 	D_ASSERT(join_type != JoinType::MARK || !predicate);
 	filter_pushdown = std::move(pushdown_info_p);
+	if (join_type == JoinType::MARK) {
+		mark_comparisons = MarkJoinComparisons(conditions);
+	}
 
 	children.push_back(left);
 	children.push_back(right);
@@ -765,10 +768,10 @@ void HashJoinGlobalSinkState::PublishLayoutIfFirst(HashJoinLocalSinkState &lstat
 
 unique_ptr<JoinHashTable> PhysicalHashJoin::InitializeHashTable(ClientContext &context,
                                                                 const idx_t initial_radix_bits) const {
-	auto result =
-	    make_uniq<JoinHashTable>(context, *this, conditions, payload_columns.col_types, join_type, initial_radix_bits,
-	                             rhs_output_columns.col_idxs, residual_info ? residual_info->Copy() : nullptr,
-	                             predicate ? predicate.get() : nullptr, lhs_output_in_probe);
+	auto result = make_uniq<JoinHashTable>(context, *this, conditions, mark_comparisons, payload_columns.col_types,
+	                                       join_type, initial_radix_bits, rhs_output_columns.col_idxs,
+	                                       residual_info ? residual_info->Copy() : nullptr,
+	                                       predicate ? predicate.get() : nullptr, lhs_output_in_probe);
 
 	if (!delim_types.empty() && join_type == JoinType::MARK) {
 		// correlated MARK join

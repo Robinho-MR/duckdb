@@ -1,5 +1,5 @@
 #include "duckdb/common/serializer/deserializer.hpp"
-#include "duckdb/execution/comparison_executor.hpp"
+#include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/execution/expression_executor_state.hpp"
 #include "duckdb/common/serializer/serializer.hpp"
 #include "duckdb/common/smaller_binary.hpp"
@@ -9,46 +9,51 @@
 #include "duckdb/parser/expression/between_expression.hpp"
 #include "duckdb/parser/expression/comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/legacy_bound_between_expression.hpp"
 
 namespace duckdb {
 
 struct BetweenFunctionData : public FunctionData {
-	BetweenFunctionData(bool lower_inclusive, bool upper_inclusive)
-	    : lower_inclusive(lower_inclusive), upper_inclusive(upper_inclusive) {
+	BetweenFunctionData(bool lower_inclusive, bool upper_inclusive, unique_ptr<Expression> lower_comparison,
+	                    unique_ptr<Expression> upper_comparison)
+	    : lower_inclusive(lower_inclusive), upper_inclusive(upper_inclusive),
+	      lower_comparison(std::move(lower_comparison)), upper_comparison(std::move(upper_comparison)) {
 	}
 
 	bool lower_inclusive;
 	bool upper_inclusive;
+	//! The comparisons "input <op> lower" and "input <op> upper" over the columns 0 and 1 of a binary input
+	unique_ptr<Expression> lower_comparison;
+	unique_ptr<Expression> upper_comparison;
 
 public:
 	unique_ptr<FunctionData> Copy() const override {
-		return make_uniq<BetweenFunctionData>(lower_inclusive, upper_inclusive);
+		return make_uniq<BetweenFunctionData>(lower_inclusive, upper_inclusive, lower_comparison->Copy(),
+		                                      upper_comparison->Copy());
 	};
 
 	bool Equals(const FunctionData &other_p) const override {
 		auto &other = other_p.Cast<BetweenFunctionData>();
-		return lower_inclusive == other.lower_inclusive && upper_inclusive == other.upper_inclusive;
+		return lower_inclusive == other.lower_inclusive && upper_inclusive == other.upper_inclusive &&
+		       lower_comparison->Equals(*other.lower_comparison) && upper_comparison->Equals(*other.upper_comparison);
 	}
 };
 
-//! The comparisons of the lower and upper bound, executed through the comparison functions
+//! Executes the comparisons of the lower and upper bound
 struct BetweenLocalState : public FunctionLocalState {
-	BetweenLocalState(Context &context, const BoundFunctionExpression &expr, const BetweenFunctionData &data)
-	    : lower_comparison(context, BoundBetweenExpression::LowerComparisonType(data.lower_inclusive),
-	                       expr.GetChildren()[0]->GetReturnType(), expr.GetChildren()[1]->GetReturnType()),
-	      upper_comparison(context, BoundBetweenExpression::UpperComparisonType(data.upper_inclusive),
-	                       expr.GetChildren()[0]->GetReturnType(), expr.GetChildren()[2]->GetReturnType()) {
+	BetweenLocalState(Context &context, const BetweenFunctionData &data)
+	    : lower_comparison(context, *data.lower_comparison), upper_comparison(context, *data.upper_comparison) {
 	}
 
-	ComparisonExecutor lower_comparison;
-	ComparisonExecutor upper_comparison;
+	ExpressionExecutor lower_comparison;
+	ExpressionExecutor upper_comparison;
 };
 
 static unique_ptr<FunctionLocalState> BetweenInitLocalState(ExpressionState &state, const BoundFunctionExpression &expr,
                                                             FunctionData *bind_data) {
-	return make_uniq<BetweenLocalState>(state.GetContext(), expr, bind_data->Cast<BetweenFunctionData>());
+	return make_uniq<BetweenLocalState>(state.GetContext(), bind_data->Cast<BetweenFunctionData>());
 }
 
 void BetweenFunction(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -60,8 +65,8 @@ void BetweenFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	const auto &lower = args.data[1];
 	const auto &upper = args.data[2];
 
-	lstate.lower_comparison.Execute(input, lower, intermediate1);
-	lstate.upper_comparison.Execute(input, upper, intermediate2);
+	lstate.lower_comparison.ExecuteBinaryExpression(input, lower, intermediate1);
+	lstate.upper_comparison.ExecuteBinaryExpression(input, upper, intermediate2);
 	VectorOperations::And(intermediate1, intermediate2, result);
 }
 
@@ -115,8 +120,8 @@ static idx_t BetweenSelectGeneric(BetweenLocalState &lstate, const Vector &input
 	Vector intermediate1(LogicalType::BOOLEAN);
 	Vector intermediate2(LogicalType::BOOLEAN);
 	Vector result(LogicalType::BOOLEAN);
-	lstate.lower_comparison.Execute(input, lower, intermediate1);
-	lstate.upper_comparison.Execute(input, upper, intermediate2);
+	lstate.lower_comparison.ExecuteBinaryExpression(input, lower, intermediate1);
+	lstate.upper_comparison.ExecuteBinaryExpression(input, upper, intermediate2);
 	VectorOperations::And(intermediate1, intermediate2, result);
 	return UnaryExecutor::Select<bool>(
 	    result, sel.get(), count, [](bool value) { return value; }, true_sel.get(), false_sel.get());
@@ -210,7 +215,13 @@ unique_ptr<Expression> BoundBetweenExpression::Create(unique_ptr<Expression> inp
 	children.push_back(std::move(lower));
 	children.push_back(std::move(upper));
 
-	auto function_data = make_uniq<BetweenFunctionData>(lower_inclusive, upper_inclusive);
+	auto &input_type = children[0]->GetReturnType();
+	auto lower_comparison = BoundComparisonExpression::CreateOnColumns(
+	    BoundBetweenExpression::LowerComparisonType(lower_inclusive), input_type, children[1]->GetReturnType());
+	auto upper_comparison = BoundComparisonExpression::CreateOnColumns(
+	    BoundBetweenExpression::UpperComparisonType(upper_inclusive), input_type, children[2]->GetReturnType());
+	auto function_data = make_uniq<BetweenFunctionData>(lower_inclusive, upper_inclusive, std::move(lower_comparison),
+	                                                    std::move(upper_comparison));
 
 	auto result = make_uniq<BoundFunctionExpression>(BoundScalarFunction(BetweenFun::GetFunction()),
 	                                                 std::move(children), std::move(function_data), false);
@@ -251,12 +262,17 @@ void BetweenFunctionSerialize(Serializer &serializer, const optional_ptr<Functio
 	auto &bind_data = bind_data_p->Cast<BetweenFunctionData>();
 	serializer.WriteProperty(100, "lower_inclusive", bind_data.lower_inclusive);
 	serializer.WriteProperty(101, "upper_inclusive", bind_data.upper_inclusive);
+	serializer.WriteProperty(102, "lower_comparison", bind_data.lower_comparison);
+	serializer.WriteProperty(103, "upper_comparison", bind_data.upper_comparison);
 }
 
 unique_ptr<FunctionData> BetweenFunctionDeserialize(Deserializer &deserializer, BoundScalarFunction &function) {
 	auto lower_inclusive = deserializer.ReadProperty<bool>(100, "lower_inclusive");
 	auto upper_inclusive = deserializer.ReadProperty<bool>(101, "upper_inclusive");
-	return make_uniq<BetweenFunctionData>(lower_inclusive, upper_inclusive);
+	auto lower_comparison = deserializer.ReadProperty<unique_ptr<Expression>>(102, "lower_comparison");
+	auto upper_comparison = deserializer.ReadProperty<unique_ptr<Expression>>(103, "upper_comparison");
+	return make_uniq<BetweenFunctionData>(lower_inclusive, upper_inclusive, std::move(lower_comparison),
+	                                      std::move(upper_comparison));
 }
 
 ScalarFunction BetweenFun::GetFunction() {

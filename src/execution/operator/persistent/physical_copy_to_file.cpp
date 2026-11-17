@@ -1,3 +1,4 @@
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/execution/operator/persistent/physical_copy_to_file.hpp"
 
 #include "duckdb/common/file_opener.hpp"
@@ -2182,6 +2183,8 @@ public:
 public:
 	const PartitionedCopy &partitioned_copy;
 	const unique_ptr<const SortStrategy> strategy;
+	//! DISTINCT FROM comparison of the partition columns
+	unique_ptr<Expression> partition_distinct_from;
 };
 
 //! A hash bin of a SortStrategyInput (or all bins of an overflow sort): sorted, materialized and masked for partition
@@ -2284,6 +2287,14 @@ private:
 SortStrategyInput::SortStrategyInput(const PartitionedCopy &partitioned_copy_p,
                                      unique_ptr<const SortStrategy> strategy_p)
     : partitioned_copy(partitioned_copy_p), strategy(std::move(strategy_p)) {
+	auto &op = partitioned_copy.op;
+	vector<LogicalType> key_types;
+	for (auto partition_column : op.partition_columns) {
+		key_types.push_back(op.expected_types[partition_column]);
+	}
+	auto key_type = WindowCollectionChunkScanner::PrefixStructType(key_types, key_types.size());
+	partition_distinct_from =
+	    BoundComparisonExpression::CreateOnColumns(ExpressionType::COMPARE_DISTINCT_FROM, key_type, key_type);
 }
 
 unique_ptr<PartitionedCopyInputGlobalState> SortStrategyInput::GetGlobalState(ClientContext &context) const {
@@ -2493,7 +2504,8 @@ void SortedBinGroup::Mask(Context &context, idx_t begin_block, idx_t end_block) 
 	auto &scan_cols = input.strategy->sort_ids;
 	const auto chunk_begin = ChunkOf(owned_begin);
 	const auto chunk_end = ChunkOf(owned_end - 1) + 1;
-	WindowDeltaScanner(context, *collection, chunk_begin, chunk_end, scan_cols, key_count,
+	WindowDeltaScanner(context, *input.partition_distinct_from, *collection, chunk_begin, chunk_end, scan_cols,
+	                   key_count,
 	                   [&](const idx_t row_idx, DataChunk &, DataChunk &, const idx_t ndistinct,
 	                       const SelectionVector &distinct, const SelectionVector &) {
 		                   for (idx_t i = 0; i < ndistinct; i++) {

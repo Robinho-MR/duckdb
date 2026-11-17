@@ -4,7 +4,6 @@
 #include "duckdb/common/types/vector.hpp"
 #include "duckdb/common/uhugeint.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
-#include "duckdb/execution/comparison_executor.hpp"
 #include "duckdb/execution/mark_join_row_comparison.hpp"
 #include "duckdb/execution/nested_loop_join.hpp"
 
@@ -40,18 +39,20 @@ static void TemplatedMarkJoin(const Vector &left, const Vector &right, idx_t lco
 	}
 }
 
-static void MarkJoinNested(Context &context, const Vector &left, const Vector &right, idx_t lcount, idx_t rcount,
-                           bool found_match[], ExpressionType comparison_type, optional_ptr<bool> found_unknown) {
+static void MarkJoinNested(Context &context, const MarkJoinPlan &plan, const Vector &left, const Vector &right,
+                           idx_t lcount, idx_t rcount, bool found_match[], ExpressionType comparison_type,
+                           optional_ptr<bool> found_unknown) {
 	if (left.GetType().id() == LogicalTypeId::TUPLE &&
 	    (comparison_type == ExpressionType::COMPARE_EQUAL || comparison_type == ExpressionType::COMPARE_NOTEQUAL)) {
+		MarkJoinRowComparison row_comparison(context, plan.leaf_equalities);
 		for (idx_t left_row = 0; left_row < lcount; left_row++) {
 			if (found_match[left_row]) {
 				continue;
 			}
 			bool equality_is_false[STANDARD_VECTOR_SIZE] = {false};
 			bool equality_is_unknown[STANDARD_VECTOR_SIZE] = {false};
-			MarkJoinRowComparison::CompareEquality(context, left, left_row, lcount, right, rcount, equality_is_false,
-			                                       equality_is_unknown);
+			row_comparison.CompareEquality(left, left_row, lcount, right, rcount, equality_is_false,
+			                               equality_is_unknown);
 			for (idx_t right_row = 0; right_row < rcount; right_row++) {
 				const bool is_match = comparison_type == ExpressionType::COMPARE_EQUAL
 				                          ? !equality_is_false[right_row] && !equality_is_unknown[right_row]
@@ -68,7 +69,7 @@ static void MarkJoinNested(Context &context, const Vector &left, const Vector &r
 		return;
 	}
 
-	ComparisonExecutor comparison(context, comparison_type, left.GetType(), right.GetType());
+	ExpressionExecutor comparison(context, plan.comparison);
 	Vector left_reference(left.GetType());
 	for (idx_t i = 0; i < lcount; i++) {
 		if (found_match[i]) {
@@ -76,7 +77,7 @@ static void MarkJoinNested(Context &context, const Vector &left, const Vector &r
 		}
 		ConstantVector::Reference(left_reference, count_t(rcount), left, i, lcount);
 		Vector comparison_result(LogicalType::BOOLEAN);
-		comparison.Execute(left_reference, right, comparison_result);
+		comparison.ExecuteBinaryExpression(left_reference, right, comparison_result);
 		bool has_match = false;
 		bool has_unknown = false;
 		for (auto entry : comparison_result.Values<bool>()) {
@@ -130,14 +131,14 @@ static void MarkJoinSwitch(const Vector &left, const Vector &right, idx_t lcount
 	}
 }
 
-static void MarkJoinComparisonSwitch(Context &context, const Vector &left, const Vector &right, idx_t lcount,
-                                     idx_t rcount, bool found_match[], ExpressionType comparison_type,
-                                     optional_ptr<bool> found_unknown) {
+static void MarkJoinComparisonSwitch(Context &context, const MarkJoinPlan &plan, const Vector &left,
+                                     const Vector &right, idx_t lcount, idx_t rcount, bool found_match[],
+                                     ExpressionType comparison_type, optional_ptr<bool> found_unknown) {
 	switch (left.GetType().InternalType()) {
 	case PhysicalType::STRUCT:
 	case PhysicalType::LIST:
 	case PhysicalType::ARRAY:
-		return MarkJoinNested(context, left, right, lcount, rcount, found_match, comparison_type, found_unknown);
+		return MarkJoinNested(context, plan, left, right, lcount, rcount, found_match, comparison_type, found_unknown);
 	default:
 		break;
 	}
@@ -162,7 +163,8 @@ static void MarkJoinComparisonSwitch(Context &context, const Vector &left, const
 	}
 }
 
-void NestedLoopJoinMark::Perform(Context &context, DataChunk &left, ColumnDataCollection &right, bool found_match[],
+void NestedLoopJoinMark::Perform(Context &context, const MarkJoinPlan &plan, DataChunk &left,
+                                 ColumnDataCollection &right, bool found_match[],
                                  const vector<JoinCondition> &conditions, optional_ptr<bool> found_unknown) {
 	D_ASSERT(conditions.size() == 1);
 	// initialize a new temporary selection vector for the left chunk
@@ -174,8 +176,8 @@ void NestedLoopJoinMark::Perform(Context &context, DataChunk &left, ColumnDataCo
 	right.InitializeScanChunk(scan_chunk);
 
 	while (right.Scan(scan_state, scan_chunk)) {
-		MarkJoinComparisonSwitch(context, left.data[0], scan_chunk.data[0], left.size(), scan_chunk.size(), found_match,
-		                         conditions[0].GetComparisonType(), found_unknown);
+		MarkJoinComparisonSwitch(context, plan, left.data[0], scan_chunk.data[0], left.size(), scan_chunk.size(),
+		                         found_match, conditions[0].GetComparisonType(), found_unknown);
 	}
 }
 

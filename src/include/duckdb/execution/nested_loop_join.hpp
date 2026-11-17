@@ -21,9 +21,22 @@ struct NestedLoopJoinInner {
 	                     SelectionVector &lvector, SelectionVector &rvector, const vector<JoinCondition> &conditions);
 };
 
+//! The comparisons of the condition of a MARK nested loop join, created during planning
+struct MarkJoinPlan {
+	MarkJoinPlan(const Expression &comparison, const vector<unique_ptr<Expression>> &leaf_equalities)
+	    : comparison(comparison), leaf_equalities(leaf_equalities) {
+	}
+
+	//! The comparison of the condition
+	const Expression &comparison;
+	//! The equalities of the leaves of the condition (for comparing tuples)
+	const vector<unique_ptr<Expression>> &leaf_equalities;
+};
+
 struct NestedLoopJoinMark {
-	static void Perform(Context &context, DataChunk &left, ColumnDataCollection &right, bool found_match[],
-	                    const vector<JoinCondition> &conditions, optional_ptr<bool> found_unknown = nullptr);
+	static void Perform(Context &context, const MarkJoinPlan &plan, DataChunk &left, ColumnDataCollection &right,
+	                    bool found_match[], const vector<JoinCondition> &conditions,
+	                    optional_ptr<bool> found_unknown = nullptr);
 };
 
 } // namespace duckdb

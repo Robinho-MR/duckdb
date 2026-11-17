@@ -33,6 +33,10 @@ public:
 		return true;
 	}
 
+public:
+	//! The equalities of the leaves of the condition of a MARK join (for comparing tuples)
+	vector<unique_ptr<Expression>> mark_leaf_equalities;
+
 protected:
 	// CachingOperator Interface
 	OperatorResultType ExecuteInternal(ExecutionContext &context, DataChunk &input, DataChunk &chunk,

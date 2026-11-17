@@ -11,7 +11,6 @@
 #include "duckdb/execution/ht_entry.hpp"
 #include "duckdb/logging/log_manager.hpp"
 #include "duckdb/execution/expression_executor.hpp"
-#include "duckdb/execution/comparison_executor.hpp"
 #include "duckdb/execution/mark_join_row_comparison.hpp"
 #include "duckdb/execution/operator/join/physical_hash_join.hpp"
 #include "duckdb/execution/perfect_hash_join_table.hpp"
@@ -88,13 +87,13 @@ JoinHashTable::InsertState::InsertState(const JoinHashTable &ht)
 }
 
 JoinHashTable::JoinHashTable(ClientContext &context_p, const PhysicalOperator &op_p,
-                             const vector<JoinCondition> &conditions_p, vector<LogicalType> btypes, JoinType type_p,
-                             const idx_t initial_radix_bits, const vector<idx_t> &output_columns_p,
-                             unique_ptr<ResidualPredicateInfo> residual_p, optional_ptr<Expression> predicate_ptr,
-                             const vector<idx_t> &output_in_probe)
+                             const vector<JoinCondition> &conditions_p, const MarkJoinComparisons &mark_comparisons_p,
+                             vector<LogicalType> btypes, JoinType type_p, const idx_t initial_radix_bits,
+                             const vector<idx_t> &output_columns_p, unique_ptr<ResidualPredicateInfo> residual_p,
+                             optional_ptr<Expression> predicate_ptr, const vector<idx_t> &output_in_probe)
     : context(context_p), op(op_p), buffer_manager(BufferManager::GetBufferManager(context)), conditions(conditions_p),
-      build_types(std::move(btypes)), output_columns(output_columns_p), tuple_size(0),
-      vfound(Value::BOOLEAN(false), count_t(STANDARD_VECTOR_SIZE)), join_type(type_p), finalized(false),
+      mark_comparisons(mark_comparisons_p), build_types(std::move(btypes)), output_columns(output_columns_p),
+      tuple_size(0), vfound(Value::BOOLEAN(false), count_t(STANDARD_VECTOR_SIZE)), join_type(type_p), finalized(false),
       has_null(false), residual_predicate(predicate_ptr), radix_bits(initial_radix_bits) {
 	// store residual predicate information
 	residual_info = std::move(residual_p);
@@ -683,14 +682,15 @@ static bool MarkJoinNullRows(const UnifiedVectorFormat &format, idx_t count,
 	return has_null;
 }
 
-static bool MarkJoinKeysHaveNull(Context &context, DataChunk &keys, optional_ptr<bool> rows_with_null = nullptr) {
+static bool MarkJoinKeysHaveNull(Context &context, const MarkJoinComparisons &comparisons, DataChunk &keys,
+                                 optional_ptr<bool> rows_with_null = nullptr) {
 	bool has_null = false;
 	for (idx_t col_idx = 0; col_idx < keys.ColumnCount(); col_idx++) {
 		UnifiedVectorFormat format;
 		if (keys.data[col_idx].GetType().IsNested()) {
 			Vector comparison(LogicalType::BOOLEAN, keys.size());
-			ComparisonExecutor equals(context, ExpressionType::COMPARE_EQUAL, keys.data[col_idx].GetType());
-			equals.Execute(keys.data[col_idx], keys.data[col_idx], comparison);
+			ExpressionExecutor equals(context, *comparisons.key_equals[col_idx]);
+			equals.ExecuteBinaryExpression(keys.data[col_idx], keys.data[col_idx], comparison);
 			comparison.ToUnifiedFormat(format);
 		} else {
 			keys.data[col_idx].ToUnifiedFormat(format);
@@ -735,7 +735,7 @@ void JoinHashTable::Build(PartitionedTupleDataAppendState &append_state, DataChu
 	if (mark_join_info.uncorrelated_condition_rows) {
 		// Keep all rows: probe-side NULLs can be UNKNOWN against non-NULL rows in other external hash partitions.
 		mark_join_info.uncorrelated_has_null =
-		    mark_join_info.uncorrelated_has_null || MarkJoinKeysHaveNull(context.GetContext(), keys);
+		    mark_join_info.uncorrelated_has_null || MarkJoinKeysHaveNull(context.GetContext(), mark_comparisons, keys);
 		mark_join_info.uncorrelated_condition_rows->Append(keys);
 	}
 
@@ -2342,13 +2342,14 @@ void ScanStructure::NextRightSemiOrAntiJoin(DataChunk &keys, DataChunk &probe_da
 	finished = true;
 }
 
-static bool MarkJoinChunkHasUnknown(Context &context, DataChunk &left, idx_t left_row, DataChunk &right) {
+static bool MarkJoinChunkHasUnknown(vector<MarkJoinRowComparison> &row_comparisons, DataChunk &left, idx_t left_row,
+                                    DataChunk &right) {
 	D_ASSERT(left.ColumnCount() == right.ColumnCount());
 	bool row_is_false[STANDARD_VECTOR_SIZE] = {false};
 	bool row_is_unknown[STANDARD_VECTOR_SIZE] = {false};
 	for (idx_t col_idx = 0; col_idx < left.ColumnCount(); col_idx++) {
-		MarkJoinRowComparison::CompareEquality(context, left.data[col_idx], left_row, left.size(), right.data[col_idx],
-		                                       right.size(), row_is_false, row_is_unknown);
+		row_comparisons[col_idx].CompareEquality(left.data[col_idx], left_row, left.size(), right.data[col_idx],
+		                                         right.size(), row_is_false, row_is_unknown);
 	}
 	for (idx_t right_row = 0; right_row < right.size(); right_row++) {
 		if (!row_is_false[right_row] && row_is_unknown[right_row]) {
@@ -2416,7 +2417,7 @@ void JoinHashTable::ConstructMarkJoinResult(DataChunk &join_keys, DataChunk &pro
 	}
 	bool requires_refinement[STANDARD_VECTOR_SIZE] = {false};
 	if (!mark_join_info.uncorrelated_has_null &&
-	    !MarkJoinKeysHaveNull(context.GetContext(), join_keys, requires_refinement)) {
+	    !MarkJoinKeysHaveNull(context.GetContext(), mark_comparisons, join_keys, requires_refinement)) {
 		return;
 	}
 
@@ -2432,6 +2433,10 @@ void JoinHashTable::ConstructMarkJoinResult(DataChunk &join_keys, DataChunk &pro
 		return;
 	}
 
+	vector<MarkJoinRowComparison> row_comparisons;
+	for (auto &leaf_equalities : mark_comparisons.key_leaf_equalities) {
+		row_comparisons.emplace_back(context.GetContext(), leaf_equalities);
+	}
 	ColumnDataScanState scan_state;
 	mark_join_info.uncorrelated_condition_rows->InitializeScan(scan_state);
 	DataChunk rhs_chunk;
@@ -2440,7 +2445,7 @@ void JoinHashTable::ConstructMarkJoinResult(DataChunk &join_keys, DataChunk &pro
 		idx_t remaining_count = 0;
 		for (idx_t candidate_idx = 0; candidate_idx < refinement_count; candidate_idx++) {
 			auto probe_idx = refinement_sel.get_index(candidate_idx);
-			if (MarkJoinChunkHasUnknown(context.GetContext(), join_keys, probe_idx, rhs_chunk)) {
+			if (MarkJoinChunkHasUnknown(row_comparisons, join_keys, probe_idx, rhs_chunk)) {
 				mask.SetInvalid(probe_idx);
 			} else {
 				refinement_sel.set_index(remaining_count++, probe_idx);

@@ -96,9 +96,8 @@ RecursiveCTEKeyDeltaState::RecursiveCTEKeyDeltaState(ClientContext &context, con
 	changed_rows.Initialize(Allocator::Get(context), op.GetTypes());
 	previous_scan_rows.Initialize(Allocator::Get(context), GetPreviousStateTypes(op, address_only_previous));
 	key_scan_rows.Initialize(Allocator::Get(context), op.hash_key_types);
-	for (auto &payload_type : op.payload_types) {
-		payload_distinct_from.push_back(
-		    make_uniq<ComparisonExecutor>(context, ExpressionType::COMPARE_DISTINCT_FROM, payload_type));
+	for (auto &comparison : op.payload_distinct_from) {
+		payload_distinct_from.push_back(make_uniq<ExpressionExecutor>(context, *comparison));
 	}
 	vector<LogicalType> comparison_types;
 	comparison_types.reserve(op.payload_types.size() * 2);
@@ -137,17 +136,18 @@ void RecursiveCTEKeyDeltaState::PrepareCollections() {
 	collections_initialized = true;
 }
 
-static idx_t SelectDistinctPayloadRows(ComparisonExecutor &distinct_from, const Vector &previous, const Vector &current,
+static idx_t SelectDistinctPayloadRows(ExpressionExecutor &distinct_from, const Vector &previous, const Vector &current,
                                        optional_ptr<SelectionVector> candidates, idx_t candidate_count,
                                        SelectionVector &changed, SelectionVector &unchanged) {
-	return distinct_from.Select(previous, current, candidates.get(), candidate_count, &changed, &unchanged);
+	return distinct_from.SelectBinaryExpression(previous, current, candidates.get(), candidate_count, &changed,
+	                                            &unchanged);
 }
 
 //! Whether the finalized payload of every row equals the candidate payload that produced it
 static bool FinalizedPayloadsEqualCandidates(RecursiveCTEKeyDeltaState &delta, const PhysicalRecursiveCTE &op,
                                              DataChunk &finalized, DataChunk &candidates, idx_t count) {
 	for (idx_t payload_idx = 0; payload_idx < op.payload_idx.size(); payload_idx++) {
-		const auto mismatch_count = delta.payload_distinct_from[payload_idx]->Select(
+		const auto mismatch_count = delta.payload_distinct_from[payload_idx]->SelectBinaryExpression(
 		    finalized.data[payload_idx], candidates.data[op.payload_idx[payload_idx]], nullptr, count,
 		    &delta.changed_column_groups, &delta.equal_groups_a);
 		if (mismatch_count != 0) {

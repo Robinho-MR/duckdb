@@ -14,6 +14,7 @@
 namespace duckdb {
 
 class Context;
+class Expression;
 class Vector;
 class DataChunk;
 class TupleDataLayout;
@@ -21,15 +22,17 @@ struct TupleDataVectorFormat;
 struct SelectionVector;
 struct MatchFunction;
 
-typedef idx_t (*match_function_t)(Context &context, Vector &lhs_vector, const TupleDataVectorFormat &lhs_format,
-                                  SelectionVector &sel, const idx_t count, const TupleDataLayout &rhs_layout,
-                                  Vector &rhs_row_locations, const idx_t col_idx,
+typedef idx_t (*match_function_t)(Context &context, const MatchFunction &self, Vector &lhs_vector,
+                                  const TupleDataVectorFormat &lhs_format, SelectionVector &sel, const idx_t count,
+                                  const TupleDataLayout &rhs_layout, Vector &rhs_row_locations, const idx_t col_idx,
                                   const vector<MatchFunction> &child_functions, SelectionVector *no_match_sel,
                                   idx_t &no_match_count);
 
 struct MatchFunction {
 	match_function_t function;
 	vector<MatchFunction> child_functions;
+	//! The comparison of nested values (if the function compares them using a comparison function)
+	shared_ptr<Expression> comparison;
 };
 
 struct RowMatcher {
@@ -59,7 +62,7 @@ private:
 	template <bool NO_MATCH_SEL>
 	MatchFunction GetStructMatchFunction(const LogicalType &type, const ExpressionType predicate);
 	template <bool NO_MATCH_SEL>
-	MatchFunction GetListMatchFunction(const ExpressionType predicate);
+	MatchFunction GetListMatchFunction(const LogicalType &type, const ExpressionType predicate);
 
 private:
 	optional_ptr<Context> context;

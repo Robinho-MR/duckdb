@@ -3,15 +3,35 @@
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/common/error_data.hpp"
-#include "duckdb/execution/comparison_executor.hpp"
+#include "duckdb/execution/expression_executor_state.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/vector_writer.hpp"
 
 namespace duckdb {
 
+//! The state of IN: the comparisons of the probe with every value
+struct InOperatorState : public ExpressionState {
+	InOperatorState(const BoundOperatorExpression &expr, ExpressionExecutorState &root) : ExpressionState(expr, root) {
+		auto &children = expr.GetChildren();
+		auto &probe_type = children[0]->GetReturnType();
+		for (idx_t child_idx = 1; child_idx < children.size(); child_idx++) {
+			comparisons.push_back(BoundComparisonExpression::CreateOnColumns(ExpressionType::COMPARE_EQUAL, probe_type,
+			                                                                 children[child_idx]->GetReturnType()));
+			comparison_executors.push_back(make_uniq<ExpressionExecutor>(GetContext(), *comparisons.back()));
+		}
+	}
+
+	vector<unique_ptr<Expression>> comparisons;
+	vector<unique_ptr<ExpressionExecutor>> comparison_executors;
+};
+
 unique_ptr<ExpressionState> ExpressionExecutor::InitializeState(const BoundOperatorExpression &expr,
                                                                 ExpressionExecutorState &root) {
-	auto result = make_uniq<ExpressionState>(expr, root);
+	const auto is_in = expr.GetExpressionType() == ExpressionType::COMPARE_IN ||
+	                   expr.GetExpressionType() == ExpressionType::COMPARE_NOT_IN;
+	auto result = is_in && expr.GetChildren().size() >= 2 ? make_uniq<InOperatorState>(expr, root)
+	                                                      : make_uniq<ExpressionState>(expr, root);
 	const auto save_inside_try = root.inside_try;
 	const auto expression_type = expr.GetExpressionType();
 	if (expression_type == ExpressionType::OPERATOR_TRY || expression_type == ExpressionType::OPERATOR_HAS_ERROR) {
@@ -192,9 +212,8 @@ void ExpressionExecutor::Execute(const BoundOperatorExpression &expr, Expression
 			Vector comp_res(LogicalType::BOOLEAN);
 
 			Execute(*expr.GetChildren()[child], state->child_states[child].get(), sel, count, vector_to_check);
-			ComparisonExecutor equals(GetContext(), ExpressionType::COMPARE_EQUAL, left.GetType(),
-			                          vector_to_check.GetType());
-			equals.Execute(left, vector_to_check, comp_res);
+			state->Cast<InOperatorState>().comparison_executors[child - 1]->ExecuteBinaryExpression(
+			    left, vector_to_check, comp_res);
 
 			if (child == 1) {
 				// first child: move to result

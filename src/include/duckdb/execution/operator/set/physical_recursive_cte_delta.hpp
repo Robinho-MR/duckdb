@@ -4,7 +4,7 @@
 #include "duckdb/execution/aggregate_hashtable.hpp"
 #include "duckdb/execution/operator/set/physical_recursive_cte.hpp"
 
-#include "duckdb/execution/comparison_executor.hpp"
+#include "duckdb/execution/expression_executor.hpp"
 
 namespace duckdb {
 
@@ -90,7 +90,7 @@ struct RecursiveCTEKeyDeltaState {
 	DataChunk key_scan_rows;
 	DataChunk comparison_rows;
 	//! DISTINCT FROM comparison of every payload column
-	vector<unique_ptr<ComparisonExecutor>> payload_distinct_from;
+	vector<unique_ptr<ExpressionExecutor>> payload_distinct_from;
 	Vector matched_addresses;
 	Vector finalize_addresses;
 	SelectionVector found_groups;

@@ -1,7 +1,8 @@
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
 #include "duckdb/common/row_operations/row_matcher.hpp"
-#include "duckdb/execution/comparison_executor.hpp"
+#include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 
 #include "duckdb/common/enum_util.hpp"
@@ -72,10 +73,10 @@ static idx_t TemplatedMatchLoop(const TupleDataVectorFormat &lhs_format, Selecti
 }
 
 template <bool NO_MATCH_SEL, class T, class OP>
-static idx_t TemplatedMatch(Context &, Vector &, const TupleDataVectorFormat &lhs_format, SelectionVector &sel,
-                            const idx_t count, const TupleDataLayout &rhs_layout, Vector &rhs_row_locations,
-                            const idx_t col_idx, const vector<MatchFunction> &, SelectionVector *no_match_sel,
-                            idx_t &no_match_count) {
+static idx_t TemplatedMatch(Context &, const MatchFunction &, Vector &, const TupleDataVectorFormat &lhs_format,
+                            SelectionVector &sel, const idx_t count, const TupleDataLayout &rhs_layout,
+                            Vector &rhs_row_locations, const idx_t col_idx, const vector<MatchFunction> &,
+                            SelectionVector *no_match_sel, idx_t &no_match_count) {
 #if DUCKDB_SMALLER_BINARY(row_matcher_validity)
 	return TemplatedMatchLoop<NO_MATCH_SEL, T, OP>(lhs_format, sel, count, rhs_layout, rhs_row_locations, col_idx,
 	                                               no_match_sel, no_match_count);
@@ -101,9 +102,9 @@ static idx_t TemplatedMatch(Context &, Vector &, const TupleDataVectorFormat &lh
 }
 
 template <bool NO_MATCH_SEL, class OP>
-static idx_t StructMatchEquality(Context &context, Vector &lhs_vector, const TupleDataVectorFormat &lhs_format,
-                                 SelectionVector &sel, const idx_t count, const TupleDataLayout &rhs_layout,
-                                 Vector &rhs_row_locations, const idx_t col_idx,
+static idx_t StructMatchEquality(Context &context, const MatchFunction &, Vector &lhs_vector,
+                                 const TupleDataVectorFormat &lhs_format, SelectionVector &sel, const idx_t count,
+                                 const TupleDataLayout &rhs_layout, Vector &rhs_row_locations, const idx_t col_idx,
                                  const vector<MatchFunction> &child_functions, SelectionVector *no_match_sel,
                                  idx_t &no_match_count) {
 	using COMPARISON_OP = ComparisonOperationWrapper<OP>;
@@ -159,8 +160,8 @@ static idx_t StructMatchEquality(Context &context, Vector &lhs_vector, const Tup
 		auto &lhs_struct_vector = lhs_struct_vectors[struct_col_idx];
 		auto &lhs_struct_format = lhs_format.children[struct_col_idx];
 		const auto &child_function = child_functions[struct_col_idx];
-		match_count = child_function.function(context, lhs_struct_vector, lhs_struct_format, sel, match_count,
-		                                      rhs_struct_layout, rhs_struct_row_locations, struct_col_idx,
+		match_count = child_function.function(context, child_function, lhs_struct_vector, lhs_struct_format, sel,
+		                                      match_count, rhs_struct_layout, rhs_struct_row_locations, struct_col_idx,
 		                                      child_function.child_functions, no_match_sel, no_match_count);
 	}
 
@@ -168,20 +169,21 @@ static idx_t StructMatchEquality(Context &context, Vector &lhs_vector, const Tup
 }
 
 template <typename OP>
-static idx_t SelectComparison(Context &, const Vector &, const Vector &, const SelectionVector &, idx_t,
-                              SelectionVector *, SelectionVector *) {
+static idx_t SelectComparison(Context &, const MatchFunction &, const Vector &, const Vector &, const SelectionVector &,
+                              idx_t, SelectionVector *, SelectionVector *) {
 	NotImplementedException::Throw("Unsupported list comparison operand for RowMatcher::GetMatchFunction");
 }
 
 //! Compare two dense vectors through the comparison function; 'sel' maps the dense rows to the selected rows
-static idx_t SelectCatalogComparison(Context &context, ExpressionType comparison, const Vector &left,
+static idx_t SelectCatalogComparison(Context &context, const MatchFunction &self, const Vector &left,
                                      const Vector &right, const SelectionVector &sel, idx_t count,
                                      SelectionVector *true_sel, SelectionVector *false_sel) {
-	ComparisonExecutor executor(context, comparison, left.GetType(), right.GetType());
+	D_ASSERT(self.comparison);
+	ExpressionExecutor executor(context, *self.comparison);
 	SelectionVector true_local(count);
 	SelectionVector false_local(false_sel ? count : 0);
 	const auto true_count =
-	    executor.Select(left, right, nullptr, count, &true_local, false_sel ? &false_local : nullptr);
+	    executor.SelectBinaryExpression(left, right, nullptr, count, &true_local, false_sel ? &false_local : nullptr);
 	// map the false rows first: the true selection may alias 'sel'
 	if (false_sel) {
 		for (idx_t i = 0; i < count - true_count; i++) {
@@ -194,24 +196,39 @@ static idx_t SelectCatalogComparison(Context &context, ExpressionType comparison
 	return true_count;
 }
 
-#define DUCKDB_CATALOG_SELECT_COMPARISON(OP, EXPRESSION_TYPE)                                                          \
+#define DUCKDB_CATALOG_SELECT_COMPARISON(OP)                                                                           \
 	template <>                                                                                                        \
-	idx_t SelectComparison<OP>(Context & context, const Vector &left, const Vector &right, const SelectionVector &sel, \
-	                           idx_t count, SelectionVector *true_sel, SelectionVector *false_sel) {                   \
-		return SelectCatalogComparison(context, EXPRESSION_TYPE, left, right, sel, count, true_sel, false_sel);        \
+	idx_t SelectComparison<OP>(Context & context, const MatchFunction &self, const Vector &left, const Vector &right,  \
+	                           const SelectionVector &sel, idx_t count, SelectionVector *true_sel,                     \
+	                           SelectionVector *false_sel) {                                                           \
+		return SelectCatalogComparison(context, self, left, right, sel, count, true_sel, false_sel);                   \
 	}
 
-DUCKDB_CATALOG_SELECT_COMPARISON(Equals, ExpressionType::COMPARE_EQUAL)
-DUCKDB_CATALOG_SELECT_COMPARISON(NotEquals, ExpressionType::COMPARE_NOTEQUAL)
-DUCKDB_CATALOG_SELECT_COMPARISON(DistinctFrom, ExpressionType::COMPARE_DISTINCT_FROM)
-DUCKDB_CATALOG_SELECT_COMPARISON(NotDistinctFrom, ExpressionType::COMPARE_NOT_DISTINCT_FROM)
+DUCKDB_CATALOG_SELECT_COMPARISON(Equals)
+DUCKDB_CATALOG_SELECT_COMPARISON(NotEquals)
+DUCKDB_CATALOG_SELECT_COMPARISON(DistinctFrom)
+DUCKDB_CATALOG_SELECT_COMPARISON(NotDistinctFrom)
 #undef DUCKDB_CATALOG_SELECT_COMPARISON
+
+//! The comparison function of a nested predicate (only for the predicates that use a comparison function)
+static shared_ptr<Expression> CreateNestedComparison(const LogicalType &type, ExpressionType predicate) {
+	switch (predicate) {
+	case ExpressionType::COMPARE_EQUAL:
+	case ExpressionType::COMPARE_NOTEQUAL:
+	case ExpressionType::COMPARE_DISTINCT_FROM:
+	case ExpressionType::COMPARE_NOT_DISTINCT_FROM:
+		return shared_ptr<Expression>(BoundComparisonExpression::CreateOnColumns(predicate, type, type));
+	default:
+		return nullptr;
+	}
+}
 
 //! Inequalities order NULLs as the maximal value
 #define DUCKDB_ORDERED_SELECT_COMPARISON(OP, EXPRESSION_TYPE)                                                          \
 	template <>                                                                                                        \
-	idx_t SelectComparison<OP>(Context &, const Vector &left, const Vector &right, const SelectionVector &sel,         \
-	                           idx_t count, SelectionVector *true_sel, SelectionVector *false_sel) {                   \
+	idx_t SelectComparison<OP>(Context &, const MatchFunction &, const Vector &left, const Vector &right,              \
+	                           const SelectionVector &sel, idx_t count, SelectionVector *true_sel,                     \
+	                           SelectionVector *false_sel) {                                                           \
 		return VectorOperations::SelectDistinctComparator(left, right, &sel, count, EXPRESSION_TYPE, false, true_sel,  \
 		                                                  false_sel);                                                  \
 	}
@@ -223,10 +240,10 @@ DUCKDB_ORDERED_SELECT_COMPARISON(LessThanEquals, ExpressionType::COMPARE_LESSTHA
 #undef DUCKDB_ORDERED_SELECT_COMPARISON
 
 template <bool NO_MATCH_SEL, class OP>
-static idx_t GenericNestedMatch(Context &context, Vector &lhs_vector, const TupleDataVectorFormat &,
-                                SelectionVector &sel, const idx_t count, const TupleDataLayout &rhs_layout,
-                                Vector &rhs_row_locations, const idx_t col_idx, const vector<MatchFunction> &,
-                                SelectionVector *no_match_sel, idx_t &no_match_count) {
+static idx_t GenericNestedMatch(Context &context, const MatchFunction &self, Vector &lhs_vector,
+                                const TupleDataVectorFormat &, SelectionVector &sel, const idx_t count,
+                                const TupleDataLayout &rhs_layout, Vector &rhs_row_locations, const idx_t col_idx,
+                                const vector<MatchFunction> &, SelectionVector *no_match_sel, idx_t &no_match_count) {
 	const auto &type = rhs_layout.GetTypes()[col_idx];
 
 	// Gather a dense Vector containing the column values being matched
@@ -242,11 +259,11 @@ static idx_t GenericNestedMatch(Context &context, Vector &lhs_vector, const Tupl
 	if (NO_MATCH_SEL) {
 		SelectionVector no_match_sel_offset(no_match_sel->data() + no_match_count,
 		                                    no_match_sel->Capacity() - no_match_count);
-		auto match_count = SelectComparison<OP>(context, sliced, key, sel, count, &sel, &no_match_sel_offset);
+		auto match_count = SelectComparison<OP>(context, self, sliced, key, sel, count, &sel, &no_match_sel_offset);
 		no_match_count += count - match_count;
 		return match_count;
 	}
-	return SelectComparison<OP>(context, sliced, key, sel, count, &sel, nullptr);
+	return SelectComparison<OP>(context, self, sliced, key, sel, count, &sel, nullptr);
 }
 
 void RowMatcher::Initialize(Context &context_p, const bool no_match_sel, const TupleDataLayout &layout,
@@ -293,9 +310,9 @@ idx_t RowMatcher::Match(DataChunk &lhs, const vector<TupleDataVectorFormat> &lhs
 		const auto col_idx = columns[fun_idx];
 
 		const auto &match_function = match_functions[fun_idx];
-		count = match_function.function(*context, lhs.data[col_idx], lhs_formats[col_idx], sel, count, *rhs_layout,
-		                                rhs_row_locations, col_idx, match_function.child_functions, no_match_sel,
-		                                no_match_count);
+		count = match_function.function(*context, match_function, lhs.data[col_idx], lhs_formats[col_idx], sel, count,
+		                                *rhs_layout, rhs_row_locations, col_idx, match_function.child_functions,
+		                                no_match_sel, no_match_count);
 	}
 	return count;
 }
@@ -341,10 +358,10 @@ MatchFunction RowMatcher::GetMatchFunction(const LogicalType &type, const Expres
 	case PhysicalType::STRUCT:
 		return GetStructMatchFunction<NO_MATCH_SEL>(type, predicate);
 	case PhysicalType::LIST:
-		return GetListMatchFunction<NO_MATCH_SEL>(predicate);
+		return GetListMatchFunction<NO_MATCH_SEL>(type, predicate);
 	case PhysicalType::ARRAY:
 		// Same logic as for lists
-		return GetListMatchFunction<NO_MATCH_SEL>(predicate);
+		return GetListMatchFunction<NO_MATCH_SEL>(type, predicate);
 	default:
 		ThrowUnsupportedMatchType("Unsupported PhysicalType for RowMatcher::GetMatchFunction: %s", type.InternalType());
 	}
@@ -390,6 +407,7 @@ MatchFunction RowMatcher::GetStructMatchFunction(const LogicalType &type, const 
 	// because for equality conditions we need to always loop through all columns, but for inequality conditions,
 	// we need to find the first inequality, so the loop looks very different
 	MatchFunction result;
+	result.comparison = CreateNestedComparison(type, predicate);
 	ExpressionType child_predicate = predicate;
 	switch (predicate) {
 	case ExpressionType::COMPARE_EQUAL:
@@ -440,8 +458,9 @@ MatchFunction RowMatcher::GetStructMatchFunction(const LogicalType &type, const 
 }
 
 template <bool NO_MATCH_SEL>
-MatchFunction RowMatcher::GetListMatchFunction(const ExpressionType predicate) {
+MatchFunction RowMatcher::GetListMatchFunction(const LogicalType &type, const ExpressionType predicate) {
 	MatchFunction result;
+	result.comparison = CreateNestedComparison(type, predicate);
 	switch (predicate) {
 	case ExpressionType::COMPARE_EQUAL:
 		result.function = GenericNestedMatch<NO_MATCH_SEL, Equals>;
