@@ -432,6 +432,31 @@ functions:
         description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
     return_type: ERROR
 
+  scalar_function_resolve_types_set_argument_type:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-17" ]
+    description: |
+      Sets the type an argument of the call site being bound is cast to.
+
+      Overrides the parameter type declared in the signature for this call only. Declare the parameter as ANY and
+      set the concrete type here, derived from the other argument types, to make the arguments agree - e.g. to
+      cast a VARCHAR to the type of its sibling. The cast is added after the callback returns. The type is borrowed and copied.
+    parameters:
+      info:
+        type: scalar_function_resolve_types_info
+        description: The resolve types info handle.
+      index:
+        type: idx
+        description: The index of the argument. Must be smaller than the number of arguments of the call.
+      type:
+        type: logical_type
+        description: The type to cast the argument to. Borrowed for the call only.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
   #---------------------------------------------------------------------------------------------------------------------
   # Bind Callback Functions
   #---------------------------------------------------------------------------------------------------------------------

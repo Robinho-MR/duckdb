@@ -344,6 +344,7 @@ struct {
 	DUCKDB_V2_LOGICAL_TYPE_ID bind_arg_type = DUCKDB_V2_LOGICAL_TYPE_ID_INVALID;
 	DUCKDB_V2_ERROR resolve_set_bind_data_rc = DUCKDB_V2_ERROR_NONE;
 	DUCKDB_V2_ERROR bind_shared_set_bind_data_rc = DUCKDB_V2_ERROR_NONE;
+	DUCKDB_V2_ERROR resolve_oob_rc = DUCKDB_V2_ERROR_NONE;
 } phase_probe;
 
 DUCKDB_V2_LOGICAL_TYPE_ID GetArgTypeId(duckdb_v2_function_bind_info_handle info, duckdb_v2_error_info_handle *err) {
@@ -391,6 +392,47 @@ void ArgProbeExec(duckdb_v2_scalar_function_exec_info_handle info, duckdb_v2_con
 	auto *out_data = static_cast<int32_t *>(raw);
 	for (idx_t i = 0; i < count; i++) {
 		out_data[i] = arg_probe.constant;
+	}
+}
+
+// Cast the ANY argument to BIGINT, and resolve the ANY return type to INTEGER.
+void WidenResolveTypes(duckdb_v2_function_bind_info_handle, duckdb_v2_scalar_function_resolve_types_info_handle result,
+                       duckdb_v2_context_handle context, duckdb_v2_error_info_handle *err) {
+	duckdb_v2_factory_handle factory = nullptr;
+	duckdb_v2_context_get_factory(context, &factory, nullptr);
+	duckdb_v2_logical_type_handle bigint = nullptr;
+	if (duckdb_v2_factory_create_type_from_id(factory, DUCKDB_V2_LOGICAL_TYPE_ID_BIGINT, nullptr, nullptr, nullptr, 0,
+	                                          &bigint, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	// An index past the last argument is an input error.
+	phase_probe.resolve_oob_rc = duckdb_v2_scalar_function_resolve_types_set_argument_type(result, 5, bigint, nullptr);
+	duckdb_v2_scalar_function_resolve_types_set_argument_type(result, 0, bigint, err);
+	duckdb_v2_logical_type_destroy(&bigint);
+	IntegerResolveTypes(nullptr, result, context, err);
+}
+
+// out[i] = (int32_t)in[i], reading the argument as BIGINT.
+void WidenExec(duckdb_v2_scalar_function_exec_info_handle info, duckdb_v2_context_handle,
+               duckdb_v2_error_info_handle *err) {
+	duckdb_v2_vector_handle src = nullptr;
+	duckdb_v2_vector_handle out = nullptr;
+	idx_t count = 0;
+	if (duckdb_v2_scalar_function_exec_get_arg(info, 0, &src, err) != DUCKDB_V2_ERROR_NONE ||
+	    duckdb_v2_scalar_function_exec_get_result(info, &out, err) != DUCKDB_V2_ERROR_NONE ||
+	    duckdb_v2_scalar_function_exec_get_row_count(info, &count, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	duckdb_v2_vector_view view {};
+	void *raw = nullptr;
+	if (duckdb_v2_vector_get_view(src, &view, err) != DUCKDB_V2_ERROR_NONE ||
+	    duckdb_v2_vector_get_data_mutable(out, &raw, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	const auto *data = static_cast<const int64_t *>(view.data);
+	auto *out_data = static_cast<int32_t *>(raw);
+	for (idx_t i = 0; i < count; i++) {
+		out_data[i] = static_cast<int32_t>(data[SelAt(view.sel, i)]);
 	}
 }
 
@@ -656,6 +698,35 @@ TEST_CASE("V2 scalar: resolve types sees the uncast argument types, bind the cas
 	// Scalar functions set the bind data through their own bind info, in the bind callback only.
 	REQUIRE(phase_probe.resolve_set_bind_data_rc != DUCKDB_V2_ERROR_NONE);
 	REQUIRE(phase_probe.bind_shared_set_bind_data_rc != DUCKDB_V2_ERROR_NONE);
+}
+
+// ===========================================================================
+// Resolve types can set the argument types the arguments are cast to.
+// ===========================================================================
+
+TEST_CASE("V2 scalar: resolve types sets the argument types", "[capi_v2][scalar_function]") {
+	EnvFixture fx;
+	auto any = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_ANY);
+
+	// widen(x ANY) -> ANY
+	auto function = MakeScalar(fx.conn, "widen");
+	auto sig = SigOf(function);
+	SigParam(sig, "x", any);
+	REQUIRE(duckdb_v2_function_signature_set_return_type(sig, any, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_scalar_function_set_resolve_types_callback(function, WidenResolveTypes, nullptr) ==
+	        DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_scalar_function_set_bind_callback(function, PhaseProbeBind, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_scalar_function_set_exec_callback(function, WidenExec, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_connection_register_scalar_function(fx.conn, function, nullptr) == DUCKDB_V2_ERROR_NONE);
+	duckdb_v2_scalar_function_destroy(&function);
+	duckdb_v2_logical_type_destroy(&any);
+
+	phase_probe = {};
+	// Exec reads the argument as BIGINT, so the SMALLINT must have been cast.
+	REQUIRE(QueryI32(fx.conn, "SELECT widen(7::SMALLINT)") == 7);
+	REQUIRE(phase_probe.bind_arg_type == DUCKDB_V2_LOGICAL_TYPE_ID_BIGINT);
+	REQUIRE(phase_probe.resolve_oob_rc == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(QueryI32(fx.conn, "SELECT widen('41')") == 41);
 }
 
 // ===========================================================================

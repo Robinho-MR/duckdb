@@ -386,22 +386,22 @@ public:
 	AggregateFunction Build(DatabaseInstance &target) {
 		CheckRegistrationTarget(db, target, "aggregate function");
 		if (name.empty()) {
-			throw InvalidInputException("Function name cannot be empty.");
+			throw duckdb::InvalidInputException("Function name cannot be empty.");
 		}
 		if (!info.size_cb) {
-			throw InvalidInputException("Size callback must be set for the function.");
+			throw duckdb::InvalidInputException("Size callback must be set for the function.");
 		}
 		if (!info.init_cb) {
-			throw InvalidInputException("Init callback must be set for the function.");
+			throw duckdb::InvalidInputException("Init callback must be set for the function.");
 		}
 		if (!info.update_cb) {
-			throw InvalidInputException("Update callback must be set for the function.");
+			throw duckdb::InvalidInputException("Update callback must be set for the function.");
 		}
 		if (!info.combine_cb) {
-			throw InvalidInputException("Combine callback must be set for the function.");
+			throw duckdb::InvalidInputException("Combine callback must be set for the function.");
 		}
 		if (!info.finalize_cb) {
-			throw InvalidInputException("Finalize callback must be set for the function.");
+			throw duckdb::InvalidInputException("Finalize callback must be set for the function.");
 		}
 
 		const auto &return_type = signature.GetReturnType();
@@ -409,15 +409,15 @@ public:
 		// ANY is allowed as a placeholder return type only when a bind callback is present to resolve the actual type.
 		if (return_type.id() == LogicalTypeId::ANY) {
 			if (info.bind_cb == nullptr) {
-				throw InvalidInputException(
+				throw duckdb::InvalidInputException(
 				    "An ANY return type requires a bind callback to set the concrete return type.");
 			}
 		} else {
 			if (return_type.id() == LogicalTypeId::INVALID) {
-				throw InvalidInputException("Return type must be set for the function.");
+				throw duckdb::InvalidInputException("Return type must be set for the function.");
 			}
 			if (!return_type.IsComplete()) {
-				throw InvalidInputException("Return type must be a fully defined concrete type");
+				throw duckdb::InvalidInputException("Return type must be a fully defined concrete type");
 			}
 		}
 
@@ -591,6 +591,21 @@ DUCKDB_V2_ERROR duckdb_v2_aggregate_function_bind_set_return_type(duckdb_v2_aggr
 	return WithErrorHandler(err, [&]() {
 		auto type = Convert(return_type);
 		Convert(info)->in_input->GetBoundFunction().SetReturnType(*type);
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_aggregate_function_bind_set_argument_type(duckdb_v2_aggregate_function_bind_info_handle info,
+                                                                    idx_t index, duckdb_v2_logical_type_handle type,
+                                                                    duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(type);
+	return WithErrorHandler(err, [&]() {
+		auto &arguments = Convert(info)->in_input->GetBoundFunction().GetArguments();
+		if (index >= arguments.size()) {
+			throw duckdb::InvalidInputException("Index out of bounds in %s", __func__);
+		}
+		auto new_type = Convert(type);
+		arguments[index] = *new_type;
 	});
 }
 

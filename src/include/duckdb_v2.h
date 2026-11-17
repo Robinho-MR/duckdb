@@ -5724,6 +5724,29 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_aggregate_function_bind_set_return_type(
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
+ * Sets the type an argument of the call site being bound is cast to.
+ *
+ * Overrides the parameter type declared in the signature for this call only. Declare the parameter as ANY and set the
+ * concrete type here, derived from the other argument types, to make the arguments agree - e.g. to cast a VARCHAR to
+ * the type of its sibling. The cast is added after the bind callback returns. The type is borrowed and copied.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind info handle.
+ * @param index The index of the argument. Must be smaller than the number of arguments of the call.
+ * @param type The type to cast the argument to. Borrowed for the call only.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_aggregate_function_bind_set_argument_type(
+    duckdb_v2_aggregate_function_bind_info_handle info, idx_t index, duckdb_v2_logical_type_handle type,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
  * Retrieves the user data set via `duckdb_v2_aggregate_function_set_user_data()`.
  *
  * history:
@@ -11294,6 +11317,29 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_set_stats_callback(
  */
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_resolve_types_set_return_type(
     duckdb_v2_scalar_function_resolve_types_info_handle info, duckdb_v2_logical_type_handle return_type,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the type an argument of the call site being bound is cast to.
+ *
+ * Overrides the parameter type declared in the signature for this call only. Declare the parameter as ANY and set the
+ * concrete type here, derived from the other argument types, to make the arguments agree - e.g. to cast a VARCHAR to
+ * the type of its sibling. The cast is added after the callback returns. The type is borrowed and copied.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The resolve types info handle.
+ * @param index The index of the argument. Must be smaller than the number of arguments of the call.
+ * @param type The type to cast the argument to. Borrowed for the call only.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_resolve_types_set_argument_type(
+    duckdb_v2_scalar_function_resolve_types_info_handle info, idx_t index, duckdb_v2_logical_type_handle type,
     duckdb_v2_error_info_handle *err);
 #endif
 

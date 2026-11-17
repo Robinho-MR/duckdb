@@ -294,10 +294,10 @@ public:
 	ScalarFunction Build(DatabaseInstance &target) {
 		CheckRegistrationTarget(db, target, "scalar function");
 		if (name.empty()) {
-			throw InvalidInputException("Function name cannot be empty.");
+			throw duckdb::InvalidInputException("Function name cannot be empty.");
 		}
 		if (!info.exec_cb) {
-			throw InvalidInputException("Exec callback must be set for the function.");
+			throw duckdb::InvalidInputException("Exec callback must be set for the function.");
 		}
 
 		const auto &return_type = signature.GetReturnType();
@@ -306,15 +306,15 @@ public:
 		// actual type.
 		if (return_type.id() == LogicalTypeId::ANY) {
 			if (info.resolve_types_cb == nullptr) {
-				throw InvalidInputException(
+				throw duckdb::InvalidInputException(
 				    "An ANY return type requires a resolve types callback to set the concrete return type.");
 			}
 		} else {
 			if (return_type.id() == LogicalTypeId::INVALID) {
-				throw InvalidInputException("Return type must be set for the function.");
+				throw duckdb::InvalidInputException("Return type must be set for the function.");
 			}
 			if (!return_type.IsComplete()) {
-				throw InvalidInputException("Return type must be a fully defined concrete type");
+				throw duckdb::InvalidInputException("Return type must be a fully defined concrete type");
 			}
 		}
 
@@ -465,6 +465,22 @@ duckdb_v2_scalar_function_resolve_types_set_return_type(duckdb_v2_scalar_functio
 	return WithErrorHandler(err, [&]() {
 		auto type = Convert(return_type);
 		Convert(info)->bound_function.SetReturnType(*type);
+	});
+}
+
+DUCKDB_V2_ERROR
+duckdb_v2_scalar_function_resolve_types_set_argument_type(duckdb_v2_scalar_function_resolve_types_info_handle info,
+                                                          idx_t index, duckdb_v2_logical_type_handle type,
+                                                          duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(type);
+	return WithErrorHandler(err, [&]() {
+		auto &arguments = Convert(info)->bound_function.GetArguments();
+		if (index >= arguments.size()) {
+			throw duckdb::InvalidInputException("Index out of bounds in %s", __func__);
+		}
+		auto new_type = Convert(type);
+		arguments[index] = *new_type;
 	});
 }
 
