@@ -2,24 +2,25 @@ cmake_minimum_required(VERSION 3.5...3.29)
 
 project(JSONExtension)
 
-# The json extension is written against DuckDB's stable C++ API only (tools/cpp/duckdb_cpp.hpp): it includes nothing
-# of the engine, and links the C++ API archive. It is built twice from the same sources:
-#  * json_extension: a static archive that is linked into the DuckDB binaries (duckdb_extension_statically_link),
-#    registered through the V2 describe function the build generates for it
-#  * json_loadable_extension: json.duckdb_extension, which routes every engine call through the extension vtable
-# The legacy implementation (engine internals) lives in legacy/ for reference while the port is in progress. It is not
-# compiled.
+# The json extension is written against DuckDB's stable C++ API only
+# (tools/cpp/duckdb_cpp.hpp): it includes nothing of the engine, and links the
+# C++ API archive. It is built twice from the same sources: * json_extension: a
+# static archive that is linked into the DuckDB binaries
+# (duckdb_extension_statically_link), registered through the V2 describe
+# function the build generates for it * json_loadable_extension:
+# json.duckdb_extension, which routes every engine call through the extension
+# vtable The legacy implementation (engine internals) lives in legacy/ for
+# reference while the port is in progress. It is not compiled.
 #
-# Each area of the port lists its sources in its own block so that work on different areas does not conflict.
+# Each area of the port lists its sources in its own block so that work on
+# different areas does not conflict.
 
 set(JSON_CORE_SOURCES
-    src/json_extension.cpp
-    src/json_common.cpp
-    src/json_function_data.cpp
-    src/json_types.cpp
-    src/functions/register_core.cpp)
+    src/json_extension.cpp src/json_common.cpp src/json_function_data.cpp
+    src/json_types.cpp src/functions/register_core.cpp)
 
-# Read-only scalar functions: json_type, json_valid, json_exists, json_extract*, json_value, json_array_length, ...
+# Read-only scalar functions: json_type, json_valid, json_exists, json_extract*,
+# json_value, json_array_length, ...
 set(JSON_SCALAR_READ_SOURCES
     src/functions/register_scalar_read.cpp
     src/functions/json_array_length.cpp
@@ -32,7 +33,8 @@ set(JSON_SCALAR_READ_SOURCES
     src/functions/json_contains.cpp
     src/functions/json_pretty.cpp)
 
-# json_merge_patch, json_deep_merge, json_insert/replace/set/remove, json_strip_nulls, json_pretty, ...
+# json_merge_patch, json_deep_merge, json_insert/replace/set/remove,
+# json_strip_nulls, json_pretty, ...
 set(JSON_SCALAR_MODIFY_SOURCES
     src/functions/register_scalar_modify.cpp
     src/functions/json_merge_patch.cpp
@@ -42,13 +44,15 @@ set(JSON_SCALAR_MODIFY_SOURCES
     src/functions/json_strip_nulls.cpp
     src/functions/json_normalize.cpp)
 
-# json_create/to_json/json_object/json_array, json_group_array/json_group_object and their casts
+# json_create/to_json/json_object/json_array, json_group_array/json_group_object
+# and their casts
 set(JSON_CREATE_SOURCES
     src/functions/register_create.cpp src/functions/json_create.cpp
     src/functions/json_strftime.cpp)
 
 # json_transform/from_json and the casts from JSON to nested types
-set(JSON_TRANSFORM_SOURCES src/functions/register_transform.cpp src/functions/json_transform.cpp)
+set(JSON_TRANSFORM_SOURCES src/functions/register_transform.cpp
+                           src/functions/json_transform.cpp)
 
 # json_structure, json_group_structure, schema inference
 set(JSON_STRUCTURE_SOURCES
@@ -57,10 +61,8 @@ set(JSON_STRUCTURE_SOURCES
 
 # read_json and friends, the replacement scan, the settings
 set(JSON_READER_SOURCES
-    src/functions/register_reader.cpp
-    src/functions/json_date_formats.cpp
-    src/functions/json_reader.cpp
-    src/functions/read_json.cpp
+    src/functions/register_reader.cpp src/functions/json_date_formats.cpp
+    src/functions/json_reader.cpp src/functions/read_json.cpp
     src/functions/copy_json_from.cpp)
 
 # json_each, json_tree
@@ -83,8 +85,7 @@ set(JSON_EXTENSION_FILES
     ${JSON_COPY_SOURCES})
 
 set(JSON_INCLUDE_DIRS
-    ${CMAKE_CURRENT_LIST_DIR}/src/include
-    ${DUCKDB_MODULE_BASE_DIR}/tools/cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/include ${DUCKDB_MODULE_BASE_DIR}/tools/cpp
     ${DUCKDB_MODULE_BASE_DIR}/third_party/yyjson/include)
 
 # Static flavor: part of the DuckDB binaries, which also carry yyjson

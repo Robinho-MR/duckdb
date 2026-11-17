@@ -180,7 +180,8 @@ TEST_CASE("Stable C++API: in-out table function over a lateral input", "[cpp_api
 	RegisterRepeat(conn);
 
 	// Several output batches per input row, and rows that produce nothing (0 and NULL).
-	REQUIRE(CollectRows(conn.Execute("SELECT r.i FROM (VALUES (3::BIGINT), (0), (NULL), (2)) t(n), cpp_repeat(t.n) r ORDER BY 1")) ==
+	REQUIRE(CollectRows(conn.Execute(
+	            "SELECT r.i FROM (VALUES (3::BIGINT), (0), (NULL), (2)) t(n), cpp_repeat(t.n) r ORDER BY 1")) ==
 	        Rows {{0}, {0}, {1}, {1}, {2}});
 
 	// Columns of the input next to the function's own.
@@ -199,8 +200,7 @@ TEST_CASE("Stable C++API: in-out table function as a source", "[cpp_api]") {
 	RegisterRepeat(conn);
 
 	// An all-constant call runs the function as a source: the callback runs until it produces nothing.
-	REQUIRE(CollectRows(conn.Execute("SELECT * FROM cpp_repeat(5)")) ==
-	        Rows {{0, 5}, {1, 5}, {2, 5}, {3, 5}, {4, 5}});
+	REQUIRE(CollectRows(conn.Execute("SELECT * FROM cpp_repeat(5)")) == Rows {{0, 5}, {1, 5}, {2, 5}, {3, 5}, {4, 5}});
 	// ... and the bind callback sees the value of the argument.
 	REQUIRE(observed.constant_available);
 	REQUIRE_FALSE(observed.constant_refused);
@@ -228,8 +228,8 @@ TEST_CASE("Stable C++API: in-out table function projection pushdown and virtual 
 	REQUIRE(observed.columns == std::vector<idx_t> {TableFunction::COLUMN_IDENTIFIER_EMPTY});
 
 	// ... also with a lateral input.
-	REQUIRE(CollectRows(conn.Execute(
-	            "SELECT count(*) FROM (VALUES (3::BIGINT), (4)) t(n), cpp_repeat(t.n) r")) == Rows {{7}});
+	REQUIRE(CollectRows(conn.Execute("SELECT count(*) FROM (VALUES (3::BIGINT), (4)) t(n), cpp_repeat(t.n) r")) ==
+	        Rows {{7}});
 	REQUIRE(CollectRows(conn.Execute("SELECT sum(r.vsq) FROM (VALUES (3::BIGINT), (4)) t(n), cpp_repeat(t.n) r")) ==
 	        Rows {{0 + 1 + 4 + 0 + 1 + 4 + 9}});
 
