@@ -7,6 +7,7 @@
 #include <atomic>
 #include <filesystem>
 #include <fstream>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -144,8 +145,10 @@ class KvFiles {
 public:
 	KvFiles() {
 		static std::atomic<int> counter {0};
+		// processes running the tests concurrently share the temporary directory
+		std::random_device random;
 		directory = fs::temp_directory_path() / ("cpp_api_kv_" + std::to_string(counter++) + "_" +
-		                                         std::to_string(reinterpret_cast<uintptr_t>(this)));
+		                                         std::to_string(random()) + std::to_string(random()));
 		fs::create_directories(directory);
 		for (auto name : {"a.kv", "b.kv", "c_d.kv"}) {
 			std::ofstream(directory / name) << "x";
