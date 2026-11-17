@@ -286,7 +286,7 @@ namespace {
 }
 
 template <class F, class... ARGS>
-auto CheckedAPICall(F &&func, ARGS &&... args) -> void {
+auto CheckedAPICall(F &&func, ARGS &&...args) -> void {
 	duckdb_v2_error_info_handle err = nullptr;
 	const auto code = func(std::forward<ARGS>(args)..., &err);
 	if (code != DUCKDB_V2_ERROR_NONE) {
@@ -461,7 +461,7 @@ auto ExecutePreparedArrow(duckdb_v2_prepared_statement_handle prepared, const Pa
 // then a buffer with room for the terminator receives the text. The library
 // never allocates, so there is nothing to free.
 template <class F, class... ARGS>
-auto RenderText(F &&func, ARGS &&... args) -> std::string {
+auto RenderText(F &&func, ARGS &&...args) -> std::string {
 	idx_t length = 0;
 	CheckedAPICall(func, args..., static_cast<char *>(nullptr), static_cast<idx_t>(0), &length);
 	std::string out;
@@ -1562,6 +1562,7 @@ DUCKDB_CPP_ASSERT_TYPE_ID(UHUGEINT);
 DUCKDB_CPP_ASSERT_TYPE_ID(HUGEINT);
 DUCKDB_CPP_ASSERT_TYPE_ID(UUID);
 DUCKDB_CPP_ASSERT_TYPE_ID(GEOMETRY);
+DUCKDB_CPP_ASSERT_TYPE_ID(GEOGRAPHY);
 DUCKDB_CPP_ASSERT_TYPE_ID(STRUCT);
 DUCKDB_CPP_ASSERT_TYPE_ID(LIST);
 DUCKDB_CPP_ASSERT_TYPE_ID(MAP);
