@@ -6,15 +6,18 @@ namespace duckdb::capiv2 {
 
 class CV2CastBoundData final : public BoundCastData {
 public:
-	CV2CastBoundData(duckdb_v2_cast_function_exec_callback_fn exec_cb, shared_ptr<CV2UserData> user_data)
-	    : exec_cb(exec_cb), user_data(std::move(user_data)) {
+	CV2CastBoundData(DatabaseInstance &db, duckdb_v2_cast_function_exec_callback_fn exec_cb,
+	                 shared_ptr<CV2UserData> user_data)
+	    : db(db), exec_cb(exec_cb), user_data(std::move(user_data)) {
 	}
 
 	auto Copy() const -> unique_ptr<BoundCastData> override {
-		return make_uniq<CV2CastBoundData>(exec_cb, user_data);
+		return make_uniq<CV2CastBoundData>(db, exec_cb, user_data);
 	}
 
 public:
+	//! The database the cast was registered on: serves casts that run without a client (index keys)
+	DatabaseInstance &db;
 	duckdb_v2_cast_function_exec_callback_fn exec_cb;
 	shared_ptr<CV2UserData> user_data;
 };
@@ -46,11 +49,12 @@ static auto Convert(CV2CastExecInfo *info) -> duckdb_v2_cast_function_exec_info_
 static auto CV2CastInitLocalState(CastLocalStateParameters &parameters) -> unique_ptr<FunctionLocalState> {
 	auto state = make_uniq<CV2CastLocalState>();
 
-	if (!parameters.context) {
-		throw InvalidInputException("Cannot initialize local state for extension cast function without a context");
+	if (parameters.context) {
+		state->context = make_uniq<CV2CallbackContext>(*parameters.context);
+	} else {
+		auto &bound_data = parameters.cast_data->Cast<CV2CastBoundData>();
+		state->context = make_uniq<CV2CallbackContext>(bound_data.db.GetContext());
 	}
-
-	state->context = make_uniq<CV2CallbackContext>(*parameters.context);
 	return std::move(state);
 }
 
@@ -68,8 +72,12 @@ static auto CV2CastExec(Vector &input, Vector &output, idx_t count, CastParamete
 	args.mode = is_try_cast ? DUCKDB_V2_CAST_MODE_TRY : DUCKDB_V2_CAST_MODE_NORMAL;
 
 	optional_ptr<CV2Context> context = nullptr;
+	unique_ptr<CV2CallbackContext> fallback_context;
 	if (parameters.local_state) {
 		context = parameters.local_state->Cast<CV2CastLocalState>().context.get();
+	} else {
+		fallback_context = make_uniq<CV2CallbackContext>(bound_data.db.GetContext());
+		context = fallback_context.get();
 	}
 
 	CV2ErrorInfo err = {};
@@ -105,7 +113,8 @@ public:
 			throw InvalidInputException("Exec callback must be set for the function.");
 		}
 
-		BoundCastInfo cast_info(CV2CastExec, make_uniq<CV2CastBoundData>(exec_cb, user_data), CV2CastInitLocalState);
+		BoundCastInfo cast_info(CV2CastExec, make_uniq<CV2CastBoundData>(db, exec_cb, user_data),
+		                        CV2CastInitLocalState);
 		return cast_info;
 	}
 

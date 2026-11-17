@@ -432,3 +432,21 @@ TEST_CASE("Stable C++API: wildcard cast types: a concrete cast wins, other ids a
 	replaced.SetTargetType(tag).SetExecCallback(NoopCast);
 	conn.Register(replaced);
 }
+
+// Casts run in expressions evaluated without a client context (index keys, generated columns) too.
+TEST_CASE("Stable C++API: cast function runs in an index key and a generated column", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+
+	auto temperature = RegisterTemperature(conn);
+	RegisterTemperatureCasts(conn, temperature, -1);
+
+	conn.Execute("CREATE TABLE temps (t VARCHAR, g INTEGER GENERATED ALWAYS AS "
+	             "(CAST(CAST(t AS TEMPERATURE_CELSIUS) AS INTEGER)) VIRTUAL)")
+	    .Drain();
+	conn.Execute("CREATE UNIQUE INDEX temps_ix ON temps ((CAST(CAST(t AS TEMPERATURE_CELSIUS) AS INTEGER)))").Drain();
+	conn.Execute("INSERT INTO temps VALUES ('1 degrees celsius'), ('2 degrees celsius')").Drain();
+	REQUIRE(CollectMaybeInts(conn.Execute("SELECT g FROM temps ORDER BY g")) ==
+	        std::vector<std::optional<int32_t>> {1, 2});
+	REQUIRE_THROWS(conn.Execute("INSERT INTO temps VALUES ('1 degrees celsius')").Drain());
+}

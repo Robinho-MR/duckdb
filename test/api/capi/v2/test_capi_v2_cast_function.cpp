@@ -318,6 +318,24 @@ TEST_CASE("V2 cast: round-trip between a custom type and VARCHAR", "[capi_v2][ca
 	                               "FROM (VALUES (1), (2)) v(t)") == "1C,2C");
 }
 
+TEST_CASE("V2 cast: runs in an index key and a generated column", "[capi_v2][cast_function]") {
+	EnvFixture fx;
+	auto integer = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER);
+	auto varchar = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR);
+	auto temperature = RegisterTemperatureType(fx, integer);
+	RegisterTemperatureCasts(fx.conn, temperature, varchar, -1);
+	duckdb_v2_logical_type_destroy(&temperature);
+	duckdb_v2_logical_type_destroy(&varchar);
+	duckdb_v2_logical_type_destroy(&integer);
+
+	ExecSQL(fx.conn, "CREATE TABLE temps (t VARCHAR, g INTEGER GENERATED ALWAYS AS "
+	                 "(CAST(CAST(t AS TEMPERATURE) AS INTEGER)) VIRTUAL)");
+	ExecSQL(fx.conn, "CREATE UNIQUE INDEX temps_ix ON temps ((CAST(CAST(t AS TEMPERATURE) AS INTEGER)))");
+	ExecSQL(fx.conn, "INSERT INTO temps VALUES ('1C'), ('2C')");
+	REQUIRE(CastQueryText(fx.conn, "SELECT sum(g)::VARCHAR FROM temps") == "3");
+	REQUIRE(RunSql(fx.conn, "INSERT INTO temps VALUES ('1C')") != DUCKDB_V2_ERROR_NONE);
+}
+
 TEST_CASE("V2 cast: normal casts abort, try casts yield NULL", "[capi_v2][cast_function]") {
 	EnvFixture fx;
 	auto integer = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER);
