@@ -1,3 +1,4 @@
+#include "duckdb/execution/comparison_executor.hpp"
 #include "duckdb/execution/operator/aggregate/physical_window.hpp"
 
 #include "duckdb/common/once_flag.hpp"
@@ -635,6 +636,7 @@ void WindowHashGroup::ComputeMasks(const idx_t block_begin, const idx_t block_en
 	auto &scan_cols = gsink.sort_strategy->sort_ids;
 	WindowCollectionChunkScanner scanner(collection, scan_cols, block_begin);
 	unordered_map<idx_t, DataChunk> prefixes;
+	unordered_map<idx_t, unique_ptr<ComparisonExecutor>> distinct_from;
 	for (auto &order_mask : order_masks) {
 		D_ASSERT(order_mask.first >= order_begin);
 		auto order_type = scanner.PrefixStructType(order_mask.first, order_begin);
@@ -642,9 +644,11 @@ void WindowHashGroup::ComputeMasks(const idx_t block_begin, const idx_t block_en
 		auto &keys = prefixes[order_mask.first];
 		// We can't use InitializeEmpty here because it doesn't set up all of the STRUCT internals...
 		keys.Initialize(collection.GetAllocator(), types);
+		distinct_from[order_mask.first] =
+		    make_uniq<ComparisonExecutor>(gsink.client.GetContext(), ExpressionType::COMPARE_DISTINCT_FROM, order_type);
 	}
 
-	WindowDeltaScanner(collection, block_begin, block_end, scan_cols, order_begin,
+	WindowDeltaScanner(gsink.client.GetContext(), collection, block_begin, block_end, scan_cols, order_begin,
 	                   [&](const idx_t row_idx, DataChunk &prev, DataChunk &curr, const idx_t ndistinct,
 	                       SelectionVector &distinct, const SelectionVector &matching) {
 		                   //	Process the partition boundaries
@@ -680,8 +684,8 @@ void WindowHashGroup::ComputeMasks(const idx_t block_begin, const idx_t block_en
 			                   } else {
 				                   prefix.SetChildCardinality(nmatch);
 			                   }
-			                   const auto m = VectorOperations::DistinctFrom(order_curr, order_prev, nullptr, nmatch,
-			                                                                 &distinct, nullptr);
+			                   const auto m = distinct_from[order_mask.first]->Select(order_curr, order_prev, nullptr,
+			                                                                          nmatch, &distinct, nullptr);
 			                   for (idx_t i = 0; i < m; ++i) {
 				                   const idx_t curr_index = row_idx + matching.get_index(distinct.get_index(i));
 				                   order_mask.second.SetValidUnsafe(curr_index);

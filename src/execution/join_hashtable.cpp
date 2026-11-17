@@ -9,6 +9,7 @@
 #include "duckdb/execution/ht_entry.hpp"
 #include "duckdb/logging/log_manager.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/execution/comparison_executor.hpp"
 #include "duckdb/execution/mark_join_row_comparison.hpp"
 #include "duckdb/execution/operator/join/physical_hash_join.hpp"
 #include "duckdb/execution/perfect_hash_join_table.hpp"
@@ -144,8 +145,9 @@ void JoinHashTable::FinishInitWithLayout(shared_ptr<TupleDataLayout> published_l
 		row_matcher_probe = unique_ptr<RowMatcher>(new RowMatcher());
 		row_matcher_probe_no_match_sel = unique_ptr<RowMatcher>(new RowMatcher());
 
-		row_matcher_probe->Initialize(false, *layout_ptr, non_equality_predicates, non_equality_predicate_columns);
-		row_matcher_probe_no_match_sel->Initialize(true, *layout_ptr, non_equality_predicates,
+		row_matcher_probe->Initialize(context.GetContext(), false, *layout_ptr, non_equality_predicates,
+		                              non_equality_predicate_columns);
+		row_matcher_probe_no_match_sel->Initialize(context.GetContext(), true, *layout_ptr, non_equality_predicates,
 		                                           non_equality_predicate_columns);
 
 		needs_chain_matcher = true;
@@ -156,7 +158,7 @@ void JoinHashTable::FinishInitWithLayout(shared_ptr<TupleDataLayout> published_l
 	chains_longer_than_one.store(false, std::memory_order_relaxed);
 	// a fresh matcher: Initialize appends, and a recursive CTE iteration publishes the layout again
 	row_matcher_build = RowMatcher();
-	row_matcher_build.Initialize(true, *layout_ptr, equality_predicates);
+	row_matcher_build.Initialize(context.GetContext(), true, *layout_ptr, equality_predicates);
 
 	const auto &offsets = layout_ptr->GetOffsets();
 	tuple_size = offsets[condition_types.size() + build_types.size()];
@@ -666,13 +668,14 @@ static bool MarkJoinNullRows(const UnifiedVectorFormat &format, idx_t count,
 	return has_null;
 }
 
-static bool MarkJoinKeysHaveNull(DataChunk &keys, optional_ptr<bool> rows_with_null = nullptr) {
+static bool MarkJoinKeysHaveNull(Context &context, DataChunk &keys, optional_ptr<bool> rows_with_null = nullptr) {
 	bool has_null = false;
 	for (idx_t col_idx = 0; col_idx < keys.ColumnCount(); col_idx++) {
 		UnifiedVectorFormat format;
 		if (keys.data[col_idx].GetType().IsNested()) {
 			Vector comparison(LogicalType::BOOLEAN, keys.size());
-			VectorOperations::Equals(keys.data[col_idx], keys.data[col_idx], comparison);
+			ComparisonExecutor equals(context, ExpressionType::COMPARE_EQUAL, keys.data[col_idx].GetType());
+			equals.Execute(keys.data[col_idx], keys.data[col_idx], comparison);
 			comparison.ToUnifiedFormat(format);
 		} else {
 			keys.data[col_idx].ToUnifiedFormat(format);
@@ -716,7 +719,8 @@ void JoinHashTable::Build(PartitionedTupleDataAppendState &append_state, DataChu
 	}
 	if (mark_join_info.uncorrelated_condition_rows) {
 		// Keep all rows: probe-side NULLs can be UNKNOWN against non-NULL rows in other external hash partitions.
-		mark_join_info.uncorrelated_has_null = mark_join_info.uncorrelated_has_null || MarkJoinKeysHaveNull(keys);
+		mark_join_info.uncorrelated_has_null =
+		    mark_join_info.uncorrelated_has_null || MarkJoinKeysHaveNull(context.GetContext(), keys);
 		mark_join_info.uncorrelated_condition_rows->Append(keys);
 	}
 
@@ -2128,12 +2132,12 @@ void ScanStructure::NextRightSemiOrAntiJoin(DataChunk &keys, DataChunk &probe_da
 	finished = true;
 }
 
-static bool MarkJoinChunkHasUnknown(DataChunk &left, idx_t left_row, DataChunk &right) {
+static bool MarkJoinChunkHasUnknown(Context &context, DataChunk &left, idx_t left_row, DataChunk &right) {
 	D_ASSERT(left.ColumnCount() == right.ColumnCount());
 	bool row_is_false[STANDARD_VECTOR_SIZE] = {false};
 	bool row_is_unknown[STANDARD_VECTOR_SIZE] = {false};
 	for (idx_t col_idx = 0; col_idx < left.ColumnCount(); col_idx++) {
-		MarkJoinRowComparison::CompareEquality(left.data[col_idx], left_row, left.size(), right.data[col_idx],
+		MarkJoinRowComparison::CompareEquality(context, left.data[col_idx], left_row, left.size(), right.data[col_idx],
 		                                       right.size(), row_is_false, row_is_unknown);
 	}
 	for (idx_t right_row = 0; right_row < right.size(); right_row++) {
@@ -2201,7 +2205,8 @@ void JoinHashTable::ConstructMarkJoinResult(DataChunk &join_keys, DataChunk &pro
 		return;
 	}
 	bool requires_refinement[STANDARD_VECTOR_SIZE] = {false};
-	if (!mark_join_info.uncorrelated_has_null && !MarkJoinKeysHaveNull(join_keys, requires_refinement)) {
+	if (!mark_join_info.uncorrelated_has_null &&
+	    !MarkJoinKeysHaveNull(context.GetContext(), join_keys, requires_refinement)) {
 		return;
 	}
 
@@ -2225,7 +2230,7 @@ void JoinHashTable::ConstructMarkJoinResult(DataChunk &join_keys, DataChunk &pro
 		idx_t remaining_count = 0;
 		for (idx_t candidate_idx = 0; candidate_idx < refinement_count; candidate_idx++) {
 			auto probe_idx = refinement_sel.get_index(candidate_idx);
-			if (MarkJoinChunkHasUnknown(join_keys, probe_idx, rhs_chunk)) {
+			if (MarkJoinChunkHasUnknown(context.GetContext(), join_keys, probe_idx, rhs_chunk)) {
 				mask.SetInvalid(probe_idx);
 			} else {
 				refinement_sel.set_index(remaining_count++, probe_idx);

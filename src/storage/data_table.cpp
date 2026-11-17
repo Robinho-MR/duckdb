@@ -41,6 +41,7 @@
 #include "duckdb/transaction/duck_transaction_manager.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/transaction/local_storage.hpp"
+#include "duckdb/execution/comparison_executor.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 
 namespace duckdb {
@@ -1516,8 +1517,9 @@ void DataTable::Update(TableUpdateState &state, ClientContext &context, DuckTabl
 	updates_slice.InitializeEmpty(updates.GetTypes());
 
 	SelectionVector sel_local_update(count), sel_global_update(count);
-	auto n_local_update = VectorOperations::GreaterThanEquals(row_ids, max_row_id_vec, nullptr, count,
-	                                                          &sel_local_update, &sel_global_update);
+	ComparisonExecutor row_id_comparison(context, ExpressionType::COMPARE_GREATERTHANOREQUALTO, LogicalType::BIGINT);
+	auto n_local_update =
+	    row_id_comparison.Select(row_ids, max_row_id_vec, nullptr, count, &sel_local_update, &sel_global_update);
 	auto n_global_update = count - n_local_update;
 
 	// row id > MAX_ROW_ID? transaction-local storage

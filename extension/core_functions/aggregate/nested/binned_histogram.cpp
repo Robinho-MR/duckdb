@@ -1,3 +1,4 @@
+#include "duckdb/execution/comparison_executor.hpp"
 #include "core_functions/aggregate/histogram_helpers.hpp"
 #include "core_functions/aggregate/nested_functions.hpp"
 #include "core_functions/scalar/generic_functions.hpp"
@@ -255,7 +256,9 @@ void IsHistogramOtherBinFunction(DataChunk &args, ExpressionState &state, Vector
 	}
 	auto v = OtherBucketValue(input_type);
 	Vector ref(v, count_t(args.size()));
-	VectorOperations::NotDistinctFrom(args.data[0], ref, result);
+	ComparisonExecutor not_distinct_from(state.GetContext(), ExpressionType::COMPARE_NOT_DISTINCT_FROM, input_type);
+	not_distinct_from.Execute(args.data[0], ref, result);
+	result.Flatten();
 
 	// Set NULL if input is NULL.
 	UnifiedVectorFormat input_data;

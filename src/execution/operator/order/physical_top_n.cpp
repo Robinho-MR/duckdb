@@ -1,4 +1,5 @@
 #include "duckdb/execution/operator/order/physical_top_n.hpp"
+#include "duckdb/execution/comparison_executor.hpp"
 #include "duckdb/common/atomic.hpp"
 
 #include "duckdb/common/assert.hpp"
@@ -102,6 +103,8 @@ public:
 	idx_t offset;
 	idx_t heap_size;
 	ExpressionExecutor executor;
+	//! NOT DISTINCT FROM comparison of every sort column
+	vector<unique_ptr<ComparisonExecutor>> not_distinct_from;
 	DataChunk sort_chunk;
 	DataChunk heap_data;
 	DataChunk payload_chunk;
@@ -188,6 +191,8 @@ TopNHeap::TopNHeap(ClientContext &context, Allocator &allocator, const vector<Lo
 		auto &expr = order.expression;
 		sort_types.push_back(expr->GetReturnType());
 		executor.AddExpression(*expr);
+		not_distinct_from.push_back(make_uniq<ComparisonExecutor>(
+		    executor.GetContext(), ExpressionType::COMPARE_NOT_DISTINCT_FROM, expr->GetReturnType()));
 		modifiers.emplace_back(order.type, order.null_order);
 	}
 	heap.reserve(InitialHeapAllocSize());
@@ -307,28 +312,15 @@ bool TopNHeap::CheckBoundaryValues(DataChunk &sort_chunk, DataChunk &payload, To
 			compare_chunk.data[i].Reference(sort_chunk.data[i]);
 		}
 		bool is_last = i + 1 == orders.size();
-		idx_t true_count;
-		if (orders[i].null_order == OrderByNullType::NULLS_LAST) {
-			if (orders[i].type == OrderType::ASCENDING) {
-				true_count = VectorOperations::DistinctLessThan(compare_chunk.data[i], boundary_values.data[i],
-				                                                &remaining_sel, remaining_count, &true_sel, &false_sel);
-			} else {
-				true_count = VectorOperations::DistinctGreaterThanNullsFirst(compare_chunk.data[i],
-				                                                             boundary_values.data[i], &remaining_sel,
-				                                                             remaining_count, &true_sel, &false_sel);
-			}
-		} else {
-			D_ASSERT(orders[i].null_order == OrderByNullType::NULLS_FIRST);
-			if (orders[i].type == OrderType::ASCENDING) {
-				true_count = VectorOperations::DistinctLessThanNullsFirst(compare_chunk.data[i],
-				                                                          boundary_values.data[i], &remaining_sel,
-				                                                          remaining_count, &true_sel, &false_sel);
-			} else {
-				true_count =
-				    VectorOperations::DistinctGreaterThan(compare_chunk.data[i], boundary_values.data[i],
-				                                          &remaining_sel, remaining_count, &true_sel, &false_sel);
-			}
-		}
+		const bool ascending = orders[i].type == OrderType::ASCENDING;
+		const bool nulls_first = orders[i].null_order == OrderByNullType::NULLS_FIRST;
+		D_ASSERT(nulls_first || orders[i].null_order == OrderByNullType::NULLS_LAST);
+		// ASC NULLS LAST and DESC NULLS FIRST compare with NULLs as maximal values, the others with NULLs as minimal
+		const auto comparison = ascending ? ExpressionType::COMPARE_LESSTHAN : ExpressionType::COMPARE_GREATERTHAN;
+		const bool nulls_minimal = ascending == nulls_first;
+		idx_t true_count = VectorOperations::SelectDistinctComparator(compare_chunk.data[i], boundary_values.data[i],
+		                                                              &remaining_sel, remaining_count, comparison,
+		                                                              nulls_minimal, &true_sel, &false_sel);
 
 		if (true_count > 0) {
 			memcpy(final_sel.data() + final_count, true_sel.data(), true_count * sizeof(sel_t));
@@ -337,9 +329,8 @@ bool TopNHeap::CheckBoundaryValues(DataChunk &sort_chunk, DataChunk &payload, To
 		idx_t false_count = remaining_count - true_count;
 		if (!is_last && false_count > 0) {
 			// check what we should continue to check
-			compare_chunk.data[i].Slice(sort_chunk.data[i], false_sel, false_count);
-			remaining_count = VectorOperations::NotDistinctFrom(compare_chunk.data[i], boundary_values.data[i],
-			                                                    &false_sel, false_count, &new_remaining_sel, nullptr);
+			remaining_count = not_distinct_from[i]->Select(sort_chunk.data[i], boundary_values.data[i], &false_sel,
+			                                               false_count, &new_remaining_sel, nullptr);
 			remaining_sel.Initialize(new_remaining_sel);
 		} else {
 			break;

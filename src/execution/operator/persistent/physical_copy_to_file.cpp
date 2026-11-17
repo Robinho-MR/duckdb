@@ -2259,7 +2259,7 @@ public:
 
 private:
 	void TakeMaterializedBins(ExecutionContext &context, OperatorSourceInput &source_input);
-	void Mask(idx_t begin_block, idx_t end_block);
+	void Mask(Context &context, idx_t begin_block, idx_t end_block);
 	void PartitionBoundaries(idx_t row_begin, idx_t chunk_rows, vector<idx_t> &boundaries) const;
 	//! The chunk holding a row
 	idx_t ChunkOf(idx_t row) const;
@@ -2412,7 +2412,7 @@ void SortedBinGroup::ExecutePreparation(ExecutionContext &context, InterruptStat
 		break;
 	}
 	case MASK:
-		Mask(begin_block, end_block);
+		Mask(context.client.GetContext(), begin_block, end_block);
 		break;
 	default:
 		throw InternalException("Invalid SortedBinGroup preparation step");
@@ -2464,7 +2464,7 @@ idx_t SortedBinGroup::ChunkOf(idx_t row) const {
 	return NumericCast<idx_t>(entry - chunk_row_offsets.begin()) - 1;
 }
 
-void SortedBinGroup::Mask(idx_t begin_block, idx_t end_block) {
+void SortedBinGroup::Mask(Context &context, idx_t begin_block, idx_t end_block) {
 	D_ASSERT(collection);
 	D_ASSERT(partition_mask.IsMaskSet());
 
@@ -2493,7 +2493,7 @@ void SortedBinGroup::Mask(idx_t begin_block, idx_t end_block) {
 	auto &scan_cols = input.strategy->sort_ids;
 	const auto chunk_begin = ChunkOf(owned_begin);
 	const auto chunk_end = ChunkOf(owned_end - 1) + 1;
-	WindowDeltaScanner(*collection, chunk_begin, chunk_end, scan_cols, key_count,
+	WindowDeltaScanner(context, *collection, chunk_begin, chunk_end, scan_cols, key_count,
 	                   [&](const idx_t row_idx, DataChunk &, DataChunk &, const idx_t ndistinct,
 	                       const SelectionVector &distinct, const SelectionVector &) {
 		                   for (idx_t i = 0; i < ndistinct; i++) {

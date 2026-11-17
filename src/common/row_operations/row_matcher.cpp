@@ -1,6 +1,8 @@
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
 #include "duckdb/common/row_operations/row_matcher.hpp"
+#include "duckdb/execution/comparison_executor.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
 
 #include "duckdb/common/enum_util.hpp"
 #include "duckdb/common/exception.hpp"
@@ -70,9 +72,10 @@ static idx_t TemplatedMatchLoop(const TupleDataVectorFormat &lhs_format, Selecti
 }
 
 template <bool NO_MATCH_SEL, class T, class OP>
-static idx_t TemplatedMatch(Vector &, const TupleDataVectorFormat &lhs_format, SelectionVector &sel, const idx_t count,
-                            const TupleDataLayout &rhs_layout, Vector &rhs_row_locations, const idx_t col_idx,
-                            const vector<MatchFunction> &, SelectionVector *no_match_sel, idx_t &no_match_count) {
+static idx_t TemplatedMatch(Context &, Vector &, const TupleDataVectorFormat &lhs_format, SelectionVector &sel,
+                            const idx_t count, const TupleDataLayout &rhs_layout, Vector &rhs_row_locations,
+                            const idx_t col_idx, const vector<MatchFunction> &, SelectionVector *no_match_sel,
+                            idx_t &no_match_count) {
 #if DUCKDB_SMALLER_BINARY(row_matcher_validity)
 	return TemplatedMatchLoop<NO_MATCH_SEL, T, OP>(lhs_format, sel, count, rhs_layout, rhs_row_locations, col_idx,
 	                                               no_match_sel, no_match_count);
@@ -98,10 +101,11 @@ static idx_t TemplatedMatch(Vector &, const TupleDataVectorFormat &lhs_format, S
 }
 
 template <bool NO_MATCH_SEL, class OP>
-static idx_t StructMatchEquality(Vector &lhs_vector, const TupleDataVectorFormat &lhs_format, SelectionVector &sel,
-                                 const idx_t count, const TupleDataLayout &rhs_layout, Vector &rhs_row_locations,
-                                 const idx_t col_idx, const vector<MatchFunction> &child_functions,
-                                 SelectionVector *no_match_sel, idx_t &no_match_count) {
+static idx_t StructMatchEquality(Context &context, Vector &lhs_vector, const TupleDataVectorFormat &lhs_format,
+                                 SelectionVector &sel, const idx_t count, const TupleDataLayout &rhs_layout,
+                                 Vector &rhs_row_locations, const idx_t col_idx,
+                                 const vector<MatchFunction> &child_functions, SelectionVector *no_match_sel,
+                                 idx_t &no_match_count) {
 	using COMPARISON_OP = ComparisonOperationWrapper<OP>;
 
 	// LHS
@@ -155,73 +159,74 @@ static idx_t StructMatchEquality(Vector &lhs_vector, const TupleDataVectorFormat
 		auto &lhs_struct_vector = lhs_struct_vectors[struct_col_idx];
 		auto &lhs_struct_format = lhs_format.children[struct_col_idx];
 		const auto &child_function = child_functions[struct_col_idx];
-		match_count = child_function.function(lhs_struct_vector, lhs_struct_format, sel, match_count, rhs_struct_layout,
-		                                      rhs_struct_row_locations, struct_col_idx, child_function.child_functions,
-		                                      no_match_sel, no_match_count);
+		match_count = child_function.function(context, lhs_struct_vector, lhs_struct_format, sel, match_count,
+		                                      rhs_struct_layout, rhs_struct_row_locations, struct_col_idx,
+		                                      child_function.child_functions, no_match_sel, no_match_count);
 	}
 
 	return match_count;
 }
 
 template <typename OP>
-static idx_t SelectComparison(const Vector &, const Vector &, const SelectionVector &, idx_t, SelectionVector *,
-                              SelectionVector *) {
+static idx_t SelectComparison(Context &, const Vector &, const Vector &, const SelectionVector &, idx_t,
+                              SelectionVector *, SelectionVector *) {
 	NotImplementedException::Throw("Unsupported list comparison operand for RowMatcher::GetMatchFunction");
 }
 
-template <>
-idx_t SelectComparison<Equals>(const Vector &left, const Vector &right, const SelectionVector &sel, idx_t count,
-                               SelectionVector *true_sel, SelectionVector *false_sel) {
-	return VectorOperations::Equals(left, right, &sel, count, true_sel, false_sel);
-}
-
-template <>
-idx_t SelectComparison<NotEquals>(const Vector &left, const Vector &right, const SelectionVector &sel, idx_t count,
-                                  SelectionVector *true_sel, SelectionVector *false_sel) {
-	return VectorOperations::NotEquals(left, right, &sel, count, true_sel, false_sel);
-}
-
-template <>
-idx_t SelectComparison<DistinctFrom>(const Vector &left, const Vector &right, const SelectionVector &sel, idx_t count,
+//! Compare two dense vectors through the comparison function; 'sel' maps the dense rows to the selected rows
+static idx_t SelectCatalogComparison(Context &context, ExpressionType comparison, const Vector &left,
+                                     const Vector &right, const SelectionVector &sel, idx_t count,
                                      SelectionVector *true_sel, SelectionVector *false_sel) {
-	return VectorOperations::DistinctFrom(left, right, &sel, count, true_sel, false_sel);
+	ComparisonExecutor executor(context, comparison, left.GetType(), right.GetType());
+	SelectionVector true_local(count);
+	SelectionVector false_local(false_sel ? count : 0);
+	const auto true_count =
+	    executor.Select(left, right, nullptr, count, &true_local, false_sel ? &false_local : nullptr);
+	// map the false rows first: the true selection may alias 'sel'
+	if (false_sel) {
+		for (idx_t i = 0; i < count - true_count; i++) {
+			false_sel->set_index(i, sel.get_index(false_local.get_index(i)));
+		}
+	}
+	for (idx_t i = 0; i < true_count; i++) {
+		true_sel->set_index(i, sel.get_index(true_local.get_index(i)));
+	}
+	return true_count;
 }
 
-template <>
-idx_t SelectComparison<NotDistinctFrom>(const Vector &left, const Vector &right, const SelectionVector &sel,
-                                        idx_t count, SelectionVector *true_sel, SelectionVector *false_sel) {
-	return VectorOperations::NotDistinctFrom(left, right, &sel, count, true_sel, false_sel);
-}
+#define DUCKDB_CATALOG_SELECT_COMPARISON(OP, EXPRESSION_TYPE)                                                          \
+	template <>                                                                                                        \
+	idx_t SelectComparison<OP>(Context & context, const Vector &left, const Vector &right, const SelectionVector &sel, \
+	                           idx_t count, SelectionVector *true_sel, SelectionVector *false_sel) {                   \
+		return SelectCatalogComparison(context, EXPRESSION_TYPE, left, right, sel, count, true_sel, false_sel);        \
+	}
 
-template <>
-idx_t SelectComparison<GreaterThan>(const Vector &left, const Vector &right, const SelectionVector &sel, idx_t count,
-                                    SelectionVector *true_sel, SelectionVector *false_sel) {
-	return VectorOperations::DistinctGreaterThan(left, right, &sel, count, true_sel, false_sel);
-}
+DUCKDB_CATALOG_SELECT_COMPARISON(Equals, ExpressionType::COMPARE_EQUAL)
+DUCKDB_CATALOG_SELECT_COMPARISON(NotEquals, ExpressionType::COMPARE_NOTEQUAL)
+DUCKDB_CATALOG_SELECT_COMPARISON(DistinctFrom, ExpressionType::COMPARE_DISTINCT_FROM)
+DUCKDB_CATALOG_SELECT_COMPARISON(NotDistinctFrom, ExpressionType::COMPARE_NOT_DISTINCT_FROM)
+#undef DUCKDB_CATALOG_SELECT_COMPARISON
 
-template <>
-idx_t SelectComparison<GreaterThanEquals>(const Vector &left, const Vector &right, const SelectionVector &sel,
-                                          idx_t count, SelectionVector *true_sel, SelectionVector *false_sel) {
-	return VectorOperations::DistinctGreaterThanEquals(left, right, &sel, count, true_sel, false_sel);
-}
+//! Inequalities order NULLs as the maximal value
+#define DUCKDB_ORDERED_SELECT_COMPARISON(OP, EXPRESSION_TYPE)                                                          \
+	template <>                                                                                                        \
+	idx_t SelectComparison<OP>(Context &, const Vector &left, const Vector &right, const SelectionVector &sel,         \
+	                           idx_t count, SelectionVector *true_sel, SelectionVector *false_sel) {                   \
+		return VectorOperations::SelectDistinctComparator(left, right, &sel, count, EXPRESSION_TYPE, false, true_sel,  \
+		                                                  false_sel);                                                  \
+	}
 
-template <>
-idx_t SelectComparison<LessThan>(const Vector &left, const Vector &right, const SelectionVector &sel, idx_t count,
-                                 SelectionVector *true_sel, SelectionVector *false_sel) {
-	return VectorOperations::DistinctLessThan(left, right, &sel, count, true_sel, false_sel);
-}
-
-template <>
-idx_t SelectComparison<LessThanEquals>(const Vector &left, const Vector &right, const SelectionVector &sel, idx_t count,
-                                       SelectionVector *true_sel, SelectionVector *false_sel) {
-	return VectorOperations::DistinctLessThanEquals(left, right, &sel, count, true_sel, false_sel);
-}
+DUCKDB_ORDERED_SELECT_COMPARISON(GreaterThan, ExpressionType::COMPARE_GREATERTHAN)
+DUCKDB_ORDERED_SELECT_COMPARISON(GreaterThanEquals, ExpressionType::COMPARE_GREATERTHANOREQUALTO)
+DUCKDB_ORDERED_SELECT_COMPARISON(LessThan, ExpressionType::COMPARE_LESSTHAN)
+DUCKDB_ORDERED_SELECT_COMPARISON(LessThanEquals, ExpressionType::COMPARE_LESSTHANOREQUALTO)
+#undef DUCKDB_ORDERED_SELECT_COMPARISON
 
 template <bool NO_MATCH_SEL, class OP>
-static idx_t GenericNestedMatch(Vector &lhs_vector, const TupleDataVectorFormat &, SelectionVector &sel,
-                                const idx_t count, const TupleDataLayout &rhs_layout, Vector &rhs_row_locations,
-                                const idx_t col_idx, const vector<MatchFunction> &, SelectionVector *no_match_sel,
-                                idx_t &no_match_count) {
+static idx_t GenericNestedMatch(Context &context, Vector &lhs_vector, const TupleDataVectorFormat &,
+                                SelectionVector &sel, const idx_t count, const TupleDataLayout &rhs_layout,
+                                Vector &rhs_row_locations, const idx_t col_idx, const vector<MatchFunction> &,
+                                SelectionVector *no_match_sel, idx_t &no_match_count) {
 	const auto &type = rhs_layout.GetTypes()[col_idx];
 
 	// Gather a dense Vector containing the column values being matched
@@ -237,15 +242,15 @@ static idx_t GenericNestedMatch(Vector &lhs_vector, const TupleDataVectorFormat 
 	if (NO_MATCH_SEL) {
 		SelectionVector no_match_sel_offset(no_match_sel->data() + no_match_count,
 		                                    no_match_sel->Capacity() - no_match_count);
-		auto match_count = SelectComparison<OP>(sliced, key, sel, count, &sel, &no_match_sel_offset);
+		auto match_count = SelectComparison<OP>(context, sliced, key, sel, count, &sel, &no_match_sel_offset);
 		no_match_count += count - match_count;
 		return match_count;
 	}
-	return SelectComparison<OP>(sliced, key, sel, count, &sel, nullptr);
+	return SelectComparison<OP>(context, sliced, key, sel, count, &sel, nullptr);
 }
 
-void RowMatcher::Initialize(const bool no_match_sel, const TupleDataLayout &layout, const Predicates &predicates,
-                            vector<column_t> columns_p) {
+void RowMatcher::Initialize(Context &context_p, const bool no_match_sel, const TupleDataLayout &layout,
+                            const Predicates &predicates, vector<column_t> columns_p) {
 	if (columns_p.empty()) {
 		// Assume all columns
 		columns_p.reserve(predicates.size());
@@ -254,6 +259,7 @@ void RowMatcher::Initialize(const bool no_match_sel, const TupleDataLayout &layo
 		}
 	}
 
+	context = &context_p;
 	rhs_layout = &layout;
 	columns = columns_p;
 
@@ -287,9 +293,9 @@ idx_t RowMatcher::Match(DataChunk &lhs, const vector<TupleDataVectorFormat> &lhs
 		const auto col_idx = columns[fun_idx];
 
 		const auto &match_function = match_functions[fun_idx];
-		count =
-		    match_function.function(lhs.data[col_idx], lhs_formats[col_idx], sel, count, *rhs_layout, rhs_row_locations,
-		                            col_idx, match_function.child_functions, no_match_sel, no_match_count);
+		count = match_function.function(*context, lhs.data[col_idx], lhs_formats[col_idx], sel, count, *rhs_layout,
+		                                rhs_row_locations, col_idx, match_function.child_functions, no_match_sel,
+		                                no_match_count);
 	}
 	return count;
 }

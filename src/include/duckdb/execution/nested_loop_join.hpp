@@ -22,7 +22,7 @@ struct NestedLoopJoinInner {
 };
 
 struct NestedLoopJoinMark {
-	static void Perform(DataChunk &left, ColumnDataCollection &right, bool found_match[],
+	static void Perform(Context &context, DataChunk &left, ColumnDataCollection &right, bool found_match[],
 	                    const vector<JoinCondition> &conditions, optional_ptr<bool> found_unknown = nullptr);
 };
 

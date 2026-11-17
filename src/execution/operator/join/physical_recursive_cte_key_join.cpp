@@ -125,7 +125,7 @@ struct RecursiveCTEKeyJoinHashTableState {
 class RecursiveCTEKeyJoinState : public CachingOperatorState {
 public:
 	RecursiveCTEKeyJoinState(ClientContext &context, const PhysicalRecursiveCTEKeyJoin &op)
-	    : valid_probe_sel(STANDARD_VECTOR_SIZE), found_key_sel(STANDARD_VECTOR_SIZE),
+	    : client(context), valid_probe_sel(STANDARD_VECTOR_SIZE), found_key_sel(STANDARD_VECTOR_SIZE),
 	      matched_input_sel(STANDARD_VECTOR_SIZE), candidate_input_sel(STANDARD_VECTOR_SIZE),
 	      candidate_match_sel(STANDARD_VECTOR_SIZE), candidate_addresses(LogicalType::POINTER),
 	      matched_addresses(LogicalType::POINTER), probe_hashes(LogicalType::HASH),
@@ -179,6 +179,7 @@ private:
 	DataChunk state_keys;
 	DataChunk aggregate_rows;
 	DataChunk state_rows;
+	ClientContext &client;
 	SelectionVector valid_probe_sel;
 	SelectionVector found_key_sel;
 	SelectionVector matched_input_sel;
@@ -329,7 +330,8 @@ RecursiveCTEKeyJoinResult RecursiveCTEKeyJoinState::ProbePartialKey(DataChunk &i
 			columns.push_back(key_idx);
 		}
 		TupleDataCollection::InitializeChunkState(match_chunk_state, layout.KeyTypes(), columns);
-		partial_matcher.Initialize(false, recursive_state.GetHashTable().GetLayout(), predicates, std::move(columns));
+		partial_matcher.Initialize(client.GetContext(), false, recursive_state.GetHashTable().GetLayout(), predicates,
+		                           std::move(columns));
 		hash_table_state->partial_matcher_initialized = true;
 	}
 

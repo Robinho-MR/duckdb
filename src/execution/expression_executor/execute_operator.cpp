@@ -3,6 +3,7 @@
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/common/error_data.hpp"
+#include "duckdb/execution/comparison_executor.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/vector_writer.hpp"
 
@@ -191,7 +192,9 @@ void ExpressionExecutor::Execute(const BoundOperatorExpression &expr, Expression
 			Vector comp_res(LogicalType::BOOLEAN);
 
 			Execute(*expr.GetChildren()[child], state->child_states[child].get(), sel, count, vector_to_check);
-			VectorOperations::Equals(left, vector_to_check, comp_res);
+			ComparisonExecutor equals(GetContext(), ExpressionType::COMPARE_EQUAL, left.GetType(),
+			                          vector_to_check.GetType());
+			equals.Execute(left, vector_to_check, comp_res);
 
 			if (child == 1) {
 				// first child: move to result

@@ -57,19 +57,6 @@ struct VectorOperations {
 	//===--------------------------------------------------------------------===//
 	// Comparison Operations
 	//===--------------------------------------------------------------------===//
-	// result = left == right
-	static void Equals(const Vector &left, const Vector &right, Vector &result);
-	// result = left != right
-	static void NotEquals(const Vector &left, const Vector &right, Vector &result);
-	// result = left > right
-	static void GreaterThan(const Vector &left, const Vector &right, Vector &result);
-	// result = left >= right
-	static void GreaterThanEquals(const Vector &left, const Vector &right, Vector &result);
-	// result = left < right
-	static void LessThan(const Vector &left, const Vector &right, Vector &result);
-	// result = left <= right
-	static void LessThanEquals(const Vector &left, const Vector &right, Vector &result);
-
 	// result = -1 if left < right, 0 if left == right, 1 if left > right (stored in int8_t TINYINT result vector)
 	// if inequality is set, then scalars inside nested types will be compared with NULLS LAST semantics.
 	static void Comparator(const Vector &left, const Vector &right, Vector &result, const ExpressionType comp);
@@ -78,10 +65,6 @@ struct VectorOperations {
 	static void ComparatorFill(const Vector &left, const Vector &right, Vector &result, idx_t count,
 	                           const ExpressionType comp);
 
-	// result = A != B with nulls being equal
-	static void DistinctFrom(const Vector &left, const Vector &right, Vector &result);
-	// result := A == B with nulls being equal
-	static void NotDistinctFrom(const Vector &left, const Vector &right, Vector &result);
 	// result := comparator(A, B) with nulls being maximal (NULLS LAST), returns -1/0/1 as int8_t
 	static void DistinctComparator(const Vector &left, const Vector &right, Vector &result);
 	// result := comparator(A, B) with nulls being minimal (NULLS FIRST), returns -1/0/1 as int8_t
@@ -93,68 +76,13 @@ struct VectorOperations {
 	//===--------------------------------------------------------------------===//
 	// Select Comparisons
 	//===--------------------------------------------------------------------===//
-	static idx_t Equals(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel, idx_t count,
-	                    optional_ptr<SelectionVector> true_sel, optional_ptr<SelectionVector> false_sel,
-	                    optional_ptr<ValidityMask> null_mask = nullptr);
-	static idx_t NotEquals(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel,
-	                       idx_t count, optional_ptr<SelectionVector> true_sel, optional_ptr<SelectionVector> false_sel,
-	                       optional_ptr<ValidityMask> null_mask = nullptr);
-	static idx_t GreaterThan(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel,
-	                         idx_t count, optional_ptr<SelectionVector> true_sel,
-	                         optional_ptr<SelectionVector> false_sel, optional_ptr<ValidityMask> null_mask = nullptr);
-	static idx_t GreaterThanEquals(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel,
-	                               idx_t count, optional_ptr<SelectionVector> true_sel,
-	                               optional_ptr<SelectionVector> false_sel,
-	                               optional_ptr<ValidityMask> null_mask = nullptr);
-	static idx_t LessThan(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel, idx_t count,
-	                      optional_ptr<SelectionVector> true_sel, optional_ptr<SelectionVector> false_sel,
-	                      optional_ptr<ValidityMask> null_mask = nullptr);
-	static idx_t LessThanEquals(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel,
-	                            idx_t count, optional_ptr<SelectionVector> true_sel,
-	                            optional_ptr<SelectionVector> false_sel,
-	                            optional_ptr<ValidityMask> null_mask = nullptr);
-
-	// true := A != B with nulls being equal
-	static idx_t DistinctFrom(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel,
-	                          idx_t count, optional_ptr<SelectionVector> true_sel,
-	                          optional_ptr<SelectionVector> false_sel);
-	// true := A == B with nulls being equal
-	static idx_t NotDistinctFrom(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel,
-	                             idx_t count, optional_ptr<SelectionVector> true_sel,
-	                             optional_ptr<SelectionVector> false_sel);
-	// true := A > B with nulls being maximal
-	static idx_t DistinctGreaterThan(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel,
-	                                 idx_t count, optional_ptr<SelectionVector> true_sel,
-	                                 optional_ptr<SelectionVector> false_sel,
-	                                 optional_ptr<ValidityMask> null_mask = nullptr);
-	// true := A >= B with nulls being maximal
-	static idx_t DistinctGreaterThanEquals(const Vector &left, const Vector &right,
-	                                       optional_ptr<const SelectionVector> sel, idx_t count,
-	                                       optional_ptr<SelectionVector> true_sel,
-	                                       optional_ptr<SelectionVector> false_sel,
-	                                       optional_ptr<ValidityMask> null_mask = nullptr);
-	// true := A < B with nulls being maximal
-	static idx_t DistinctLessThan(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel,
-	                              idx_t count, optional_ptr<SelectionVector> true_sel,
-	                              optional_ptr<SelectionVector> false_sel,
-	                              optional_ptr<ValidityMask> null_mask = nullptr);
-	// true := A <= B with nulls being maximal
-	static idx_t DistinctLessThanEquals(const Vector &left, const Vector &right,
-	                                    optional_ptr<const SelectionVector> sel, idx_t count,
-	                                    optional_ptr<SelectionVector> true_sel, optional_ptr<SelectionVector> false_sel,
-	                                    optional_ptr<ValidityMask> null_mask = nullptr);
-	// true := A > B with nulls being minimal
-	static idx_t DistinctGreaterThanNullsFirst(const Vector &left, const Vector &right,
-	                                           optional_ptr<const SelectionVector> sel, idx_t count,
-	                                           optional_ptr<SelectionVector> true_sel,
-	                                           optional_ptr<SelectionVector> false_sel,
-	                                           optional_ptr<ValidityMask> null_mask = nullptr);
-	// true := A < B with nulls being minimal
-	static idx_t DistinctLessThanNullsFirst(const Vector &left, const Vector &right,
-	                                        optional_ptr<const SelectionVector> sel, idx_t count,
-	                                        optional_ptr<SelectionVector> true_sel,
-	                                        optional_ptr<SelectionVector> false_sel,
-	                                        optional_ptr<ValidityMask> null_mask = nullptr);
+	//! Select the rows for which "left <comparison> right" holds, using the DistinctComparator ordering where NULLs
+	//! are maximal (or minimal if nulls_first is set). The comparison must be one of <, <=, >, >=.
+	static idx_t SelectDistinctComparator(const Vector &left, const Vector &right,
+	                                      optional_ptr<const SelectionVector> sel, idx_t count,
+	                                      ExpressionType comparison, bool nulls_first,
+	                                      optional_ptr<SelectionVector> true_sel,
+	                                      optional_ptr<SelectionVector> false_sel);
 
 	//===--------------------------------------------------------------------===//
 	// Hash functions
@@ -281,71 +209,12 @@ struct VectorOperations {
 		}
 		Not(input, result);
 	}
-	[[deprecated("count parameter is deprecated; call Equals without count instead")]] static void
-	Equals(const Vector &left, const Vector &right, Vector &result, idx_t count) {
-		if (count != left.size()) {
-			throw InternalException("Equals: count (%llu) does not match vector size (%llu)", count, left.size());
-		}
-		Equals(left, right, result);
-	}
-	[[deprecated("count parameter is deprecated; call NotEquals without count instead")]] static void
-	NotEquals(const Vector &left, const Vector &right, Vector &result, idx_t count) {
-		if (count != left.size()) {
-			throw InternalException("NotEquals: count (%llu) does not match vector size (%llu)", count, left.size());
-		}
-		NotEquals(left, right, result);
-	}
-	[[deprecated("count parameter is deprecated; call GreaterThan without count instead")]] static void
-	GreaterThan(const Vector &left, const Vector &right, Vector &result, idx_t count) {
-		if (count != left.size()) {
-			throw InternalException("GreaterThan: count (%llu) does not match vector size (%llu)", count, left.size());
-		}
-		GreaterThan(left, right, result);
-	}
-	[[deprecated("count parameter is deprecated; call GreaterThanEquals without count instead")]] static void
-	GreaterThanEquals(const Vector &left, const Vector &right, Vector &result, idx_t count) {
-		if (count != left.size()) {
-			throw InternalException("GreaterThanEquals: count (%llu) does not match vector size (%llu)", count,
-			                        left.size());
-		}
-		GreaterThanEquals(left, right, result);
-	}
-	[[deprecated("count parameter is deprecated; call LessThan without count instead")]] static void
-	LessThan(const Vector &left, const Vector &right, Vector &result, idx_t count) {
-		if (count != left.size()) {
-			throw InternalException("LessThan: count (%llu) does not match vector size (%llu)", count, left.size());
-		}
-		LessThan(left, right, result);
-	}
-	[[deprecated("count parameter is deprecated; call LessThanEquals without count instead")]] static void
-	LessThanEquals(const Vector &left, const Vector &right, Vector &result, idx_t count) {
-		if (count != left.size()) {
-			throw InternalException("LessThanEquals: count (%llu) does not match vector size (%llu)", count,
-			                        left.size());
-		}
-		LessThanEquals(left, right, result);
-	}
 	[[deprecated("count parameter is deprecated; call Comparator with ExpressionType instead")]] static void
 	Comparator(const Vector &left, const Vector &right, Vector &result, idx_t count) {
 		if (count != left.size()) {
 			throw InternalException("Comparator: count (%llu) does not match vector size (%llu)", count, left.size());
 		}
 		Comparator(left, right, result, ExpressionType::COMPARE_EQUAL);
-	}
-	[[deprecated("count parameter is deprecated; call DistinctFrom without count instead")]] static void
-	DistinctFrom(const Vector &left, const Vector &right, Vector &result, idx_t count) {
-		if (count != left.size()) {
-			throw InternalException("DistinctFrom: count (%llu) does not match vector size (%llu)", count, left.size());
-		}
-		DistinctFrom(left, right, result);
-	}
-	[[deprecated("count parameter is deprecated; call NotDistinctFrom without count instead")]] static void
-	NotDistinctFrom(const Vector &left, const Vector &right, Vector &result, idx_t count) {
-		if (count != left.size()) {
-			throw InternalException("NotDistinctFrom: count (%llu) does not match vector size (%llu)", count,
-			                        left.size());
-		}
-		NotDistinctFrom(left, right, result);
 	}
 	[[deprecated("count parameter is deprecated; call DistinctComparator without count instead")]] static void
 	DistinctComparator(const Vector &left, const Vector &right, Vector &result, idx_t count) {

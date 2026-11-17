@@ -14,6 +14,7 @@
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
+#include "duckdb/execution/comparison_executor.hpp"
 
 #include <exception>
 
@@ -211,7 +212,7 @@ public:
 };
 
 template <typename OP>
-static void WindowDeltaScanner(ColumnDataCollection &collection, idx_t block_begin, idx_t block_end,
+static void WindowDeltaScanner(Context &context, ColumnDataCollection &collection, idx_t block_begin, idx_t block_end,
                                const vector<column_t> &scan_cols, const idx_t key_count, OP operation) {
 	//	Stop if there is no work to do
 	if (!collection.Count()) {
@@ -237,6 +238,7 @@ static void WindowDeltaScanner(ColumnDataCollection &collection, idx_t block_beg
 	const auto key_type = scanner.PrefixStructType(key_count);
 	Vector compare_curr(key_type);
 	Vector compare_prev(key_type);
+	ComparisonExecutor distinct_from(context, ExpressionType::COMPARE_DISTINCT_FROM, key_type);
 
 	bool boundary_compare = (block_begin > 0);
 	idx_t row_idx = 1;
@@ -293,8 +295,7 @@ static void WindowDeltaScanner(ColumnDataCollection &collection, idx_t block_beg
 		scanner.ReferenceStructColumns(*prev, compare_prev, key_count);
 		scanner.ReferenceStructColumns(*curr, compare_curr, key_count);
 
-		const auto ndistinct =
-		    VectorOperations::DistinctFrom(compare_curr, compare_prev, nullptr, count, &distinct, &matching);
+		const auto ndistinct = distinct_from.Select(compare_curr, compare_prev, nullptr, count, &distinct, &matching);
 
 		//	If n is 0, neither SV has been filled in?
 		auto match_sel = ndistinct ? &matching : FlatVector::IncrementalSelectionVector();

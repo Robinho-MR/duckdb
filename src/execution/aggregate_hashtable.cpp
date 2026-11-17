@@ -89,7 +89,7 @@ GroupedAggregateHashTable::GroupedAggregateHashTable(ClientContext &context_p, A
 	                           ? ExpressionType::COMPARE_EQUAL
 	                           : ExpressionType::COMPARE_NOT_DISTINCT_FROM;
 	predicates.resize(layout_ptr->ColumnCount() - 1, expr_type);
-	row_matcher.Initialize(true, *layout_ptr, predicates);
+	row_matcher.Initialize(context.GetContext(), true, *layout_ptr, predicates);
 
 	state.partitioned_append_state.compute_reverse_partition_sel = true;
 	state.unpartitioned_append_state.compute_reverse_partition_sel = true;
@@ -1051,7 +1051,7 @@ void GroupedAggregateHashTable::InitializeLookupState(AggregateHTLookupState &lo
 	}
 	lookup_state.group_chunk.InitializeEmpty(layout_ptr->GetTypes());
 	TupleDataCollection::InitializeChunkState(lookup_state.chunk_state, layout_ptr->GetTypes());
-	lookup_state.row_matcher.Initialize(true, *layout_ptr, predicates);
+	lookup_state.row_matcher.Initialize(context.GetContext(), true, *layout_ptr, predicates);
 	for (idx_t group_idx = 0; group_idx + 1 < layout_ptr->ColumnCount(); group_idx++) {
 		lookup_state.gather_functions.push_back(
 		    TupleDataCollection::GetGatherFunction(layout_ptr->GetTypes()[group_idx]));

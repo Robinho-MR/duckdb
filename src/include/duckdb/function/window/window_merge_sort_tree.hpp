@@ -29,7 +29,7 @@ public:
 	//! Sort the data
 	void Finalize(ExecutionContext &context, InterruptState &interrupt);
 	//! Process sorted leaf data
-	virtual void BuildLeaves() = 0;
+	virtual void BuildLeaves(Context &context) = 0;
 
 	//! The index tree we are building
 	WindowMergeSortTree &window_tree;

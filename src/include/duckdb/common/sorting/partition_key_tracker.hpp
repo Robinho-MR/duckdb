@@ -10,12 +10,13 @@
 
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/types/row/partitioned_tuple_data.hpp"
+#include "duckdb/execution/comparison_executor.hpp"
 
 namespace duckdb {
 
 class PartitionKeyTracker {
 public:
-	PartitionKeyTracker(Allocator &allocator, const vector<LogicalType> &key_types);
+	PartitionKeyTracker(Context &context, Allocator &allocator, const vector<LogicalType> &key_types);
 
 	void Reset(idx_t radix_bits);
 	bool CanBypass(idx_t hash_bin) const;
@@ -40,6 +41,8 @@ private:
 
 private:
 	idx_t key_count;
+	//! DISTINCT FROM comparisons of the key columns
+	vector<unique_ptr<ComparisonExecutor>> distinct_from;
 	idx_t radix_bits = 0;
 	unsafe_vector<PartitionKeyTrackerState> states;
 	unsafe_vector<hash_t> hashes;

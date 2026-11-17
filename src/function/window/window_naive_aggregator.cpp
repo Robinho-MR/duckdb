@@ -1,4 +1,5 @@
 #include "duckdb/function/window/window_naive_aggregator.hpp"
+#include "duckdb/execution/comparison_executor.hpp"
 #include "duckdb/common/sorting/sort.hpp"
 #include "duckdb/function/window/window_collection.hpp"
 #include "duckdb/function/window/window_shared_expressions.hpp"
@@ -87,6 +88,8 @@ protected:
 	Vector hashes;
 	//! The state used for comparing the collection across chunk boundaries
 	unique_ptr<WindowCursor> comparer;
+	//! The NOT DISTINCT FROM comparisons of the key columns
+	vector<unique_ptr<ComparisonExecutor>> key_comparisons;
 
 	//! The state used for scanning ORDER BY values from the collection
 	unique_ptr<Sort> sort;
@@ -136,6 +139,10 @@ void WindowNaiveLocalState::Finalize(ExecutionContext &context, WindowAggregator
 	//	Set up the comparison scanner just in case
 	if (!comparer) {
 		comparer = make_uniq<WindowCursor>(*collection, aggregator.child_idx);
+		for (const auto &type : comparer->chunk.GetTypes()) {
+			key_comparisons.push_back(make_uniq<ComparisonExecutor>(context.client.GetContext(),
+			                                                        ExpressionType::COMPARE_NOT_DISTINCT_FROM, type));
+		}
 	}
 
 	//	Set up the argument ORDER BY scanner if needed
@@ -225,7 +232,7 @@ bool WindowNaiveLocalState::KeyEqual(const idx_t &lidx, const idx_t &ridx) {
 	for (column_t c = 0; c < scanned.ColumnCount(); ++c) {
 		Vector left(scanned.data[c], lsel, 1);
 		Vector right(rscanned->data[c], rsel, 1);
-		if (!VectorOperations::NotDistinctFrom(left, right, nullptr, 1, nullptr, &fsel)) {
+		if (!key_comparisons[c]->Select(left, right, nullptr, 1, nullptr, &fsel)) {
 			return false;
 		}
 	}

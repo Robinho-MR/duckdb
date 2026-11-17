@@ -1,4 +1,6 @@
 #include "duckdb/common/serializer/deserializer.hpp"
+#include "duckdb/execution/comparison_executor.hpp"
+#include "duckdb/execution/expression_executor_state.hpp"
 #include "duckdb/common/serializer/serializer.hpp"
 #include "duckdb/common/smaller_binary.hpp"
 #include "duckdb/common/vector_operations/unary_executor.hpp"
@@ -31,11 +33,26 @@ public:
 	}
 };
 
-void BetweenFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	auto &between_expr = state.expr.Cast<BoundFunctionExpression>();
-	bool upper_inclusive = BoundBetweenExpression::UpperInclusive(between_expr);
-	bool lower_inclusive = BoundBetweenExpression::LowerInclusive(between_expr);
+//! The comparisons of the lower and upper bound, executed through the comparison functions
+struct BetweenLocalState : public FunctionLocalState {
+	BetweenLocalState(Context &context, const BoundFunctionExpression &expr, const BetweenFunctionData &data)
+	    : lower_comparison(context, BoundBetweenExpression::LowerComparisonType(data.lower_inclusive),
+	                       expr.GetChildren()[0]->GetReturnType(), expr.GetChildren()[1]->GetReturnType()),
+	      upper_comparison(context, BoundBetweenExpression::UpperComparisonType(data.upper_inclusive),
+	                       expr.GetChildren()[0]->GetReturnType(), expr.GetChildren()[2]->GetReturnType()) {
+	}
 
+	ComparisonExecutor lower_comparison;
+	ComparisonExecutor upper_comparison;
+};
+
+static unique_ptr<FunctionLocalState> BetweenInitLocalState(ExpressionState &state, const BoundFunctionExpression &expr,
+                                                            FunctionData *bind_data) {
+	return make_uniq<BetweenLocalState>(state.GetContext(), expr, bind_data->Cast<BetweenFunctionData>());
+}
+
+void BetweenFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &lstate = ExecuteFunctionState::GetFunctionState(state)->Cast<BetweenLocalState>();
 	Vector intermediate1(LogicalType::BOOLEAN);
 	Vector intermediate2(LogicalType::BOOLEAN);
 
@@ -43,19 +60,8 @@ void BetweenFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	const auto &lower = args.data[1];
 	const auto &upper = args.data[2];
 
-	if (upper_inclusive && lower_inclusive) {
-		VectorOperations::GreaterThanEquals(input, lower, intermediate1);
-		VectorOperations::LessThanEquals(input, upper, intermediate2);
-	} else if (lower_inclusive) {
-		VectorOperations::GreaterThanEquals(input, lower, intermediate1);
-		VectorOperations::LessThan(input, upper, intermediate2);
-	} else if (upper_inclusive) {
-		VectorOperations::GreaterThan(input, lower, intermediate1);
-		VectorOperations::LessThanEquals(input, upper, intermediate2);
-	} else {
-		VectorOperations::GreaterThan(input, lower, intermediate1);
-		VectorOperations::LessThan(input, upper, intermediate2);
-	}
+	lstate.lower_comparison.Execute(input, lower, intermediate1);
+	lstate.upper_comparison.Execute(input, upper, intermediate2);
 	VectorOperations::And(intermediate1, intermediate2, result);
 }
 
@@ -101,32 +107,24 @@ struct ExclusiveBetweenOperator {
 };
 
 template <class OP>
-static idx_t BetweenSelectGeneric(const Vector &input, const Vector &lower, const Vector &upper,
-                                  optional_ptr<const SelectionVector> sel, idx_t count,
+static idx_t BetweenSelectGeneric(BetweenLocalState &lstate, const Vector &input, const Vector &lower,
+                                  const Vector &upper, optional_ptr<const SelectionVector> sel, idx_t count,
                                   optional_ptr<SelectionVector> true_sel, optional_ptr<SelectionVector> false_sel) {
 	// fallback for types without a templated select path (e.g. nested types):
 	// evaluate the boolean result like the execute path and turn it into a selection
 	Vector intermediate1(LogicalType::BOOLEAN);
 	Vector intermediate2(LogicalType::BOOLEAN);
 	Vector result(LogicalType::BOOLEAN);
-	if (OP::LOWER_INCLUSIVE) {
-		VectorOperations::GreaterThanEquals(input, lower, intermediate1);
-	} else {
-		VectorOperations::GreaterThan(input, lower, intermediate1);
-	}
-	if (OP::UPPER_INCLUSIVE) {
-		VectorOperations::LessThanEquals(input, upper, intermediate2);
-	} else {
-		VectorOperations::LessThan(input, upper, intermediate2);
-	}
+	lstate.lower_comparison.Execute(input, lower, intermediate1);
+	lstate.upper_comparison.Execute(input, upper, intermediate2);
 	VectorOperations::And(intermediate1, intermediate2, result);
 	return UnaryExecutor::Select<bool>(
 	    result, sel.get(), count, [](bool value) { return value; }, true_sel.get(), false_sel.get());
 }
 
 template <class OP>
-static idx_t BetweenLoopTypeSwitch(const Vector &input, const Vector &lower, const Vector &upper,
-                                   optional_ptr<const SelectionVector> sel, idx_t count,
+static idx_t BetweenLoopTypeSwitch(BetweenLocalState &lstate, const Vector &input, const Vector &lower,
+                                   const Vector &upper, optional_ptr<const SelectionVector> sel, idx_t count,
                                    optional_ptr<SelectionVector> true_sel, optional_ptr<SelectionVector> false_sel) {
 	switch (input.GetType().InternalType()) {
 	case PhysicalType::BOOL:
@@ -172,7 +170,7 @@ static idx_t BetweenLoopTypeSwitch(const Vector &input, const Vector &lower, con
 		return TernaryExecutor::Select<interval_t, interval_t, interval_t, OP>(input, lower, upper, sel, count,
 		                                                                       true_sel, false_sel);
 	default:
-		return BetweenSelectGeneric<OP>(input, lower, upper, sel, count, true_sel, false_sel);
+		return BetweenSelectGeneric<OP>(lstate, input, lower, upper, sel, count, true_sel, false_sel);
 	}
 }
 
@@ -182,22 +180,24 @@ idx_t BetweenSelect(DataChunk &args, ExpressionState &state, optional_ptr<const 
 	bool upper_inclusive = BoundBetweenExpression::UpperInclusive(between_expr);
 	bool lower_inclusive = BoundBetweenExpression::LowerInclusive(between_expr);
 
+	auto &lstate = ExecuteFunctionState::GetFunctionState(state)->Cast<BetweenLocalState>();
 	const auto &input = args.data[0];
 	const auto &lower = args.data[1];
 	const auto &upper = args.data[2];
 	auto count = args.size();
 
 	if (upper_inclusive && lower_inclusive) {
-		return BetweenLoopTypeSwitch<BothInclusiveBetweenOperator>(input, lower, upper, sel, count, true_sel,
+		return BetweenLoopTypeSwitch<BothInclusiveBetweenOperator>(lstate, input, lower, upper, sel, count, true_sel,
 		                                                           false_sel);
 	} else if (lower_inclusive) {
-		return BetweenLoopTypeSwitch<LowerInclusiveBetweenOperator>(input, lower, upper, sel, count, true_sel,
+		return BetweenLoopTypeSwitch<LowerInclusiveBetweenOperator>(lstate, input, lower, upper, sel, count, true_sel,
 		                                                            false_sel);
 	} else if (upper_inclusive) {
-		return BetweenLoopTypeSwitch<UpperInclusiveBetweenOperator>(input, lower, upper, sel, count, true_sel,
+		return BetweenLoopTypeSwitch<UpperInclusiveBetweenOperator>(lstate, input, lower, upper, sel, count, true_sel,
 		                                                            false_sel);
 	} else {
-		return BetweenLoopTypeSwitch<ExclusiveBetweenOperator>(input, lower, upper, sel, count, true_sel, false_sel);
+		return BetweenLoopTypeSwitch<ExclusiveBetweenOperator>(lstate, input, lower, upper, sel, count, true_sel,
+		                                                       false_sel);
 	}
 }
 #endif
@@ -269,6 +269,7 @@ ScalarFunction BetweenFun::GetFunction() {
 	between_fun.SetToStringCallback(BetweenToString);
 	between_fun.SetGetExpressionTypeCallback(BetweenGetExpressionType);
 	between_fun.SetLegacySerializeCallback(BetweenLegacySerializeCallback);
+	between_fun.SetInitStateCallback(BetweenInitLocalState);
 	between_fun.SetSerializeCallback(BetweenFunctionSerialize);
 	between_fun.SetDeserializeCallback(BetweenFunctionDeserialize);
 #if !DUCKDB_SMALLER_BINARY(between_select)

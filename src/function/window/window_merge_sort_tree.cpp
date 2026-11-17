@@ -112,7 +112,7 @@ void WindowMergeSortTreeLocalState::ExecuteSortTask(ExecutionContext &context, I
 		break;
 	}
 	case WindowMergeSortStage::SORTED:
-		BuildLeaves();
+		BuildLeaves(context.client.GetContext());
 		break;
 	case WindowMergeSortStage::FINISH:
 		window_tree.Finished();

@@ -190,7 +190,7 @@ public:
 	void Sink(ExecutionContext &context, DataChunk &sink_chunk, DataChunk &coll_chunk, idx_t input_idx,
 	          optional_ptr<SelectionVector> filter_sel, idx_t filtered, InterruptState &interrupt);
 	void Finalize(ExecutionContext &context, WindowAggregatorGlobalState &gastate, CollectionPtr collection) override;
-	void Sorted();
+	void Sorted(Context &context);
 	void ExecuteTask(ExecutionContext &context, WindowDistinctAggregatorGlobalState &gdstate);
 	void Evaluate(ExecutionContext &context, const WindowDistinctAggregatorGlobalState &gdstate,
 	              const DataChunk &bounds, Vector &result, idx_t count, idx_t row_idx);
@@ -319,7 +319,7 @@ void WindowDistinctAggregatorLocalState::ExecuteTask(ExecutionContext &context,
 		break;
 	}
 	case WindowDistinctSortStage::SORTED:
-		Sorted();
+		Sorted(context.client.GetContext());
 		break;
 	default:
 		break;
@@ -414,7 +414,7 @@ void WindowDistinctAggregator::Finalize(ExecutionContext &context, CollectionPtr
 	++gdsink.finalized;
 }
 
-void WindowDistinctAggregatorLocalState::Sorted() {
+void WindowDistinctAggregatorLocalState::Sorted(Context &context) {
 	using ZippedTuple = WindowDistinctAggregatorGlobalState::ZippedTuple;
 	auto &collection = *gdstate.sorted;
 	auto &prev_idcs = gdstate.zipped_tree.LowestLevel();
@@ -449,7 +449,7 @@ void WindowDistinctAggregatorLocalState::Sorted() {
 	}
 
 	//	8:	for i ← 1 to in.size do
-	WindowDeltaScanner(collection, block_begin, block_end, scan_cols, key_count,
+	WindowDeltaScanner(context, collection, block_begin, block_end, scan_cols, key_count,
 	                   [&](const idx_t row_idx, DataChunk &prev, DataChunk &curr, const idx_t ndistinct,
 	                       SelectionVector &distinct, const SelectionVector &matching) {
 		                   const auto count = MinValue<idx_t>(prev.size(), curr.size());

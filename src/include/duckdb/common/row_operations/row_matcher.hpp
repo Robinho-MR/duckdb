@@ -13,6 +13,7 @@
 
 namespace duckdb {
 
+class Context;
 class Vector;
 class DataChunk;
 class TupleDataLayout;
@@ -20,10 +21,11 @@ struct TupleDataVectorFormat;
 struct SelectionVector;
 struct MatchFunction;
 
-typedef idx_t (*match_function_t)(Vector &lhs_vector, const TupleDataVectorFormat &lhs_format, SelectionVector &sel,
-                                  const idx_t count, const TupleDataLayout &rhs_layout, Vector &rhs_row_locations,
-                                  const idx_t col_idx, const vector<MatchFunction> &child_functions,
-                                  SelectionVector *no_match_sel, idx_t &no_match_count);
+typedef idx_t (*match_function_t)(Context &context, Vector &lhs_vector, const TupleDataVectorFormat &lhs_format,
+                                  SelectionVector &sel, const idx_t count, const TupleDataLayout &rhs_layout,
+                                  Vector &rhs_row_locations, const idx_t col_idx,
+                                  const vector<MatchFunction> &child_functions, SelectionVector *no_match_sel,
+                                  idx_t &no_match_count);
 
 struct MatchFunction {
 	match_function_t function;
@@ -36,8 +38,8 @@ public:
 
 	//! Initializes the RowMatcher, filling match_functions using layout and equality_predicates
 	//! If columns is empty, we assume column indices 0, 1, 2, etc.
-	void Initialize(const bool no_match_sel, const TupleDataLayout &layout, const Predicates &predicates,
-	                vector<column_t> columns = {});
+	void Initialize(Context &context, const bool no_match_sel, const TupleDataLayout &layout,
+	                const Predicates &predicates, vector<column_t> columns = {});
 
 public:
 	//! Given a DataChunk on the LHS, on which we've called TupleDataCollection::ToUnifiedFormat,
@@ -60,6 +62,7 @@ private:
 	MatchFunction GetListMatchFunction(const ExpressionType predicate);
 
 private:
+	optional_ptr<Context> context;
 	optional_ptr<const TupleDataLayout> rhs_layout;
 	vector<column_t> columns;
 	vector<MatchFunction> match_functions;
