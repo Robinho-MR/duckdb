@@ -1,3 +1,4 @@
+#include "duckdb/common/types/decimal.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/common/operator/comparison_operators.hpp"
 #include "duckdb/common/uhugeint.hpp"
@@ -452,7 +453,8 @@ static unique_ptr<FunctionData> ComparisonBind(BindScalarFunctionInput &input) {
 	auto left_type = ExpressionBinder::GetExpressionReturnType(*arguments[0]);
 	auto right_type = ExpressionBinder::GetExpressionReturnType(*arguments[1]);
 	LogicalType input_type;
-	if (!BoundComparisonExpression::TryBindComparison(context, left_type, right_type, input_type, TYPE)) {
+	if (!BoundComparisonExpression::TryBindComparison(context, left_type, right_type, input_type, TYPE,
+	                                                  input.GetDecimalWidthLimit())) {
 		throw BinderException("Cannot compare values of type %s and type %s - an explicit cast is required",
 		                      left_type.ToString(), right_type.ToString());
 	}
@@ -561,13 +563,14 @@ unique_ptr<Expression> BoundComparisonExpression::Create(ExpressionType type, un
 }
 
 unique_ptr<Expression> BoundComparisonExpression::Bind(ClientContext &context, ExpressionType type,
-                                                       unique_ptr<Expression> left, unique_ptr<Expression> right) {
+                                                       unique_ptr<Expression> left, unique_ptr<Expression> right,
+                                                       optional_ptr<Binder> binder) {
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(left));
 	children.push_back(std::move(right));
 
 	BoundScalarFunction function(GetComparisonFunction(type));
-	BindScalarFunctionInput input(context, function, children);
+	BindScalarFunctionInput input(context, function, children, binder);
 	function.GetBindCallback()(input);
 	return make_uniq<BoundFunctionExpression>(std::move(function), std::move(children), nullptr, true);
 }
@@ -612,7 +615,7 @@ unique_ptr<Expression> &BoundComparisonExpression::RightMutable(BoundFunctionExp
 }
 
 void BoundComparisonExpression::SetType(BoundFunctionExpression &comparison_expr, ExpressionType new_type) {
-	auto arguments = comparison_expr.FunctionMutable().GetArguments();
+	auto arguments = comparison_expr.Function().GetArguments();
 
 	comparison_expr.SetExpressionTypeUnsafe(new_type);
 	comparison_expr.FunctionMutable() = BoundScalarFunction(GetComparisonFunction(new_type));
