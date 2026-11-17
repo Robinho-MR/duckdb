@@ -4621,8 +4621,25 @@ public:
 	}
 
 	/// The virtual column a column index reported by `GetColumnIndex` stands for.
-	/// @throws InvalidInputException When the index stands for a declared column.
+	/// @throws InvalidInputException When the index stands for a declared column or a custom virtual column.
 	static auto GetVirtualColumn(idx_t column_index) -> VirtualColumn;
+
+	/// The smallest id of a virtual column the function declares itself with `AddCustomVirtualColumn`.
+	static constexpr idx_t CUSTOM_VIRTUAL_COLUMN_START = 1024;
+	/// The ids of custom virtual columns are less than this.
+	static constexpr idx_t CUSTOM_VIRTUAL_COLUMN_END = static_cast<idx_t>(1) << 32;
+
+	/// Whether a column index reported by `GetColumnIndex` stands for a virtual column declared with
+	/// `AddCustomVirtualColumn`.
+	static auto IsCustomVirtualColumn(idx_t column_index) -> bool {
+		return column_index >= VIRTUAL_COLUMN_START + CUSTOM_VIRTUAL_COLUMN_START &&
+		       column_index < VIRTUAL_COLUMN_START + CUSTOM_VIRTUAL_COLUMN_END;
+	}
+
+	/// The id passed to `AddCustomVirtualColumn` for the column a column index reported by `GetColumnIndex` stands
+	/// for.
+	/// @throws InvalidInputException When the index does not stand for a custom virtual column.
+	static auto GetCustomVirtualColumnId(idx_t column_index) -> idx_t;
 
 	TableFunction(TableFunction &&) noexcept = default;
 	TableFunction &operator=(TableFunction &&) noexcept = default;
@@ -4696,6 +4713,15 @@ public:
 	/// vector of the exec callback's output chunk, whose column index (see `GetColumnIndex`) is
 	/// `VIRTUAL_COLUMN_START` plus the value of the column. Requires projection pushdown. Unstable API.
 	auto AddVirtualColumn(VirtualColumn column) & -> TableFunction &;
+
+	/// Declares a virtual column of the function's own, e.g. the row group a row of a file was read from, which a query
+	/// asks for by name. Its column index (see `GetColumnIndex`) is `VIRTUAL_COLUMN_START` plus `id`: see
+	/// `IsCustomVirtualColumn` and `GetCustomVirtualColumnId`. Requires projection pushdown. Unstable API.
+	/// @param id The id of the column, at least `CUSTOM_VIRTUAL_COLUMN_START` and less than
+	/// `CUSTOM_VIRTUAL_COLUMN_END`.
+	/// @throws InvalidInputException When the id is out of range, the function already declared a virtual column with
+	/// the same id or name, the name is empty, or the type is not a fully defined concrete type.
+	auto AddCustomVirtualColumn(idx_t id, const std::string &name, const LogicalType &type) & -> TableFunction &;
 
 	/// Lets the function report what the scan did: see `MetricsCallback`. Unstable API.
 	auto SetMetricsCallback(MetricsCallback callback) & -> TableFunction &;

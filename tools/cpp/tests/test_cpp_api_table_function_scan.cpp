@@ -167,6 +167,8 @@ struct LinesGlobal {
 
 // How often the exec callback of cpp_lines was called, over all files
 std::atomic<idx_t> lines_exec_calls {0};
+// The id of the line_pair custom virtual column a variant of cpp_lines declares
+constexpr idx_t LINE_PAIR_COLUMN = TableFunction::CUSTOM_VIRTUAL_COLUMN_START + 7;
 
 void LinesBindFunction(TableFunction::BindInput &input) {
 	input.AddResultColumn("line", input.GetContext().GetFactory().ParseType("VARCHAR"));
@@ -197,6 +199,17 @@ void LinesExec(TableFunction::ExecInput &input) {
 		auto vector = chunk.GetVector(v);
 		vector.SetSize(count);
 		const auto column = input.GetColumnIndex(v);
+		if (TableFunction::IsCustomVirtualColumn(column)) {
+			// the line_pair custom virtual column: which pair of lines of its file the line is in
+			if (TableFunction::GetCustomVirtualColumnId(column) != LINE_PAIR_COLUMN) {
+				throw InvalidInputException("unexpected custom virtual column");
+			}
+			auto *data = vector.GetDataMutable<int64_t>();
+			for (idx_t row = 0; row < count; row++) {
+				data[row] = static_cast<int64_t>((start + row) / 2);
+			}
+			continue;
+		}
 		if (TableFunction::IsVirtualColumn(column)) {
 			// exec runs on worker threads, where Catch assertions are not thread-safe: fail the query instead
 			if (TableFunction::GetVirtualColumn(column) != TableFunction::VirtualColumn::FILE_ROW_NUMBER) {
@@ -670,6 +683,177 @@ TEST_CASE("Stable C++API: multi-file function uses the stats callback of its tab
 	REQUIRE(lines_exec_calls > 0);
 	REQUIRE(count(both_files, "< 'c'") == std::vector<int64_t> {1});
 	REQUIRE(lines_exec_calls > 0);
+
+	std::filesystem::remove_all(directory);
+}
+
+namespace {
+
+// cpp_blocks(n): cpp_hint's rows, with the custom virtual columns "block" (the row divided by 5) and "label"
+constexpr idx_t BLOCK_COLUMN = TableFunction::CUSTOM_VIRTUAL_COLUMN_START;
+constexpr idx_t LABEL_COLUMN = TableFunction::CUSTOM_VIRTUAL_COLUMN_END - 1;
+
+void BlocksExec(TableFunction::ExecInput &input) {
+	auto &bind = input.GetBindData<HintBind>();
+	auto &global = input.GetGlobalState<HintGlobal>();
+	auto chunk = input.GetOutputChunk();
+	const auto produced = std::min<int64_t>(std::min<int64_t>(bind.count - global.position, 5),
+	                                        static_cast<int64_t>(chunk.GetCapacity()));
+	const auto count = static_cast<idx_t>(std::max<int64_t>(produced, 0));
+	for (idx_t v = 0; v < input.GetColumnCount(); v++) {
+		auto vector = chunk.GetVector(v);
+		vector.SetSize(count);
+		const auto column = input.GetColumnIndex(v);
+		if (TableFunction::IsCustomVirtualColumn(column) &&
+		    TableFunction::GetCustomVirtualColumnId(column) == LABEL_COLUMN) {
+			for (idx_t row = 0; row < count; row++) {
+				vector.AssignString(row, "label of a row, longer than inlined " +
+				                             std::to_string(global.position + static_cast<int64_t>(row)));
+			}
+			continue;
+		}
+		auto *data = vector.GetDataMutable<int64_t>();
+		for (idx_t row = 0; row < count; row++) {
+			const auto value = global.position + static_cast<int64_t>(row);
+			if (TableFunction::IsCustomVirtualColumn(column)) {
+				if (TableFunction::GetCustomVirtualColumnId(column) != BLOCK_COLUMN) {
+					throw InvalidInputException("unexpected custom virtual column");
+				}
+				data[row] = value / 5;
+			} else {
+				data[row] = column == 0 ? value : 2 * value;
+			}
+		}
+	}
+	global.position += static_cast<int64_t>(count);
+}
+
+auto MakeBlocksFunction(Connection &conn, const std::string &name) -> TableFunction {
+	auto &factory = conn.GetFactory();
+	auto function = TableFunction::Create(factory);
+	function.SetName(name);
+	function.GetSignature().AddParameter("n", factory.ParseType("BIGINT"));
+	function.SetBindCallback(HintBindFunction)
+	    .SetInitGlobalCallback(HintInitGlobal)
+	    .SetExecCallback(BlocksExec)
+	    .SetProjectionPushdown(true);
+	return function;
+}
+
+} // namespace
+
+TEST_CASE("Stable C++API: table function custom virtual columns", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	auto &factory = conn.GetFactory();
+
+	auto function = MakeBlocksFunction(conn, "cpp_blocks");
+	function.AddCustomVirtualColumn(BLOCK_COLUMN, "block", factory.ParseType("BIGINT"))
+	    .AddCustomVirtualColumn(LABEL_COLUMN, "label", factory.ParseType("VARCHAR"));
+	conn.Register(function);
+
+	REQUIRE(CollectBigints(conn.Execute("SELECT block FROM cpp_blocks(12) ORDER BY i")) ==
+	        std::vector<int64_t> {0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2});
+	REQUIRE(CollectBigints(conn.Execute("SELECT j FROM cpp_blocks(12) WHERE block = 2 ORDER BY j")) ==
+	        std::vector<int64_t> {20, 22});
+	REQUIRE(CollectStrings(conn.Execute("SELECT label FROM cpp_blocks(12) WHERE i = 7")) ==
+	        std::vector<std::string> {"label of a row, longer than inlined 7"});
+	REQUIRE(CollectBigints(conn.Execute("SELECT count(DISTINCT label) + max(block) FROM cpp_blocks(12)")) ==
+	        std::vector<int64_t> {14});
+
+	// Not selected by default
+	{
+		auto described = conn.Execute("SELECT * FROM cpp_blocks(3)");
+		REQUIRE(described.FetchChunk().GetVectorCount() == 2);
+	}
+
+	// A declared column of the same name hides it
+	auto hidden = MakeBlocksFunction(conn, "cpp_blocks_hidden");
+	hidden.AddCustomVirtualColumn(BLOCK_COLUMN, "j", factory.ParseType("BIGINT"));
+	conn.Register(hidden);
+	REQUIRE(CollectBigints(conn.Execute("SELECT j FROM cpp_blocks_hidden(3) ORDER BY j")) ==
+	        std::vector<int64_t> {0, 2, 4});
+}
+
+TEST_CASE("Stable C++API: table function custom virtual column refusals", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	auto &factory = conn.GetFactory();
+	auto bigint = factory.ParseType("BIGINT");
+
+	auto function = MakeBlocksFunction(conn, "cpp_blocks_refused");
+	REQUIRE_THROWS_AS(function.AddCustomVirtualColumn(TableFunction::CUSTOM_VIRTUAL_COLUMN_START - 1, "a", bigint),
+	                  InvalidInputException);
+	REQUIRE_THROWS_AS(function.AddCustomVirtualColumn(TableFunction::CUSTOM_VIRTUAL_COLUMN_END, "a", bigint),
+	                  InvalidInputException);
+	REQUIRE_THROWS_AS(function.AddCustomVirtualColumn(BLOCK_COLUMN, "", bigint), InvalidInputException);
+	REQUIRE_THROWS_AS(function.AddCustomVirtualColumn(BLOCK_COLUMN, "a", factory.CreateType(LogicalTypeId::ANY)),
+	                  InvalidInputException);
+	function.AddCustomVirtualColumn(BLOCK_COLUMN, "a", bigint);
+	REQUIRE_THROWS_AS(function.AddCustomVirtualColumn(BLOCK_COLUMN, "b", bigint), InvalidInputException);
+	REQUIRE_THROWS_AS(function.AddCustomVirtualColumn(BLOCK_COLUMN + 1, "a", bigint), InvalidInputException);
+
+	// Like the built-in virtual columns, they need projection pushdown
+	auto without_projection = MakeBlocksFunction(conn, "cpp_blocks_no_projection");
+	without_projection.SetProjectionPushdown(false).AddCustomVirtualColumn(BLOCK_COLUMN, "block", bigint);
+	REQUIRE_THROWS_AS(conn.Register(without_projection), InvalidInputException);
+
+	// They cannot take the name of the built-in one next to it
+	auto clash = MakeBlocksFunction(conn, "cpp_blocks_clash");
+	clash.AddCustomVirtualColumn(BLOCK_COLUMN, "file_row_number", bigint)
+	    .AddVirtualColumn(TableFunction::VirtualColumn::FILE_ROW_NUMBER);
+	REQUIRE_THROWS_AS(conn.Register(clash), InvalidInputException);
+
+	REQUIRE(TableFunction::IsCustomVirtualColumn(TableFunction::VIRTUAL_COLUMN_START + BLOCK_COLUMN));
+	REQUIRE_FALSE(TableFunction::IsCustomVirtualColumn(TableFunction::VIRTUAL_COLUMN_START));
+	REQUIRE_FALSE(TableFunction::IsCustomVirtualColumn(BLOCK_COLUMN));
+	REQUIRE(TableFunction::GetCustomVirtualColumnId(TableFunction::VIRTUAL_COLUMN_START + LABEL_COLUMN) ==
+	        LABEL_COLUMN);
+	REQUIRE_THROWS_AS(TableFunction::GetCustomVirtualColumnId(TableFunction::VIRTUAL_COLUMN_START),
+	                  InvalidInputException);
+}
+
+TEST_CASE("Stable C++API: multi-file function produces the custom virtual columns of its files", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	auto &factory = conn.GetFactory();
+
+	const auto directory = std::filesystem::temp_directory_path() / "cpp_api_custom_virtual_columns";
+	std::filesystem::create_directories(directory);
+	const auto first = (directory / "a.lines").string();
+	const auto second = (directory / "b.lines").string();
+	std::ofstream(first) << "x is a long line\ny is a long line\nz is a long line\n";
+	std::ofstream(second) << "p is a long line\nq is a long line\n";
+
+	auto single = TableFunction::Create(factory);
+	single.SetName("cpp_lines_pairs");
+	single.GetSignature().AddParameter("file", factory.CreateType(LogicalTypeId::ANY));
+	single.SetBindCallback(LinesBindFunction)
+	    .SetInitGlobalCallback(LinesInitGlobal)
+	    .SetExecCallback(LinesExec)
+	    .SetProjectionPushdown(true)
+	    .AddVirtualColumn(TableFunction::VirtualColumn::FILE_ROW_NUMBER)
+	    .AddCustomVirtualColumn(LINE_PAIR_COLUMN, "line_pair", factory.ParseType("BIGINT"));
+	conn.Register(single);
+
+	auto multi = MultiFileFunction::Create(factory);
+	multi.SetName("cpp_read_lines_pairs")
+	    .SetSingleFileFunction("cpp_lines_pairs")
+	    .SetReaderType("Lines")
+	    .SetFileExtension("lines");
+	conn.Register(multi);
+
+	const std::string files = "['" + first + "', '" + second + "']";
+	REQUIRE(CollectStrings(conn.Execute("SELECT line || ':' || line_pair || ':' || file_row_number FROM "
+	                                    "cpp_read_lines_pairs(" +
+	                                    files + ") ORDER BY line")) ==
+	        std::vector<std::string> {"p is a long line:0:0", "q is a long line:0:1", "x is a long line:0:0",
+	                                  "y is a long line:0:1", "z is a long line:1:2"});
+	REQUIRE(CollectStrings(conn.Execute("SELECT line FROM cpp_read_lines_pairs(" + files + ") WHERE line_pair = 1")) ==
+	        std::vector<std::string> {"z is a long line"});
+	// On a single file, through the function itself
+	REQUIRE(CollectBigints(conn.Execute("SELECT line_pair FROM cpp_lines_pairs('" + first + "') ORDER BY line")) ==
+	        std::vector<int64_t> {0, 0, 1});
 
 	std::filesystem::remove_all(directory);
 }
