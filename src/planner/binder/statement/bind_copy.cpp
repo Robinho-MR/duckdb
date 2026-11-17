@@ -59,7 +59,7 @@ void IsFormatExtensionKnown(const string &format) {
 
 identifier_map_t<CopyOption> Binder::GetFullCopyOptionsList(const CopyFunction &function, CopyOptionMode mode) {
 	identifier_map_t<CopyOption> copy_options;
-	CopyOptionsInput input(copy_options);
+	CopyOptionsInput input(copy_options, function.function_info.get());
 	if (function.copy_options) {
 		function.copy_options(context, input);
 	}

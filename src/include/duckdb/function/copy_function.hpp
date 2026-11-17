@@ -121,10 +121,13 @@ struct CopyOption {
 };
 
 struct CopyOptionsInput {
-	explicit CopyOptionsInput(identifier_map_t<CopyOption> &options) : options(options) {
+	explicit CopyOptionsInput(identifier_map_t<CopyOption> &options,
+	                          optional_ptr<CopyFunctionInfo> function_info = nullptr)
+	    : options(options), function_info(function_info) {
 	}
 
 	identifier_map_t<CopyOption> &options;
+	optional_ptr<CopyFunctionInfo> function_info;
 };
 
 struct CopyToPropagateStatsInput {
