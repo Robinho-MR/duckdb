@@ -651,7 +651,10 @@ void RegisterGeoJSON(Extension &extension, Context &context) {
 	    .SetType(factory.CreateType(LogicalTypeId::VARCHAR))
 	    .SetDefaultValue(Value::Create(factory, varchar_t(string_view("wkt"))))
 	    .SetUpdateCallback(ValidateGeometryFormat);
-	extension.Register(format_option);
+	// a config that outlives its database (a restart) still holds the option of the previous load
+	if (!context.GetConfig().TryGetOption("json_geometry_format")) {
+		extension.Register(format_option);
+	}
 
 	SetGeometryToGeoJSON(GeometryToGeoJSONHook);
 	JSONTransform::SetGeoJSONParser(GeoJSONParserHook);

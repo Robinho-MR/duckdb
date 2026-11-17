@@ -85,15 +85,7 @@ public:
 		}
 
 		auto &config = DBConfig::GetConfig(target);
-		if (DBConfig::GetOptionByName(name)) {
-			throw InvalidInputException("An option named %s already exists.", name);
-		}
-		ExtensionOption existing;
-		if (config.TryGetExtensionOption(name, existing)) {
-			// a config reused by a restarted database still holds the option of the previous load
-			if (existing.type == option_type && existing.description == description) {
-				return;
-			}
+		if (DBConfig::GetOptionByName(name) || config.HasExtensionOption(name)) {
 			throw InvalidInputException("An option named %s already exists.", name);
 		}
 
