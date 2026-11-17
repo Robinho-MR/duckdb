@@ -34,7 +34,7 @@ struct KvBind {
 };
 
 struct KvScan {
-	bool done = false;
+	std::atomic<bool> done {false};
 };
 
 // What the callbacks saw, latched for the test to assert on afterwards. A callback must not use REQUIRE: it would
@@ -104,11 +104,11 @@ void KvExec(TableFunction::ExecInput &input) {
 	const auto &bind = input.GetBindData<KvBind>();
 	auto &scan = input.GetGlobalState<KvScan>();
 	auto chunk = input.GetOutputChunk();
-	if (scan.done) {
+	// the threads scanning a file share the state: the one that sets it produces the row of the file
+	if (scan.done.exchange(true)) {
 		chunk.GetVector(0).SetSize(0);
 		return;
 	}
-	scan.done = true;
 	for (idx_t i = 0; i < input.GetColumnCount(); i++) {
 		auto vec = chunk.GetVector(i);
 		auto &column = bind.columns[input.GetColumnIndex(i)];

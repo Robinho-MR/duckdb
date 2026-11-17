@@ -127,7 +127,8 @@ void KvBindCb(duckdb_v2_function_bind_info_handle info, duckdb_v2_table_function
 }
 
 struct KvScan {
-	bool done = false;
+	//! The threads scanning a file share this state: the one that sets it produces the row of the file
+	std::atomic<bool> done {false};
 };
 
 void DeleteKvScan(void *ptr) {
@@ -153,21 +154,28 @@ void KvExecCb(duckdb_v2_table_function_exec_info_handle info, duckdb_v2_context_
 	}
 	auto &bind = *static_cast<KvBind *>(bind_ptr);
 	auto &scan = *static_cast<KvScan *>(global_ptr);
-	for (idx_t i = 0; i < bind.columns.size(); i++) {
+	const bool emit = !scan.done.exchange(true);
+	// the chunk holds a vector per column the query uses
+	idx_t column_count = 0;
+	if (duckdb_v2_table_function_exec_get_column_count(info, &column_count, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	for (idx_t i = 0; i < column_count; i++) {
 		duckdb_v2_vector_handle vec = nullptr;
 		void *raw = nullptr;
-		if (duckdb_v2_data_chunk_get_vector(chunk, i, &vec, err) != DUCKDB_V2_ERROR_NONE ||
+		idx_t column = 0;
+		if (duckdb_v2_table_function_exec_get_column_index(info, i, &column, err) != DUCKDB_V2_ERROR_NONE ||
+		    duckdb_v2_data_chunk_get_vector(chunk, i, &vec, err) != DUCKDB_V2_ERROR_NONE ||
 		    duckdb_v2_vector_get_data_mutable(vec, &raw, err) != DUCKDB_V2_ERROR_NONE) {
 			return;
 		}
-		if (!scan.done) {
-			static_cast<int64_t *>(raw)[0] = bind.columns[i] == bind.stem ? 1 : 0;
+		if (emit) {
+			static_cast<int64_t *>(raw)[0] = bind.columns[column] == bind.stem ? 1 : 0;
 		}
-		if (duckdb_v2_vector_set_size(vec, scan.done ? 0 : 1, err) != DUCKDB_V2_ERROR_NONE) {
+		if (duckdb_v2_vector_set_size(vec, emit ? 1 : 0, err) != DUCKDB_V2_ERROR_NONE) {
 			return;
 		}
 	}
-	scan.done = true;
 }
 
 // Combines the columns of the sampled files in the order of the files
@@ -258,7 +266,14 @@ private:
 
 int64_t MultiFileQueryI64(duckdb_v2_connection_handle conn, const std::string &sql) {
 	duckdb_v2_result_handle result = nullptr;
-	REQUIRE(Query(conn, sql, &result) == DUCKDB_V2_ERROR_NONE);
+	duckdb_v2_error_info_handle err = nullptr;
+	auto rc = Query(conn, sql, &result, &err);
+	if (rc != DUCKDB_V2_ERROR_NONE) {
+		const char *text = nullptr;
+		idx_t text_length = 0;
+		duckdb_v2_error_info_get_text(err, &text, &text_length);
+		FAIL(std::string(text, text_length));
+	}
 	auto chunk = StepChunk(result);
 	REQUIRE(chunk != nullptr);
 	duckdb_v2_vector_handle vec = nullptr;
@@ -287,6 +302,8 @@ void RegisterKv(EnvFixture &fx, bool combine, idx_t sample_files) {
 	REQUIRE(duckdb_v2_table_function_set_bind_callback(single, KvBindCb, nullptr) == DUCKDB_V2_ERROR_NONE);
 	REQUIRE(duckdb_v2_table_function_set_init_global_callback(single, KvInitGlobalCb, nullptr) == DUCKDB_V2_ERROR_NONE);
 	REQUIRE(duckdb_v2_table_function_set_exec_callback(single, KvExecCb, nullptr) == DUCKDB_V2_ERROR_NONE);
+	// a multi-file function needs the columns a query uses, and its virtual columns, to be told apart
+	REQUIRE(duckdb_v2_table_function_set_projection_pushdown(single, true, nullptr) == DUCKDB_V2_ERROR_NONE);
 	if (combine) {
 		REQUIRE(duckdb_v2_table_function_set_combine_schema_callback(single, KvCombineCb, nullptr) ==
 		        DUCKDB_V2_ERROR_NONE);
