@@ -1546,6 +1546,64 @@ typedef struct {
 	(duckdb_v2_sql_statement_handle statement, const duckdb_v2_identifier_t *name,
 	 duckdb_v2_column_data_collection_handle collection, const duckdb_v2_identifier_t *column_names, idx_t column_count,
 	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_connection_get_or_create_state)
+	(duckdb_v2_connection_handle conn, const duckdb_v2_str *key, duckdb_v2_context_state_init_callback_fn init,
+	 void *init_user_data, void **data, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_connection_get_state)
+	(duckdb_v2_connection_handle conn, const duckdb_v2_str *key, bool *found, void **data,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_connection_remove_state)
+	(duckdb_v2_connection_handle conn, const duckdb_v2_str *key, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_context_get_object_cache)
+	(duckdb_v2_context_handle context, duckdb_v2_object_cache_handle *cache, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_context_get_or_create_state)
+	(duckdb_v2_context_handle context, const duckdb_v2_str *key, duckdb_v2_context_state_init_callback_fn init,
+	 void *init_user_data, void **data, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_context_get_state)
+	(duckdb_v2_context_handle context, const duckdb_v2_str *key, bool *found, void **data,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_context_remove_state)
+	(duckdb_v2_context_handle context, const duckdb_v2_str *key, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_context_state_profile_write)
+	(duckdb_v2_context_state_profile_handle profile, const duckdb_v2_str *text, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_context_state_set_profiling_callback)
+	(duckdb_v2_context_state_handle state, duckdb_v2_context_state_profiling_callback_fn callback,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_context_state_set_query_begin_callback)
+	(duckdb_v2_context_state_handle state, duckdb_v2_context_state_query_begin_callback_fn callback,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_context_state_set_query_end_callback)
+	(duckdb_v2_context_state_handle state, duckdb_v2_context_state_query_end_callback_fn callback,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_context_state_set_transaction_begin_callback)
+	(duckdb_v2_context_state_handle state, duckdb_v2_context_state_transaction_begin_callback_fn callback,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_context_state_set_transaction_commit_callback)
+	(duckdb_v2_context_state_handle state, duckdb_v2_context_state_transaction_end_callback_fn callback,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_context_state_set_transaction_rollback_callback)
+	(duckdb_v2_context_state_handle state, duckdb_v2_context_state_transaction_end_callback_fn callback,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_context_state_set_user_data)
+	(duckdb_v2_context_state_handle state, duckdb_v2_opaque *data, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_instance_get_object_cache)
+	(duckdb_v2_instance_handle instance, duckdb_v2_object_cache_handle *cache, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_object_cache_delete)
+	(duckdb_v2_object_cache_handle cache, const duckdb_v2_str *type, const duckdb_v2_str *key,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_object_cache_entry_destroy)(duckdb_v2_object_cache_entry_handle *entry);
+	DUCKDB_V2_ERROR (*duckdb_v2_object_cache_entry_get_data)
+	(duckdb_v2_object_cache_entry_handle entry, void **data, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_object_cache_get)
+	(duckdb_v2_object_cache_handle cache, const duckdb_v2_str *type, const duckdb_v2_str *key,
+	 duckdb_v2_object_cache_entry_handle *entry, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_object_cache_get_or_create)
+	(duckdb_v2_object_cache_handle cache, const duckdb_v2_str *type, const duckdb_v2_str *key,
+	 duckdb_v2_object_cache_create_callback_fn create, void *create_user_data,
+	 duckdb_v2_object_cache_entry_handle *entry, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_object_cache_put)
+	(duckdb_v2_object_cache_handle cache, const duckdb_v2_str *type, const duckdb_v2_str *key, duckdb_v2_opaque *data,
+	 idx_t size_bytes, duckdb_v2_error_info_handle *err);
 #endif
 	// capigen:end appended
 } duckdb_ext_api_v2;
@@ -3516,6 +3574,75 @@ typedef struct {
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_statement_add_collection duckdb_ext_api.duckdb_v2_statement_add_collection
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_connection_get_or_create_state duckdb_ext_api.duckdb_v2_connection_get_or_create_state
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_connection_get_state duckdb_ext_api.duckdb_v2_connection_get_state
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_connection_remove_state duckdb_ext_api.duckdb_v2_connection_remove_state
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_context_get_object_cache duckdb_ext_api.duckdb_v2_context_get_object_cache
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_context_get_or_create_state duckdb_ext_api.duckdb_v2_context_get_or_create_state
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_context_get_state duckdb_ext_api.duckdb_v2_context_get_state
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_context_remove_state duckdb_ext_api.duckdb_v2_context_remove_state
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_context_state_profile_write duckdb_ext_api.duckdb_v2_context_state_profile_write
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_context_state_set_profiling_callback duckdb_ext_api.duckdb_v2_context_state_set_profiling_callback
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_context_state_set_query_begin_callback duckdb_ext_api.duckdb_v2_context_state_set_query_begin_callback
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_context_state_set_query_end_callback duckdb_ext_api.duckdb_v2_context_state_set_query_end_callback
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_context_state_set_transaction_begin_callback                                                         \
+	duckdb_ext_api.duckdb_v2_context_state_set_transaction_begin_callback
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_context_state_set_transaction_commit_callback                                                        \
+	duckdb_ext_api.duckdb_v2_context_state_set_transaction_commit_callback
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_context_state_set_transaction_rollback_callback                                                      \
+	duckdb_ext_api.duckdb_v2_context_state_set_transaction_rollback_callback
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_context_state_set_user_data duckdb_ext_api.duckdb_v2_context_state_set_user_data
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_instance_get_object_cache duckdb_ext_api.duckdb_v2_instance_get_object_cache
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_object_cache_delete duckdb_ext_api.duckdb_v2_object_cache_delete
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_object_cache_entry_destroy duckdb_ext_api.duckdb_v2_object_cache_entry_destroy
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_object_cache_entry_get_data duckdb_ext_api.duckdb_v2_object_cache_entry_get_data
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_object_cache_get duckdb_ext_api.duckdb_v2_object_cache_get
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_object_cache_get_or_create duckdb_ext_api.duckdb_v2_object_cache_get_or_create
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_object_cache_put duckdb_ext_api.duckdb_v2_object_cache_put
 #endif
 // capigen:end appended
 #endif // DUCKDB_BUILD_STATIC_EXTENSION

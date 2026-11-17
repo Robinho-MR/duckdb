@@ -4746,6 +4746,579 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_schema_destroy(duckdb_v2_schema_handle *s
 /* --- Struct definitions for schema --- */
 
 /* ============================================================================
+ * MODULE: state
+ * ============================================================================ */
+
+/* --- Enums for state --- */
+
+/* --- Struct forward declarations for state --- */
+
+/* --- Types for state --- */
+
+/*!
+ * A borrowed opaque handle to connection state being set up, received by the init callback of
+ * `duckdb_v2_context_get_or_create_state()` or `duckdb_v2_connection_get_or_create_state()` and valid only for the
+ * duration of that call. Configure it with `duckdb_v2_context_state_set_user_data()` and the callback setters; whatever
+ * is not set stays inert.
+ */
+typedef struct _duckdb_v2_context_state {
+	void *internal_ptr;
+} * duckdb_v2_context_state_handle;
+
+/*!
+ * A borrowed opaque handle to the profile of the query that just ended, received by a connection state's profiling
+ * callback and valid only for the duration of that call. Add text to it with `duckdb_v2_context_state_profile_write()`.
+ */
+typedef struct _duckdb_v2_context_state_profile {
+	void *internal_ptr;
+} * duckdb_v2_context_state_profile_handle;
+
+/*!
+ * A borrowed opaque handle to the object cache of an instance. Obtained from `duckdb_v2_instance_get_object_cache()` or
+ * `duckdb_v2_context_get_object_cache()`, valid for as long as the instance is, and never destroyed by the caller.
+ */
+typedef struct _duckdb_v2_object_cache {
+	void *internal_ptr;
+} * duckdb_v2_object_cache_handle;
+
+/*!
+ * An owned opaque handle to an entry of an object cache. Obtained from `duckdb_v2_object_cache_get()` or
+ * `duckdb_v2_object_cache_get_or_create()`, and destroyed with `duckdb_v2_object_cache_entry_destroy()`. Holding the
+ * handle keeps the entry's data alive: the cache may evict or delete the entry meanwhile, but the data is only
+ * destroyed once the last handle is.
+ */
+typedef struct _duckdb_v2_object_cache_entry {
+	void *internal_ptr;
+} * duckdb_v2_object_cache_entry_handle;
+
+/* --- Constants for state --- */
+
+/* --- Function pointer typedefs for state --- */
+
+/*!
+ * Sets up the connection state of a key that has none yet.
+ *
+ * Runs at most once per key and connection, while the connection's registered states are locked: it must not create,
+ * get or remove connection state itself. A failure reported through `err` leaves the key unregistered and fails the
+ * call that triggered the init.
+ */
+typedef void (*duckdb_v2_context_state_init_callback_fn)(duckdb_v2_context_handle context, void *user_data,
+                                                         duckdb_v2_context_state_handle state,
+                                                         duckdb_v2_error_info_handle *err);
+
+/*!
+ * Called when a query starts on the connection, before any of it runs. Called at most once per query, also for the
+ * queries DuckDB runs on behalf of another. No transaction is guaranteed to be active.
+ *
+ * An error reported through `err` fails the query.
+ */
+typedef void (*duckdb_v2_context_state_query_begin_callback_fn)(duckdb_v2_context_handle context, void *user_data,
+                                                                duckdb_v2_error_info_handle *err);
+
+/*!
+ * Called when a query ends on the connection, whether it succeeded, failed or was cancelled. The place to drop what was
+ * only meant to last for one query. No transaction is guaranteed to be active.
+ *
+ * The callback cannot fail: there is nothing left to fail.
+ */
+typedef void (*duckdb_v2_context_state_query_end_callback_fn)(duckdb_v2_context_handle context, void *user_data,
+                                                              const duckdb_v2_str *error);
+
+/*!
+ * Called when a transaction starts on the connection, explicitly or automatically. The transaction is active.
+ *
+ * An error reported through `err` fails the statement starting the transaction.
+ */
+typedef void (*duckdb_v2_context_state_transaction_begin_callback_fn)(duckdb_v2_context_handle context, void *user_data,
+                                                                      duckdb_v2_error_info_handle *err);
+
+/*!
+ * Called when a transaction ends on the connection: after it committed, or after it was rolled back, either explicitly
+ * or because its statement failed. A transaction whose commit fails is reported as rolled back. No transaction is
+ * active any longer.
+ *
+ * The callback cannot fail: the transaction has already ended, and its fate does not depend on the callback.
+ */
+typedef void (*duckdb_v2_context_state_transaction_end_callback_fn)(duckdb_v2_context_handle context, void *user_data);
+
+/*!
+ * Called when the text rendering of the profile of a query is written, as `EXPLAIN ANALYZE` does, to let the state add
+ * to it. What the state writes comes out next to what other connection states wrote.
+ */
+typedef void (*duckdb_v2_context_state_profiling_callback_fn)(duckdb_v2_context_state_profile_handle profile,
+                                                              void *user_data, duckdb_v2_error_info_handle *err);
+
+/*!
+ * Creates the data of a cache entry that does not exist yet.
+ *
+ * Runs while the cache is locked, so that two threads never both create the same entry: it must not use the object
+ * cache itself. A failure reported through `err` leaves the entry uncreated and fails the call.
+ */
+typedef void (*duckdb_v2_object_cache_create_callback_fn)(void *user_data, duckdb_v2_opaque *data, idx_t *size_bytes,
+                                                          duckdb_v2_error_info_handle *err);
+
+/* --- Functions for state --- */
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Gets the state registered under a key on the connection of a context, creating it first if there is none.
+ *
+ * The init callback sets up a new state; it runs at most once per key and connection, also when several threads race to
+ * get the same key. The state lives until `duckdb_v2_context_remove_state()` or until the connection is destroyed, and
+ * then releases its user data through the destructor bundled with it. The data pointer received is the state's user
+ * data, valid for as long as the state is.
+ *
+ * Keys are case-sensitive and shared by everything that registers state on the connection, DuckDB's extensions
+ * included: prefix them with the name of the extension. A key held by something that is not state of this API fails the
+ * call.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param context The context whose connection to take the state from.
+ * @param key The key of the state. Borrowed and copied.
+ * @param init Sets up the state if the key has none yet.
+ * @param init_user_data Handed to the init callback. Borrowed for the duration of the call.
+ * @param data Receives the user data of the state, or null if it set none. Optional.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_context_get_or_create_state(duckdb_v2_context_handle context,
+                                                                   const duckdb_v2_str *key,
+                                                                   duckdb_v2_context_state_init_callback_fn init,
+                                                                   void *init_user_data, void **data,
+                                                                   duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Gets the state registered under a key on a connection, creating it first if there is none. The same as
+ * `duckdb_v2_context_get_or_create_state()`, for a connection that is not seen from inside DuckDB.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param conn The connection to take the state from.
+ * @param key The key of the state. Borrowed and copied.
+ * @param init Sets up the state if the key has none yet.
+ * @param init_user_data Handed to the init callback. Borrowed for the duration of the call.
+ * @param data Receives the user data of the state, or null if it set none. Optional.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_connection_get_or_create_state(duckdb_v2_connection_handle conn,
+                                                                      const duckdb_v2_str *key,
+                                                                      duckdb_v2_context_state_init_callback_fn init,
+                                                                      void *init_user_data, void **data,
+                                                                      duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Looks up the state registered under a key on the connection of a context, without creating it.
+ *
+ * `found` receives false if there is no state under the key, and `data` is then left untouched. The data pointer is
+ * valid until the state is removed or the connection is destroyed.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param context The context whose connection to look the state up on.
+ * @param key The key of the state. Borrowed for the duration of the call.
+ * @param found Receives whether the key has state.
+ * @param data Receives the user data of the state, or null if it set none. Optional.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_context_get_state(duckdb_v2_context_handle context, const duckdb_v2_str *key,
+                                                         bool *found, void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Looks up the state registered under a key on a connection. The same as `duckdb_v2_context_get_state()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param conn The connection to look the state up on.
+ * @param key The key of the state. Borrowed for the duration of the call.
+ * @param found Receives whether the key has state.
+ * @param data Receives the user data of the state, or null if it set none. Optional.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_connection_get_state(duckdb_v2_connection_handle conn, const duckdb_v2_str *key,
+                                                            bool *found, void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Removes the state registered under a key on the connection of a context, destroying its user data. Removing a key
+ * that has no state is not an error.
+ *
+ * The callbacks of the state do not run for the query or transaction that is under way, and the data pointer handed out
+ * earlier is not valid any longer.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param context The context whose connection to remove the state from.
+ * @param key The key of the state. Borrowed for the duration of the call.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_context_remove_state(duckdb_v2_context_handle context, const duckdb_v2_str *key,
+                                                            duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Removes the state registered under a key on a connection. The same as `duckdb_v2_context_remove_state()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param conn The connection to remove the state from.
+ * @param key The key of the state. Borrowed for the duration of the call.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_connection_remove_state(duckdb_v2_connection_handle conn,
+                                                               const duckdb_v2_str *key,
+                                                               duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the user data of the state, handed to all of its callbacks.
+ *
+ * The opaque handle bundles the pointer with an optional destructor, invoked when the state is removed or its
+ * connection is destroyed. If the state could not be created after all, because its init callback reported an error,
+ * the destructor is invoked right away.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param state The state to set the user data of.
+ * @param data Opaque handle bundling the user data pointer plus an optional destructor.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_context_state_set_user_data(duckdb_v2_context_state_handle state,
+                                                                   duckdb_v2_opaque *data,
+                                                                   duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the callback called when a query starts on the connection.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param state The state to set the callback of.
+ * @param callback The callback.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_context_state_set_query_begin_callback(
+    duckdb_v2_context_state_handle state, duckdb_v2_context_state_query_begin_callback_fn callback,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the callback called when a query ends on the connection.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param state The state to set the callback of.
+ * @param callback The callback.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_context_state_set_query_end_callback(
+    duckdb_v2_context_state_handle state, duckdb_v2_context_state_query_end_callback_fn callback,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the callback called when a transaction starts on the connection.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param state The state to set the callback of.
+ * @param callback The callback.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_context_state_set_transaction_begin_callback(
+    duckdb_v2_context_state_handle state, duckdb_v2_context_state_transaction_begin_callback_fn callback,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the callback called when a transaction on the connection committed.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param state The state to set the callback of.
+ * @param callback The callback.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_context_state_set_transaction_commit_callback(
+    duckdb_v2_context_state_handle state, duckdb_v2_context_state_transaction_end_callback_fn callback,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the callback called when a transaction on the connection was rolled back.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param state The state to set the callback of.
+ * @param callback The callback.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_context_state_set_transaction_rollback_callback(
+    duckdb_v2_context_state_handle state, duckdb_v2_context_state_transaction_end_callback_fn callback,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the callback called when the profile of a query is written, to let the state add to it.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param state The state to set the callback of.
+ * @param callback The callback.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_context_state_set_profiling_callback(
+    duckdb_v2_context_state_handle state, duckdb_v2_context_state_profiling_callback_fn callback,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Adds text to the profile being written. The text is borrowed and copied.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param profile The profile to add to.
+ * @param text The text to add.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_context_state_profile_write(duckdb_v2_context_state_profile_handle profile,
+                                                                   const duckdb_v2_str *text,
+                                                                   duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Borrows the object cache of an instance.
+ *
+ * The returned handle is borrowed: it is valid only for as long as the instance is, and must not be destroyed.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param instance The instance to take the object cache from.
+ * @param cache Receives the borrowed object cache.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_instance_get_object_cache(duckdb_v2_instance_handle instance,
+                                                                 duckdb_v2_object_cache_handle *cache,
+                                                                 duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Borrows the object cache of the instance a context belongs to.
+ *
+ * The returned handle is borrowed: it is valid only for as long as the instance is, and must not be destroyed.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param context The context to take the object cache from.
+ * @param cache Receives the borrowed object cache.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_context_get_object_cache(duckdb_v2_context_handle context,
+                                                                duckdb_v2_object_cache_handle *cache,
+                                                                duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Puts an entry into the cache, replacing the entry of the same type and key, if any.
+ *
+ * Entries are looked up by type and key together, so a key only has to be unique within its type. Name types after the
+ * extension, e.g. `my_extension.footer`, as the cache is shared by everything on the instance.
+ *
+ * The opaque handle bundles the data with an optional destructor, invoked once the entry is gone from the cache and
+ * nobody holds it any longer. If the call fails, the destructor is invoked right away. A `size_bytes` of 0 pins the
+ * entry for as long as it is not deleted or replaced, and the instance lives. Any other value makes it evictable: the
+ * cache counts it against the memory limit, and may drop it, least recently used first, when memory is needed.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param cache The cache to put the entry into.
+ * @param type The type of the entry. Borrowed and copied.
+ * @param key The key of the entry. Borrowed and copied.
+ * @param data Opaque handle bundling the data pointer plus an optional destructor.
+ * @param size_bytes The approximate memory the data takes up, or 0 to pin the entry.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_object_cache_put(duckdb_v2_object_cache_handle cache, const duckdb_v2_str *type,
+                                                        const duckdb_v2_str *key, duckdb_v2_opaque *data,
+                                                        idx_t size_bytes, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Looks an entry up, marking it as recently used.
+ *
+ * `entry` receives null if the cache has no entry of the type under the key, because there never was one or it was
+ * evicted. Otherwise the caller owns it, and must destroy it via `duckdb_v2_object_cache_entry_destroy()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param cache The cache to look the entry up in.
+ * @param type The type of the entry. Borrowed for the duration of the call.
+ * @param key The key of the entry. Borrowed for the duration of the call.
+ * @param entry Receives the entry, or null if there is none. Owned by the caller.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_object_cache_get(duckdb_v2_object_cache_handle cache, const duckdb_v2_str *type,
+                                                        const duckdb_v2_str *key,
+                                                        duckdb_v2_object_cache_entry_handle *entry,
+                                                        duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Looks an entry up, creating it first with the create callback if there is none.
+ *
+ * Creation is atomic: of several threads racing for the same entry, one runs the create callback and the others receive
+ * its result. The entry is returned as `duckdb_v2_object_cache_get()` does, owned by the caller.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param cache The cache to look the entry up in.
+ * @param type The type of the entry. Borrowed for the duration of the call.
+ * @param key The key of the entry. Borrowed for the duration of the call.
+ * @param create Creates the data of the entry if there is none yet.
+ * @param create_user_data Handed to the create callback. Borrowed for the duration of the call.
+ * @param entry Receives the entry. Owned by the caller.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_object_cache_get_or_create(duckdb_v2_object_cache_handle cache,
+                                                                  const duckdb_v2_str *type, const duckdb_v2_str *key,
+                                                                  duckdb_v2_object_cache_create_callback_fn create,
+                                                                  void *create_user_data,
+                                                                  duckdb_v2_object_cache_entry_handle *entry,
+                                                                  duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Deletes an entry from the cache. Deleting an entry that is not there is not an error.
+ *
+ * Holders of the entry keep its data until they destroy their handle.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param cache The cache to delete the entry from.
+ * @param type The type of the entry. Borrowed for the duration of the call.
+ * @param key The key of the entry. Borrowed for the duration of the call.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_object_cache_delete(duckdb_v2_object_cache_handle cache,
+                                                           const duckdb_v2_str *type, const duckdb_v2_str *key,
+                                                           duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the data pointer of an entry, valid for as long as the entry handle is.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param entry The entry to take the data of.
+ * @param data Receives the data pointer.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_object_cache_entry_get_data(duckdb_v2_object_cache_entry_handle entry,
+                                                                   void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Destroys the entry handle, releasing its hold on the data. Always succeeds. On success the handle is set to null.
+ * Safe to call on an already-null slot.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param entry The entry handle to destroy.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_object_cache_entry_destroy(duckdb_v2_object_cache_entry_handle *entry);
+#endif
+
+/* --- Struct definitions for state --- */
+
+/* ============================================================================
  * MODULE: stats
  * ============================================================================ */
 
