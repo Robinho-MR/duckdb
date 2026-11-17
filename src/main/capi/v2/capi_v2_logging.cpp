@@ -49,7 +49,7 @@ DUCKDB_V2_ERROR duckdb_v2_context_log(duckdb_v2_context_handle ctx, DUCKDB_V2_LO
                                       duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(ctx);
 	return WithErrorHandler(err, [&]() {
-		WriteLog(duckdb::Logger::Get(Convert(ctx)->context), level, Convert(log_type, log_type_length),
+		WriteLog(duckdb::Logger::Get(Convert(ctx)->services), level, Convert(log_type, log_type_length),
 		         Convert(message, message_length));
 	});
 }

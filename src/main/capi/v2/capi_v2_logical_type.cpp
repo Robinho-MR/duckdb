@@ -312,8 +312,10 @@ static void CreateLogicalTypeFromTextV2(CV2Factory &factory, std::string_view te
 		return;
 	}
 	duckdb::LogicalType parsed;
-	factory.WithTransaction(
-	    [&](duckdb::ClientContext &context) { parsed = duckdb::TransformStringToLogicalType(string, context); });
+	auto decimal_width_limit = factory.GetDecimalWidthLimit();
+	factory.WithTransaction([&](duckdb::ClientContext &context) {
+		parsed = duckdb::TransformStringToLogicalType(string, context, decimal_width_limit);
+	});
 	*out_type = Convert(std::move(parsed));
 }
 

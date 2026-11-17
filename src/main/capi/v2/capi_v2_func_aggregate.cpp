@@ -207,7 +207,8 @@ static auto CV2AggregateBind(BindAggregateFunctionInput &input) -> unique_ptr<Fu
 
 	CV2ErrorInfo err = {};
 	auto err_ptr = Convert(&err);
-	CV2CallbackContext callback_context(input.GetClientContext());
+	const auto decimal_width_limit = input.GetDecimalWidthLimit();
+	CV2CallbackContext callback_context(input.GetClientContext(), decimal_width_limit);
 	info.bind_cb(Convert(&bind_info), Convert(&result_info), Convert(&callback_context), &err_ptr);
 
 	if (bind_info.out_bind_data) {

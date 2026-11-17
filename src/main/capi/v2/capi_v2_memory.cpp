@@ -57,7 +57,7 @@ DUCKDB_V2_ERROR duckdb_v2_context_reserve_memory(duckdb_v2_context_handle contex
 	*reservation = nullptr;
 	DUCKDB_CHECK_ARG(context);
 	return WithErrorHandler(err, [&]() {
-		auto &buffer_manager = duckdb::BufferManager::GetBufferManager(Convert(context)->context);
+		auto &buffer_manager = duckdb::BufferManager::GetBufferManager(Convert(context)->factory.GetDatabase());
 		buffer_manager.ReserveMemory(size);
 		*reservation = Convert(new CV2MemoryReservation(buffer_manager, size));
 	});

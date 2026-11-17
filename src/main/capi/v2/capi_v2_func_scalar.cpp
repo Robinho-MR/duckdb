@@ -155,7 +155,8 @@ static auto CV2ScalarResolveTypes(ResolveScalarFunctionTypesInput &input) -> voi
 
 	CV2ErrorInfo err = {};
 	auto err_ptr = Convert(&err);
-	CV2CallbackContext callback_context(input.GetClientContext());
+	const auto decimal_width_limit = input.GetDecimalWidthLimit();
+	CV2CallbackContext callback_context(input.GetClientContext(), decimal_width_limit);
 	info.resolve_types_cb(Convert(&bind_info), Convert(&result_info), Convert(&callback_context), &err_ptr);
 
 	if (err.HasError()) {
@@ -173,7 +174,8 @@ static auto CV2ScalarBind(BindScalarFunctionInput &input) -> unique_ptr<Function
 
 	CV2ErrorInfo err = {};
 	auto err_ptr = Convert(&err);
-	CV2CallbackContext callback_context(input.GetClientContext());
+	const auto decimal_width_limit = input.GetDecimalWidthLimit();
+	CV2CallbackContext callback_context(input.GetClientContext(), decimal_width_limit);
 	info.bind_cb(Convert(&bind_info), Convert(&result_info), Convert(&callback_context), &err_ptr);
 
 	unique_ptr<FunctionData> result = nullptr;
@@ -202,7 +204,7 @@ static auto CV2ScalarInit(ExpressionState &state, const BoundFunctionExpression 
 
 	CV2ErrorInfo err = {};
 	auto err_ptr = Convert(&err);
-	CV2CallbackContext callback_context(state.GetClientContext());
+	CV2CallbackContext callback_context(state.GetContext());
 	info.init_cb(Convert(&args), Convert(&callback_context), &err_ptr);
 
 	unique_ptr<FunctionLocalState> result = nullptr;
@@ -246,7 +248,7 @@ static auto CV2ScalarExec(DataChunk &input, ExpressionState &state, Vector &resu
 	CV2ErrorInfo err = {};
 	auto err_ptr = Convert(&err);
 
-	CV2CallbackContext callback_context(state.GetClientContext());
+	CV2CallbackContext callback_context(state.GetContext());
 	info.exec_cb(Convert(&args), Convert(&callback_context), &err_ptr);
 
 	if (err.HasError()) {

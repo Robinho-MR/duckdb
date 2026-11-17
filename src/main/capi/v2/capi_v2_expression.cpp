@@ -280,7 +280,7 @@ DUCKDB_V2_ERROR duckdb_v2_expression_check_statistics(duckdb_v2_context_handle c
 	DUCKDB_CHECK_ARG(result);
 	*result = DUCKDB_V2_FILTER_PROPAGATE_RESULT_NO_PRUNING_POSSIBLE;
 	return WithErrorHandler(err, [&]() {
-		auto &client_context = Convert(context)->context;
+		auto &client_context = Convert(context)->Client();
 		const auto &column_stats = Convert(stats)->GetStats();
 		const auto &predicate_expr = *Convert(expression);
 		if (predicate_expr.GetReturnType().id() != duckdb::LogicalTypeId::BOOLEAN) {

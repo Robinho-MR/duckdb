@@ -897,3 +897,31 @@ TEST_CASE("Stable C++API: scalar function overloads carry their own description 
 	REQUIRE(chunk.GetVector(3).GetValue(0).ToText() == "numeric|example");
 	REQUIRE(chunk.GetVector(3).GetValue(1).ToText() == "");
 }
+
+namespace {
+// out[i] = a[i] + 1, with a type parsed through the callback context's factory.
+void PlusOneParseExec(ScalarFunction::ExecInput &input) {
+	const auto integer = input.GetContext().GetFactory().ParseType("INTEGER");
+	REQUIRE(integer.ToText() == "INTEGER");
+	PlusOneExec(input);
+}
+} // namespace
+
+// Expressions evaluated without a client context (index keys, generated columns) run API functions too.
+TEST_CASE("Stable C++API: scalar function runs in an index key and a generated column", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	const auto integer = conn.GetFactory().ParseType("INTEGER");
+
+	auto function = ScalarFunction::Create(conn.GetFactory());
+	function.SetName("cpp_key_plus_one").SetExecCallback(PlusOneParseExec);
+	function.GetSignature().AddParameter("a", integer).SetReturnType(integer);
+	conn.Register(function);
+
+	conn.Execute("CREATE TABLE t(a INTEGER, g INTEGER GENERATED ALWAYS AS (cpp_key_plus_one(a)) VIRTUAL)").Drain();
+	conn.Execute("CREATE UNIQUE INDEX tx ON t((cpp_key_plus_one(a)))").Drain();
+	conn.Execute("INSERT INTO t VALUES (1), (2), (3)").Drain();
+	REQUIRE(CollectInts(conn.Execute("SELECT g FROM t ORDER BY a")) == std::vector<int32_t> {2, 3, 4});
+	REQUIRE_THROWS(conn.Execute("INSERT INTO t VALUES (1)").Drain());
+	REQUIRE(CollectInts(conn.Execute("SELECT a FROM t WHERE cpp_key_plus_one(a) = 3")) == std::vector<int32_t> {2});
+}
