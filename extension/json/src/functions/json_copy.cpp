@@ -112,13 +112,16 @@ static string LowerCase(string text) {
 	                      expected, value.GetLogicalType().ToText());
 }
 
+//! compression and encoding were options of the CSV writer, which rejects an option given without an argument
+static void RequireArgument(const string &option, const Value &value) {
+	if (!value.IsNull() && value.GetLogicalType().GetTypeId() == LogicalTypeId::BOOLEAN) {
+		throw InvalidInputException("Copy option %s requires an argument of type VARCHAR", option);
+	}
+}
+
 static string GetStringOption(const JSONCopyUserData &user, const string &option, const Value &value) {
 	if (value.IsNull()) {
 		ThrowParameterNull(user, option);
-	}
-	if (value.GetLogicalType().GetTypeId() == LogicalTypeId::BOOLEAN) {
-		// an option given without an argument
-		throw InvalidInputException("Copy option %s requires an argument of type VARCHAR", option);
 	}
 	if (value.GetLogicalType().GetTypeId() != LogicalTypeId::VARCHAR) {
 		ThrowParameterType(user, option, value, "VARCHAR");
@@ -317,8 +320,10 @@ static void CopyToBind(CopyFunction::CopyToBindInput &input) {
 		} else if (user.geojson && name == "bbox") {
 			data.bbox = GetBooleanOption(context, user, name, value);
 		} else if (name == "compression") {
+			RequireArgument(name, value);
 			data.compression = ParseCompression(GetStringOption(user, name, value));
 		} else if (name == "encoding") {
+			RequireArgument(name, value);
 			const auto encoding = LowerCase(GetStringOption(user, name, value));
 			if (encoding != "utf-8" && encoding != "utf8") {
 				throw NotImplementedException("COPY ... TO ... (FORMAT %s) only supports the UTF-8 encoding",
