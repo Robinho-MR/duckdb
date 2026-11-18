@@ -1780,8 +1780,8 @@ CreateColumnStatistics(const case_insensitive_map_t<case_insensitive_map_t<Value
 //===--------------------------------------------------------------------===//
 // Copy File Lifecycle
 //===--------------------------------------------------------------------===//
-static void FinalizeLifecycleFileState(ClientContext &context, copy_to_finalize_t finalize, FunctionData &bind_data,
-                                       unique_ptr<GlobalFileState> state) {
+static void FinalizeLifecycleFileState(ClientContext &context, copy_to_finalize_t finalize,
+                                       const FunctionData &bind_data, unique_ptr<GlobalFileState> state) {
 	if (!finalize) {
 		throw InternalException("COPY file lifecycle finalize requires a finalize callback");
 	}
@@ -2160,7 +2160,8 @@ public:
 
 class SortStrategyInput : public PartitionedCopyInput {
 public:
-	SortStrategyInput(const PartitionedCopy &partitioned_copy, unique_ptr<const SortStrategy> strategy);
+	SortStrategyInput(ClientContext &context, const PartitionedCopy &partitioned_copy,
+	                  unique_ptr<const SortStrategy> strategy);
 
 public:
 	unique_ptr<PartitionedCopyInputGlobalState> GetGlobalState(ClientContext &context) const override;
@@ -2284,7 +2285,7 @@ private:
 	ValidityMask partition_mask;
 };
 
-SortStrategyInput::SortStrategyInput(const PartitionedCopy &partitioned_copy_p,
+SortStrategyInput::SortStrategyInput(ClientContext &context, const PartitionedCopy &partitioned_copy_p,
                                      unique_ptr<const SortStrategy> strategy_p)
     : partitioned_copy(partitioned_copy_p), strategy(std::move(strategy_p)) {
 	auto &op = partitioned_copy.op;
@@ -2293,8 +2294,8 @@ SortStrategyInput::SortStrategyInput(const PartitionedCopy &partitioned_copy_p,
 		key_types.push_back(op.expected_types[partition_column]);
 	}
 	auto key_type = WindowCollectionChunkScanner::PrefixStructType(key_types, key_types.size());
-	partition_distinct_from =
-	    BoundComparisonExpression::CreateOnColumns(ExpressionType::COMPARE_DISTINCT_FROM, key_type, key_type);
+	partition_distinct_from = BoundComparisonExpression::CreateOnColumns(context, ExpressionType::COMPARE_DISTINCT_FROM,
+	                                                                     key_type, 0, key_type, 1);
 }
 
 unique_ptr<PartitionedCopyInputGlobalState> SortStrategyInput::GetGlobalState(ClientContext &context) const {
@@ -2811,7 +2812,7 @@ unique_ptr<SortStrategyInput> IntegerPartitionInput::CreateOverflowInput(ClientC
 	OperatorPartitionInfo unpartitioned_info;
 	auto strategy = SortStrategy::Factory(context, partition_bys, op.order_columns, op.expected_types, no_stats,
 	                                      unpartitioned_info, count);
-	return make_uniq<SortStrategyInput>(partitioned_copy, std::move(strategy));
+	return make_uniq<SortStrategyInput>(context, partitioned_copy, std::move(strategy));
 }
 
 unique_ptr<PartitionedCopyInputGlobalState> IntegerPartitionInput::GetGlobalState(ClientContext &context) const {
@@ -3749,7 +3750,7 @@ unique_ptr<const PartitionedCopyInput> PartitionedCopy::ConstructInput() const {
 	auto strategy =
 	    SortStrategy::Factory(context, partition_bys, op.order_columns, op.expected_types, op.partition_stats,
 	                          unpartitioned_info, op.children.empty() ? 0 : op.children[0].get().estimated_cardinality);
-	return make_uniq<SortStrategyInput>(*this, std::move(strategy));
+	return make_uniq<SortStrategyInput>(context, *this, std::move(strategy));
 }
 
 bool PartitionedCopy::RequiresSerializedPartitionWrites() const {
@@ -4523,29 +4524,35 @@ void CopyToFileGlobalState::Initialize() {
 	initialized = true;
 }
 
-void CopyToFileGlobalState::PrepareOutputDirectory() {
+void PhysicalCopyToFile::PrepareOutputDirectory(ClientContext &context, const string &directory,
+                                                CopyOverwriteMode overwrite_mode,
+                                                CopyOutputLifecycle &output_lifecycle) {
 	auto &fs = FileSystem::GetFileSystem(context);
-	if (!fs.IsRemoteFile(op.file_path)) {
-		if (fs.FileExists(op.file_path)) {
-			if (op.overwrite_mode == CopyOverwriteMode::COPY_OVERWRITE) {
-				fs.RemoveFile(op.file_path);
+	if (!fs.IsRemoteFile(directory)) {
+		if (fs.FileExists(directory)) {
+			if (overwrite_mode == CopyOverwriteMode::COPY_OVERWRITE) {
+				fs.RemoveFile(directory);
 			} else {
 				throw IOException("Cannot write to \"%s\" - it exists and is a file, not a directory! Enable "
 				                  "OVERWRITE option to overwrite the file",
-				                  op.file_path);
+				                  directory);
 			}
 		}
 	}
 
-	if (!fs.DirectoryExists(op.file_path)) {
-		if (fs.CreateDirectoryExtended(op.file_path, {CreateDirectoryMode::SINGLE})) {
-			output_lifecycle.RegisterCreatedDirectory(op.file_path);
+	if (!fs.DirectoryExists(directory)) {
+		if (fs.CreateDirectoryExtended(directory, {CreateDirectoryMode::SINGLE})) {
+			output_lifecycle.RegisterCreatedDirectory(directory);
 		} else {
-			CheckDirectory(fs, op.file_path, op.overwrite_mode);
+			CheckDirectory(fs, directory, overwrite_mode);
 		}
 	} else {
-		CheckDirectory(fs, op.file_path, op.overwrite_mode);
+		CheckDirectory(fs, directory, overwrite_mode);
 	}
+}
+
+void CopyToFileGlobalState::PrepareOutputDirectory() {
+	PhysicalCopyToFile::PrepareOutputDirectory(context, op.file_path, op.overwrite_mode, output_lifecycle);
 }
 
 void CopyToFileGlobalState::ScheduleOutputDirectorySetup() {
@@ -4841,7 +4848,7 @@ CopyToFileLocalState::CopyToFileLocalState(const PhysicalCopyToFile &op_p, Execu
 // PhysicalCopyToFile
 //===--------------------------------------------------------------------===//
 PhysicalCopyToFile::PhysicalCopyToFile(PhysicalPlan &physical_plan, vector<LogicalType> types, CopyFunction function_p,
-                                       unique_ptr<FunctionData> bind_data, idx_t estimated_cardinality)
+                                       cow_ptr<FunctionData> bind_data, idx_t estimated_cardinality)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::COPY_TO_FILE, std::move(types), estimated_cardinality),
       function(std::move(function_p)), bind_data(std::move(bind_data)), parallel(false) {
 }
@@ -5183,7 +5190,7 @@ static unique_ptr<PreparedBatchData> PrepareLegacyCopyBatch(unique_ptr<ColumnDat
 	return make_uniq<LegacyCopyPreparedBatch>(std::move(batch));
 }
 
-static void FlushLegacyCopyBatch(ClientContext &context, const CopyFunction &function, FunctionData &bind_data,
+static void FlushLegacyCopyBatch(ClientContext &context, const CopyFunction &function, const FunctionData &bind_data,
                                  GlobalFunctionData &gstate, PreparedBatchData &prepared_batch) {
 	if (!function.copy_to_initialize_local || !function.copy_to_sink || !function.copy_to_combine) {
 		throw InternalException("Legacy copy function is missing required sink/combine callbacks");

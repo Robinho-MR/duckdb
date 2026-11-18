@@ -76,13 +76,68 @@ struct VectorOperations {
 	//===--------------------------------------------------------------------===//
 	// Select Comparisons
 	//===--------------------------------------------------------------------===//
-	//! Select the rows for which "left <comparison> right" holds, using the DistinctComparator ordering where NULLs
-	//! are maximal (or minimal if nulls_first is set). The comparison must be one of <, <=, >, >=.
-	static idx_t SelectDistinctComparator(const Vector &left, const Vector &right,
-	                                      optional_ptr<const SelectionVector> sel, idx_t count,
-	                                      ExpressionType comparison, bool nulls_first,
-	                                      optional_ptr<SelectionVector> true_sel,
-	                                      optional_ptr<SelectionVector> false_sel);
+	static idx_t Equals(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel, idx_t count,
+	                    optional_ptr<SelectionVector> true_sel, optional_ptr<SelectionVector> false_sel,
+	                    optional_ptr<ValidityMask> null_mask = nullptr);
+	static idx_t NotEquals(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel,
+	                       idx_t count, optional_ptr<SelectionVector> true_sel, optional_ptr<SelectionVector> false_sel,
+	                       optional_ptr<ValidityMask> null_mask = nullptr);
+	static idx_t GreaterThan(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel,
+	                         idx_t count, optional_ptr<SelectionVector> true_sel,
+	                         optional_ptr<SelectionVector> false_sel, optional_ptr<ValidityMask> null_mask = nullptr);
+	static idx_t GreaterThanEquals(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel,
+	                               idx_t count, optional_ptr<SelectionVector> true_sel,
+	                               optional_ptr<SelectionVector> false_sel,
+	                               optional_ptr<ValidityMask> null_mask = nullptr);
+	static idx_t LessThan(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel, idx_t count,
+	                      optional_ptr<SelectionVector> true_sel, optional_ptr<SelectionVector> false_sel,
+	                      optional_ptr<ValidityMask> null_mask = nullptr);
+	static idx_t LessThanEquals(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel,
+	                            idx_t count, optional_ptr<SelectionVector> true_sel,
+	                            optional_ptr<SelectionVector> false_sel,
+	                            optional_ptr<ValidityMask> null_mask = nullptr);
+
+	// true := A != B with nulls being equal
+	static idx_t DistinctFrom(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel,
+	                          idx_t count, optional_ptr<SelectionVector> true_sel,
+	                          optional_ptr<SelectionVector> false_sel);
+	// true := A == B with nulls being equal
+	static idx_t NotDistinctFrom(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel,
+	                             idx_t count, optional_ptr<SelectionVector> true_sel,
+	                             optional_ptr<SelectionVector> false_sel);
+	// true := A > B with nulls being maximal
+	static idx_t DistinctGreaterThan(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel,
+	                                 idx_t count, optional_ptr<SelectionVector> true_sel,
+	                                 optional_ptr<SelectionVector> false_sel,
+	                                 optional_ptr<ValidityMask> null_mask = nullptr);
+	// true := A >= B with nulls being maximal
+	static idx_t DistinctGreaterThanEquals(const Vector &left, const Vector &right,
+	                                       optional_ptr<const SelectionVector> sel, idx_t count,
+	                                       optional_ptr<SelectionVector> true_sel,
+	                                       optional_ptr<SelectionVector> false_sel,
+	                                       optional_ptr<ValidityMask> null_mask = nullptr);
+	// true := A < B with nulls being maximal
+	static idx_t DistinctLessThan(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel,
+	                              idx_t count, optional_ptr<SelectionVector> true_sel,
+	                              optional_ptr<SelectionVector> false_sel,
+	                              optional_ptr<ValidityMask> null_mask = nullptr);
+	// true := A <= B with nulls being maximal
+	static idx_t DistinctLessThanEquals(const Vector &left, const Vector &right,
+	                                    optional_ptr<const SelectionVector> sel, idx_t count,
+	                                    optional_ptr<SelectionVector> true_sel, optional_ptr<SelectionVector> false_sel,
+	                                    optional_ptr<ValidityMask> null_mask = nullptr);
+	// true := A > B with nulls being minimal
+	static idx_t DistinctGreaterThanNullsFirst(const Vector &left, const Vector &right,
+	                                           optional_ptr<const SelectionVector> sel, idx_t count,
+	                                           optional_ptr<SelectionVector> true_sel,
+	                                           optional_ptr<SelectionVector> false_sel,
+	                                           optional_ptr<ValidityMask> null_mask = nullptr);
+	// true := A < B with nulls being minimal
+	static idx_t DistinctLessThanNullsFirst(const Vector &left, const Vector &right,
+	                                        optional_ptr<const SelectionVector> sel, idx_t count,
+	                                        optional_ptr<SelectionVector> true_sel,
+	                                        optional_ptr<SelectionVector> false_sel,
+	                                        optional_ptr<ValidityMask> null_mask = nullptr);
 
 	//===--------------------------------------------------------------------===//
 	// Hash functions

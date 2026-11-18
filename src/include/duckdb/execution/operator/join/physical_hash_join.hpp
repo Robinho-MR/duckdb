@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "duckdb/execution/mark_join_row_comparison.hpp"
 #include "duckdb/execution/operator/join/physical_comparison_join.hpp"
 #include "duckdb/execution/physical_operator.hpp"
 
@@ -35,9 +34,6 @@ struct ResidualPredicateInfo {
 class PhysicalHashJoin : public PhysicalComparisonJoin {
 public:
 	static constexpr const PhysicalOperatorType TYPE = PhysicalOperatorType::HASH_JOIN;
-
-	//! The equality comparisons of the keys of a MARK join
-	MarkJoinComparisons mark_comparisons;
 
 	struct JoinProjectionColumns {
 		vector<idx_t> col_idxs;

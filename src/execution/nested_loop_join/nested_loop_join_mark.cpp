@@ -3,7 +3,6 @@
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/types/vector.hpp"
 #include "duckdb/common/uhugeint.hpp"
-#include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/mark_join_row_comparison.hpp"
 #include "duckdb/execution/nested_loop_join.hpp"
 
@@ -39,20 +38,21 @@ static void TemplatedMarkJoin(const Vector &left, const Vector &right, idx_t lco
 	}
 }
 
-static void MarkJoinNested(Context &context, const MarkJoinPlan &plan, const Vector &left, const Vector &right,
-                           idx_t lcount, idx_t rcount, bool found_match[], ExpressionType comparison_type,
+static void MarkJoinNested(const Vector &left, const Vector &right, idx_t lcount, idx_t rcount, bool found_match[],
+                           ExpressionType comparison_type, ExpressionExecutor &comparison_executor,
+                           DataChunk &comparison_input, optional_ptr<MarkJoinRowComparison> tuple_comparison,
                            optional_ptr<bool> found_unknown) {
 	if (left.GetType().id() == LogicalTypeId::TUPLE &&
 	    (comparison_type == ExpressionType::COMPARE_EQUAL || comparison_type == ExpressionType::COMPARE_NOTEQUAL)) {
-		MarkJoinRowComparison row_comparison(context, plan.leaf_equalities);
+		D_ASSERT(tuple_comparison);
 		for (idx_t left_row = 0; left_row < lcount; left_row++) {
 			if (found_match[left_row]) {
 				continue;
 			}
 			bool equality_is_false[STANDARD_VECTOR_SIZE] = {false};
 			bool equality_is_unknown[STANDARD_VECTOR_SIZE] = {false};
-			row_comparison.CompareEquality(left, left_row, lcount, right, rcount, equality_is_false,
-			                               equality_is_unknown);
+			tuple_comparison->CompareEquality(left, left_row, lcount, right, rcount, equality_is_false,
+			                                  equality_is_unknown);
 			for (idx_t right_row = 0; right_row < rcount; right_row++) {
 				const bool is_match = comparison_type == ExpressionType::COMPARE_EQUAL
 				                          ? !equality_is_false[right_row] && !equality_is_unknown[right_row]
@@ -69,28 +69,25 @@ static void MarkJoinNested(Context &context, const MarkJoinPlan &plan, const Vec
 		return;
 	}
 
-	ExpressionExecutor comparison(context, plan.comparison);
-	Vector left_reference(left.GetType());
 	for (idx_t i = 0; i < lcount; i++) {
 		if (found_match[i]) {
 			continue;
 		}
-		ConstantVector::Reference(left_reference, count_t(rcount), left, i, lcount);
-		Vector comparison_result(LogicalType::BOOLEAN);
-		comparison.ExecuteBinaryExpression(left_reference, right, comparison_result);
-		bool has_match = false;
+		ConstantVector::Reference(comparison_input.data[0], count_t(rcount), left, i, lcount);
+		comparison_input.data[1].Reference(right);
+		comparison_input.CheckCardinality(rcount);
+		Vector comparison(LogicalType::BOOLEAN, rcount);
+		comparison_executor.ExecuteExpression(comparison_input, comparison);
 		bool has_unknown = false;
-		for (auto entry : comparison_result.Values<bool>()) {
+		for (auto entry : comparison.Values<bool>()) {
 			if (!entry.IsValid()) {
 				has_unknown = true;
 			} else if (entry.GetValue()) {
-				has_match = true;
+				found_match[i] = true;
 				break;
 			}
 		}
-		if (has_match) {
-			found_match[i] = true;
-		} else if (found_unknown && has_unknown) {
+		if (!found_match[i] && found_unknown && has_unknown) {
 			found_unknown.get()[i] = true;
 		}
 	}
@@ -131,14 +128,17 @@ static void MarkJoinSwitch(const Vector &left, const Vector &right, idx_t lcount
 	}
 }
 
-static void MarkJoinComparisonSwitch(Context &context, const MarkJoinPlan &plan, const Vector &left,
-                                     const Vector &right, idx_t lcount, idx_t rcount, bool found_match[],
-                                     ExpressionType comparison_type, optional_ptr<bool> found_unknown) {
+static void MarkJoinComparisonSwitch(const Vector &left, const Vector &right, idx_t lcount, idx_t rcount,
+                                     bool found_match[], ExpressionType comparison_type,
+                                     ExpressionExecutor &comparison_executor, DataChunk &comparison_input,
+                                     optional_ptr<MarkJoinRowComparison> tuple_comparison,
+                                     optional_ptr<bool> found_unknown) {
 	switch (left.GetType().InternalType()) {
 	case PhysicalType::STRUCT:
 	case PhysicalType::LIST:
 	case PhysicalType::ARRAY:
-		return MarkJoinNested(context, plan, left, right, lcount, rcount, found_match, comparison_type, found_unknown);
+		return MarkJoinNested(left, right, lcount, rcount, found_match, comparison_type, comparison_executor,
+		                      comparison_input, tuple_comparison, found_unknown);
 	default:
 		break;
 	}
@@ -163,9 +163,10 @@ static void MarkJoinComparisonSwitch(Context &context, const MarkJoinPlan &plan,
 	}
 }
 
-void NestedLoopJoinMark::Perform(Context &context, const MarkJoinPlan &plan, DataChunk &left,
-                                 ColumnDataCollection &right, bool found_match[],
-                                 const vector<JoinCondition> &conditions, optional_ptr<bool> found_unknown) {
+void NestedLoopJoinMark::Perform(DataChunk &left, ColumnDataCollection &right, bool found_match[],
+                                 const vector<JoinCondition> &conditions, ExpressionExecutor &comparison_executor,
+                                 DataChunk &comparison_input, optional_ptr<MarkJoinRowComparison> tuple_comparison,
+                                 optional_ptr<bool> found_unknown) {
 	D_ASSERT(conditions.size() == 1);
 	// initialize a new temporary selection vector for the left chunk
 	// loop over all chunks in the RHS
@@ -176,8 +177,9 @@ void NestedLoopJoinMark::Perform(Context &context, const MarkJoinPlan &plan, Dat
 	right.InitializeScanChunk(scan_chunk);
 
 	while (right.Scan(scan_state, scan_chunk)) {
-		MarkJoinComparisonSwitch(context, plan, left.data[0], scan_chunk.data[0], left.size(), scan_chunk.size(),
-		                         found_match, conditions[0].GetComparisonType(), found_unknown);
+		MarkJoinComparisonSwitch(left.data[0], scan_chunk.data[0], left.size(), scan_chunk.size(), found_match,
+		                         conditions[0].GetComparisonType(), comparison_executor, comparison_input,
+		                         tuple_comparison, found_unknown);
 	}
 }
 

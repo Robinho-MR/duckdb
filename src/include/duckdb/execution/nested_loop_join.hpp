@@ -15,27 +15,20 @@
 
 namespace duckdb {
 class ColumnDataCollection;
+class ExpressionExecutor;
+class MarkJoinRowComparison;
 
 struct NestedLoopJoinInner {
 	static idx_t Perform(idx_t &ltuple, idx_t &rtuple, DataChunk &left_conditions, DataChunk &right_conditions,
 	                     SelectionVector &lvector, SelectionVector &rvector, const vector<JoinCondition> &conditions);
 };
 
-//! The comparisons of the condition of a MARK nested loop join, created during planning
-struct MarkJoinPlan {
-	MarkJoinPlan(const Expression &comparison, const vector<unique_ptr<Expression>> &leaf_equalities)
-	    : comparison(comparison), leaf_equalities(leaf_equalities) {
-	}
-
-	//! The comparison of the condition
-	const Expression &comparison;
-	//! The equalities of the leaves of the condition (for comparing tuples)
-	const vector<unique_ptr<Expression>> &leaf_equalities;
-};
-
 struct NestedLoopJoinMark {
-	static void Perform(Context &context, const MarkJoinPlan &plan, DataChunk &left, ColumnDataCollection &right,
-	                    bool found_match[], const vector<JoinCondition> &conditions,
+	//! Nested keys are compared with comparison_executor over comparison_input ([left row, right rows]), or with
+	//! tuple_comparison for TUPLE (in)equality
+	static void Perform(DataChunk &left, ColumnDataCollection &right, bool found_match[],
+	                    const vector<JoinCondition> &conditions, ExpressionExecutor &comparison_executor,
+	                    DataChunk &comparison_input, optional_ptr<MarkJoinRowComparison> tuple_comparison,
 	                    optional_ptr<bool> found_unknown = nullptr);
 };
 

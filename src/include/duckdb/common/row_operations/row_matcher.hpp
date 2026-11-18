@@ -13,8 +13,6 @@
 
 namespace duckdb {
 
-class Context;
-class Expression;
 class Vector;
 class DataChunk;
 class TupleDataLayout;
@@ -22,17 +20,14 @@ struct TupleDataVectorFormat;
 struct SelectionVector;
 struct MatchFunction;
 
-typedef idx_t (*match_function_t)(Context &context, const MatchFunction &self, Vector &lhs_vector,
-                                  const TupleDataVectorFormat &lhs_format, SelectionVector &sel, const idx_t count,
-                                  const TupleDataLayout &rhs_layout, Vector &rhs_row_locations, const idx_t col_idx,
-                                  const vector<MatchFunction> &child_functions, SelectionVector *no_match_sel,
-                                  idx_t &no_match_count);
+typedef idx_t (*match_function_t)(Vector &lhs_vector, const TupleDataVectorFormat &lhs_format, SelectionVector &sel,
+                                  const idx_t count, const TupleDataLayout &rhs_layout, Vector &rhs_row_locations,
+                                  const idx_t col_idx, const vector<MatchFunction> &child_functions,
+                                  SelectionVector *no_match_sel, idx_t &no_match_count);
 
 struct MatchFunction {
 	match_function_t function;
 	vector<MatchFunction> child_functions;
-	//! The comparison of nested values (if the function compares them using a comparison function)
-	shared_ptr<Expression> comparison;
 };
 
 struct RowMatcher {
@@ -41,8 +36,8 @@ public:
 
 	//! Initializes the RowMatcher, filling match_functions using layout and equality_predicates
 	//! If columns is empty, we assume column indices 0, 1, 2, etc.
-	void Initialize(Context &context, const bool no_match_sel, const TupleDataLayout &layout,
-	                const Predicates &predicates, vector<column_t> columns = {});
+	void Initialize(const bool no_match_sel, const TupleDataLayout &layout, const Predicates &predicates,
+	                vector<column_t> columns = {});
 
 public:
 	//! Given a DataChunk on the LHS, on which we've called TupleDataCollection::ToUnifiedFormat,
@@ -62,10 +57,9 @@ private:
 	template <bool NO_MATCH_SEL>
 	MatchFunction GetStructMatchFunction(const LogicalType &type, const ExpressionType predicate);
 	template <bool NO_MATCH_SEL>
-	MatchFunction GetListMatchFunction(const LogicalType &type, const ExpressionType predicate);
+	MatchFunction GetListMatchFunction(const ExpressionType predicate);
 
 private:
-	optional_ptr<Context> context;
 	optional_ptr<const TupleDataLayout> rhs_layout;
 	vector<column_t> columns;
 	vector<MatchFunction> match_functions;

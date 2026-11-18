@@ -13,15 +13,16 @@
 
 namespace duckdb {
 
-PhysicalTopN::PhysicalTopN(PhysicalPlan &physical_plan, vector<LogicalType> types, vector<BoundOrderByNode> orders,
-                           idx_t limit, idx_t offset, shared_ptr<DynamicFilterData> dynamic_filter_p,
-                           idx_t estimated_cardinality)
+PhysicalTopN::PhysicalTopN(PhysicalPlan &physical_plan, ClientContext &context, vector<LogicalType> types,
+                           vector<BoundOrderByNode> orders, idx_t limit, idx_t offset,
+                           shared_ptr<DynamicFilterData> dynamic_filter_p, idx_t estimated_cardinality)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::TOP_N, std::move(types), estimated_cardinality),
       orders(std::move(orders)), limit(limit), offset(offset), dynamic_filter(std::move(dynamic_filter_p)) {
-	for (auto &order : this->orders) {
-		auto &type = order.expression->GetReturnType();
-		not_distinct_from.push_back(
-		    BoundComparisonExpression::CreateOnColumns(ExpressionType::COMPARE_NOT_DISTINCT_FROM, type, type));
+	const auto order_count = this->orders.size();
+	for (idx_t order_idx = 0; order_idx < order_count; order_idx++) {
+		auto &type = this->orders[order_idx].expression->GetReturnType();
+		not_distinct_from.push_back(BoundComparisonExpression::CreateOnColumns(
+		    context, ExpressionType::COMPARE_NOT_DISTINCT_FROM, type, order_idx, type, order_count + order_idx));
 	}
 }
 
@@ -123,6 +124,8 @@ public:
 	DataChunk compare_chunk;
 	//! Cached global boundary value as a set of constant vectors
 	DataChunk boundary_values;
+	//! The input of not_distinct_from: [sort columns..., boundary values...]
+	DataChunk boundary_compare_chunk;
 	//! Cached global boundary value in sort-key format
 	string boundary_val;
 	SelectionVector final_sel;
@@ -211,6 +214,9 @@ TopNHeap::TopNHeap(ClientContext &context, Allocator &allocator, const vector<Lo
 	sort_chunk.Initialize(allocator, sort_types);
 	compare_chunk.Initialize(allocator, sort_types);
 	boundary_values.Initialize(allocator, sort_types);
+	auto boundary_compare_types = sort_types;
+	boundary_compare_types.insert(boundary_compare_types.end(), sort_types.begin(), sort_types.end());
+	boundary_compare_chunk.InitializeEmpty(boundary_compare_types);
 }
 
 TopNHeap::TopNHeap(ClientContext &context, const vector<LogicalType> &payload_types,
@@ -309,6 +315,11 @@ bool TopNHeap::CheckBoundaryValues(DataChunk &sort_chunk, DataChunk &payload, To
 		}
 	}
 	boundary_values.SetChildCardinality(sort_chunk.size());
+	for (idx_t i = 0; i < orders.size(); i++) {
+		boundary_compare_chunk.data[i].Reference(sort_chunk.data[i]);
+		boundary_compare_chunk.data[orders.size() + i].Reference(boundary_values.data[i]);
+	}
+	boundary_compare_chunk.CheckCardinality(sort_chunk.size());
 
 	// we have boundary values
 	// from these boundary values, determine which values we should insert (if any)
@@ -323,15 +334,28 @@ bool TopNHeap::CheckBoundaryValues(DataChunk &sort_chunk, DataChunk &payload, To
 			compare_chunk.data[i].Reference(sort_chunk.data[i]);
 		}
 		bool is_last = i + 1 == orders.size();
-		const bool ascending = orders[i].type == OrderType::ASCENDING;
-		const bool nulls_first = orders[i].null_order == OrderByNullType::NULLS_FIRST;
-		D_ASSERT(nulls_first || orders[i].null_order == OrderByNullType::NULLS_LAST);
-		// ASC NULLS LAST and DESC NULLS FIRST compare with NULLs as maximal values, the others with NULLs as minimal
-		const auto comparison = ascending ? ExpressionType::COMPARE_LESSTHAN : ExpressionType::COMPARE_GREATERTHAN;
-		const bool nulls_minimal = ascending == nulls_first;
-		idx_t true_count = VectorOperations::SelectDistinctComparator(compare_chunk.data[i], boundary_values.data[i],
-		                                                              &remaining_sel, remaining_count, comparison,
-		                                                              nulls_minimal, &true_sel, &false_sel);
+		idx_t true_count;
+		if (orders[i].null_order == OrderByNullType::NULLS_LAST) {
+			if (orders[i].type == OrderType::ASCENDING) {
+				true_count = VectorOperations::DistinctLessThan(compare_chunk.data[i], boundary_values.data[i],
+				                                                &remaining_sel, remaining_count, &true_sel, &false_sel);
+			} else {
+				true_count = VectorOperations::DistinctGreaterThanNullsFirst(compare_chunk.data[i],
+				                                                             boundary_values.data[i], &remaining_sel,
+				                                                             remaining_count, &true_sel, &false_sel);
+			}
+		} else {
+			D_ASSERT(orders[i].null_order == OrderByNullType::NULLS_FIRST);
+			if (orders[i].type == OrderType::ASCENDING) {
+				true_count = VectorOperations::DistinctLessThanNullsFirst(compare_chunk.data[i],
+				                                                          boundary_values.data[i], &remaining_sel,
+				                                                          remaining_count, &true_sel, &false_sel);
+			} else {
+				true_count =
+				    VectorOperations::DistinctGreaterThan(compare_chunk.data[i], boundary_values.data[i],
+				                                          &remaining_sel, remaining_count, &true_sel, &false_sel);
+			}
+		}
 
 		if (true_count > 0) {
 			memcpy(final_sel.data() + final_count, true_sel.data(), true_count * sizeof(sel_t));
@@ -340,8 +364,8 @@ bool TopNHeap::CheckBoundaryValues(DataChunk &sort_chunk, DataChunk &payload, To
 		idx_t false_count = remaining_count - true_count;
 		if (!is_last && false_count > 0) {
 			// check what we should continue to check
-			remaining_count = not_distinct_from[i]->SelectBinaryExpression(
-			    sort_chunk.data[i], boundary_values.data[i], &false_sel, false_count, &new_remaining_sel, nullptr);
+			remaining_count = not_distinct_from[i]->SelectExpression(boundary_compare_chunk, &new_remaining_sel,
+			                                                         nullptr, &false_sel, false_count);
 			remaining_sel.Initialize(new_remaining_sel);
 		} else {
 			break;

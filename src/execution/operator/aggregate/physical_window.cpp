@@ -267,7 +267,7 @@ public:
 };
 
 // this implements a sorted window functions variant
-PhysicalWindow::PhysicalWindow(PhysicalPlan &physical_plan, vector<LogicalType> types,
+PhysicalWindow::PhysicalWindow(PhysicalPlan &physical_plan, ClientContext &context, vector<LogicalType> types,
                                vector<unique_ptr<Expression>> select_list_p, idx_t estimated_cardinality,
                                vector<column_t> partitions)
     : PhysicalOperator(physical_plan, TYPE, std::move(types), estimated_cardinality),
@@ -302,7 +302,8 @@ PhysicalWindow::PhysicalWindow(PhysicalPlan &physical_plan, vector<LogicalType> 
 	}
 	auto create_distinct_from = [&](idx_t end, idx_t begin) {
 		auto type = WindowCollectionChunkScanner::PrefixStructType(key_types, end, begin);
-		return BoundComparisonExpression::CreateOnColumns(ExpressionType::COMPARE_DISTINCT_FROM, type, type);
+		return BoundComparisonExpression::CreateOnColumns(context, ExpressionType::COMPARE_DISTINCT_FROM, type, 0, type,
+		                                                  1);
 	};
 	partition_distinct_from = create_distinct_from(order_begin, 0);
 	for (auto &expr : select_list) {
@@ -313,9 +314,9 @@ PhysicalWindow::PhysicalWindow(PhysicalPlan &physical_plan, vector<LogicalType> 
 	}
 }
 
-PhysicalWindow::PhysicalWindow(PhysicalPlan &physical_plan, vector<LogicalType> types,
+PhysicalWindow::PhysicalWindow(PhysicalPlan &physical_plan, ClientContext &context, vector<LogicalType> types,
                                vector<unique_ptr<Expression>> select_list, idx_t estimated_cardinality)
-    : PhysicalWindow(physical_plan, std::move(types), std::move(select_list), estimated_cardinality,
+    : PhysicalWindow(physical_plan, context, std::move(types), std::move(select_list), estimated_cardinality,
                      vector<column_t>()) {
 }
 
@@ -710,10 +711,14 @@ void WindowHashGroup::ComputeMasks(const idx_t block_begin, const idx_t block_en
 			                   if (ndistinct) {
 				                   prefix.Slice(matching, nmatch);
 			                   } else {
-				                   prefix.SetChildCardinality(nmatch);
+				                   // Slice instead of resizing: the vectors share their buffers with prev and curr
+				                   for (auto &vec : prefix.data) {
+					                   vec.Slice(Vector::Ref(vec), 0, nmatch);
+				                   }
+				                   prefix.CheckCardinality(nmatch);
 			                   }
-			                   const auto m = distinct_from[order_mask.first]->SelectBinaryExpression(
-			                       order_curr, order_prev, nullptr, nmatch, &distinct, nullptr);
+			                   const auto m = distinct_from[order_mask.first]->SelectExpression(
+			                       prefix, &distinct, nullptr, nullptr, nmatch);
 			                   for (idx_t i = 0; i < m; ++i) {
 				                   const idx_t curr_index = row_idx + matching.get_index(distinct.get_index(i));
 				                   order_mask.second.SetValidUnsafe(curr_index);

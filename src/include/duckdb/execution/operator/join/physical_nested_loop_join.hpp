@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/execution/mark_join_row_comparison.hpp"
 #include "duckdb/execution/operator/join/physical_comparison_join.hpp"
 
 namespace duckdb {
@@ -18,12 +19,13 @@ public:
 	static constexpr const PhysicalOperatorType TYPE = PhysicalOperatorType::NESTED_LOOP_JOIN;
 
 public:
-	PhysicalNestedLoopJoin(PhysicalPlan &physical_plan, LogicalComparisonJoin &op, PhysicalOperator &left,
-	                       PhysicalOperator &right, vector<JoinCondition> cond, JoinType join_type,
-	                       idx_t estimated_cardinality, unique_ptr<JoinFilterPushdownInfo> pushdown_info);
-	PhysicalNestedLoopJoin(PhysicalPlan &physical_plan, LogicalComparisonJoin &op, PhysicalOperator &left,
-	                       PhysicalOperator &right, vector<JoinCondition> cond, JoinType join_type,
-	                       idx_t estimated_cardinality);
+	PhysicalNestedLoopJoin(PhysicalPlan &physical_plan, ClientContext &context, LogicalComparisonJoin &op,
+	                       PhysicalOperator &left, PhysicalOperator &right, vector<JoinCondition> cond,
+	                       JoinType join_type, idx_t estimated_cardinality,
+	                       unique_ptr<JoinFilterPushdownInfo> pushdown_info);
+	PhysicalNestedLoopJoin(PhysicalPlan &physical_plan, ClientContext &context, LogicalComparisonJoin &op,
+	                       PhysicalOperator &left, PhysicalOperator &right, vector<JoinCondition> cond,
+	                       JoinType join_type, idx_t estimated_cardinality);
 
 public:
 	// Operator Interface
@@ -32,10 +34,6 @@ public:
 	bool ParallelOperator() const override {
 		return true;
 	}
-
-public:
-	//! The equalities of the leaves of the condition of a MARK join (for comparing tuples)
-	vector<unique_ptr<Expression>> mark_leaf_equalities;
 
 protected:
 	// CachingOperator Interface
@@ -79,6 +77,11 @@ public:
 public:
 	//! Returns a list of the types of the join conditions
 	vector<LogicalType> GetJoinTypes() const;
+
+	//! The condition "#0 <op> #1" of SEMI/ANTI/MARK joins (can be nullptr)
+	unique_ptr<Expression> condition_comparison;
+	//! The leaf comparisons of a TUPLE condition of SEMI/ANTI/MARK joins (can be nullptr)
+	unique_ptr<MarkJoinKeyComparison> tuple_comparison;
 
 private:
 	vector<idx_t> mark_projection_map;

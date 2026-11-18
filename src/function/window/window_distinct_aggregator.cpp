@@ -140,8 +140,8 @@ WindowDistinctAggregatorGlobalState::WindowDistinctAggregatorGlobalState(ClientC
 	}
 
 	auto key_type = WindowCollectionChunkScanner::PrefixStructType(sort_types, aggregator.arg_types.size());
-	key_distinct_from =
-	    BoundComparisonExpression::CreateOnColumns(ExpressionType::COMPARE_DISTINCT_FROM, key_type, key_type);
+	key_distinct_from = BoundComparisonExpression::CreateOnColumns(client, ExpressionType::COMPARE_DISTINCT_FROM,
+	                                                               key_type, 0, key_type, 1);
 
 	sort = make_uniq<Sort>(client, orders, sort_types, sort_cols);
 	global_sink = sort->GetGlobalSinkState(client);
@@ -658,7 +658,7 @@ void WindowDistinctAggregatorLocalState::FlushStates() {
 	}
 
 	const auto &aggr = gdstate.aggr;
-	AggregateInputData aggr_input_data(aggr, allocator);
+	AggregateInputData aggr_input_data(aggr, statef.allocator);
 	statel.Verify();
 	aggr.function.GetStateCombineCallback()(statel, statep, aggr_input_data, flush_count);
 
@@ -675,6 +675,8 @@ void WindowDistinctAggregatorLocalState::Evaluate(ExecutionContext &context,
 	const auto &levels_flat_native = gdstate.levels_flat_native;
 	const auto exclude_mode = gdstate.aggregator.exclude_mode;
 
+	//	Reclaim the result states of the previous batch, whose results have been consumed
+	statef.allocator.Reset();
 	//	Build the finalise vector that just points to the result states
 	statef.Initialize(count);
 

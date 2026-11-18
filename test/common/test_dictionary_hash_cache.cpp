@@ -212,9 +212,8 @@ TEST_CASE("Resetting a hash join scan releases its dictionary ownership", "[dict
 	                        make_uniq<BoundReferenceExpression>(LogicalType::INTEGER, 0),
 	                        ExpressionType::COMPARE_EQUAL);
 	const vector<idx_t> output_columns {1};
-	MarkJoinComparisons mark_comparisons;
-	JoinHashTable table(*con.context, op, conditions, mark_comparisons, {LogicalType::INTEGER}, JoinType::INNER, 0,
-	                    output_columns, nullptr);
+	JoinHashTable table(*con.context, op, conditions, {LogicalType::INTEGER}, JoinType::INNER, 0, output_columns,
+	                    nullptr);
 	TupleDataChunkState key_state;
 	JoinHashTable::ScanStructure scan(table, key_state);
 	weak_ptr<DictionaryEntry> original_owner;
