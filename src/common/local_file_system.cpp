@@ -208,6 +208,23 @@ static void ApplyLocalFileSystemDelay(optional_ptr<FileOpener> opener) {
 	ApplyLocalFileSystemDelay(FileOpener::TryGetDatabase(opener));
 }
 
+#if defined(F_OFD_SETLK) && defined(F_OFD_SETLKW) && defined(F_OFD_GETLK)
+// open file description locks conflict between handles, also within one process, and survive closing other handles
+#define DUCKDB_HAS_OFD_LOCKS
+#endif
+
+#ifdef DUCKDB_HAS_OFD_LOCKS
+static struct flock RangeLockStruct(short type, idx_t start, idx_t length) {
+	struct flock fl;
+	memset(&fl, 0, sizeof fl);
+	fl.l_type = type;
+	fl.l_whence = SEEK_SET;
+	fl.l_start = NumericCast<off_t>(start);
+	fl.l_len = NumericCast<off_t>(length);
+	return fl;
+}
+#endif
+
 struct UnixFileHandle : public FileHandle {
 public:
 	UnixFileHandle(FileSystem &file_system, string path, int fd, FileOpenFlags flags, optional_ptr<DatabaseInstance> db)
@@ -216,6 +233,67 @@ public:
 	~UnixFileHandle() override {
 		UnixFileHandle::Close();
 	}
+
+	bool SupportsRangeLocks() override {
+#ifdef DUCKDB_HAS_OFD_LOCKS
+		return true;
+#else
+		return false;
+#endif
+	}
+
+#ifdef DUCKDB_HAS_OFD_LOCKS
+	void LockRange(idx_t start, idx_t length, FileLockType type) override {
+		D_ASSERT(type != FileLockType::NO_LOCK);
+		auto fl = RangeLockStruct(type == FileLockType::READ_LOCK ? F_RDLCK : F_WRLCK, start, length);
+		while (fcntl(fd, F_OFD_SETLKW, &fl) == -1) {
+			if (errno != EINTR) {
+				throw IOException({{ "errno",
+					                 std::to_string(errno) }},
+				                  "Could not lock bytes %llu-%llu of file \"%s\": %s", start, start + length, path,
+				                  strerror(errno));
+			}
+		}
+	}
+
+	bool TryLockRange(idx_t start, idx_t length, FileLockType type) override {
+		D_ASSERT(type != FileLockType::NO_LOCK);
+		auto fl = RangeLockStruct(type == FileLockType::READ_LOCK ? F_RDLCK : F_WRLCK, start, length);
+		while (fcntl(fd, F_OFD_SETLK, &fl) == -1) {
+			if (errno == EAGAIN || errno == EACCES) {
+				return false;
+			}
+			if (errno != EINTR) {
+				throw IOException({{ "errno",
+					                 std::to_string(errno) }},
+				                  "Could not lock bytes %llu-%llu of file \"%s\": %s", start, start + length, path,
+				                  strerror(errno));
+			}
+		}
+		return true;
+	}
+
+	void UnlockRange(idx_t start, idx_t length) override {
+		auto fl = RangeLockStruct(F_UNLCK, start, length);
+		if (fcntl(fd, F_OFD_SETLK, &fl) == -1) {
+			throw IOException({{ "errno",
+				                 std::to_string(errno) }},
+			                  "Could not unlock bytes %llu-%llu of file \"%s\": %s", start, start + length, path,
+			                  strerror(errno));
+		}
+	}
+
+	bool RangeIsLocked(idx_t start, idx_t length) override {
+		auto fl = RangeLockStruct(F_WRLCK, start, length);
+		if (fcntl(fd, F_OFD_GETLK, &fl) == -1) {
+			throw IOException({{ "errno",
+				                 std::to_string(errno) }},
+			                  "Could not query locks on bytes %llu-%llu of file \"%s\": %s", start, start + length,
+			                  path, strerror(errno));
+		}
+		return fl.l_type != F_UNLCK;
+	}
+#endif
 
 	int fd;
 	optional_ptr<DatabaseInstance> db;
@@ -312,45 +390,106 @@ static void TryAcquireFileLock(FileSystem &fs, int fd, const string &path, FileO
 	fl.l_whence = SEEK_SET;
 	fl.l_start = 0;
 	fl.l_len = 0;
-	int rc = fcntl(fd, F_SETLK, &fl);
+	int set_command = F_SETLK;
+	int get_command = F_GETLK;
+	// snapshot readers must be visible to the writer, so they cannot proceed without a lock
+	bool require_lock = false;
+#ifdef DUCKDB_HAS_OFD_LOCKS
+	if (flags.DatabaseLock()) {
+		// OFD locks: a process-scoped lock would be dropped when any other handle to the file in this process closes
+		set_command = F_OFD_SETLK;
+		get_command = F_OFD_GETLK;
+		if (flags.Lock() == FileLockType::WRITE_LOCK) {
+			fl.l_start = DatabaseLockRange::WRITER_START;
+			fl.l_len = DatabaseLockRange::WRITER_LENGTH;
+		} else {
+			fl.l_start = DatabaseLockRange::READERS_START;
+			fl.l_len = DatabaseLockRange::READERS_LENGTH;
+			require_lock = true;
+		}
+	}
+#endif
+	int rc = fcntl(fd, set_command, &fl);
+#ifdef DUCKDB_HAS_OFD_LOCKS
+	// a writer holds the readers range while it rewrites blocks in place: wait for it instead of failing
+	while (rc == -1 && require_lock && (errno == EAGAIN || errno == EACCES)) {
+		auto holder = fl;
+		if (fcntl(fd, F_OFD_GETLK, &holder) == -1) {
+			errno = EAGAIN;
+			break;
+		}
+		bool writer_holds_readers_range = holder.l_type == F_WRLCK &&
+		                                  holder.l_start == static_cast<off_t>(DatabaseLockRange::READERS_START) &&
+		                                  holder.l_len == static_cast<off_t>(DatabaseLockRange::READERS_LENGTH);
+		if (holder.l_type != F_UNLCK && !writer_holds_readers_range) {
+			// e.g. a whole-file lock of an older version
+			errno = EAGAIN;
+			break;
+		}
+		if (writer_holds_readers_range) {
+			ThreadUtil::SleepMs(1);
+		}
+		rc = fcntl(fd, set_command, &fl);
+	}
+#endif
 	int retained_errno = errno;
 	bool has_error = rc == -1;
 	string extended_error;
 	if (has_error) {
 		if (retained_errno == ENOTSUP) {
-			if (flags.Lock() == FileLockType::READ_LOCK) {
+			if (flags.Lock() == FileLockType::READ_LOCK && !require_lock) {
 				// file lock not supported here; ignore for read-only
 				return;
 			}
 			extended_error = "File locks are not supported for this file system, cannot open the file in "
-			                 "read-write mode. Try opening the file in read-only mode";
+			                 "read-write or snapshot mode. Try opening the file in read-only mode";
 		}
 	}
 	if (!has_error) {
 		return;
 	}
 	if (extended_error.empty()) {
+		extended_error = StringUtil::Format("%s (errno %d)", strerror(retained_errno), retained_errno);
 		// who is holding the lock?
-		rc = fcntl(fd, F_GETLK, &fl);
+		rc = fcntl(fd, get_command, &fl);
 		if (rc == -1) {
-			extended_error = strerror(errno);
+			extended_error += ". Could not determine the lock holder: ";
+			extended_error += strerror(errno);
+		} else if (fl.l_type == F_UNLCK) {
+			extended_error += ". No conflicting lock was reported, the file system may not support locks reliably";
 		} else if (fl.l_pid == ProcessUtil::CurrentProcessId()) {
-			extended_error = "Lock is already held in current process, likely another DuckDB instance";
+			extended_error += ". Lock is already held in current process, likely another DuckDB instance";
+		} else if (fl.l_pid == -1) {
+			extended_error += ". Conflicting lock is held by another open handle to this file, likely another "
+			                  "DuckDB instance in this or another process";
+		} else if (fl.l_pid == 0) {
+			extended_error += ". Conflicting lock is held by a process that is not visible from here (PID 0), "
+			                  "e.g. on another host of a network file system or in another container";
 		} else {
 			auto process = ProcessUtil::GetProcessDescription(fs, fl.l_pid);
 			if (!process.empty()) {
-				extended_error = "Conflicting lock is held in " + process;
+				extended_error += ". Conflicting lock is held in " + process;
 			}
 		}
-		if (flags.Lock() == FileLockType::WRITE_LOCK) {
+		bool held_by_writer = rc != -1 && fl.l_type == F_WRLCK;
+		if (flags.Lock() == FileLockType::WRITE_LOCK && !held_by_writer) {
 			// could we get a read lock?
-			fl.l_type = F_RDLCK;
-			rc = fcntl(fd, F_SETLK, &fl);
+			struct flock read_fl;
+			memset(&read_fl, 0, sizeof read_fl);
+			read_fl.l_type = F_RDLCK;
+			read_fl.l_whence = SEEK_SET;
+			rc = fcntl(fd, F_SETLK, &read_fl);
 			if (rc != -1) {
 				extended_error += ". However, you would be able to open this database in read-only mode, e.g. by "
 				                  "using the -readonly parameter in the CLI";
 			}
 		}
+#ifdef DUCKDB_HAS_OFD_LOCKS
+		if (held_by_writer && !require_lock) {
+			extended_error += ". To read a snapshot of a database that is being written, attach it with "
+			                  "(READ_ONLY, SNAPSHOT)";
+		}
+#endif
 	}
 	CloseFileAndAppendError(fd, extended_error);
 	extended_error += ". See also https://duckdb.org/docs/current/connect/concurrency";

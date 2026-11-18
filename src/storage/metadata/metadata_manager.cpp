@@ -57,13 +57,26 @@ MetadataHandle MetadataManager::AllocateHandle() {
 	MetadataPointer pointer;
 	unique_lock<mutex> guard(block_lock);
 	block_id_t free_block = INVALID_BLOCK;
+	bool checked_in_place_writes = false;
+	bool in_place_writes = false;
 	for (auto &kv : blocks) {
 		auto &block = kv.second;
 		D_ASSERT(kv.first == block.block_id);
-		if (!block.free_blocks.empty()) {
-			free_block = kv.first;
-			break;
+		if (block.free_blocks.empty()) {
+			continue;
 		}
+		if (block.block->BlockId() < MAXIMUM_BLOCK) {
+			// the block is on disk: filling its free space rewrites it in place
+			if (!checked_in_place_writes) {
+				in_place_writes = block_manager.TryBeginInPlaceWrites();
+				checked_in_place_writes = true;
+			}
+			if (!in_place_writes) {
+				continue;
+			}
+		}
+		free_block = kv.first;
+		break;
 	}
 	guard.unlock();
 	if (free_block == INVALID_BLOCK || free_block > PeekNextBlockId()) {
