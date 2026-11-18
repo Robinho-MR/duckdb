@@ -1068,12 +1068,13 @@ static auto CV2TableGetFileRowNumberColumn(ClientContext &, optional_ptr<Functio
 
 //! The optimizer hands over the predicates it would otherwise evaluate above the scan; whatever the callback accepts
 //! is removed from the list, and the engine keeps applying the rest itself.
-static auto CV2TableFilterPushdown(ClientContext &context, LogicalGet &get, FunctionData *bind_data_p,
+static auto CV2TableFilterPushdown(ClientContext &context, LogicalGet &get,
+                                   optional_ptr<const FunctionData> bind_data_p,
                                    vector<unique_ptr<Expression>> &filters) -> void {
 	if (filters.empty()) {
 		return;
 	}
-	auto &bind_data = bind_data_p->Cast<CV2TableFunctionData>();
+	const auto &bind_data = bind_data_p->Cast<CV2TableFunctionData>();
 	const auto &info = *bind_data.info;
 
 	CV2TableFilterPushdownInfo args = {};
@@ -1095,14 +1096,18 @@ static auto CV2TableFilterPushdown(ClientContext &context, LogicalGet &get, Func
 	}
 
 	vector<unique_ptr<Expression>> remaining;
+	bool filters_accepted = false;
 	for (idx_t i = 0; i < filters.size(); i++) {
 		if (!args.out_handled[i]) {
 			remaining.push_back(std::move(filters[i]));
 		} else {
-			bind_data.filters_accepted = true;
+			filters_accepted = true;
 		}
 	}
 	filters = std::move(remaining);
+	if (filters_accepted) {
+		get.bind_data.write().Cast<CV2TableFunctionData>().filters_accepted = true;
+	}
 }
 
 //! Batch index is required on every call, even when unrequested: the pipeline range-checks it regardless.
