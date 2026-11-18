@@ -1745,6 +1745,10 @@ typedef struct {
 	(duckdb_v2_memory_reservation_handle reservation, idx_t *size, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_memory_reservation_resize)
 	(duckdb_v2_memory_reservation_handle reservation, idx_t size, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_instance_open_shared)
+	(duckdb_v2_environment_handle env, const char *path, idx_t path_length, const char **option_names,
+	 const idx_t *option_names_lengths, const char **option_values, const idx_t *option_values_lengths,
+	 idx_t option_count, duckdb_v2_instance_handle *out_instance, duckdb_v2_error_info_handle *err);
 #endif
 	// capigen:end appended
 } duckdb_ext_api_v2;
@@ -3987,6 +3991,9 @@ typedef struct {
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_memory_reservation_resize duckdb_ext_api.duckdb_v2_memory_reservation_resize
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_instance_open_shared duckdb_ext_api.duckdb_v2_instance_open_shared
 #endif
 // capigen:end appended
 #endif // DUCKDB_BUILD_STATIC_EXTENSION
