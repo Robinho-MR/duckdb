@@ -416,7 +416,7 @@ static auto CV2CopyToBind(ClientContext &context, CopyFunctionBindInput &input, 
 }
 
 static auto CV2CopyToPropagateStatistics(CopyToPropagateStatsInput &input) -> void {
-	auto &data = input.bind_data.Cast<CV2CopyFunctionData>();
+	const auto &data = input.bind_data->Cast<CV2CopyFunctionData>();
 	const auto &info = GetFunctionInfo(data);
 	if (input.column_stats.size() != data.to_types.size()) {
 		return;
@@ -455,7 +455,7 @@ static auto CV2CopyListOptions(ClientContext &context, CopyOptionsInput &input) 
 	}
 }
 
-static auto CV2CopyToBatchSize(ClientContext &context, FunctionData &bind_data) -> optional_idx {
+static auto CV2CopyToBatchSize(ClientContext &context, const FunctionData &bind_data) -> optional_idx {
 	const auto &info = GetFunctionInfo(bind_data);
 
 	CV2CopyToBatchSizeInfo args = {};
@@ -476,7 +476,7 @@ static auto CV2CopyToBatchSize(ClientContext &context, FunctionData &bind_data) 
 	return args.out_target;
 }
 
-static auto CV2CopyToInitGlobal(ClientContext &context, FunctionData &bind_data, const string &file_path)
+static auto CV2CopyToInitGlobal(ClientContext &context, const FunctionData &bind_data, const string &file_path)
     -> unique_ptr<GlobalFunctionData> {
 	const auto &info = GetFunctionInfo(bind_data);
 
@@ -505,7 +505,7 @@ static auto CV2CopyToInitGlobal(ClientContext &context, FunctionData &bind_data,
 	return std::move(result);
 }
 
-static auto CV2CopyToPrepareBatch(ClientContext &context, FunctionData &bind_data, GlobalFunctionData &gstate,
+static auto CV2CopyToPrepareBatch(ClientContext &context, const FunctionData &bind_data, GlobalFunctionData &gstate,
                                   unique_ptr<ColumnDataCollection> collection) -> unique_ptr<PreparedBatchData> {
 	const auto &info = GetFunctionInfo(bind_data);
 
@@ -532,7 +532,7 @@ static auto CV2CopyToPrepareBatch(ClientContext &context, FunctionData &bind_dat
 	return std::move(result);
 }
 
-static auto CV2CopyToFlushBatch(ClientContext &context, FunctionData &bind_data, GlobalFunctionData &gstate,
+static auto CV2CopyToFlushBatch(ClientContext &context, const FunctionData &bind_data, GlobalFunctionData &gstate,
                                 PreparedBatchData &batch) -> void {
 	const auto &info = GetFunctionInfo(bind_data);
 
@@ -552,8 +552,8 @@ static auto CV2CopyToFlushBatch(ClientContext &context, FunctionData &bind_data,
 	}
 }
 
-static auto CV2CopyToReportStatistics(ClientContext &context, FunctionData &bind_data, CV2CopyToGlobalState &gstate)
-    -> void {
+static auto CV2CopyToReportStatistics(ClientContext &context, const FunctionData &bind_data,
+                                      CV2CopyToGlobalState &gstate) -> void {
 	const auto &info = GetFunctionInfo(bind_data);
 
 	CV2CopyToStatisticsInfo args = {};
@@ -573,7 +573,8 @@ static auto CV2CopyToReportStatistics(ClientContext &context, FunctionData &bind
 	gstate.written_statistics->file_size_bytes = args.out_file_size_bytes;
 }
 
-static auto CV2CopyToFinalize(ClientContext &context, FunctionData &bind_data, GlobalFunctionData &gstate_p) -> void {
+static auto CV2CopyToFinalize(ClientContext &context, const FunctionData &bind_data, GlobalFunctionData &gstate_p)
+    -> void {
 	const auto &info = GetFunctionInfo(bind_data);
 	auto &gstate = gstate_p.Cast<CV2CopyToGlobalState>();
 
@@ -600,8 +601,8 @@ static auto CV2CopyToFinalize(ClientContext &context, FunctionData &bind_data, G
 }
 
 //! The engine asks where to report the statistics of a file right after creating it, before anything is written to it
-static auto CV2CopyToGetWrittenStatistics(ClientContext &context, FunctionData &bind_data, GlobalFunctionData &gstate,
-                                          CopyFunctionFileStatistics &statistics) -> void {
+static auto CV2CopyToGetWrittenStatistics(ClientContext &context, const FunctionData &bind_data,
+                                          GlobalFunctionData &gstate, CopyFunctionFileStatistics &statistics) -> void {
 	gstate.Cast<CV2CopyToGlobalState>().written_statistics = &statistics;
 }
 
@@ -611,11 +612,12 @@ static auto CV2CopyToGetWrittenStatistics(ClientContext &context, FunctionData &
 // COPY TO itself drives the function through its batch interface. These hooks serve callers that write a file through
 // the copy function directly, sinking chunks into it one at a time - every chunk is written as a batch of its own.
 
-static auto CV2CopyToInitLocal(ExecutionContext &context, FunctionData &bind_data) -> unique_ptr<LocalFunctionData> {
+static auto CV2CopyToInitLocal(ExecutionContext &context, const FunctionData &bind_data)
+    -> unique_ptr<LocalFunctionData> {
 	return make_uniq<CV2CopyToLocalState>();
 }
 
-static auto CV2CopyToSink(ExecutionContext &context, FunctionData &bind_data, GlobalFunctionData &gstate,
+static auto CV2CopyToSink(ExecutionContext &context, const FunctionData &bind_data, GlobalFunctionData &gstate,
                           LocalFunctionData &lstate, DataChunk &input) -> void {
 	if (input.size() == 0) {
 		return;
@@ -628,7 +630,7 @@ static auto CV2CopyToSink(ExecutionContext &context, FunctionData &bind_data, Gl
 	CV2CopyToFlushBatch(context.client, bind_data, gstate, *prepared);
 }
 
-static auto CV2CopyToCombine(ExecutionContext &context, FunctionData &bind_data, GlobalFunctionData &gstate,
+static auto CV2CopyToCombine(ExecutionContext &context, const FunctionData &bind_data, GlobalFunctionData &gstate,
                              LocalFunctionData &lstate) -> void {
 }
 
