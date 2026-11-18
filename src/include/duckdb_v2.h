@@ -3940,6 +3940,60 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_instance_create_with_options(
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
+ * Opens the database file at `path` in an instance shared through the environment: a new handle to the instance that
+ * already has the file open, or else to a new instance, created with the startup options, with the file attached as its
+ * default database.
+ *
+ * Every call for the same file returns a new handle to the same instance, so connections created from any of them see
+ * the same database. The file is identified by its absolute path, as DuckDB resolves it. Destroy each handle via
+ * `duckdb_v2_instance_destroy()`; the instance is destroyed once the last handle and the last connection on it are, and
+ * a call for the same file meanwhile waits for it to be, rather than opening the file again while it is being closed.
+ *
+ * An existing instance is shared only when it was created with the same startup options, compared as written: an option
+ * given under an alias, or a value written differently, counts as a different configuration, as for
+ * `duckdb_get_or_create_from_cache` in the V1 API. Otherwise ERROR_RESOURCE_IN_USE is returned. `:memory:` or an empty
+ * view opens a new in-memory instance on every call, which is never shared; a named in-memory database such as
+ * `:memory:name` is shared like a file. The startup options are those of `duckdb_v2_instance_create_with_options()`,
+ * with the same restrictions.
+ *
+ * A file that an instance of the environment attached with `duckdb_v2_instance_attach()` is not shared, and opening it
+ * returns an error like a second `duckdb_v2_instance_attach()` would; nor can a file opened here be attached to another
+ * instance. `duckdb_v2_instance_attach()`, `duckdb_v2_instance_detach()` and `duckdb_v2_instance_set_default()` on a
+ * shared handle change the instance for every handle to it.
+ *
+ * A client cannot compose this from the other functions: telling that two paths name the same file as DuckDB resolves
+ * it, and waiting for an instance whose last handle and connection were just destroyed to finish closing its files,
+ * both need the engine.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param env The environment the instance is shared through.
+ * @param path Path to the database file, or `:memory:` / an empty view for a new in-memory database.
+ * @param path_length The length of `path` in bytes. `path` need not be null-terminated and may be NULL only when this
+ * is 0.
+ * @param option_names Optional. An array of option_count option names (canonical or alias). Pass NULL when option_count
+ * is 0.
+ * @param option_names_lengths Byte lengths of the entries in `option_names`; element i is the length of
+ * `option_names[i]`. May be NULL only when `option_names` is NULL.
+ * @param option_values Optional. An array of option_count values, parallel to option_names, in the textual form SQL
+ * `SET` accepts. Pass NULL when option_count is 0.
+ * @param option_values_lengths Byte lengths of the entries in `option_values`; element i is the length of
+ * `option_values[i]`. May be NULL only when `option_values` is NULL.
+ * @param option_count The number of startup options.
+ * @param out_instance Receives a new handle to the shared instance.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_instance_open_shared(
+    duckdb_v2_environment_handle env, const char *path, idx_t path_length, const char **option_names,
+    const idx_t *option_names_lengths, const char **option_values, const idx_t *option_values_lengths,
+    idx_t option_count, duckdb_v2_instance_handle *out_instance, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
  * Destroys the instance handle.
  *
  * Always succeeds. Every attached database is closed with the instance. The instance itself stays alive for as long as
@@ -13459,6 +13513,15 @@ typedef struct _duckdb_v2_table_function_get_bind_info_info {
 } * duckdb_v2_table_function_get_bind_info_info_handle;
 
 /*!
+ * A borrowed opaque handle to the arguments supplied to a table function when the query optimizer asks for the
+ * partitions of a bound call. The "partition stats" callback receives this handle and can use it to report the
+ * partitions the scan reads - e.g. the row groups or stripes of a file - and how many rows each holds.
+ */
+typedef struct _duckdb_v2_table_function_partition_stats_info {
+	void *internal_ptr;
+} * duckdb_v2_table_function_partition_stats_info_handle;
+
+/*!
  * An owned opaque handle to a multi-file table function being built. A multi-file function wraps an already registered
  * table function that reads a single file, and adds everything that is needed to read many files at once on top of it:
  * globbing, lists of files, hive partitioning, the `filename` column, `union_by_name` and the like. Created with
@@ -13523,6 +13586,10 @@ typedef void (*duckdb_v2_table_function_get_bind_info_callback_fn)(
 typedef void (*duckdb_v2_table_function_stats_callback_fn)(duckdb_v2_table_function_stats_info_handle info,
                                                            duckdb_v2_context_handle context,
                                                            duckdb_v2_error_info_handle *err);
+
+typedef void (*duckdb_v2_table_function_partition_stats_callback_fn)(
+    duckdb_v2_table_function_partition_stats_info_handle info, duckdb_v2_context_handle context,
+    duckdb_v2_error_info_handle *err);
 
 /* --- Functions for table --- */
 
@@ -15391,6 +15458,93 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_get_bind_info_set_column_i
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_get_bind_info_set_option(
     duckdb_v2_table_function_get_bind_info_info_handle info, const char *key, idx_t key_length,
     duckdb_v2_value_handle value, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the optional "partition stats" callback of the table function.
+ *
+ * The query optimizer invokes the callback with the bind data of a bound call, before execution starts, to learn how
+ * many rows the scan produces without running it. The callback reports the partitions of the scan, e.g. the row groups
+ * or stripes of the file it reads, in scan order, with `duckdb_v2_table_function_partition_stats_add_partition()`. When
+ * every partition reports an exact row count, the optimizer answers e.g. `SELECT count(*)` of the whole call from their
+ * sum, without scanning. Reporting no partitions, or leaving the callback unset, tells the optimizer nothing.
+ *
+ * The counts must be those of the rows the call produces: a count that differs from what the scan then produces leads
+ * to wrong results. The engine applies the filters and samples of the query itself, so the callback reports the rows
+ * before them; it is not invoked for a call that accepted a predicate through the filter pushdown callback (see
+ * `duckdb_v2_table_function_set_filter_pushdown_callback()`), whose rows the engine can no longer count. A function
+ * wrapped in a multi-file function is asked about the file of a scan of a single file. The callback may be invoked more
+ * than once for the same bind data, so it should only report what the bind already determined.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the callback of.
+ * @param callback The "partition stats" callback to set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_set_partition_stats_callback(
+    duckdb_v2_table_function_handle function, duckdb_v2_table_function_partition_stats_callback_fn callback,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the user data set via `duckdb_v2_table_function_set_user_data()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The partition stats info handle.
+ * @param data Receives the user data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_partition_stats_get_user_data(
+    duckdb_v2_table_function_partition_stats_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the bind data the function's bind callback set for the bound call being described.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The partition stats info handle.
+ * @param data Receives the bind data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_partition_stats_get_bind_data(
+    duckdb_v2_table_function_partition_stats_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Reports the next partition of the scan, in scan order, and how many rows it holds.
+ *
+ * An exact count is a promise that the partition produces exactly that many rows; an estimate lets the optimizer plan
+ * with the count, but not answer a query from it.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The partition stats info handle.
+ * @param row_count The number of rows of the partition.
+ * @param is_exact Whether the count is exact, rather than an estimate.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_partition_stats_add_partition(
+    duckdb_v2_table_function_partition_stats_info_handle info, idx_t row_count, bool is_exact,
+    duckdb_v2_error_info_handle *err);
 #endif
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE

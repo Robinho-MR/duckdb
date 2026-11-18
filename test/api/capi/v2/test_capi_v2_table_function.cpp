@@ -2338,4 +2338,31 @@ TEST_CASE("V2 table: virtual column and metrics arguments", "[capi_v2][table_fun
 	        DUCKDB_V2_ERROR_INPUT_INVALID);
 }
 
+namespace {
+
+void NoPartitionStatsCb(duckdb_v2_table_function_partition_stats_info_handle, duckdb_v2_context_handle,
+                        duckdb_v2_error_info_handle *) {
+}
+
+} // namespace
+
+TEST_CASE("V2 table: partition stats arguments", "[capi_v2][table_function]") {
+	EnvFixture fx;
+	auto function = MakeTable(fx.conn, "partition_stats_arguments");
+	REQUIRE(duckdb_v2_table_function_set_partition_stats_callback(function, NoPartitionStatsCb, nullptr) ==
+	        DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_table_function_set_partition_stats_callback(function, nullptr, nullptr) == DUCKDB_V2_ERROR_NONE);
+	duckdb_v2_table_function_destroy(&function);
+
+	void *data = nullptr;
+	REQUIRE(duckdb_v2_table_function_set_partition_stats_callback(nullptr, NoPartitionStatsCb, nullptr) ==
+	        DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_table_function_partition_stats_get_user_data(nullptr, &data, nullptr) ==
+	        DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_table_function_partition_stats_get_bind_data(nullptr, &data, nullptr) ==
+	        DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_table_function_partition_stats_add_partition(nullptr, 10, true, nullptr) ==
+	        DUCKDB_V2_ERROR_INPUT_INVALID);
+}
+
 } // namespace test_capi_v2

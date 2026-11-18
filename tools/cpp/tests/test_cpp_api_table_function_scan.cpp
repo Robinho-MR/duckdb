@@ -673,3 +673,157 @@ TEST_CASE("Stable C++API: multi-file function uses the stats callback of its tab
 
 	std::filesystem::remove_all(directory);
 }
+
+namespace {
+
+// cpp_partitioned(n): cpp_hint's rows, reported as partitions of 5 rows each
+std::atomic<idx_t> partitioned_exec_calls {0};
+std::atomic<idx_t> partition_stats_calls {0};
+
+void PartitionedExec(TableFunction::ExecInput &input) {
+	partitioned_exec_calls++;
+	HintExec(input);
+}
+
+void ReportPartitions(TableFunction::PartitionStatsInput &input, bool is_exact) {
+	partition_stats_calls++;
+	auto remaining = static_cast<idx_t>(input.GetBindData<HintBind>().count);
+	while (remaining > 0) {
+		const auto rows = std::min<idx_t>(remaining, 5);
+		input.AddPartition(rows, is_exact);
+		remaining -= rows;
+	}
+}
+
+void ExactPartitions(TableFunction::PartitionStatsInput &input) {
+	ReportPartitions(input, true);
+}
+
+void EstimatedPartitions(TableFunction::PartitionStatsInput &input) {
+	ReportPartitions(input, false);
+}
+
+void FailingPartitions(TableFunction::PartitionStatsInput &) {
+	throw InvalidInputException("cannot count the partitions");
+}
+
+// Accepts every predicate, which it then ignores: only the rows it produces matter to the test
+void AcceptAllFilters(TableFunction::FilterPushdownInput &input) {
+	for (idx_t i = 0; i < input.GetFilterCount(); i++) {
+		input.Accept(i);
+	}
+}
+
+void RegisterPartitioned(Connection &conn, const std::string &name, TableFunction::PartitionStatsCallback callback,
+                         TableFunction::FilterPushdownCallback filter_pushdown = nullptr) {
+	auto &factory = conn.GetFactory();
+	auto function = TableFunction::Create(factory);
+	function.SetName(name);
+	function.GetSignature().AddParameter("n", factory.ParseType("BIGINT"));
+	function.SetBindCallback(HintBindFunction)
+	    .SetInitGlobalCallback(HintInitGlobal)
+	    .SetExecCallback(PartitionedExec)
+	    .SetPartitionStatsCallback(callback);
+	if (filter_pushdown) {
+		function.SetFilterPushdownCallback(filter_pushdown);
+	}
+	conn.Register(function);
+}
+
+void LinesPartitions(TableFunction::PartitionStatsInput &input) {
+	partition_stats_calls++;
+	input.AddPartition(input.GetBindData<LinesBind>().lines.size());
+}
+
+} // namespace
+
+TEST_CASE("Stable C++API: table function partition stats answer count(*)", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	RegisterPartitioned(conn, "cpp_partitioned", ExactPartitions);
+	RegisterPartitioned(conn, "cpp_partitioned_estimate", EstimatedPartitions);
+	RegisterPartitioned(conn, "cpp_partitioned_fails", FailingPartitions);
+	RegisterPartitioned(conn, "cpp_partitioned_filtered", ExactPartitions, AcceptAllFilters);
+
+	auto count = [&](const std::string &sql) {
+		partitioned_exec_calls = 0;
+		partition_stats_calls = 0;
+		return CollectBigints(conn.Execute(sql));
+	};
+
+	// Exact counts answer count(*) without a scan
+	REQUIRE(count("SELECT count(*) FROM cpp_partitioned(12)") == std::vector<int64_t> {12});
+	REQUIRE(partition_stats_calls > 0);
+	REQUIRE(partitioned_exec_calls == 0);
+	// No partitions tell the optimizer nothing
+	REQUIRE(count("SELECT count(*) FROM cpp_partitioned(0)") == std::vector<int64_t> {0});
+	REQUIRE(partitioned_exec_calls > 0);
+
+	// A filter or a sample the engine applies needs the rows
+	REQUIRE(count("SELECT count(*) FROM cpp_partitioned(12) WHERE i < 4") == std::vector<int64_t> {4});
+	REQUIRE(partitioned_exec_calls > 0);
+	REQUIRE(count("SELECT count(i) FROM cpp_partitioned(12)") == std::vector<int64_t> {12});
+	REQUIRE(partitioned_exec_calls > 0);
+
+	// Estimates do not answer a query
+	REQUIRE(count("SELECT count(*) FROM cpp_partitioned_estimate(12)") == std::vector<int64_t> {12});
+	REQUIRE(partitioned_exec_calls > 0);
+
+	// Not asked once the function applies a predicate itself: the counts would not account for it
+	REQUIRE(count("SELECT count(*) FROM cpp_partitioned_filtered(12) WHERE i < 4") == std::vector<int64_t> {12});
+	REQUIRE(partition_stats_calls == 0);
+	REQUIRE(partitioned_exec_calls > 0);
+	REQUIRE(count("SELECT count(*) FROM cpp_partitioned_filtered(12)") == std::vector<int64_t> {12});
+	REQUIRE(partitioned_exec_calls == 0);
+
+	// The errors of the callback fail the query
+	REQUIRE_THROWS_WITH(conn.Execute("SELECT count(*) FROM cpp_partitioned_fails(3)").Drain(),
+	                    Catch::Contains("cannot count the partitions"));
+	REQUIRE(count("SELECT i FROM cpp_partitioned_fails(2) ORDER BY i") == std::vector<int64_t> {0, 1});
+}
+
+TEST_CASE("Stable C++API: multi-file function uses the partition stats of a single file", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	auto &factory = conn.GetFactory();
+
+	const auto directory = std::filesystem::temp_directory_path() / "cpp_api_partition_stats";
+	std::filesystem::create_directories(directory);
+	const auto first = (directory / "a.lines").string();
+	const auto second = (directory / "b.lines").string();
+	std::ofstream(first) << "x is a long line\ny is a long line\nz is a long line\n";
+	std::ofstream(second) << "p is a long line\nq is a long line\n";
+
+	auto single = TableFunction::Create(factory);
+	single.SetName("cpp_lines_partitions");
+	single.GetSignature().AddParameter("file", factory.CreateType(LogicalTypeId::ANY));
+	single.SetBindCallback(LinesBindFunction)
+	    .SetInitGlobalCallback(LinesInitGlobal)
+	    .SetExecCallback(LinesExec)
+	    .SetProjectionPushdown(true)
+	    .SetPartitionStatsCallback(LinesPartitions);
+	conn.Register(single);
+
+	auto multi = MultiFileFunction::Create(factory);
+	multi.SetName("cpp_read_lines_partitions")
+	    .SetSingleFileFunction("cpp_lines_partitions")
+	    .SetReaderType("Lines")
+	    .SetFileExtension("lines");
+	conn.Register(multi);
+
+	auto count = [&](const std::string &files) {
+		lines_exec_calls = 0;
+		partition_stats_calls = 0;
+		return CollectBigints(conn.Execute("SELECT count(*) FROM cpp_read_lines_partitions(" + files + ")"));
+	};
+
+	REQUIRE(count("'" + first + "'") == std::vector<int64_t> {3});
+	REQUIRE(partition_stats_calls > 0);
+	REQUIRE(lines_exec_calls == 0);
+
+	// A scan of several files reads them
+	REQUIRE(count("['" + first + "', '" + second + "']") == std::vector<int64_t> {5});
+	REQUIRE(lines_exec_calls > 0);
+
+	std::filesystem::remove_all(directory);
+}

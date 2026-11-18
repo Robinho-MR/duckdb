@@ -605,6 +605,25 @@ Instance::Instance(Environment &env, const std::string &path, const StartupOptio
 	Attach(path, true);
 }
 
+auto Instance::OpenShared(const std::string &path, const StartupOptions &options) -> Instance {
+	return OpenShared(Environment::Default(), path, options);
+}
+
+auto Instance::OpenShared(Environment &env, const std::string &path, const StartupOptions &options) -> Instance {
+	auto pairs = StartupOptionPairs(options);
+	StringArrays names(pairs.size());
+	StringArrays values(pairs.size());
+	for (auto &[name, value] : pairs) {
+		names.Push(name);
+		values.Push(value);
+	}
+	auto path_str = ToStr(path);
+	duckdb_v2_instance_handle instance = nullptr;
+	CheckedAPICall(duckdb_v2_instance_open_shared, env.handle(), path_str.data(), path_str.size(), names.ptrs(),
+	               names.lengths(), values.ptrs(), values.lengths(), static_cast<idx_t>(pairs.size()), &instance);
+	return Instance(instance);
+}
+
 //---------------------------------------------------------------------------
 // Custom Option
 //---------------------------------------------------------------------------
@@ -4290,6 +4309,7 @@ struct TableFunctionInfo {
 	TableFunction::GetBindInfoCallback get_bind_info_callback = nullptr;
 	TableFunction::StatsCallback stats_callback = nullptr;
 	TableFunction::MetricsCallback metrics_callback = nullptr;
+	TableFunction::PartitionStatsCallback partition_stats_callback = nullptr;
 	detail::UserData user_data;
 
 	TableFunctionInfo(TableFunction::BindCallback bind_callback, TableFunction::InitGlobalCallback init_global_callback,
@@ -4301,13 +4321,14 @@ struct TableFunctionInfo {
 	                  TableFunction::ClaimBatchCallback claim_batch_callback,
 	                  TableFunction::GetBindInfoCallback get_bind_info_callback,
 	                  TableFunction::StatsCallback stats_callback, TableFunction::MetricsCallback metrics_callback,
-	                  detail::UserData user_data)
+	                  TableFunction::PartitionStatsCallback partition_stats_callback, detail::UserData user_data)
 	    : bind_callback(bind_callback), init_global_callback(init_global_callback),
 	      init_local_callback(init_local_callback), exec_callback(exec_callback), progress_callback(progress_callback),
 	      filter_pushdown_callback(filter_pushdown_callback), partition_data_callback(partition_data_callback),
 	      partitioning_callback(partitioning_callback), claim_batch_callback(claim_batch_callback),
 	      get_bind_info_callback(get_bind_info_callback), stats_callback(stats_callback),
-	      metrics_callback(metrics_callback), user_data(std::move(user_data)) {
+	      metrics_callback(metrics_callback), partition_stats_callback(partition_stats_callback),
+	      user_data(std::move(user_data)) {
 	}
 
 	bool operator==(const TableFunctionInfo &other) const {
@@ -4319,7 +4340,8 @@ struct TableFunctionInfo {
 		       partitioning_callback == other.partitioning_callback &&
 		       claim_batch_callback == other.claim_batch_callback &&
 		       get_bind_info_callback == other.get_bind_info_callback && stats_callback == other.stats_callback &&
-		       metrics_callback == other.metrics_callback && user_data.get() == other.user_data.get();
+		       metrics_callback == other.metrics_callback &&
+		       partition_stats_callback == other.partition_stats_callback && user_data.get() == other.user_data.get();
 	}
 };
 
@@ -4728,13 +4750,38 @@ auto TableFunction::SetMetricsCallback(MetricsCallback callback) & -> TableFunct
 	return *this;
 }
 
+auto TableFunction::SetPartitionStatsCallback(PartitionStatsCallback callback) & -> TableFunction & {
+	if (!callback) {
+		CheckedAPICall(duckdb_v2_table_function_set_partition_stats_callback, handle(), nullptr);
+		partition_stats_callback = nullptr;
+		return *this;
+	}
+
+	static auto trampoline = [](duckdb_v2_table_function_partition_stats_info_handle info,
+	                            duckdb_v2_context_handle context, duckdb_v2_error_info_handle *err) {
+		WithExceptionGuard(err, [&]() {
+			void *user_data = nullptr;
+			CheckedAPICall(duckdb_v2_table_function_partition_stats_get_user_data, info, &user_data);
+			const auto &function = *static_cast<TableFunctionInfo *>(user_data);
+
+			auto input = detail::HandleFactory::Make<PartitionStatsInput>(static_cast<void *>(info),
+			                                                              static_cast<void *>(context));
+			function.partition_stats_callback(input);
+		});
+	};
+
+	CheckedAPICall(duckdb_v2_table_function_set_partition_stats_callback, handle(), trampoline);
+	partition_stats_callback = callback;
+	return *this;
+}
+
 auto TableFunction::PrepareRegistration() -> void {
 	// The callback table rides the C user_data slot so the trampolines can find
 	// it; the user's own data (SetUserData, moved out here) rides inside it.
 	auto info = std::unique_ptr<TableFunctionInfo>(new TableFunctionInfo(
 	    bind_callback, init_global_callback, init_local_callback, exec_callback, progress_callback,
 	    filter_pushdown_callback, partition_data_callback, partitioning_callback, claim_batch_callback,
-	    get_bind_info_callback, stats_callback, metrics_callback, std::move(user_data)));
+	    get_bind_info_callback, stats_callback, metrics_callback, partition_stats_callback, std::move(user_data)));
 	duckdb_v2_opaque opaque {info.get(), detail::TypedDelete<TableFunctionInfo>,
 	                         detail::TypedEquals<TableFunctionInfo>};
 	CheckedAPICall(duckdb_v2_table_function_set_user_data, handle(), &opaque);
@@ -5235,6 +5282,30 @@ auto TableFunction::ClaimBatchInput::GetContext() -> Context & {
 }
 
 auto TableFunction::GetBindInfoInput::GetContext() -> Context & {
+	return context;
+}
+
+void *TableFunction::PartitionStatsInput::GetBindDataInternal() const {
+	void *bind_data = nullptr;
+	CheckedAPICall(duckdb_v2_table_function_partition_stats_get_bind_data,
+	               static_cast<duckdb_v2_table_function_partition_stats_info_handle>(args), &bind_data);
+	return RequireTableBindData(bind_data);
+}
+
+void *TableFunction::PartitionStatsInput::GetUserDataInternal() const {
+	void *user_data = nullptr;
+	CheckedAPICall(duckdb_v2_table_function_partition_stats_get_user_data,
+	               static_cast<duckdb_v2_table_function_partition_stats_info_handle>(args), &user_data);
+	const auto &function = *static_cast<const TableFunctionInfo *>(user_data);
+	return RequireTableUserData(function.user_data);
+}
+
+auto TableFunction::PartitionStatsInput::AddPartition(idx_t row_count, bool is_exact) -> void {
+	CheckedAPICall(duckdb_v2_table_function_partition_stats_add_partition,
+	               static_cast<duckdb_v2_table_function_partition_stats_info_handle>(args), row_count, is_exact);
+}
+
+auto TableFunction::PartitionStatsInput::GetContext() -> Context & {
 	return context;
 }
 
