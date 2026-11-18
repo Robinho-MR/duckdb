@@ -1607,6 +1607,21 @@ typedef struct {
 	DUCKDB_V2_ERROR(*duckdb_v2_table_function_set_combine_schema_callback)
 	(duckdb_v2_table_function_handle function, duckdb_v2_table_function_combine_schema_callback_fn callback,
 	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_aggregate_function_get_generic_property)
+	(duckdb_v2_aggregate_function_handle function, const char *name, idx_t name_length,
+	 duckdb_v2_value_handle *out_value, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_aggregate_function_set_generic_property)
+	(duckdb_v2_aggregate_function_handle function, const char *name, idx_t name_length, duckdb_v2_value_handle value,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_get_generic_property)
+	(duckdb_v2_scalar_function_handle function, const char *name, idx_t name_length, duckdb_v2_value_handle *out_value,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_set_generic_property)
+	(duckdb_v2_scalar_function_handle function, const char *name, idx_t name_length, duckdb_v2_value_handle value,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_set_schema)
+	(duckdb_v2_scalar_function_handle function, const char *schema, idx_t schema_length,
+	 duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_context_reserve_memory)
 	(duckdb_v2_context_handle context, idx_t size, duckdb_v2_memory_reservation_handle *reservation,
 	 duckdb_v2_error_info_handle *err);
@@ -2396,6 +2411,11 @@ inline duckdb_ext_api_v2 CreateAPIv2(void) {
 	result.duckdb_v2_table_function_combine_schema_set_bind_data =
 	    duckdb_v2_table_function_combine_schema_set_bind_data;
 	result.duckdb_v2_table_function_set_combine_schema_callback = duckdb_v2_table_function_set_combine_schema_callback;
+	result.duckdb_v2_aggregate_function_get_generic_property = duckdb_v2_aggregate_function_get_generic_property;
+	result.duckdb_v2_aggregate_function_set_generic_property = duckdb_v2_aggregate_function_set_generic_property;
+	result.duckdb_v2_scalar_function_get_generic_property = duckdb_v2_scalar_function_get_generic_property;
+	result.duckdb_v2_scalar_function_set_generic_property = duckdb_v2_scalar_function_set_generic_property;
+	result.duckdb_v2_scalar_function_set_schema = duckdb_v2_scalar_function_set_schema;
 	result.duckdb_v2_context_reserve_memory = duckdb_v2_context_reserve_memory;
 	result.duckdb_v2_copy_to_file_size_get_bind_data = duckdb_v2_copy_to_file_size_get_bind_data;
 	result.duckdb_v2_copy_to_file_size_get_init_data = duckdb_v2_copy_to_file_size_get_init_data;
