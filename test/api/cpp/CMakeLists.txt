@@ -21,7 +21,9 @@ add_library(
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_custom_option.cpp
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_file_system.cpp
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_log_sink.cpp
+  ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_memory.cpp
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_query_metrics.cpp
+  ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_multi_file_function.cpp
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_pragma_function.cpp
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_prepared_statement.cpp
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_query.cpp
@@ -29,6 +31,7 @@ add_library(
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_scalar_function.cpp
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_stats.cpp
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_table_function.cpp
+  ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_table_function_in_out.cpp
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_table_function_scan.cpp
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_tokenizer.cpp
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_types_values.cpp

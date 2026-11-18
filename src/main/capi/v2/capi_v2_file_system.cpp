@@ -1,5 +1,6 @@
 #include "duckdb/main/capi_v2/capi_v2_internal.hpp"
 
+#include "duckdb/common/exception.hpp"
 #include "duckdb/common/file_open_flags.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/open_file_info.hpp"
@@ -154,6 +155,30 @@ DUCKDB_V2_ERROR duckdb_v2_file_open_options_set_value(duckdb_v2_file_open_option
 			throw duckdb::InvalidInputException("A file option name cannot be empty.");
 		}
 		Convert(options)->Options()[key] = *Convert(value);
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_file_open_options_set_compression(duckdb_v2_file_open_options_handle options,
+                                                            DUCKDB_V2_FILE_COMPRESSION compression,
+                                                            duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(options);
+	return WithErrorHandler(err, [&]() {
+		switch (compression) {
+		case DUCKDB_V2_FILE_COMPRESSION_AUTO_DETECT:
+			Convert(options)->flags.SetCompression(duckdb::FileCompressionType::AUTO_DETECT);
+			break;
+		case DUCKDB_V2_FILE_COMPRESSION_NONE:
+			Convert(options)->flags.SetCompression(duckdb::FileCompressionType::UNCOMPRESSED);
+			break;
+		case DUCKDB_V2_FILE_COMPRESSION_GZIP:
+			Convert(options)->flags.SetCompression(duckdb::FileCompressionType::GZIP);
+			break;
+		case DUCKDB_V2_FILE_COMPRESSION_ZSTD:
+			Convert(options)->flags.SetCompression(duckdb::FileCompressionType::ZSTD);
+			break;
+		default:
+			throw duckdb::InvalidInputException("'%d' is not a file compression.", static_cast<int>(compression));
+		}
 	});
 }
 
@@ -335,6 +360,21 @@ DUCKDB_V2_ERROR duckdb_v2_file_tell(duckdb_v2_file_handle file, idx_t *position,
 	DUCKDB_CHECK_ARG(file);
 	DUCKDB_CHECK_ARG(position);
 	return WithErrorHandler(err, [&]() { *position = Convert(file)->Handle().SeekPosition(); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_file_get_progress(duckdb_v2_file_handle file, idx_t *progress,
+                                            duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(file);
+	DUCKDB_CHECK_ARG(progress);
+	return WithErrorHandler(err, [&]() {
+		auto &handle = Convert(file)->Handle();
+		try {
+			*progress = handle.GetProgress();
+		} catch (duckdb::NotImplementedException &) {
+			// only compressed files track the stored bytes they consumed
+			*progress = handle.SeekPosition();
+		}
+	});
 }
 
 DUCKDB_V2_ERROR duckdb_v2_file_size(duckdb_v2_file_handle file, idx_t *size, duckdb_v2_error_info_handle *err) {

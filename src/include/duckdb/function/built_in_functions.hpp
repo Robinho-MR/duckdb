@@ -61,6 +61,9 @@ private:
 	void RegisterPragmaFunctions();
 	void RegisterCollations();
 
+	// serialization of statements and plans as JSON
+	void RegisterSerializeFunctions();
+
 	void AddExtensionFunction(ScalarFunctionSet set);
 };
 

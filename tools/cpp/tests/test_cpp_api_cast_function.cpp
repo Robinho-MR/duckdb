@@ -302,3 +302,151 @@ TEST_CASE("Stable C++API: cast function registration errors", "[cpp_api]") {
 	other.SetSourceType(varchar).SetTargetType(integer).SetExecCallback(NoopCast);
 	conn.Register(other);
 }
+
+namespace {
+
+// Source wildcards: renders the concrete type of the input, proving the callback was reached for that type.
+void SourceTypeToText(CastFunction::ExecInput &input) {
+	auto in = input.GetInput();
+	auto out = input.GetOutput();
+	const auto text = in.GetLogicalType().ToText();
+	for (idx_t i = 0; i < input.GetRowCount(); i++) {
+		out.AssignString(i, text);
+	}
+}
+
+std::string last_target_type;
+
+// Target wildcards: latches the concrete type of the output and leaves every row NULL.
+void TargetTypeProbe(CastFunction::ExecInput &input) {
+	auto out = input.GetOutput();
+	last_target_type = out.GetLogicalType().ToText();
+	auto validity = out.GetValidityMutable();
+	for (idx_t i = 0; i < input.GetRowCount(); i++) {
+		validity.SetInvalid(i);
+	}
+}
+
+void ExactListCast(CastFunction::ExecInput &input) {
+	for (idx_t i = 0; i < input.GetRowCount(); i++) {
+		input.GetOutput().AssignString(i, "exact");
+	}
+}
+
+auto RegisterTag(Connection &conn) -> LogicalType {
+	auto &factory = conn.GetFactory();
+	auto type = CustomType::Create(factory);
+	type.SetName("WILD_TAG").SetBaseType(factory.ParseType("VARCHAR"));
+	conn.Register(type);
+	return factory.ParseType("VARCHAR").WithAlias(factory, "WILD_TAG");
+}
+
+const std::vector<CastWildcardKind> WILDCARD_KINDS = {
+    CastWildcardKind::LIST,  CastWildcardKind::STRUCT,  CastWildcardKind::MAP,  CastWildcardKind::UNION,
+    CastWildcardKind::ARRAY, CastWildcardKind::DECIMAL, CastWildcardKind::ENUM, CastWildcardKind::TUPLE};
+
+} // namespace
+
+TEST_CASE("Stable C++API: wildcard source casts match every type of a kind", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	auto tag = RegisterTag(conn);
+	for (auto kind : WILDCARD_KINDS) {
+		auto function = CastFunction::Create(conn.GetFactory());
+		function.SetSourceKind(kind).SetTargetType(tag).SetExecCallback(SourceTypeToText);
+		conn.Register(function);
+	}
+	auto text = [&](const std::string &expr) {
+		return CollectCastStrings(conn.Execute("SELECT CAST(CAST(" + expr + " AS WILD_TAG) AS VARCHAR)"));
+	};
+	REQUIRE(text("[1, 2]") == std::vector<std::string> {"INTEGER[]"});
+	REQUIRE(text("[['a']]") == std::vector<std::string> {"VARCHAR[][]"});
+	REQUIRE(text("{'a': 1, 'b': 'x'}") == std::vector<std::string> {"STRUCT(a INTEGER, b VARCHAR)"});
+	REQUIRE(text("map {1: 'x'}") == std::vector<std::string> {"MAP(INTEGER, VARCHAR)"});
+	REQUIRE(text("union_value(num := 1)") == std::vector<std::string> {"UNION(num INTEGER)"});
+	REQUIRE(text("[1, 2, 3]::INTEGER[3]") == std::vector<std::string> {"INTEGER[3]"});
+	REQUIRE(text("[1]::BIGINT[1]") == std::vector<std::string> {"BIGINT[1]"});
+	REQUIRE(text("1.5::DECIMAL(4, 1)") == std::vector<std::string> {"DECIMAL(4,1)"});
+	REQUIRE(text("1::DECIMAL(30, 2)") == std::vector<std::string> {"DECIMAL(30,2)"});
+	conn.Execute("CREATE TYPE mood AS ENUM ('sad', 'ok')").Drain();
+	REQUIRE(text("'ok'::mood") == std::vector<std::string> {"ENUM('sad', 'ok')"});
+}
+
+TEST_CASE("Stable C++API: wildcard target casts match every type of a kind", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	auto tag = RegisterTag(conn);
+	for (auto kind : WILDCARD_KINDS) {
+		auto function = CastFunction::Create(conn.GetFactory());
+		function.SetSourceType(tag).SetTargetKind(kind).SetExecCallback(TargetTypeProbe);
+		conn.Register(function);
+	}
+	conn.Execute("CREATE TYPE mood AS ENUM ('sad', 'ok')").Drain();
+	const std::vector<std::pair<std::string, std::string>> cases = {
+	    {"INTEGER[]", "INTEGER[]"},
+	    {"STRUCT(a INTEGER, b VARCHAR)", "STRUCT(a INTEGER, b VARCHAR)"},
+	    {"MAP(VARCHAR, INTEGER)", "MAP(VARCHAR, INTEGER)"},
+	    {"UNION(num INTEGER, str VARCHAR)", "UNION(num INTEGER, str VARCHAR)"},
+	    {"INTEGER[3]", "INTEGER[3]"},
+	    {"DECIMAL(10, 2)", "DECIMAL(10,2)"},
+	    {"mood", "ENUM('sad', 'ok')"},
+	};
+	for (auto &test : cases) {
+		last_target_type.clear();
+		conn.Execute("SELECT CAST(CAST('x' AS WILD_TAG) AS " + test.first + ")").Drain();
+		REQUIRE(last_target_type == test.second);
+	}
+}
+
+TEST_CASE("Stable C++API: wildcard cast types: a concrete cast wins, other ids are refused", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	auto &factory = conn.GetFactory();
+	auto tag = RegisterTag(conn);
+
+	auto wildcard = CastFunction::Create(factory);
+	wildcard.SetSourceKind(CastWildcardKind::LIST).SetTargetType(tag).SetExecCallback(SourceTypeToText);
+	conn.Register(wildcard);
+	auto exact = CastFunction::Create(factory);
+	exact.SetSourceType(factory.ParseType("INTEGER[]")).SetTargetType(tag).SetExecCallback(ExactListCast);
+	conn.Register(exact);
+	REQUIRE(CollectCastStrings(conn.Execute("SELECT CAST(CAST([1] AS WILD_TAG) AS VARCHAR)")) ==
+	        std::vector<std::string> {"exact"});
+	REQUIRE(CollectCastStrings(conn.Execute("SELECT CAST(CAST(['a'] AS WILD_TAG) AS VARCHAR)")) ==
+	        std::vector<std::string> {"VARCHAR[]"});
+
+	// An unknown kind is refused.
+	auto function = CastFunction::Create(factory);
+	auto bogus = static_cast<CastWildcardKind>(99);
+	REQUIRE_THROWS_MATCHES(function.SetSourceKind(bogus), Exception, HasErrorCode(DUCKDB_V2_ERROR_INPUT_INVALID));
+	REQUIRE_THROWS_MATCHES(function.SetTargetKind(bogus), Exception, HasErrorCode(DUCKDB_V2_ERROR_INPUT_INVALID));
+
+	// ANY is not a concrete source type, and a wildcard does not make it one.
+	auto any_source = CastFunction::Create(factory);
+	any_source.SetSourceType(factory.CreateType(LogicalTypeId::ANY)).SetTargetType(tag).SetExecCallback(NoopCast);
+	REQUIRE_THROWS_MATCHES(conn.Register(any_source), Exception, HasErrorCode(DUCKDB_V2_ERROR_INPUT_INVALID));
+
+	// Setting a concrete type replaces the wildcard, so the function is complete again.
+	auto replaced = CastFunction::Create(factory);
+	replaced.SetSourceKind(CastWildcardKind::LIST).SetSourceType(factory.ParseType("INTEGER"));
+	replaced.SetTargetType(tag).SetExecCallback(NoopCast);
+	conn.Register(replaced);
+}
+
+// Casts run in expressions evaluated without a client context (index keys, generated columns) too.
+TEST_CASE("Stable C++API: cast function runs in an index key and a generated column", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+
+	auto temperature = RegisterTemperature(conn);
+	RegisterTemperatureCasts(conn, temperature, -1);
+
+	conn.Execute("CREATE TABLE temps (t VARCHAR, g INTEGER GENERATED ALWAYS AS "
+	             "(CAST(CAST(t AS TEMPERATURE_CELSIUS) AS INTEGER)) VIRTUAL)")
+	    .Drain();
+	conn.Execute("CREATE UNIQUE INDEX temps_ix ON temps ((CAST(CAST(t AS TEMPERATURE_CELSIUS) AS INTEGER)))").Drain();
+	conn.Execute("INSERT INTO temps VALUES ('1 degrees celsius'), ('2 degrees celsius')").Drain();
+	REQUIRE(CollectMaybeInts(conn.Execute("SELECT g FROM temps ORDER BY g")) ==
+	        std::vector<std::optional<int32_t>> {1, 2});
+	REQUIRE_THROWS(conn.Execute("INSERT INTO temps VALUES ('1 degrees celsius')").Drain());
+}

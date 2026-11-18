@@ -394,6 +394,20 @@ void ArgProbeExec(duckdb_v2_scalar_function_exec_info_handle info, duckdb_v2_con
 	}
 }
 
+// AddExec, after the callback context handed a factory that parses a type: contexts without a client context
+// (index keys, generated columns) still serve one.
+void AddWithContextExec(duckdb_v2_scalar_function_exec_info_handle info, duckdb_v2_context_handle ctx,
+                        duckdb_v2_error_info_handle *err) {
+	duckdb_v2_factory_handle factory = nullptr;
+	duckdb_v2_logical_type_handle type = nullptr;
+	if (duckdb_v2_context_get_factory(ctx, &factory, err) != DUCKDB_V2_ERROR_NONE ||
+	    duckdb_v2_factory_create_type_from_text(factory, "INTEGER", 7, &type, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	duckdb_v2_logical_type_destroy(&type);
+	AddExec(info, ctx, err);
+}
+
 } // namespace
 
 // ===========================================================================
@@ -420,6 +434,28 @@ TEST_CASE("V2 scalar: register on connection and execute", "[capi_v2][scalar_fun
 	// More rows than one chunk, so the callback sees full vectors.
 	REQUIRE(QueryI32(fx.conn, "SELECT sum(my_add(r::INTEGER, 1))::INTEGER FROM range(5000) t(r)") ==
 	        static_cast<int32_t>(5000LL * 4999 / 2 + 5000));
+}
+
+TEST_CASE("V2 scalar: runs in an index key and a generated column", "[capi_v2][scalar_function]") {
+	EnvFixture fx;
+	auto integer = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER);
+
+	auto function = MakeScalar(fx.conn, "key_add");
+	auto sig = SigOf(function);
+	SigParam(sig, "a", integer);
+	SigParam(sig, "b", integer);
+	REQUIRE(duckdb_v2_function_signature_set_return_type(sig, integer, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_scalar_function_set_exec_callback(function, AddWithContextExec, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_connection_register_scalar_function(fx.conn, function, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_scalar_function_destroy(&function) == DUCKDB_V2_ERROR_NONE);
+	duckdb_v2_logical_type_destroy(&integer);
+
+	ExecSQL(fx.conn, "CREATE TABLE t(a INTEGER, g INTEGER GENERATED ALWAYS AS (key_add(a, 10)) VIRTUAL)");
+	ExecSQL(fx.conn, "CREATE UNIQUE INDEX tx ON t((key_add(a, 1)))");
+	ExecSQL(fx.conn, "INSERT INTO t VALUES (1), (2), (3)");
+	REQUIRE(QueryI32(fx.conn, "SELECT sum(g)::INTEGER FROM t") == 36);
+	REQUIRE(RunSql(fx.conn, "INSERT INTO t VALUES (1)") != DUCKDB_V2_ERROR_NONE);
+	REQUIRE(QueryI32(fx.conn, "SELECT a FROM t WHERE key_add(a, 1) = 4") == 3);
 }
 
 TEST_CASE("V2 scalar: parameter defaults and named-argument calls", "[capi_v2][scalar_function]") {

@@ -6,15 +6,18 @@ namespace duckdb::capiv2 {
 
 class CV2CastBoundData final : public BoundCastData {
 public:
-	CV2CastBoundData(duckdb_v2_cast_function_exec_callback_fn exec_cb, shared_ptr<CV2UserData> user_data)
-	    : exec_cb(exec_cb), user_data(std::move(user_data)) {
+	CV2CastBoundData(DatabaseInstance &db, duckdb_v2_cast_function_exec_callback_fn exec_cb,
+	                 shared_ptr<CV2UserData> user_data)
+	    : db(db), exec_cb(exec_cb), user_data(std::move(user_data)) {
 	}
 
 	auto Copy() const -> unique_ptr<BoundCastData> override {
-		return make_uniq<CV2CastBoundData>(exec_cb, user_data);
+		return make_uniq<CV2CastBoundData>(db, exec_cb, user_data);
 	}
 
 public:
+	//! The database the cast was registered on: serves casts that run without a client (index keys)
+	DatabaseInstance &db;
 	duckdb_v2_cast_function_exec_callback_fn exec_cb;
 	shared_ptr<CV2UserData> user_data;
 };
@@ -46,11 +49,12 @@ static auto Convert(CV2CastExecInfo *info) -> duckdb_v2_cast_function_exec_info_
 static auto CV2CastInitLocalState(CastLocalStateParameters &parameters) -> unique_ptr<FunctionLocalState> {
 	auto state = make_uniq<CV2CastLocalState>();
 
-	if (!parameters.context) {
-		throw InvalidInputException("Cannot initialize local state for extension cast function without a context");
+	if (parameters.context) {
+		state->context = make_uniq<CV2CallbackContext>(*parameters.context);
+	} else {
+		auto &bound_data = parameters.cast_data->Cast<CV2CastBoundData>();
+		state->context = make_uniq<CV2CallbackContext>(bound_data.db.GetContext());
 	}
-
-	state->context = make_uniq<CV2CallbackContext>(*parameters.context);
 	return std::move(state);
 }
 
@@ -68,8 +72,12 @@ static auto CV2CastExec(Vector &input, Vector &output, idx_t count, CastParamete
 	args.mode = is_try_cast ? DUCKDB_V2_CAST_MODE_TRY : DUCKDB_V2_CAST_MODE_NORMAL;
 
 	optional_ptr<CV2Context> context = nullptr;
+	unique_ptr<CV2CallbackContext> fallback_context;
 	if (parameters.local_state) {
 		context = parameters.local_state->Cast<CV2CastLocalState>().context.get();
+	} else {
+		fallback_context = make_uniq<CV2CallbackContext>(bound_data.db.GetContext());
+		context = fallback_context.get();
 	}
 
 	CV2ErrorInfo err = {};
@@ -95,17 +103,18 @@ public:
 	//! Validates the configuration and builds the cast to register on `target`.
 	BoundCastInfo Build(DatabaseInstance &target) {
 		CheckRegistrationTarget(db, target, "cast function");
-		if (!source_type.IsComplete()) {
+		if (!source_is_wildcard && !source_type.IsComplete()) {
 			throw InvalidInputException("Source type must be set to a fully defined concrete type");
 		}
-		if (!target_type.IsComplete()) {
+		if (!target_is_wildcard && !target_type.IsComplete()) {
 			throw InvalidInputException("Target type must be set to a fully defined concrete type");
 		}
 		if (!exec_cb) {
 			throw InvalidInputException("Exec callback must be set for the function.");
 		}
 
-		BoundCastInfo cast_info(CV2CastExec, make_uniq<CV2CastBoundData>(exec_cb, user_data), CV2CastInitLocalState);
+		BoundCastInfo cast_info(CV2CastExec, make_uniq<CV2CastBoundData>(db, exec_cb, user_data),
+		                        CV2CastInitLocalState);
 		return cast_info;
 	}
 
@@ -114,10 +123,37 @@ public:
 	DatabaseInstance &db;
 	LogicalType source_type;
 	LogicalType target_type;
+	//! Whether the type is the key the engine matches every type of its kind against.
+	bool source_is_wildcard = false;
+	bool target_is_wildcard = false;
 	int64_t implicit_cast_cost = -1;
 	duckdb_v2_cast_function_exec_callback_fn exec_cb = nullptr;
 	shared_ptr<CV2UserData> user_data = nullptr;
 };
+
+//! The key CastFunctionSet matches every type of the kind against (see RelaxedTypeMatch).
+static auto WildcardCastType(DUCKDB_V2_CAST_WILDCARD_KIND kind) -> LogicalType {
+	switch (kind) {
+	case DUCKDB_V2_CAST_WILDCARD_KIND_DECIMAL:
+		return LogicalType(LogicalTypeId::DECIMAL);
+	case DUCKDB_V2_CAST_WILDCARD_KIND_ENUM:
+		return LogicalType(LogicalTypeId::ENUM);
+	case DUCKDB_V2_CAST_WILDCARD_KIND_LIST:
+		return LogicalType::LIST(LogicalType::ANY);
+	case DUCKDB_V2_CAST_WILDCARD_KIND_STRUCT:
+		return LogicalType::STRUCT({{"any", LogicalType::ANY}});
+	case DUCKDB_V2_CAST_WILDCARD_KIND_TUPLE:
+		return LogicalType::TUPLE({LogicalType::ANY});
+	case DUCKDB_V2_CAST_WILDCARD_KIND_MAP:
+		return LogicalType::MAP(LogicalType::ANY, LogicalType::ANY);
+	case DUCKDB_V2_CAST_WILDCARD_KIND_UNION:
+		return LogicalType::UNION({{"any", LogicalType::ANY}});
+	case DUCKDB_V2_CAST_WILDCARD_KIND_ARRAY:
+		return LogicalType::ARRAY(LogicalType::ANY, optional_idx());
+	default:
+		throw InvalidInputException("Unknown wildcard cast kind");
+	}
+}
 
 static auto Convert(duckdb_v2_cast_function_handle func) -> CV2CastFunction * {
 	return reinterpret_cast<CV2CastFunction *>(func);
@@ -154,6 +190,29 @@ DUCKDB_V2_ERROR duckdb_v2_cast_function_set_source_type(duckdb_v2_cast_function_
 	return WithErrorHandler(err, [&]() {
 		auto type = Convert(source_type);
 		Convert(function)->source_type = *type;
+		Convert(function)->source_is_wildcard = false;
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_cast_function_set_source_kind(duckdb_v2_cast_function_handle function,
+                                                        DUCKDB_V2_CAST_WILDCARD_KIND kind,
+                                                        duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() {
+		auto type = WildcardCastType(kind);
+		Convert(function)->source_type = std::move(type);
+		Convert(function)->source_is_wildcard = true;
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_cast_function_set_target_kind(duckdb_v2_cast_function_handle function,
+                                                        DUCKDB_V2_CAST_WILDCARD_KIND kind,
+                                                        duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() {
+		auto type = WildcardCastType(kind);
+		Convert(function)->target_type = std::move(type);
+		Convert(function)->target_is_wildcard = true;
 	});
 }
 
@@ -165,6 +224,7 @@ DUCKDB_V2_ERROR duckdb_v2_cast_function_set_target_type(duckdb_v2_cast_function_
 	return WithErrorHandler(err, [&]() {
 		auto type = Convert(target_type);
 		Convert(function)->target_type = *type;
+		Convert(function)->target_is_wildcard = false;
 	});
 }
 
