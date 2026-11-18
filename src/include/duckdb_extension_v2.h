@@ -1614,6 +1614,21 @@ typedef struct {
 	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_set_schema)
 	(duckdb_v2_scalar_function_handle function, const char *schema, idx_t schema_length,
 	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_function_add_option)
+	(duckdb_v2_copy_function_handle function, const char *name, idx_t name_length, duckdb_v2_logical_type_handle type,
+	 DUCKDB_V2_COPY_OPTION_MODE mode, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_bind_stats_get_bind_data)
+	(duckdb_v2_copy_to_bind_stats_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_bind_stats_get_column_count)
+	(duckdb_v2_copy_to_bind_stats_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_bind_stats_get_column_stats)
+	(duckdb_v2_copy_to_bind_stats_info_handle info, idx_t index, duckdb_v2_stats_handle *stats,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_bind_stats_get_user_data)
+	(duckdb_v2_copy_to_bind_stats_info_handle info, void **data, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_copy_to_set_bind_stats_callback)
+	(duckdb_v2_copy_function_handle function, duckdb_v2_copy_to_bind_stats_callback_fn callback,
+	 duckdb_v2_error_info_handle *err);
 #endif
 	// capigen:end appended
 } duckdb_ext_api_v2;
@@ -3683,6 +3698,24 @@ typedef struct {
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_scalar_function_set_schema duckdb_ext_api.duckdb_v2_scalar_function_set_schema
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_copy_function_add_option duckdb_ext_api.duckdb_v2_copy_function_add_option
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_copy_to_bind_stats_get_bind_data duckdb_ext_api.duckdb_v2_copy_to_bind_stats_get_bind_data
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_copy_to_bind_stats_get_column_count duckdb_ext_api.duckdb_v2_copy_to_bind_stats_get_column_count
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_copy_to_bind_stats_get_column_stats duckdb_ext_api.duckdb_v2_copy_to_bind_stats_get_column_stats
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_copy_to_bind_stats_get_user_data duckdb_ext_api.duckdb_v2_copy_to_bind_stats_get_user_data
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_copy_to_set_bind_stats_callback duckdb_ext_api.duckdb_v2_copy_to_set_bind_stats_callback
 #endif
 // capigen:end appended
 #endif // DUCKDB_BUILD_STATIC_EXTENSION

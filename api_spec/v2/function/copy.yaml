@@ -1,5 +1,23 @@
 module: copy
 #-----------------------------------------------------------------------------------------------------------------------
+# Enums
+#-----------------------------------------------------------------------------------------------------------------------
+enums:
+  COPY_OPTION_MODE:
+    description: |
+      The statements an option of a copy function applies to. Declared with `[[copy_function_add_option]]`.
+    values:
+      COPY_OPTION_MODE_READ:
+        value: 0
+        description: The option applies to `COPY ... FROM` only.
+      COPY_OPTION_MODE_WRITE:
+        value: 1
+        description: The option applies to `COPY ... TO` only.
+      COPY_OPTION_MODE_READ_WRITE:
+        value: 2
+        description: The option applies to both `COPY ... FROM` and `COPY ... TO`.
+
+#-----------------------------------------------------------------------------------------------------------------------
 # Handles
 #-----------------------------------------------------------------------------------------------------------------------
 handles:
@@ -15,6 +33,12 @@ handles:
       A borrowed opaque handle to the arguments supplied to a copy function during the query preparation "bind" phase
       of a `COPY ... TO` statement. The "bind" callback receives this handle and can use it to e.g. inspect the names
       and types of the columns being written, read the statement's options and initialize some constant state.
+
+  copy_to_bind_stats_info:
+    description: |
+      A borrowed opaque handle to the arguments supplied to a copy function during the "bind stats" phase of a
+      `COPY ... TO` statement. The "bind stats" callback receives this handle and can use it to read the statistics
+      of the columns being written.
 
   copy_to_batch_size_info:
     description: |
@@ -92,6 +116,20 @@ callbacks:
     parameters:
       info:
         type: copy_to_bind_info
+        description: Borrowed opaque handle providing access to the information available to the callback.
+      context:
+        type: context
+        description: Borrowed handle to the context of the query currently executing the callback.
+      err:
+        type: error_info
+        indirection: 1
+        description: Borrowed error info handle to use to report errors that occur during the callback.
+    return_type: void
+
+  copy_to_bind_stats_callback:
+    parameters:
+      info:
+        type: copy_to_bind_stats_info
         description: Borrowed opaque handle providing access to the information available to the callback.
       context:
         type: context
@@ -2090,6 +2128,160 @@ functions:
       file_size_bytes:
         type: idx
         description: The size of the file in bytes.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  #---------------------------------------------------------------------------------------------------------------------
+  # Options
+  #---------------------------------------------------------------------------------------------------------------------
+  copy_function_add_option:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-17" ]
+    description: |
+      Declares an option of the copy function.
+
+      The engine validates the options of a `COPY` statement against the declared ones: an option that is not
+      declared, or that is declared for the other direction (see `[[COPY_OPTION_MODE]]`), is rejected with a
+      suggestion of the closest declared name, and a value is cast to the declared type before the callbacks read
+      it. A function that declares no options at all accepts any option, unvalidated. As soon as it declares one,
+      every option it reads must be declared. Option names are case-insensitive. The options the engine handles
+      itself (e.g. `PARTITION_BY`, `OVERWRITE`, `FILE_SIZE_BYTES`) need not be declared.
+
+      Declaring an option twice replaces the earlier declaration.
+    parameters:
+      function:
+        type: copy_function
+        description: The function to declare the option on.
+      name:
+        type: char
+        indirection: 1
+        const: true
+        kind: IN
+        description: The option name. Borrowed and copied.
+      name_length:
+        type: idx
+        description: The length of `name` in bytes. `name` must be valid UTF-8, need not be null-terminated, and may be NULL only when this is 0.
+      type:
+        type: logical_type
+        kind: IN
+        description: The type of the option value. ANY accepts a value of any type without casting it. Borrowed and copied.
+      mode:
+        type: COPY_OPTION_MODE
+        description: The statements the option applies to.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  #---------------------------------------------------------------------------------------------------------------------
+  # COPY TO Bind Statistics
+  #---------------------------------------------------------------------------------------------------------------------
+  copy_to_set_bind_stats_callback:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-17" ]
+    description: |
+      Sets the optional bind stats callback of the `COPY ... TO` side.
+
+      The bind stats callback is invoked during query optimization for each `COPY ... TO` statement that uses the
+      function, once the statistics of the columns being written are known, i.e. after the bind callback and before
+      anything is written. It can read the statistics (e.g. whether a column can hold NULLs, or its minimum and
+      maximum) via `[[copy_to_bind_stats_get_column_stats]]` and keep what it needs in the bind data. The optimizer
+      may invoke it more than once for a statement.
+    parameters:
+      function:
+        type: copy_function
+        description: The function to set the callback of.
+      callback:
+        type: copy_to_bind_stats_callback
+        description: The callback to set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  copy_to_bind_stats_get_user_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-17" ]
+    description: Retrieves the user data set on the copy function via `[[copy_function_set_user_data]]`.
+    parameters:
+      info:
+        type: copy_to_bind_stats_info
+        description: The bind stats info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the user data pointer, or null if none was set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  copy_to_bind_stats_get_bind_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-17" ]
+    description: Retrieves the bind data set by the function's `COPY ... TO` bind callback.
+    parameters:
+      info:
+        type: copy_to_bind_stats_info
+        description: The bind stats info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the bind data pointer, or null if none was set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  copy_to_bind_stats_get_column_count:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-17" ]
+    description: Retrieves the number of columns being written.
+    parameters:
+      info:
+        type: copy_to_bind_stats_info
+        description: The bind stats info handle.
+      count:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the number of columns.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  copy_to_bind_stats_get_column_stats:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-17" ]
+    description: |
+      Retrieves the statistics of the column at the given index.
+
+      The statistics are read-only, and the setters fail on them. A column the optimizer knows nothing about has
+      unknown statistics, with every kind of value possible. Fails if the index is out of bounds. Borrowed; valid
+      only for the duration of the callback.
+    parameters:
+      info:
+        type: copy_to_bind_stats_info
+        description: The bind stats info handle.
+      index:
+        type: idx
+        description: The index of the column.
+      stats:
+        type: stats
+        indirection: 1
+        kind: OUT
+        description: Receives the borrowed, read-only statistics of the column.
       err:
         type: error_info
         indirection: 1

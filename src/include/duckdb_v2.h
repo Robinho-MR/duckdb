@@ -6722,6 +6722,19 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_column_description_destroy(duckdb_v2_colu
 
 /* --- Enums for copy --- */
 
+//! The statements an option of a copy function applies to. Declared with `duckdb_v2_copy_function_add_option()`.
+typedef enum DUCKDB_V2_COPY_OPTION_MODE {
+	//! The option applies to `COPY ... FROM` only.
+	DUCKDB_V2_COPY_OPTION_MODE_READ = 0,
+
+	//! The option applies to `COPY ... TO` only.
+	DUCKDB_V2_COPY_OPTION_MODE_WRITE = 1,
+
+	//! The option applies to both `COPY ... FROM` and `COPY ... TO`.
+	DUCKDB_V2_COPY_OPTION_MODE_READ_WRITE = 2,
+	DUCKDB_V2_COPY_OPTION_MODE_MAX_ENUM = 0x7FFFFFFF,
+} DUCKDB_V2_COPY_OPTION_MODE;
+
 /* --- Struct forward declarations for copy --- */
 
 /* --- Types for copy --- */
@@ -6745,6 +6758,15 @@ typedef struct _duckdb_v2_copy_function {
 typedef struct _duckdb_v2_copy_to_bind_info {
 	void *internal_ptr;
 } * duckdb_v2_copy_to_bind_info_handle;
+
+/*!
+ * A borrowed opaque handle to the arguments supplied to a copy function during the "bind stats" phase of a `COPY ...
+ * TO` statement. The "bind stats" callback receives this handle and can use it to read the statistics of the columns
+ * being written.
+ */
+typedef struct _duckdb_v2_copy_to_bind_stats_info {
+	void *internal_ptr;
+} * duckdb_v2_copy_to_bind_stats_info_handle;
 
 /*!
  * A borrowed opaque handle to the arguments supplied to a copy function during the "batch size" phase of a `COPY ...
@@ -6851,6 +6873,10 @@ typedef struct _duckdb_v2_copy_from_progress_info {
 
 typedef void (*duckdb_v2_copy_to_bind_callback_fn)(duckdb_v2_copy_to_bind_info_handle info,
                                                    duckdb_v2_context_handle context, duckdb_v2_error_info_handle *err);
+
+typedef void (*duckdb_v2_copy_to_bind_stats_callback_fn)(duckdb_v2_copy_to_bind_stats_info_handle info,
+                                                         duckdb_v2_context_handle context,
+                                                         duckdb_v2_error_info_handle *err);
 
 typedef void (*duckdb_v2_copy_to_batch_size_callback_fn)(duckdb_v2_copy_to_batch_size_info_handle info,
                                                          duckdb_v2_context_handle context,
@@ -8495,6 +8521,137 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_statistics_set_row_count(duckdb_v
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_statistics_set_file_size(duckdb_v2_copy_to_statistics_info_handle info,
                                                                         idx_t file_size_bytes,
                                                                         duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Declares an option of the copy function.
+ *
+ * The engine validates the options of a `COPY` statement against the declared ones: an option that is not declared, or
+ * that is declared for the other direction (see `DUCKDB_V2_COPY_OPTION_MODE`), is rejected with a suggestion of the
+ * closest declared name, and a value is cast to the declared type before the callbacks read it. A function that
+ * declares no options at all accepts any option, unvalidated. As soon as it declares one, every option it reads must be
+ * declared. Option names are case-insensitive. The options the engine handles itself (e.g. `PARTITION_BY`, `OVERWRITE`,
+ * `FILE_SIZE_BYTES`) need not be declared.
+ *
+ * Declaring an option twice replaces the earlier declaration.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to declare the option on.
+ * @param name The option name. Borrowed and copied.
+ * @param name_length The length of `name` in bytes. `name` must be valid UTF-8, need not be null-terminated, and may be
+ * NULL only when this is 0.
+ * @param type The type of the option value. ANY accepts a value of any type without casting it. Borrowed and copied.
+ * @param mode The statements the option applies to.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_function_add_option(duckdb_v2_copy_function_handle function,
+                                                                const char *name, idx_t name_length,
+                                                                duckdb_v2_logical_type_handle type,
+                                                                DUCKDB_V2_COPY_OPTION_MODE mode,
+                                                                duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the optional bind stats callback of the `COPY ... TO` side.
+ *
+ * The bind stats callback is invoked during query optimization for each `COPY ... TO` statement that uses the function,
+ * once the statistics of the columns being written are known, i.e. after the bind callback and before anything is
+ * written. It can read the statistics (e.g. whether a column can hold NULLs, or its minimum and maximum) via
+ * `duckdb_v2_copy_to_bind_stats_get_column_stats()` and keep what it needs in the bind data. The optimizer may invoke
+ * it more than once for a statement.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the callback of.
+ * @param callback The callback to set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_set_bind_stats_callback(
+    duckdb_v2_copy_function_handle function, duckdb_v2_copy_to_bind_stats_callback_fn callback,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the user data set on the copy function via `duckdb_v2_copy_function_set_user_data()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind stats info handle.
+ * @param data Receives the user data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_bind_stats_get_user_data(duckdb_v2_copy_to_bind_stats_info_handle info,
+                                                                        void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the bind data set by the function's `COPY ... TO` bind callback.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind stats info handle.
+ * @param data Receives the bind data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_bind_stats_get_bind_data(duckdb_v2_copy_to_bind_stats_info_handle info,
+                                                                        void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the number of columns being written.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind stats info handle.
+ * @param count Receives the number of columns.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_copy_to_bind_stats_get_column_count(
+    duckdb_v2_copy_to_bind_stats_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the statistics of the column at the given index.
+ *
+ * The statistics are read-only, and the setters fail on them. A column the optimizer knows nothing about has unknown
+ * statistics, with every kind of value possible. Fails if the index is out of bounds. Borrowed; valid only for the
+ * duration of the callback.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind stats info handle.
+ * @param index The index of the column.
+ * @param stats Receives the borrowed, read-only statistics of the column.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR
+duckdb_v2_copy_to_bind_stats_get_column_stats(duckdb_v2_copy_to_bind_stats_info_handle info, idx_t index,
+                                              duckdb_v2_stats_handle *stats, duckdb_v2_error_info_handle *err);
 #endif
 
 /* --- Struct definitions for copy --- */
