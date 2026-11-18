@@ -1,5 +1,15 @@
 module: table
 #-----------------------------------------------------------------------------------------------------------------------
+# Constants
+#-----------------------------------------------------------------------------------------------------------------------
+constants:
+  TABLE_VIRTUAL_COLUMN_CUSTOM_START:
+    value: 1024
+    description: |
+      The smallest id of a virtual column a table function declares itself with
+      `[[table_function_add_custom_virtual_column]]`. The ids below it are those of `[[TABLE_VIRTUAL_COLUMN]]`.
+
+#-----------------------------------------------------------------------------------------------------------------------
 # Enums
 #-----------------------------------------------------------------------------------------------------------------------
 enums:
@@ -26,7 +36,8 @@ enums:
       A column a table function can produce next to the columns it declares in bind. A query asks for it by name,
       but it is not part of the function's result columns. Declared with `[[table_function_add_virtual_column]]`.
       In the column lists of the scan (e.g. `[[table_function_exec_get_column_index]]`), a virtual column is
-      identified by 2^63 plus its value in this enum.
+      identified by 2^63 plus its value in this enum. A function can also declare virtual columns of its own, with
+      `[[table_function_add_custom_virtual_column]]`.
     values:
       TABLE_VIRTUAL_COLUMN_FILE_ROW_NUMBER:
         value: 0
@@ -608,6 +619,47 @@ functions:
       column:
         type: TABLE_VIRTUAL_COLUMN
         description: The virtual column the function can produce.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_add_custom_virtual_column:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-17" ]
+    description: |
+      Declares a virtual column of the table function's own, e.g. the number of the row group or stripe a row of a
+      file was read from.
+
+      Like the columns of `[[TABLE_VIRTUAL_COLUMN]]` (see `[[table_function_add_virtual_column]]`), a query asks for
+      it by name, and the function only produces it when it is asked for; it requires projection pushdown. The global
+      init, local init and exec callbacks recognize the vector of the output chunk that holds it by its column index,
+      which is 2^63 plus `id` (see e.g. `[[table_function_exec_get_column_index]]`). A function wrapped in a
+      multi-file function produces it for each file it reads. A declared column of the same name hides it.
+
+      Fails with `ERROR_INPUT_INVALID` when `id` is less than `[[TABLE_VIRTUAL_COLUMN_CUSTOM_START]]` or not less
+      than 2^32, when the function already declared a virtual column with the same id or name, when the name is
+      empty, or when the type is not a fully defined concrete type.
+    parameters:
+      function:
+        type: table_function
+        description: The function to configure.
+      id:
+        type: idx
+        description: The id of the column, chosen by the function, at least `[[TABLE_VIRTUAL_COLUMN_CUSTOM_START]]`.
+      name:
+        type: char
+        indirection: 1
+        const: true
+        kind: IN
+        description: The name a query asks for the column by. Borrowed and copied.
+      name_length:
+        type: idx
+        description: The length of `name` in bytes. `name` need not be null-terminated.
+      type:
+        type: logical_type
+        description: The type of the column. Borrowed and copied.
       err:
         type: error_info
         indirection: 1

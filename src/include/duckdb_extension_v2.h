@@ -1614,6 +1614,9 @@ typedef struct {
 	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_set_schema)
 	(duckdb_v2_scalar_function_handle function, const char *schema, idx_t schema_length,
 	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_add_custom_virtual_column)
+	(duckdb_v2_table_function_handle function, idx_t id, const char *name, idx_t name_length,
+	 duckdb_v2_logical_type_handle type, duckdb_v2_error_info_handle *err);
 #endif
 	// capigen:end appended
 } duckdb_ext_api_v2;
@@ -3683,6 +3686,10 @@ typedef struct {
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_scalar_function_set_schema duckdb_ext_api.duckdb_v2_scalar_function_set_schema
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_table_function_add_custom_virtual_column                                                             \
+	duckdb_ext_api.duckdb_v2_table_function_add_custom_virtual_column
 #endif
 // capigen:end appended
 #endif // DUCKDB_BUILD_STATIC_EXTENSION

@@ -4703,6 +4703,24 @@ auto TableFunction::AddVirtualColumn(VirtualColumn column) & -> TableFunction & 
 	return *this;
 }
 
+static_assert(TableFunction::CUSTOM_VIRTUAL_COLUMN_START == DUCKDB_V2_TABLE_VIRTUAL_COLUMN_CUSTOM_START,
+              "TableFunction::CUSTOM_VIRTUAL_COLUMN_START mismatch");
+
+auto TableFunction::GetCustomVirtualColumnId(idx_t column_index) -> idx_t {
+	if (!IsCustomVirtualColumn(column_index)) {
+		throw InvalidInputException("The column index " + std::to_string(column_index) +
+		                            " does not stand for a custom virtual column");
+	}
+	return column_index - VIRTUAL_COLUMN_START;
+}
+
+auto TableFunction::AddCustomVirtualColumn(idx_t id, const std::string &name,
+                                           const LogicalType &type) & -> TableFunction & {
+	CheckedAPICall(duckdb_v2_table_function_add_custom_virtual_column, handle(), id, name.data(),
+	               static_cast<idx_t>(name.size()), type.handle());
+	return *this;
+}
+
 auto TableFunction::SetMetricsCallback(MetricsCallback callback) & -> TableFunction & {
 	if (!callback) {
 		CheckedAPICall(duckdb_v2_table_function_set_metrics_callback, handle(), nullptr);

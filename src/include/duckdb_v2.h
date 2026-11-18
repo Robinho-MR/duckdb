@@ -13320,7 +13320,8 @@ typedef enum DUCKDB_V2_TABLE_PARTITION_INFO {
  * A column a table function can produce next to the columns it declares in bind. A query asks for it by name, but it is
  * not part of the function's result columns. Declared with `duckdb_v2_table_function_add_virtual_column()`. In the
  * column lists of the scan (e.g. `duckdb_v2_table_function_exec_get_column_index()`), a virtual column is identified by
- * 2^63 plus its value in this enum.
+ * 2^63 plus its value in this enum. A function can also declare virtual columns of its own, with
+ * `duckdb_v2_table_function_add_custom_virtual_column()`.
  */
 typedef enum DUCKDB_V2_TABLE_VIRTUAL_COLUMN {
 	/*!
@@ -13472,6 +13473,13 @@ typedef struct _duckdb_v2_multi_file_function {
 } * duckdb_v2_multi_file_function_handle;
 
 /* --- Constants for table --- */
+
+/*!
+ * The smallest id of a virtual column a table function declares itself with
+ * `duckdb_v2_table_function_add_custom_virtual_column()`. The ids below it are those of
+ * `DUCKDB_V2_TABLE_VIRTUAL_COLUMN`.
+ */
+#define DUCKDB_V2_TABLE_VIRTUAL_COLUMN_CUSTOM_START 1024
 
 /* --- Function pointer typedefs for table --- */
 
@@ -13799,6 +13807,38 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_set_projection_pushdown(du
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_add_virtual_column(duckdb_v2_table_function_handle function,
                                                                          DUCKDB_V2_TABLE_VIRTUAL_COLUMN column,
                                                                          duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Declares a virtual column of the table function's own, e.g. the number of the row group or stripe a row of a file was
+ * read from.
+ *
+ * Like the columns of `DUCKDB_V2_TABLE_VIRTUAL_COLUMN` (see `duckdb_v2_table_function_add_virtual_column()`), a query
+ * asks for it by name, and the function only produces it when it is asked for; it requires projection pushdown. The
+ * global init, local init and exec callbacks recognize the vector of the output chunk that holds it by its column
+ * index, which is 2^63 plus `id` (see e.g. `duckdb_v2_table_function_exec_get_column_index()`). A function wrapped in a
+ * multi-file function produces it for each file it reads. A declared column of the same name hides it.
+ *
+ * Fails with `ERROR_INPUT_INVALID` when `id` is less than `DUCKDB_V2_TABLE_VIRTUAL_COLUMN_CUSTOM_START` or not less
+ * than 2^32, when the function already declared a virtual column with the same id or name, when the name is empty, or
+ * when the type is not a fully defined concrete type.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to configure.
+ * @param id The id of the column, chosen by the function, at least `DUCKDB_V2_TABLE_VIRTUAL_COLUMN_CUSTOM_START`.
+ * @param name The name a query asks for the column by. Borrowed and copied.
+ * @param name_length The length of `name` in bytes. `name` need not be null-terminated.
+ * @param type The type of the column. Borrowed and copied.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_add_custom_virtual_column(
+    duckdb_v2_table_function_handle function, idx_t id, const char *name, idx_t name_length,
+    duckdb_v2_logical_type_handle type, duckdb_v2_error_info_handle *err);
 #endif
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE

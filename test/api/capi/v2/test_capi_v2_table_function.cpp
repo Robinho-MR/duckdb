@@ -2338,4 +2338,32 @@ TEST_CASE("V2 table: virtual column and metrics arguments", "[capi_v2][table_fun
 	        DUCKDB_V2_ERROR_INPUT_INVALID);
 }
 
+TEST_CASE("V2 table: custom virtual column arguments", "[capi_v2][table_function]") {
+	EnvFixture fx;
+	auto function = MakeTable(fx.conn, "custom_virtual_arguments");
+	auto bigint = MakeType(FactoryOf(fx.conn), DUCKDB_V2_LOGICAL_TYPE_ID_BIGINT);
+	std::string_view name = "block";
+
+	REQUIRE(duckdb_v2_table_function_add_custom_virtual_column(function, DUCKDB_V2_TABLE_VIRTUAL_COLUMN_CUSTOM_START,
+	                                                           name.data(), name.size(), bigint,
+	                                                           nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_table_function_add_custom_virtual_column(function,
+	                                                           DUCKDB_V2_TABLE_VIRTUAL_COLUMN_CUSTOM_START - 1, "other",
+	                                                           5, bigint, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_table_function_add_custom_virtual_column(function, DUCKDB_V2_TABLE_VIRTUAL_COLUMN_CUSTOM_START,
+	                                                           "other", 5, bigint,
+	                                                           nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_table_function_add_custom_virtual_column(nullptr, DUCKDB_V2_TABLE_VIRTUAL_COLUMN_CUSTOM_START,
+	                                                           name.data(), name.size(), bigint,
+	                                                           nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_table_function_add_custom_virtual_column(function, DUCKDB_V2_TABLE_VIRTUAL_COLUMN_CUSTOM_START,
+	                                                           nullptr, 5, bigint,
+	                                                           nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_table_function_add_custom_virtual_column(function, DUCKDB_V2_TABLE_VIRTUAL_COLUMN_CUSTOM_START,
+	                                                           name.data(), name.size(), nullptr,
+	                                                           nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	duckdb_v2_logical_type_destroy(&bigint);
+	duckdb_v2_table_function_destroy(&function);
+}
+
 } // namespace test_capi_v2

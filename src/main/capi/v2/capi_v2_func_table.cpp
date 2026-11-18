@@ -414,14 +414,33 @@ static auto CV2ConvertOrderPreservation(DUCKDB_V2_ORDER_PRESERVATION value) -> O
 //! public enum
 static constexpr column_t CV2_VIRTUAL_COLUMN_START = UINT64_C(9223372036854775808);
 
+//! The ids a function may give the virtual columns it declares itself
+static constexpr idx_t CV2_CUSTOM_VIRTUAL_COLUMN_END = UINT64_C(4294967296);
+
+//! The engine identifies a virtual column a function declares itself by the index the function sees for it
+static auto CV2IsCustomVirtualColumn(column_t engine_id) -> bool {
+	return engine_id >= CV2_VIRTUAL_COLUMN_START + DUCKDB_V2_TABLE_VIRTUAL_COLUMN_CUSTOM_START &&
+	       engine_id < CV2_VIRTUAL_COLUMN_START + CV2_CUSTOM_VIRTUAL_COLUMN_END;
+}
+
 //! The index the scan's column lists hold for a virtual column of the engine, which is invalid if there is no such
 //! virtual column
 static auto CV2VirtualColumnIndex(column_t engine_id) -> column_t {
 	if (engine_id == MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER) {
 		return CV2_VIRTUAL_COLUMN_START + DUCKDB_V2_TABLE_VIRTUAL_COLUMN_FILE_ROW_NUMBER;
 	}
+	if (CV2IsCustomVirtualColumn(engine_id)) {
+		return engine_id;
+	}
 	throw InternalException("Unsupported virtual column %llu in a table function scan", engine_id);
 }
+
+//! A virtual column a function declared itself
+struct CV2CustomVirtualColumn {
+	idx_t id;
+	Identifier name;
+	LogicalType type;
+};
 
 class CV2TableFunctionInfo : public TableFunctionInfo {
 public:
@@ -445,6 +464,12 @@ public:
 	}
 	//! Whether the function can produce the file_row_number virtual column
 	bool file_row_number = false;
+	//! The virtual columns the function declared itself
+	vector<CV2CustomVirtualColumn> custom_virtual_columns;
+	//! Whether the function can produce any virtual column
+	bool HasVirtualColumns() const {
+		return file_row_number || !custom_virtual_columns.empty();
+	}
 
 	Identifier name;
 };
@@ -1061,6 +1086,23 @@ static auto CV2TableGetFileRowNumberColumn(ClientContext &, optional_ptr<Functio
 	return result;
 }
 
+//! Registered for functions that declared virtual columns of their own, which the bind data leads back to
+static auto CV2TableGetVirtualColumns(ClientContext &context, optional_ptr<FunctionData> bind_data)
+    -> virtual_column_map_t {
+	if (!bind_data) {
+		return virtual_column_map_t();
+	}
+	const auto &info = *bind_data->Cast<CV2TableFunctionData>().info;
+	virtual_column_map_t result;
+	if (info.file_row_number) {
+		result = CV2TableGetFileRowNumberColumn(context, bind_data);
+	}
+	for (auto &column : info.custom_virtual_columns) {
+		result.insert(make_pair(CV2_VIRTUAL_COLUMN_START + column.id, TableColumn(column.name, column.type)));
+	}
+	return result;
+}
+
 //! The optimizer hands over the predicates it would otherwise evaluate above the scan; whatever the callback accepts
 //! is removed from the list, and the engine keeps applying the rest itself.
 static auto CV2TableFilterPushdown(ClientContext &context, LogicalGet &get,
@@ -1203,9 +1245,15 @@ public:
 		}
 
 		// Both are told apart from the declared columns by their place among the columns the scan was asked for
-		if (info.file_row_number && !info.projection_pushdown) {
+		if (info.HasVirtualColumns() && !info.projection_pushdown) {
 			throw InvalidInputException(
 			    "A table function that produces a virtual column requires projection pushdown.");
+		}
+		for (auto &column : info.custom_virtual_columns) {
+			if (info.file_row_number && column.name == Identifier("file_row_number")) {
+				throw InvalidInputException("A table function cannot declare a virtual column named file_row_number "
+				                            "next to the file_row_number virtual column.");
+			}
 		}
 
 		signature.Verify();
@@ -1238,7 +1286,9 @@ public:
 			// The engine applies the filters to what the function produces, so they only need to reach the scan
 			function.filter_pushdown = true;
 		}
-		if (info.file_row_number) {
+		if (!info.custom_virtual_columns.empty()) {
+			function.get_virtual_columns = CV2TableGetVirtualColumns;
+		} else if (info.file_row_number) {
 			function.get_virtual_columns = CV2TableGetFileRowNumberColumn;
 		}
 		if (info.metrics_cb) {
@@ -1464,6 +1514,43 @@ DUCKDB_V2_ERROR duckdb_v2_table_function_add_virtual_column(duckdb_v2_table_func
 		default:
 			throw duckdb::InvalidInputException("Invalid value in duckdb_v2_table_function_add_virtual_column");
 		}
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_add_custom_virtual_column(duckdb_v2_table_function_handle function, idx_t id,
+                                                                   const char *name, idx_t name_length,
+                                                                   duckdb_v2_logical_type_handle type,
+                                                                   duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	DUCKDB_CHECK_STR_ARG(name, name_length);
+	DUCKDB_CHECK_ARG(type);
+	return WithErrorHandler(err, [&]() {
+		if (id < DUCKDB_V2_TABLE_VIRTUAL_COLUMN_CUSTOM_START || id >= CV2_CUSTOM_VIRTUAL_COLUMN_END) {
+			throw duckdb::InvalidInputException(
+			    "duckdb_v2_table_function_add_custom_virtual_column: the id %llu is not at least %llu and less than "
+			    "2^32",
+			    id, idx_t(DUCKDB_V2_TABLE_VIRTUAL_COLUMN_CUSTOM_START));
+		}
+		if (name_length == 0) {
+			throw duckdb::InvalidInputException(
+			    "duckdb_v2_table_function_add_custom_virtual_column: the name cannot be empty");
+		}
+		auto column_type_ref = Convert(type);
+		const auto &column_type = *column_type_ref;
+		if (!column_type.IsComplete()) {
+			throw duckdb::InvalidInputException("duckdb_v2_table_function_add_custom_virtual_column: the type must be "
+			                                    "a fully defined concrete type");
+		}
+		duckdb::Identifier column_name(ConvertIdentifierName(name, name_length));
+		auto &info = Convert(function)->info;
+		for (auto &column : info.custom_virtual_columns) {
+			if (column.id == id || column.name == column_name) {
+				throw duckdb::InvalidInputException("duckdb_v2_table_function_add_custom_virtual_column: the function "
+				                                    "already declared a virtual column with id %llu or name \"%s\"",
+				                                    id, column_name.GetIdentifierName());
+			}
+		}
+		info.custom_virtual_columns.push_back({id, std::move(column_name), column_type});
 	});
 }
 
