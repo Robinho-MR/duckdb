@@ -1540,6 +1540,68 @@ typedef struct {
 	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_set_schema)
 	(duckdb_v2_scalar_function_handle function, const char *schema, idx_t schema_length,
 	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_cipher_create)
+	(duckdb_v2_instance_handle instance, DUCKDB_V2_CRYPTO_CIPHER cipher, DUCKDB_V2_CRYPTO_MODE mode, const uint8_t *key,
+	 idx_t key_length, duckdb_v2_crypto_cipher_handle *stream, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_crypto_cipher_destroy)(duckdb_v2_crypto_cipher_handle *stream);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_cipher_finalize)
+	(duckdb_v2_crypto_cipher_handle stream, uint8_t *tag, idx_t tag_length, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_cipher_init)
+	(duckdb_v2_crypto_cipher_handle stream, const uint8_t *iv, idx_t iv_length, const uint8_t *aad, idx_t aad_length,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_cipher_update)
+	(duckdb_v2_crypto_cipher_handle stream, const uint8_t *in, idx_t in_length, uint8_t *out, idx_t out_capacity,
+	 idx_t *out_length, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_hash)
+	(duckdb_v2_instance_handle instance, DUCKDB_V2_CRYPTO_HASH_FUNCTION function, const uint8_t *data, idx_t length,
+	 uint8_t *digest, idx_t digest_capacity, idx_t *digest_length, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_hash_digest_size)
+	(DUCKDB_V2_CRYPTO_HASH_FUNCTION function, idx_t *size, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_hmac)
+	(duckdb_v2_instance_handle instance, DUCKDB_V2_CRYPTO_HASH_FUNCTION function, const uint8_t *key, idx_t key_length,
+	 const uint8_t *data, idx_t length, uint8_t *mac, idx_t mac_capacity, idx_t *mac_length,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_provider_create)
+	(duckdb_v2_factory_handle factory, duckdb_v2_crypto_provider_handle *provider, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR (*duckdb_v2_crypto_provider_destroy)(duckdb_v2_crypto_provider_handle *provider);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_provider_set_cipher_create_callback)
+	(duckdb_v2_crypto_provider_handle provider, duckdb_v2_crypto_provider_cipher_create_callback_fn callback,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_provider_set_cipher_destroy_callback)
+	(duckdb_v2_crypto_provider_handle provider, duckdb_v2_crypto_provider_cipher_destroy_callback_fn callback,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_provider_set_cipher_finalize_callback)
+	(duckdb_v2_crypto_provider_handle provider, duckdb_v2_crypto_provider_cipher_finalize_callback_fn callback,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_provider_set_cipher_init_callback)
+	(duckdb_v2_crypto_provider_handle provider, duckdb_v2_crypto_provider_cipher_init_callback_fn callback,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_provider_set_cipher_update_callback)
+	(duckdb_v2_crypto_provider_handle provider, duckdb_v2_crypto_provider_cipher_update_callback_fn callback,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_provider_set_hash_callback)
+	(duckdb_v2_crypto_provider_handle provider, duckdb_v2_crypto_provider_hash_callback_fn callback,
+	 const DUCKDB_V2_CRYPTO_HASH_FUNCTION *functions, idx_t function_count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_provider_set_hmac_callback)
+	(duckdb_v2_crypto_provider_handle provider, duckdb_v2_crypto_provider_hmac_callback_fn callback,
+	 const DUCKDB_V2_CRYPTO_HASH_FUNCTION *functions, idx_t function_count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_provider_set_random_callback)
+	(duckdb_v2_crypto_provider_handle provider, duckdb_v2_crypto_provider_random_callback_fn callback,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_provider_set_user_data)
+	(duckdb_v2_crypto_provider_handle provider, duckdb_v2_opaque *data, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_random_bytes)
+	(duckdb_v2_instance_handle instance, uint8_t *data, idx_t length, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_supports_hash)
+	(duckdb_v2_instance_handle instance, DUCKDB_V2_CRYPTO_HASH_FUNCTION function, bool *supported,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_crypto_supports_hmac)
+	(duckdb_v2_instance_handle instance, DUCKDB_V2_CRYPTO_HASH_FUNCTION function, bool *supported,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_extension_register_crypto_provider)
+	(duckdb_v2_extension_handle extension, duckdb_v2_crypto_provider_handle provider, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_instance_register_crypto_provider)
+	(duckdb_v2_instance_handle instance, duckdb_v2_crypto_provider_handle provider, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_table_function_set_to_string_callback)
 	(duckdb_v2_table_function_handle function, duckdb_v2_table_function_to_string_callback_fn callback,
 	 duckdb_v2_error_info_handle *err);
@@ -2253,6 +2315,32 @@ inline duckdb_ext_api_v2 CreateAPIv2(void) {
 	result.duckdb_v2_scalar_function_get_generic_property = duckdb_v2_scalar_function_get_generic_property;
 	result.duckdb_v2_scalar_function_set_generic_property = duckdb_v2_scalar_function_set_generic_property;
 	result.duckdb_v2_scalar_function_set_schema = duckdb_v2_scalar_function_set_schema;
+	result.duckdb_v2_crypto_cipher_create = duckdb_v2_crypto_cipher_create;
+	result.duckdb_v2_crypto_cipher_destroy = duckdb_v2_crypto_cipher_destroy;
+	result.duckdb_v2_crypto_cipher_finalize = duckdb_v2_crypto_cipher_finalize;
+	result.duckdb_v2_crypto_cipher_init = duckdb_v2_crypto_cipher_init;
+	result.duckdb_v2_crypto_cipher_update = duckdb_v2_crypto_cipher_update;
+	result.duckdb_v2_crypto_hash = duckdb_v2_crypto_hash;
+	result.duckdb_v2_crypto_hash_digest_size = duckdb_v2_crypto_hash_digest_size;
+	result.duckdb_v2_crypto_hmac = duckdb_v2_crypto_hmac;
+	result.duckdb_v2_crypto_provider_create = duckdb_v2_crypto_provider_create;
+	result.duckdb_v2_crypto_provider_destroy = duckdb_v2_crypto_provider_destroy;
+	result.duckdb_v2_crypto_provider_set_cipher_create_callback = duckdb_v2_crypto_provider_set_cipher_create_callback;
+	result.duckdb_v2_crypto_provider_set_cipher_destroy_callback =
+	    duckdb_v2_crypto_provider_set_cipher_destroy_callback;
+	result.duckdb_v2_crypto_provider_set_cipher_finalize_callback =
+	    duckdb_v2_crypto_provider_set_cipher_finalize_callback;
+	result.duckdb_v2_crypto_provider_set_cipher_init_callback = duckdb_v2_crypto_provider_set_cipher_init_callback;
+	result.duckdb_v2_crypto_provider_set_cipher_update_callback = duckdb_v2_crypto_provider_set_cipher_update_callback;
+	result.duckdb_v2_crypto_provider_set_hash_callback = duckdb_v2_crypto_provider_set_hash_callback;
+	result.duckdb_v2_crypto_provider_set_hmac_callback = duckdb_v2_crypto_provider_set_hmac_callback;
+	result.duckdb_v2_crypto_provider_set_random_callback = duckdb_v2_crypto_provider_set_random_callback;
+	result.duckdb_v2_crypto_provider_set_user_data = duckdb_v2_crypto_provider_set_user_data;
+	result.duckdb_v2_crypto_random_bytes = duckdb_v2_crypto_random_bytes;
+	result.duckdb_v2_crypto_supports_hash = duckdb_v2_crypto_supports_hash;
+	result.duckdb_v2_crypto_supports_hmac = duckdb_v2_crypto_supports_hmac;
+	result.duckdb_v2_extension_register_crypto_provider = duckdb_v2_extension_register_crypto_provider;
+	result.duckdb_v2_instance_register_crypto_provider = duckdb_v2_instance_register_crypto_provider;
 	result.duckdb_v2_table_function_set_to_string_callback = duckdb_v2_table_function_set_to_string_callback;
 	result.duckdb_v2_table_function_to_string_get_bind_data = duckdb_v2_table_function_to_string_get_bind_data;
 	result.duckdb_v2_table_function_to_string_get_user_data = duckdb_v2_table_function_to_string_get_user_data;
