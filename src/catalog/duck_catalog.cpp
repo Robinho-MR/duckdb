@@ -1,4 +1,5 @@
 #include "duckdb/catalog/duck_catalog.hpp"
+#include "duckdb/function/table/catalog_scan_function.hpp"
 #include "duckdb/catalog/dependency_manager.hpp"
 #include "duckdb/catalog/catalog_entry/duck_schema_entry.hpp"
 #include "duckdb/storage/storage_manager.hpp"
@@ -144,6 +145,17 @@ static void ScanNestedSchemas(VisibilityBound bound, DuckSchemaEntry &schema,
 		callback(nested);
 		ScanNestedSchemas(bound, nested, callback);
 	});
+}
+
+bool DuckCatalog::UsesScanFunction(CatalogType type) {
+	return type == CatalogType::INDEX_ENTRY;
+}
+
+TableFunction DuckCatalog::GetScanFunction(ClientContext &context, CatalogType type) {
+	if (type != CatalogType::INDEX_ENTRY) {
+		return Catalog::GetScanFunction(context, type);
+	}
+	return CatalogScanFunctions::DuckIndexesScan(GetName().GetIdentifierName());
 }
 
 void DuckCatalog::ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) {

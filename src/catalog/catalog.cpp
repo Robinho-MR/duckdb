@@ -1618,6 +1618,14 @@ vector<reference<SchemaCatalogEntry>> Catalog::GetSchemas(ClientContext &context
 	return GetSchemas(retriever, catalog_name);
 }
 
+bool Catalog::UsesScanFunction(CatalogType type) {
+	return false;
+}
+
+TableFunction Catalog::GetScanFunction(ClientContext &context, CatalogType type) {
+	throw NotImplementedException("Catalog \"%s\" does not provide a scan function", GetName().GetIdentifierName());
+}
+
 vector<reference<SchemaCatalogEntry>> Catalog::GetAllSchemas(ClientContext &context) {
 	vector<reference<SchemaCatalogEntry>> result;
 

@@ -59,6 +59,7 @@ class TableCatalogEntry;
 class ViewCatalogEntry;
 class SequenceCatalogEntry;
 class TableFunctionCatalogEntry;
+class TableFunction;
 class CopyFunctionCatalogEntry;
 class PragmaFunctionCatalogEntry;
 class CatalogSet;
@@ -435,6 +436,12 @@ public:
 	DUCKDB_API virtual CatalogLookupBehavior CatalogTypeLookupRule(CatalogType type) const {
 		return CatalogLookupBehavior::STANDARD;
 	}
+
+	//! Whether this catalog hands back a table function that scans the entries of `type` for the system list
+	//! functions (e.g. duckdb_indexes), instead of the list function calling Scan on each schema.
+	DUCKDB_API virtual bool UsesScanFunction(CatalogType type);
+	//! The table function scanning the entries of `type` in this catalog. Only valid if UsesScanFunction(type).
+	DUCKDB_API virtual TableFunction GetScanFunction(ClientContext &context, CatalogType type);
 
 	//! Returns the default schema of the catalog, or nullopt if the catalog has no default schema.
 	//! Catalogs without a default schema are never probed with an implicit schema for unqualified lookups.

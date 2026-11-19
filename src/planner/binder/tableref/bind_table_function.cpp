@@ -1,4 +1,5 @@
 #include "duckdb/catalog/catalog.hpp"
+#include "duckdb/function/table/catalog_scan_function.hpp"
 #include "duckdb/catalog/catalog_entry/table_macro_catalog_entry.hpp"
 #include "duckdb/function/builtin_function_lookup.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
@@ -459,6 +460,16 @@ BoundStatement Binder::BindTableFunction(TableFunction &function, vector<Value> 
 
 BoundStatement Binder::Bind(TableFunctionRef &ref) {
 	QueryErrorContext error_context(ref.query_location);
+
+	// a catalog-provided scan function is bound directly, there is no catalog entry to look up
+	if (ref.bind_info) {
+		auto scan_info = dynamic_cast<CatalogScanRefInfo *>(ref.bind_info.get());
+		if (scan_info) {
+			BoundTableFunction scan_function(scan_info->function);
+			return BindTableFunctionInternal(scan_function, ref, vector<Value>(), named_argument_map_t(),
+			                                 vector<LogicalType>(), vector<Identifier>(), nullptr);
+		}
+	}
 
 	D_ASSERT(ref.function->GetExpressionType() == ExpressionType::FUNCTION);
 	auto &fexpr = ref.function->Cast<FunctionExpression>();
