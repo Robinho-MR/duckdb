@@ -4,6 +4,10 @@
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/function/table/system_functions.hpp"
+#include "duckdb/function/table/catalog_scan_function.hpp"
+#include "duckdb/main/attached_database.hpp"
+#include "duckdb/main/database_manager.hpp"
+#include "duckdb/transaction/meta_transaction.hpp"
 #include "duckdb/main/client_data.hpp"
 
 namespace duckdb {
@@ -14,6 +18,24 @@ struct DuckDBIndexesData : public GlobalTableFunctionState {
 
 	vector<reference<CatalogEntry>> entries;
 	idx_t offset;
+};
+
+struct DuckDBIndexesBindData : public FunctionData {
+	//! If set, scan only this catalog (the scan function handed out by the DuckCatalog)
+	string scan_catalog;
+	//! Skip the catalogs that provide their own scan function
+	bool skip_scan_catalogs = false;
+
+	unique_ptr<FunctionData> Copy() const override {
+		auto result = make_uniq<DuckDBIndexesBindData>();
+		result->scan_catalog = scan_catalog;
+		result->skip_scan_catalogs = skip_scan_catalogs;
+		return std::move(result);
+	}
+	bool Equals(const FunctionData &other_p) const override {
+		auto &other = other_p.Cast<DuckDBIndexesBindData>();
+		return scan_catalog == other.scan_catalog && skip_scan_catalogs == other.skip_scan_catalogs;
+	}
 };
 
 static unique_ptr<FunctionData> DuckDBIndexesBind(ClientContext &context, TableFunctionBindInput &input,
@@ -60,18 +82,36 @@ static unique_ptr<FunctionData> DuckDBIndexesBind(ClientContext &context, TableF
 	names.emplace_back("sql");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
-	return nullptr;
+	auto result = make_uniq<DuckDBIndexesBindData>();
+	if (input.info) {
+		if (auto target = dynamic_cast<CatalogScanTarget *>(input.info.get())) {
+			result->scan_catalog = target->catalog_name;
+		} else if (dynamic_cast<CatalogScanRemainder *>(input.info.get())) {
+			result->skip_scan_catalogs = true;
+		}
+	}
+	return std::move(result);
 }
 
 unique_ptr<GlobalTableFunctionState> DuckDBIndexesInit(ClientContext &context, TableFunctionInitInput &input) {
 	auto result = make_uniq<DuckDBIndexesData>();
 
-	// scan all the schemas for tables and collect them
-	auto schemas = Catalog::GetAllSchemas(context);
-	for (auto &schema : schemas) {
-		schema.get().Scan(context, CatalogType::INDEX_ENTRY,
-		                  [&](CatalogEntry &entry) { result->entries.push_back(entry); });
+	auto &bind_data = input.bind_data->Cast<DuckDBIndexesBindData>();
+	auto collect = [&](SchemaCatalogEntry &schema) {
+		schema.Scan(context, CatalogType::INDEX_ENTRY, [&](CatalogEntry &entry) { result->entries.push_back(entry); });
 	};
+	if (!bind_data.scan_catalog.empty()) {
+		// the scan function of one catalog
+		auto &catalog = Catalog::GetCatalog(context, Identifier(bind_data.scan_catalog));
+		catalog.ScanSchemas(context, collect);
+		return std::move(result);
+	}
+	for (auto &schema : Catalog::GetAllSchemas(context)) {
+		if (bind_data.skip_scan_catalogs && schema.get().catalog.UsesScanFunction(CatalogType::INDEX_ENTRY)) {
+			continue;
+		}
+		collect(schema.get());
+	}
 	return std::move(result);
 }
 
@@ -157,8 +197,24 @@ void DuckDBIndexesFunction(ClientContext &context, TableFunctionInput &data_p, D
 	}
 }
 
+static TableFunction DuckDBIndexesLegacy() {
+	return TableFunction("duckdb_indexes", {}, DuckDBIndexesFunction, DuckDBIndexesBind, DuckDBIndexesInit);
+}
+
+static unique_ptr<TableRef> DuckDBIndexesBindReplace(ClientContext &context, TableFunctionBindInput &input) {
+	return CatalogScanFunctions::BindReplace(context, CatalogType::INDEX_ENTRY, DuckDBIndexesLegacy());
+}
+
+TableFunction CatalogScanFunctions::DuckIndexesScan(const string &catalog_name) {
+	auto function = DuckDBIndexesLegacy();
+	function.function_info = make_shared_ptr<CatalogScanTarget>(catalog_name);
+	return function;
+}
+
 void DuckDBIndexesFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(TableFunction("duckdb_indexes", {}, DuckDBIndexesFunction, DuckDBIndexesBind, DuckDBIndexesInit));
+	auto function = DuckDBIndexesLegacy();
+	function.bind_replace = DuckDBIndexesBindReplace;
+	set.AddFunction(function);
 }
 
 } // namespace duckdb

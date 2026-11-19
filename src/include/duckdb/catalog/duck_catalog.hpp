@@ -20,6 +20,8 @@ public:
 
 public:
 	bool IsDuckCatalog() override;
+	bool UsesScanFunction(CatalogType type) override;
+	TableFunction GetScanFunction(ClientContext &context, CatalogType type) override;
 	bool SupportsNestedSchemas() const override {
 		return true;
 	}

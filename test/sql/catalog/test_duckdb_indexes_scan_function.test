@@ -1,0 +1,40 @@
+# name: test/sql/catalog/test_duckdb_indexes_scan_function.test
+# description: duckdb_indexes is replaced by the scan functions handed out by the catalogs
+# group: [catalog]
+
+statement ok
+CREATE TABLE tbl(i INTEGER, j INTEGER);
+
+statement ok
+CREATE INDEX idx_i ON tbl(i);
+
+statement ok
+CREATE UNIQUE INDEX idx_j ON tbl(j);
+
+query III
+SELECT database_name, index_name, table_name FROM duckdb_indexes() ORDER BY index_name;
+----
+memory	idx_i	tbl
+memory	idx_j	tbl
+
+# multiple catalogs: UNION ALL of the scan functions
+statement ok
+ATTACH ':memory:' AS other;
+
+statement ok
+CREATE TABLE other.t2(k INTEGER);
+
+statement ok
+CREATE INDEX idx_k ON other.t2(k);
+
+query III
+SELECT database_name, index_name, table_name FROM duckdb_indexes() ORDER BY ALL;
+----
+memory	idx_i	tbl
+memory	idx_j	tbl
+other	idx_k	t2
+
+query I
+SELECT count(*) FROM duckdb_indexes() WHERE is_unique;
+----
+1
