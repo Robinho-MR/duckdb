@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/execution/mark_join_row_comparison.hpp"
 #include "duckdb/execution/operator/join/physical_comparison_join.hpp"
 
 namespace duckdb {
@@ -77,8 +78,10 @@ public:
 	//! Returns a list of the types of the join conditions
 	vector<LogicalType> GetJoinTypes() const;
 
-	//! The condition "#0 <op> #1" of SEMI/ANTI joins with a predicate (can be nullptr)
+	//! The condition "#0 <op> #1" of SEMI/ANTI/MARK joins (can be nullptr)
 	unique_ptr<Expression> condition_comparison;
+	//! The leaf comparisons of a TUPLE condition of SEMI/ANTI/MARK joins (can be nullptr)
+	unique_ptr<MarkJoinKeyComparison> tuple_comparison;
 
 private:
 	vector<idx_t> mark_projection_map;

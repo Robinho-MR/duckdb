@@ -194,6 +194,7 @@ void JoinHashTable::InitializeUncorrelatedMarkJoin() {
 	D_ASSERT(mark_join_info.correlated_types.empty());
 	mark_join_info.uncorrelated_has_null = false;
 	mark_join_info.uncorrelated_condition_rows = make_uniq<ColumnDataCollection>(context, condition_types);
+	mark_join_info.uncorrelated_comparisons = make_uniq<MarkJoinComparisons>(context, condition_types);
 }
 
 bool JoinHashTable::HasUncorrelatedMarkJoin() const {
@@ -668,42 +669,6 @@ void JoinHashTable::EncodeDictSurvivingColumn(const DictSurvivingColumn &column,
 	                        static_cast<uint64_t>(build_col_idx));
 }
 
-static bool MarkJoinNullRows(const UnifiedVectorFormat &format, idx_t count,
-                             optional_ptr<bool> rows_with_null = nullptr) {
-	if (format.validity.CannotHaveNull()) {
-		return false;
-	}
-	bool has_null = false;
-	for (idx_t row_idx = 0; row_idx < count; row_idx++) {
-		auto format_idx = format.sel->get_index(row_idx);
-		if (!format.validity.RowIsValid(format_idx)) {
-			has_null = true;
-			if (rows_with_null) {
-				rows_with_null.get()[row_idx] = true;
-			}
-		}
-	}
-	return has_null;
-}
-
-static bool MarkJoinKeysHaveNull(DataChunk &keys, optional_ptr<bool> rows_with_null = nullptr) {
-	bool has_null = false;
-	for (idx_t col_idx = 0; col_idx < keys.ColumnCount(); col_idx++) {
-		UnifiedVectorFormat format;
-		if (keys.data[col_idx].GetType().IsNested()) {
-			Vector comparison(LogicalType::BOOLEAN, keys.size());
-			VectorOperations::Equals(keys.data[col_idx], keys.data[col_idx], comparison);
-			comparison.ToUnifiedFormat(format);
-		} else {
-			keys.data[col_idx].ToUnifiedFormat(format);
-		}
-		if (MarkJoinNullRows(format, keys.size(), rows_with_null)) {
-			has_null = true;
-		}
-	}
-	return has_null;
-}
-
 void JoinHashTable::Build(PartitionedTupleDataAppendState &append_state, DataChunk &keys, DataChunk &payload) {
 	D_ASSERT(!finalized);
 	D_ASSERT(keys.size() == payload.size());
@@ -736,7 +701,11 @@ void JoinHashTable::Build(PartitionedTupleDataAppendState &append_state, DataChu
 	}
 	if (mark_join_info.uncorrelated_condition_rows) {
 		// Keep all rows: probe-side NULLs can be UNKNOWN against non-NULL rows in other external hash partitions.
-		mark_join_info.uncorrelated_has_null = mark_join_info.uncorrelated_has_null || MarkJoinKeysHaveNull(keys);
+		auto &build_state = mark_join_info.uncorrelated_build_state;
+		if (!build_state) {
+			build_state = make_uniq<MarkJoinComparisonState>(context, *mark_join_info.uncorrelated_comparisons);
+		}
+		mark_join_info.uncorrelated_has_null = mark_join_info.uncorrelated_has_null || build_state->KeysHaveNull(keys);
 		mark_join_info.uncorrelated_condition_rows->Append(keys);
 	}
 
@@ -2377,24 +2346,9 @@ void ScanStructure::NextRightSemiOrAntiJoin(DataChunk &keys, DataChunk &probe_da
 	finished = true;
 }
 
-static bool MarkJoinChunkHasUnknown(DataChunk &left, idx_t left_row, DataChunk &right) {
-	D_ASSERT(left.ColumnCount() == right.ColumnCount());
-	bool row_is_false[STANDARD_VECTOR_SIZE] = {false};
-	bool row_is_unknown[STANDARD_VECTOR_SIZE] = {false};
-	for (idx_t col_idx = 0; col_idx < left.ColumnCount(); col_idx++) {
-		MarkJoinRowComparison::CompareEquality(left.data[col_idx], left_row, left.size(), right.data[col_idx],
-		                                       right.size(), row_is_false, row_is_unknown);
-	}
-	for (idx_t right_row = 0; right_row < right.size(); right_row++) {
-		if (!row_is_false[right_row] && row_is_unknown[right_row]) {
-			return true;
-		}
-	}
-	return false;
-}
-
 void JoinHashTable::ConstructMarkJoinResult(DataChunk &join_keys, DataChunk &probe_data, DataChunk &result,
-                                            optional_ptr<const bool> found_match) {
+                                            optional_ptr<const bool> found_match,
+                                            unique_ptr<MarkJoinComparisonState> &comparison_state) {
 	// extract OUTPUT columns from probe_data
 	for (idx_t i = 0; i < lhs_output_in_probe.size(); i++) {
 		idx_t probe_col_idx = lhs_output_in_probe[i];
@@ -2449,8 +2403,11 @@ void JoinHashTable::ConstructMarkJoinResult(DataChunk &join_keys, DataChunk &pro
 	    mark_join_info.uncorrelated_condition_rows->Count() == 0) {
 		return;
 	}
+	if (!comparison_state) {
+		comparison_state = make_uniq<MarkJoinComparisonState>(context, *mark_join_info.uncorrelated_comparisons);
+	}
 	bool requires_refinement[STANDARD_VECTOR_SIZE] = {false};
-	if (!mark_join_info.uncorrelated_has_null && !MarkJoinKeysHaveNull(join_keys, requires_refinement)) {
+	if (!mark_join_info.uncorrelated_has_null && !comparison_state->KeysHaveNull(join_keys, requires_refinement)) {
 		return;
 	}
 
@@ -2474,7 +2431,7 @@ void JoinHashTable::ConstructMarkJoinResult(DataChunk &join_keys, DataChunk &pro
 		idx_t remaining_count = 0;
 		for (idx_t candidate_idx = 0; candidate_idx < refinement_count; candidate_idx++) {
 			auto probe_idx = refinement_sel.get_index(candidate_idx);
-			if (MarkJoinChunkHasUnknown(join_keys, probe_idx, rhs_chunk)) {
+			if (comparison_state->RowHasUnknown(join_keys, probe_idx, rhs_chunk)) {
 				mask.SetInvalid(probe_idx);
 			} else {
 				refinement_sel.set_index(remaining_count++, probe_idx);
@@ -2485,7 +2442,11 @@ void JoinHashTable::ConstructMarkJoinResult(DataChunk &join_keys, DataChunk &pro
 }
 
 void ScanStructure::ConstructMarkJoinResult(DataChunk &join_keys, DataChunk &probe_data, DataChunk &result) {
-	ht.ConstructMarkJoinResult(join_keys, probe_data, result, found_match.get());
+	ht.ConstructMarkJoinResult(join_keys, probe_data, result, found_match.get(), mark_comparison_state);
+}
+
+void ScanStructure::ConstructEmptyMarkJoinResult(DataChunk &join_keys, DataChunk &probe_data, DataChunk &result) {
+	ht.ConstructMarkJoinResult(join_keys, probe_data, result, nullptr, mark_comparison_state);
 }
 
 void ScanStructure::NextMarkJoin(DataChunk &keys, DataChunk &probe_data, DataChunk &result) {

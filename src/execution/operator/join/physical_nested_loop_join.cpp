@@ -28,11 +28,24 @@ PhysicalNestedLoopJoin::PhysicalNestedLoopJoin(PhysicalPlan &physical_plan, Clie
 	if (join_type == JoinType::MARK) {
 		mark_projection_map = FillProjectionMap(left, op.left_projection_map);
 	}
-	if (predicate && conditions.size() == 1) {
+	const auto simple_join = join_type == JoinType::SEMI || join_type == JoinType::ANTI || join_type == JoinType::MARK;
+	if (simple_join && conditions.size() == 1) {
 		auto &condition = conditions[0];
 		condition_comparison = BoundComparisonExpression::CreateOnColumns(context, condition.GetComparisonType(),
 		                                                                  condition.GetLHS().GetReturnType(), 0,
 		                                                                  condition.GetRHS().GetReturnType(), 1);
+		if (condition.GetLHS().GetReturnType().id() == LogicalTypeId::TUPLE) {
+			tuple_comparison = make_uniq<MarkJoinKeyComparison>(context, condition.GetLHS().GetReturnType());
+		}
+	} else if (join_type == JoinType::RIGHT_SEMI && conditions.size() == 1) {
+		// the build rows are the left side of the flipped comparison
+		auto &condition = conditions[0];
+		condition_comparison = BoundComparisonExpression::CreateOnColumns(
+		    context, FlipComparisonExpression(condition.GetComparisonType()), condition.GetRHS().GetReturnType(), 0,
+		    condition.GetLHS().GetReturnType(), 1);
+		if (condition.GetRHS().GetReturnType().id() == LogicalTypeId::TUPLE) {
+			tuple_comparison = make_uniq<MarkJoinKeyComparison>(context, condition.GetRHS().GetReturnType());
+		}
 	}
 }
 
@@ -377,8 +390,16 @@ public:
 		}
 		if (op.condition_comparison) {
 			comparison_executor.AddExpression(*op.condition_comparison);
-			comparison_input.InitializeEmpty(
-			    {conditions[0].GetLHS().GetReturnType(), conditions[0].GetRHS().GetReturnType()});
+			auto &lhs_type = conditions[0].GetLHS().GetReturnType();
+			auto &rhs_type = conditions[0].GetRHS().GetReturnType();
+			if (op.join_type == JoinType::RIGHT_SEMI) {
+				comparison_input.InitializeEmpty({rhs_type, lhs_type});
+			} else {
+				comparison_input.InitializeEmpty({lhs_type, rhs_type});
+			}
+		}
+		if (op.tuple_comparison) {
+			tuple_comparison = make_uniq<MarkJoinRowComparison>(context, *op.tuple_comparison);
 		}
 		ResetState();
 	}
@@ -404,9 +425,11 @@ public:
 	SelectionVector pred_matches;
 	DataChunk pred_input;
 	DataChunk mark_payload;
-	//! The condition of SEMI/ANTI joins with a predicate, over [left constant, right condition]
+	//! The condition of SEMI/ANTI/MARK joins, over [left constant, right condition]
 	ExpressionExecutor comparison_executor;
 	DataChunk comparison_input;
+	//! The comparison of a TUPLE condition
+	unique_ptr<MarkJoinRowComparison> tuple_comparison;
 
 private:
 	void ResetState() {
@@ -549,6 +572,7 @@ void PhysicalNestedLoopJoin::ResolveSimpleJoin(ExecutionContext &context, DataCh
 		ResolveSimpleJoinPredicate(conditions, input, state, gstate, found_match);
 	} else {
 		NestedLoopJoinMark::Perform(state.left_condition, gstate.right_condition_data, found_match, conditions,
+		                            state.comparison_executor, state.comparison_input, state.tuple_comparison.get(),
 		                            track_unknown ? optional_ptr<bool>(found_unknown) : nullptr);
 	}
 	switch (join_type) {
@@ -591,7 +615,8 @@ void PhysicalNestedLoopJoin::ResolveRightSemiJoin(ExecutionContext &context, Dat
 		const auto base = state.condition_scan_state.current_row_index;
 		memset(found_match, 0, sizeof(bool) * count);
 		NestedLoopJoinMark::Perform(state.right_condition.data[0], state.left_condition.data[0], count, input.size(),
-		                            found_match, comparison);
+		                            found_match, comparison, state.comparison_executor, state.comparison_input,
+		                            state.tuple_comparison.get());
 		idx_t match_count = 0;
 		for (idx_t i = 0; i < count; i++) {
 			if (found_match[i]) {

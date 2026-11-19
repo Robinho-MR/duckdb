@@ -2436,7 +2436,7 @@ OperatorResultType PhysicalHashJoin::ExecuteInternal(ExecutionContext &context, 
 			state.lhs_join_keys.Reset();
 			state.probe_executor.Execute(input, state.lhs_join_keys);
 			state.lhs_probe_data.ReferenceColumns(input, lhs_probe_columns.col_idxs);
-			sink.hash_table->ConstructMarkJoinResult(state.lhs_join_keys, state.lhs_probe_data, chunk);
+			state.scan_structure.ConstructEmptyMarkJoinResult(state.lhs_join_keys, state.lhs_probe_data, chunk);
 			return OperatorResultType::NEED_MORE_INPUT;
 		}
 		if (EmptyResultIfRHSIsEmpty()) {
@@ -2932,7 +2932,7 @@ void HashJoinLocalSourceState::ExternalProbe(HashJoinGlobalSinkState &sink, Hash
 	lhs_probe_data.ReferenceColumns(lhs_probe_chunk, gstate.op.lhs_probe_columns.col_idxs);
 
 	if (sink.hash_table->Count() == 0 && sink.hash_table->HasUncorrelatedMarkJoin()) {
-		sink.hash_table->ConstructMarkJoinResult(lhs_join_keys, lhs_probe_data, chunk);
+		scan_structure.ConstructEmptyMarkJoinResult(lhs_join_keys, lhs_probe_data, chunk);
 		empty_ht_probe_in_progress = true;
 		return;
 	}

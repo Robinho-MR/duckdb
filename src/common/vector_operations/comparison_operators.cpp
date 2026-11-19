@@ -21,92 +21,6 @@
 
 namespace duckdb {
 
-//===--------------------------------------------------------------------===//
-// Fast path: direct BinaryExecutor for primitive types (single pass, no intermediate vector)
-//===--------------------------------------------------------------------===//
-template <class OP>
-static bool TryPrimitiveComparisonExecute(const Vector &left, const Vector &right, Vector &result) {
-#if DUCKDB_SMALLER_BINARY(primitive_comparison_execute)
-	return false;
-#else
-	D_ASSERT(left.GetType().InternalType() == right.GetType().InternalType());
-	switch (left.GetType().InternalType()) {
-	case PhysicalType::BOOL:
-	case PhysicalType::INT8:
-		BinaryExecutor::Execute<int8_t, int8_t, bool, OP>(left, right, result);
-		return true;
-	case PhysicalType::INT16:
-		BinaryExecutor::Execute<int16_t, int16_t, bool, OP>(left, right, result);
-		return true;
-	case PhysicalType::INT32:
-		BinaryExecutor::Execute<int32_t, int32_t, bool, OP>(left, right, result);
-		return true;
-	case PhysicalType::INT64:
-		BinaryExecutor::Execute<int64_t, int64_t, bool, OP>(left, right, result);
-		return true;
-	case PhysicalType::UINT8:
-		BinaryExecutor::Execute<uint8_t, uint8_t, bool, OP>(left, right, result);
-		return true;
-	case PhysicalType::UINT16:
-		BinaryExecutor::Execute<uint16_t, uint16_t, bool, OP>(left, right, result);
-		return true;
-	case PhysicalType::UINT32:
-		BinaryExecutor::Execute<uint32_t, uint32_t, bool, OP>(left, right, result);
-		return true;
-	case PhysicalType::UINT64:
-		BinaryExecutor::Execute<uint64_t, uint64_t, bool, OP>(left, right, result);
-		return true;
-	case PhysicalType::INT128:
-		BinaryExecutor::Execute<hugeint_t, hugeint_t, bool, OP>(left, right, result);
-		return true;
-	case PhysicalType::UINT128:
-		BinaryExecutor::Execute<uhugeint_t, uhugeint_t, bool, OP>(left, right, result);
-		return true;
-	case PhysicalType::FLOAT:
-		BinaryExecutor::Execute<float, float, bool, OP>(left, right, result);
-		return true;
-	case PhysicalType::DOUBLE:
-		BinaryExecutor::Execute<double, double, bool, OP>(left, right, result);
-		return true;
-	case PhysicalType::INTERVAL:
-		BinaryExecutor::Execute<interval_t, interval_t, bool, OP>(left, right, result);
-		return true;
-	case PhysicalType::VARCHAR:
-		BinaryExecutor::Execute<string_t, string_t, bool, OP>(left, right, result);
-		return true;
-	default:
-		return false;
-	}
-#endif
-}
-
-template <class PREDICATE>
-static void ComparatorToBoolean(const Vector &left, const Vector &right, Vector &result, const ExpressionType comp,
-                                PREDICATE predicate) {
-	D_ASSERT(result.GetType() == LogicalType::BOOLEAN);
-	Vector comparator_result(LogicalType::TINYINT);
-	VectorOperations::Comparator(left, right, comparator_result, comp);
-	const auto count = comparator_result.size();
-	auto cmp_data = comparator_result.Values<int8_t>();
-	if (left.GetVectorType() == VectorType::CONSTANT_VECTOR && right.GetVectorType() == VectorType::CONSTANT_VECTOR) {
-		// the comparison of two constants is a constant
-		auto entry = cmp_data[0];
-		auto value = entry.IsValid() ? Value::BOOLEAN(predicate(entry.GetValue())) : Value(LogicalType::BOOLEAN);
-		result.Reference(value, count_t(count));
-		return;
-	}
-	result.SetVectorType(VectorType::FLAT_VECTOR);
-	auto result_data = FlatVector::Writer<bool>(result, count);
-	for (idx_t i = 0; i < count; i++) {
-		auto entry = cmp_data[i];
-		if (!entry.IsValid()) {
-			result_data.WriteNull();
-		} else {
-			result_data.WriteValue(predicate(entry.GetValue()));
-		}
-	}
-}
-
 static idx_t GetComparisonCount(const Vector &left, const Vector &right, const char *fname) {
 	const bool left_is_const = left.GetVectorType() == VectorType::CONSTANT_VECTOR;
 	const bool right_is_const = right.GetVectorType() == VectorType::CONSTANT_VECTOR;
@@ -115,46 +29,6 @@ static idx_t GetComparisonCount(const Vector &left, const Vector &right, const c
 		                        left.size(), right.size());
 	}
 	return left_is_const ? right.size() : left.size();
-}
-
-void VectorOperations::Equals(const Vector &left, const Vector &right, Vector &result) {
-	if (!TryPrimitiveComparisonExecute<duckdb::Equals>(left, right, result)) {
-		ComparatorToBoolean(left, right, result, ExpressionType::COMPARE_EQUAL, [](int8_t v) { return v == 0; });
-	}
-}
-
-void VectorOperations::NotEquals(const Vector &left, const Vector &right, Vector &result) {
-	if (!TryPrimitiveComparisonExecute<duckdb::NotEquals>(left, right, result)) {
-		ComparatorToBoolean(left, right, result, ExpressionType::COMPARE_NOTEQUAL, [](int8_t v) { return v != 0; });
-	}
-}
-
-void VectorOperations::GreaterThan(const Vector &left, const Vector &right, Vector &result) {
-	if (!TryPrimitiveComparisonExecute<duckdb::GreaterThan>(left, right, result)) {
-		ComparatorToBoolean(left, right, result, ExpressionType::COMPARE_GREATERTHAN, [](int8_t v) { return v > 0; });
-	}
-}
-
-void VectorOperations::GreaterThanEquals(const Vector &left, const Vector &right, Vector &result) {
-	if (!TryPrimitiveComparisonExecute<duckdb::GreaterThanEquals>(left, right, result)) {
-		ComparatorToBoolean(left, right, result, ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-		                    [](int8_t v) { return v >= 0; });
-	}
-}
-
-void VectorOperations::LessThan(const Vector &left, const Vector &right, Vector &result) {
-	// NOLINTNEXTLINE: flip right / left (left < right is equal to right > left)
-	if (!TryPrimitiveComparisonExecute<duckdb::GreaterThan>(right, left, result)) {
-		ComparatorToBoolean(left, right, result, ExpressionType::COMPARE_LESSTHAN, [](int8_t v) { return v < 0; });
-	}
-}
-
-void VectorOperations::LessThanEquals(const Vector &left, const Vector &right, Vector &result) {
-	// NOLINTNEXTLINE: flip right / left (left <= right is equal to right >= left)
-	if (!TryPrimitiveComparisonExecute<duckdb::GreaterThanEquals>(right, left, result)) {
-		ComparatorToBoolean(left, right, result, ExpressionType::COMPARE_LESSTHANOREQUALTO,
-		                    [](int8_t v) { return v <= 0; });
-	}
 }
 
 struct StandardComparatorExecute {

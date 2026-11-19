@@ -22,6 +22,7 @@
 #include "duckdb/common/vector/dictionary_vector.hpp"
 #include "duckdb/execution/aggregate_hashtable.hpp"
 #include "duckdb/execution/ht_entry.hpp"
+#include "duckdb/execution/mark_join_row_comparison.hpp"
 #include "duckdb/execution/perfect_hash_join_table.hpp"
 #include "duckdb/parallel/sharded_counter.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
@@ -213,6 +214,8 @@ public:
 		void Reset();
 		//! Get the next batch of data from the scan structure
 		void Next(DataChunk &keys, DataChunk &probe_data, DataChunk &result);
+		//! Construct the MARK result of probing an empty HT
+		void ConstructEmptyMarkJoinResult(DataChunk &keys, DataChunk &probe_data, DataChunk &result);
 		//! Are pointer chains all pointing to NULL?
 		bool PointersExhausted() const;
 		//! Flush the thread-local probe match count into the global counter (idempotent)
@@ -252,6 +255,8 @@ public:
 	private:
 		unique_ptr<ExpressionExecutor> residual_executor;
 		unique_ptr<ResidualPredicateProbeState> residual_state;
+		//! The executors of the uncorrelated MARK join NULL refinement
+		unique_ptr<MarkJoinComparisonState> mark_comparison_state;
 
 	public:
 		void AdvancePointers();
@@ -369,7 +374,8 @@ public:
 	bool HasUncorrelatedMarkJoin() const;
 	//! Construct a MARK result, including selective UNKNOWN refinement when enabled
 	void ConstructMarkJoinResult(DataChunk &join_keys, DataChunk &probe_data, DataChunk &result,
-	                             optional_ptr<const bool> found_match = nullptr);
+	                             optional_ptr<const bool> found_match,
+	                             unique_ptr<MarkJoinComparisonState> &comparison_state);
 	//! Scan the HT to construct the full outer join result
 	void ScanFullOuter(JoinHTScanState &state, Vector &addresses, DataChunk &result) const;
 
@@ -506,6 +512,10 @@ public:
 		bool uncorrelated_has_null = false;
 		//! All RHS condition rows, used only for uncorrelated row equality NULL refinement
 		unique_ptr<ColumnDataCollection> uncorrelated_condition_rows;
+		//! The key comparisons of the uncorrelated NULL refinement
+		unique_ptr<MarkJoinComparisons> uncorrelated_comparisons;
+		//! The executors of uncorrelated_comparisons used by Build
+		unique_ptr<MarkJoinComparisonState> uncorrelated_build_state;
 	} mark_join_info;
 
 private:

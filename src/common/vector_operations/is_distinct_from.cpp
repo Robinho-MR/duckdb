@@ -4,32 +4,6 @@
 
 namespace duckdb {
 
-void VectorOperations::DistinctFrom(const Vector &left, const Vector &right, Vector &result) {
-	D_ASSERT(result.GetType() == LogicalType::BOOLEAN);
-	Vector comparator_result(LogicalType::TINYINT);
-	VectorOperations::DistinctComparator(left, right, comparator_result);
-	const idx_t count = comparator_result.size();
-	auto cmp_data = comparator_result.Values<int8_t>();
-	result.SetVectorType(VectorType::FLAT_VECTOR);
-	auto result_data = FlatVector::Writer<bool>(result, count);
-	for (idx_t i = 0; i < count; i++) {
-		result_data.WriteValue(cmp_data[i].GetValueUnsafe() != 0);
-	}
-}
-
-void VectorOperations::NotDistinctFrom(const Vector &left, const Vector &right, Vector &result) {
-	D_ASSERT(result.GetType() == LogicalType::BOOLEAN);
-	Vector comparator_result(LogicalType::TINYINT);
-	VectorOperations::DistinctComparator(left, right, comparator_result);
-	const idx_t count = comparator_result.size();
-	auto cmp_data = comparator_result.Values<int8_t>();
-	result.SetVectorType(VectorType::FLAT_VECTOR);
-	auto result_data = FlatVector::Writer<bool>(result, count);
-	for (idx_t i = 0; i < count; i++) {
-		result_data.WriteValue(cmp_data[i].GetValueUnsafe() == 0);
-	}
-}
-
 template <class FILL_FN, class PREDICATE>
 static idx_t DistinctComparatorSelect(const Vector &left, const Vector &right, optional_ptr<const SelectionVector> sel,
                                       idx_t count, optional_ptr<SelectionVector> true_sel,
