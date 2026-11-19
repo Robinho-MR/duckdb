@@ -30,6 +30,10 @@ struct NestedLoopJoinMark {
 	                    const vector<JoinCondition> &conditions, ExpressionExecutor &comparison_executor,
 	                    DataChunk &comparison_input, optional_ptr<MarkJoinRowComparison> tuple_comparison,
 	                    optional_ptr<bool> found_unknown = nullptr);
+	//! Marks the rows of `left` that a row of `right` matches
+	static void Perform(const Vector &left, const Vector &right, idx_t left_count, idx_t right_count,
+	                    bool found_match[], ExpressionType comparison, ExpressionExecutor &comparison_executor,
+	                    DataChunk &comparison_input, optional_ptr<MarkJoinRowComparison> tuple_comparison);
 };
 
 } // namespace duckdb

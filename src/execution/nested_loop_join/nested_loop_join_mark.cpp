@@ -183,4 +183,11 @@ void NestedLoopJoinMark::Perform(DataChunk &left, ColumnDataCollection &right, b
 	}
 }
 
+void NestedLoopJoinMark::Perform(const Vector &left, const Vector &right, idx_t left_count, idx_t right_count,
+                                 bool found_match[], ExpressionType comparison, ExpressionExecutor &comparison_executor,
+                                 DataChunk &comparison_input, optional_ptr<MarkJoinRowComparison> tuple_comparison) {
+	MarkJoinComparisonSwitch(left, right, left_count, right_count, found_match, comparison, comparison_executor,
+	                         comparison_input, tuple_comparison, nullptr);
+}
+
 } // namespace duckdb
