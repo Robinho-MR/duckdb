@@ -41,13 +41,13 @@ public:
 	string cgroup_path;
 };
 
-static vector<CGroupEntry> ParseGroupEntries(FileSystem &fs) {
+static vector<CGroupEntry> ParseGroupEntries(BaseFileSystem &fs) {
 	vector<CGroupEntry> result;
-	if (!fs.FileExists(CGROUP_PATH)) {
+	if (!fs.FileExists(CGROUP_PATH, nullptr)) {
 		return result;
 	}
 
-	auto handle = fs.OpenFile(CGROUP_PATH, FileFlags::FILE_FLAGS_READ);
+	auto handle = fs.OpenFile(CGROUP_PATH, FileFlags::FILE_FLAGS_READ, nullptr);
 
 	char buffer[DEFAULT_CGROUP_FILE_BUFFER_SIZE];
 	int64_t bytes_read;
@@ -87,7 +87,7 @@ static vector<CGroupEntry> ParseGroupEntries(FileSystem &fs) {
 	return result;
 }
 
-static optional_idx GetCPUCountV2(const string &cgroup_path, FileSystem &fs) {
+static optional_idx GetCPUCountV2(const string &cgroup_path, BaseFileSystem &fs) {
 	static constexpr const char *CPU_MAX = "/sys/fs/cgroup%s/cpu.max";
 
 	auto cpu_max = StringUtil::Format(CPU_MAX, cgroup_path);
@@ -98,13 +98,13 @@ static optional_idx GetCPUCountV2(const string &cgroup_path, FileSystem &fs) {
 	//! the length of a period (in microseconds)
 	int64_t period;
 
-	if (!fs.FileExists(cpu_max)) {
+	if (!fs.FileExists(cpu_max, nullptr)) {
 		return optional_idx();
 	}
 
 	// cgroup v2
 	char byte_buffer[1000];
-	auto handle = fs.OpenFile(cpu_max, FileFlags::FILE_FLAGS_READ);
+	auto handle = fs.OpenFile(cpu_max, FileFlags::FILE_FLAGS_READ, nullptr);
 	int64_t read_bytes = fs.Read(*handle, (void *)byte_buffer, 999);
 	byte_buffer[read_bytes] = '\0';
 	if (std::sscanf(byte_buffer, "%" SCNd64 " %" SCNd64 "", &quota, &period) != 2) {
@@ -117,14 +117,14 @@ static optional_idx GetCPUCountV2(const string &cgroup_path, FileSystem &fs) {
 	return optional_idx();
 }
 
-static optional_idx GetCPUCountV1(const string &cgroup_path, FileSystem &fs) {
+static optional_idx GetCPUCountV1(const string &cgroup_path, BaseFileSystem &fs) {
 	static constexpr const char *CFS_QUOTA = "/sys/fs/cgroup/cpu%s/cpu.cfs_quota_us";
 	static constexpr const char *CFS_PERIOD = "/sys/fs/cgroup/cpu%s/cpu.cfs_period_us";
 
 	auto cfs_quota = StringUtil::Format(CFS_QUOTA, cgroup_path);
 	auto cfs_period = StringUtil::Format(CFS_PERIOD, cgroup_path);
 
-	if (!fs.FileExists(cfs_quota) || !fs.FileExists(cfs_period)) {
+	if (!fs.FileExists(cfs_quota, nullptr) || !fs.FileExists(cfs_period, nullptr)) {
 		return optional_idx();
 	}
 
@@ -137,7 +137,7 @@ static optional_idx GetCPUCountV1(const string &cgroup_path, FileSystem &fs) {
 	// cgroup v1
 	char byte_buffer[1000];
 	{
-		auto handle = fs.OpenFile(cfs_quota, FileFlags::FILE_FLAGS_READ);
+		auto handle = fs.OpenFile(cfs_quota, FileFlags::FILE_FLAGS_READ, nullptr);
 		int64_t read_bytes = fs.Read(*handle, (void *)byte_buffer, 999);
 		byte_buffer[read_bytes] = '\0';
 		if (std::sscanf(byte_buffer, "%" SCNd64 "", &quota) != 1) {
@@ -145,7 +145,7 @@ static optional_idx GetCPUCountV1(const string &cgroup_path, FileSystem &fs) {
 		}
 	}
 	{
-		auto handle = fs.OpenFile(cfs_period, FileFlags::FILE_FLAGS_READ);
+		auto handle = fs.OpenFile(cfs_period, FileFlags::FILE_FLAGS_READ, nullptr);
 		int64_t read_bytes = fs.Read(*handle, (void *)byte_buffer, 999);
 		byte_buffer[read_bytes] = '\0';
 		if (std::sscanf(byte_buffer, "%" SCNd64 "", &period) != 1) {
@@ -159,12 +159,12 @@ static optional_idx GetCPUCountV1(const string &cgroup_path, FileSystem &fs) {
 	return optional_idx();
 }
 
-static optional_idx ReadMemoryLimit(FileSystem &fs, const string &file_path) {
-	if (!fs.FileExists(file_path)) {
+static optional_idx ReadMemoryLimit(BaseFileSystem &fs, const string &file_path) {
+	if (!fs.FileExists(file_path, nullptr)) {
 		return optional_idx();
 	}
 
-	auto handle = fs.OpenFile(file_path, FileFlags::FILE_FLAGS_READ);
+	auto handle = fs.OpenFile(file_path, FileFlags::FILE_FLAGS_READ, nullptr);
 	char buffer[100];
 	auto bytes_read = fs.Read(*handle, buffer, 99);
 	buffer[bytes_read] = '\0';
@@ -179,7 +179,7 @@ static optional_idx ReadMemoryLimit(FileSystem &fs, const string &file_path) {
 
 } // namespace
 
-optional_idx CGroups::GetMemoryLimit(FileSystem &fs) {
+optional_idx CGroups::GetMemoryLimit(BaseFileSystem &fs) {
 	static constexpr const char *MEMORY_LIMIT_IN_BYTES = "/sys/fs/cgroup/memory%s/memory.limit_in_bytes";
 	static constexpr const char *MEMORY_MAX = "/sys/fs/cgroup%s/memory.max";
 
@@ -236,7 +236,7 @@ optional_idx CGroups::GetMemoryLimit(FileSystem &fs) {
 	return optional_idx();
 }
 
-idx_t CGroups::GetCPULimit(FileSystem &fs, idx_t physical_cores) {
+idx_t CGroups::GetCPULimit(BaseFileSystem &fs, idx_t physical_cores) {
 	optional_idx root_entry;
 	optional_idx cpu_entry;
 
@@ -288,11 +288,11 @@ idx_t CGroups::GetCPULimit(FileSystem &fs, idx_t physical_cores) {
 
 #else
 
-optional_idx CGroups::GetMemoryLimit(FileSystem &fs) {
+optional_idx CGroups::GetMemoryLimit(BaseFileSystem &fs) {
 	return optional_idx();
 }
 
-idx_t CGroups::GetCPULimit(FileSystem &fs, idx_t physical_cores) {
+idx_t CGroups::GetCPULimit(BaseFileSystem &fs, idx_t physical_cores) {
 	return physical_cores;
 }
 

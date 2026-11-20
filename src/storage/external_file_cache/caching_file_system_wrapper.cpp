@@ -2,7 +2,7 @@
 
 #include "duckdb/common/compressed_file_system.hpp"
 #include "duckdb/common/exception.hpp"
-#include "duckdb/common/file_system.hpp"
+#include "duckdb/common/base_file_system.hpp"
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/main/client_context.hpp"
 
@@ -45,14 +45,15 @@ void CachingFileHandleWrapper::Close() {
 //===----------------------------------------------------------------------===//
 // CachingFileSystemWrapper implementation
 //===----------------------------------------------------------------------===//
-CachingFileSystemWrapper::CachingFileSystemWrapper(FileSystem &file_system, DatabaseInstance &db, CachingMode mode)
-    : caching_file_system(file_system, db), underlying_file_system(file_system), caching_mode(mode) {
+CachingFileSystemWrapper::CachingFileSystemWrapper(BaseFileSystem &file_system, DatabaseInstance &db, CachingMode mode)
+    : underlying_file_system(file_system), bound_file_system(file_system, nullptr),
+      caching_file_system(bound_file_system, db), caching_mode(mode) {
 }
 
-CachingFileSystemWrapper::CachingFileSystemWrapper(FileSystem &file_system, optional_ptr<FileOpener> file_opener,
+CachingFileSystemWrapper::CachingFileSystemWrapper(BaseFileSystem &file_system, optional_ptr<FileOpener> file_opener,
                                                    CachingMode mode)
-    : caching_file_system(file_system, GetDatabaseInstance(file_opener)), underlying_file_system(file_system),
-      caching_mode(mode) {
+    : underlying_file_system(file_system), bound_file_system(file_system, file_opener),
+      caching_file_system(bound_file_system, GetDatabaseInstance(file_opener)), caching_mode(mode) {
 }
 
 bool CachingFileSystemWrapper::ShouldUseCache(const string &path) const {
@@ -318,7 +319,7 @@ vector<OpenFileInfo> CachingFileSystemWrapper::Glob(const string &path, FileOpen
 //===----------------------------------------------------------------------===//
 // SubSystem Operations
 //===----------------------------------------------------------------------===//
-void CachingFileSystemWrapper::RegisterSubSystem(unique_ptr<FileSystem> sub_fs) {
+void CachingFileSystemWrapper::RegisterSubSystem(unique_ptr<BaseFileSystem> sub_fs) {
 	underlying_file_system.RegisterSubSystem(std::move(sub_fs));
 }
 
@@ -330,7 +331,7 @@ void CachingFileSystemWrapper::UnregisterSubSystem(const string &name) {
 	underlying_file_system.UnregisterSubSystem(name);
 }
 
-unique_ptr<FileSystem> CachingFileSystemWrapper::ExtractSubSystem(const string &name) {
+unique_ptr<BaseFileSystem> CachingFileSystemWrapper::ExtractSubSystem(const string &name) {
 	return underlying_file_system.ExtractSubSystem(name);
 }
 

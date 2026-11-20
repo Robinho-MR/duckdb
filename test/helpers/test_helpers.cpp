@@ -126,7 +126,8 @@ bool NO_FAIL(duckdb::unique_ptr<QueryResult> result) {
 }
 
 FileSystem &TestLocalFileSystem() {
-	static LocalFileSystem fs;
+	static LocalFileSystem local_fs;
+	static BoundFileSystem fs(local_fs, nullptr);
 	return fs;
 }
 

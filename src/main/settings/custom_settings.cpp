@@ -9,6 +9,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "duckdb/common/file_system.hpp"
 #include "duckdb/common/types/decimal.hpp"
 #include "duckdb/main/settings.hpp"
 
@@ -19,7 +20,6 @@
 #include "duckdb/common/limits.hpp"
 #include "duckdb/catalog/catalog_search_path.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/common/file_system.hpp"
 #include "duckdb/main/extension_repository_manager.hpp"
 #include "duckdb/common/operator/double_cast_operator.hpp"
 #include "duckdb/main/attached_database.hpp"
@@ -1154,17 +1154,9 @@ void ForceCompressionSetting::OnSet(SettingCallbackInfo &info, Value &input) {
 // Home Directory
 //===----------------------------------------------------------------------===//
 void HomeDirectorySetting::OnSet(SettingCallbackInfo &info, Value &input) {
-	optional_ptr<FileSystem> fs;
-	if (info.context) {
-		fs = FileSystem::GetFileSystem(*info.context);
-	} else if (info.db) {
-		fs = FileSystem::GetFileSystem(*info.db);
-	} else {
-		fs = info.config.file_system.get();
-	}
-	if (fs && !input.IsNull()) {
+	if (!input.IsNull()) {
 		auto new_home_directory = input.ToString();
-		if (fs->IsRemoteFile(new_home_directory)) {
+		if (FileSystem::IsRemoteFile(new_home_directory)) {
 			throw InvalidInputException("Cannot set the home directory to a remote path");
 		}
 	}

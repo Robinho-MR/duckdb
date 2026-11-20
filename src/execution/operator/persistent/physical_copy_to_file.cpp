@@ -1,8 +1,8 @@
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/execution/operator/persistent/physical_copy_to_file.hpp"
+#include "duckdb/common/file_system.hpp"
 
 #include "duckdb/common/file_opener.hpp"
-#include "duckdb/common/file_system.hpp"
 #include "duckdb/common/path.hpp"
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -4528,7 +4528,7 @@ void PhysicalCopyToFile::PrepareOutputDirectory(ClientContext &context, const st
                                                 CopyOverwriteMode overwrite_mode,
                                                 CopyOutputLifecycle &output_lifecycle) {
 	auto &fs = FileSystem::GetFileSystem(context);
-	if (!fs.IsRemoteFile(directory)) {
+	if (!FileSystem::IsRemoteFile(directory)) {
 		if (fs.FileExists(directory)) {
 			if (overwrite_mode == CopyOverwriteMode::COPY_OVERWRITE) {
 				fs.RemoveFile(directory);

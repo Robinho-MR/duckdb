@@ -2,10 +2,10 @@
 #include "duckdb/common/compressed_file_system.hpp"
 #include "duckdb/common/multi_file/multi_file_list.hpp"
 #include "duckdb/common/file_buffer.hpp"
-#include "duckdb/common/file_system.hpp"
+#include "duckdb/common/base_file_system.hpp"
 #include "duckdb/common/fstream.hpp"
 #include "duckdb/common/local_file_system.hpp"
-#include "duckdb/common/opener_file_system.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/unique_ptr.hpp"
@@ -29,7 +29,7 @@ using namespace duckdb;
 
 namespace {
 
-class ExistingDirectoryFileSystem : public FileSystem {
+class ExistingDirectoryFileSystem : public BaseFileSystem {
 public:
 	string GetName() const override {
 		return "ExistingDirectoryFileSystem";
@@ -47,14 +47,14 @@ public:
 	bool create_called = false;
 };
 
-class TestOpenerFileSystem : public OpenerFileSystem {
+class TestContextFileSystem : public FileSystem {
 public:
-	TestOpenerFileSystem(FileSystem &file_system_p, FileOpener &opener_p)
+	TestContextFileSystem(BaseFileSystem &file_system_p, FileOpener &opener_p)
 	    : file_system(file_system_p), opener(opener_p) {
 	}
 
 public:
-	FileSystem &GetFileSystem() const override {
+	BaseFileSystem &GetFileSystem() const override {
 		return file_system;
 	}
 
@@ -63,7 +63,7 @@ public:
 	}
 
 private:
-	FileSystem &file_system;
+	BaseFileSystem &file_system;
 	FileOpener &opener;
 };
 
@@ -95,7 +95,7 @@ void CreateDummyFile(string fname) {
 // just the interface compatibility.
 class FakeCompressFileHandle : public FileHandle {
 public:
-	FakeCompressFileHandle(FileSystem &internal_file_system, duckdb::unique_ptr<FileHandle> internal_file_handle_p)
+	FakeCompressFileHandle(BaseFileSystem &internal_file_system, duckdb::unique_ptr<FileHandle> internal_file_handle_p)
 	    : FileHandle(internal_file_system, internal_file_handle_p->GetPath(), internal_file_handle_p->GetFlags()),
 	      internal_file_handle(std::move(internal_file_handle_p)) {
 	}
@@ -139,7 +139,7 @@ public:
 
 TEST_CASE("Make sure the file:// protocol works as expected", "[file_system]") {
 	auto &fs = TestLocalFileSystem();
-	auto dname = TestMakeAbsolute(TestCreatePath("TEST_DIR"), fs.GetWorkingDirectory());
+	auto dname = TestMakeAbsolute(TestCreatePath("TEST_DIR"), FileSystem::GetWorkingDirectory());
 	auto dname_converted_slashes = StringUtil::Replace(dname, "\\", "/");
 
 	// handle differences between windows and linux
@@ -286,7 +286,7 @@ TEST_CASE("Test directory cleanup preserves a concurrently created sibling", "[f
 			if (directory == root && !created_sibling) {
 				created_sibling = true;
 				auto sibling = JoinPath(root, "active_run");
-				CreateDirectory(sibling);
+				CreateDirectory(sibling, nullptr);
 				CreateDummyFile(JoinPath(sibling, "database.wal"));
 			}
 			return result;
@@ -299,19 +299,22 @@ TEST_CASE("Test directory cleanup preserves a concurrently created sibling", "[f
 	auto root = TestCreatePath("cleanup_ancestor");
 	ConcurrentDirectoryFileSystem fs(root);
 	auto leaf = fs.JoinPath(root, "finished_run");
-	fs.CreateDirectoriesRecursive(leaf);
-	ReclaimTestDirectoryLevels(fs, leaf, {root, leaf});
+	fs.CreateDirectoriesRecursive(leaf, nullptr);
+	BoundFileSystem bound_fs(fs, nullptr);
+	ReclaimTestDirectoryLevels(bound_fs, leaf, {root, leaf});
 	REQUIRE(fs.created_sibling);
-	REQUIRE(!fs.DirectoryExists(leaf));
-	REQUIRE(fs.FileExists(fs.JoinPath(root, "active_run/database.wal")));
-	fs.RemoveDirectory(root);
+	REQUIRE(!fs.DirectoryExists(leaf, nullptr));
+	REQUIRE(fs.FileExists(fs.JoinPath(root, "active_run/database.wal"), nullptr));
+	fs.RemoveDirectory(root, nullptr);
 }
 
 TEST_CASE("Extended directory operations report target ownership", "[file_system]") {
 	ExistingDirectoryFileSystem existing_directory_fs;
-	REQUIRE(!existing_directory_fs.CreateDirectoryExtended("virtual_directory", {CreateDirectoryMode::SINGLE}));
+	REQUIRE(
+	    !existing_directory_fs.CreateDirectoryExtended("virtual_directory", {CreateDirectoryMode::SINGLE}, nullptr));
 	REQUIRE(!existing_directory_fs.create_called);
-	REQUIRE(!existing_directory_fs.RemoveDirectoryExtended("virtual_directory", {RemoveDirectoryMode::SINGLE}));
+	REQUIRE(
+	    !existing_directory_fs.RemoveDirectoryExtended("virtual_directory", {RemoveDirectoryMode::SINGLE}, nullptr));
 
 	auto &fs = TestLocalFileSystem();
 	auto directory = TestCreatePath("try_create_directory");
@@ -372,10 +375,10 @@ TEST_CASE("Extended directory operations forward the file opener", "[file_system
 	ClientContextFileOpener opener(con.context->GetContext());
 	LocalFileSystem fs;
 	auto home_directory = TestCreatePath("extended_directory_opener");
-	if (fs.DirectoryExists(home_directory)) {
-		fs.RemoveDirectory(home_directory);
+	if (fs.DirectoryExists(home_directory, nullptr)) {
+		fs.RemoveDirectory(home_directory, nullptr);
 	}
-	fs.CreateDirectory(home_directory);
+	fs.CreateDirectory(home_directory, nullptr);
 	REQUIRE_NO_FAIL(con.Query(StringUtil::Format("SET home_directory = '%s'", home_directory)));
 
 	auto directory = "~/parent/child";
@@ -384,8 +387,8 @@ TEST_CASE("Extended directory operations forward the file opener", "[file_system
 	auto file = fs.JoinPath(fs.JoinPath(absolute_parent, "child"), "file");
 	CreateDummyFile(file);
 	REQUIRE(fs.RemoveDirectoryExtended("~/parent", {RemoveDirectoryMode::RECURSIVE}, &opener));
-	REQUIRE(!fs.DirectoryExists(absolute_parent));
-	fs.RemoveDirectory(home_directory);
+	REQUIRE(!fs.DirectoryExists(absolute_parent, nullptr));
+	fs.RemoveDirectory(home_directory, nullptr);
 }
 
 TEST_CASE("Recursive directory creation checks access for every ancestor", "[file_system]") {
@@ -393,7 +396,7 @@ TEST_CASE("Recursive directory creation checks access for every ancestor", "[fil
 	Connection con(db);
 	ClientContextFileOpener opener(con.context->GetContext());
 	auto &fs = TestLocalFileSystem();
-	TestOpenerFileSystem opener_fs(fs, opener);
+	TestContextFileSystem opener_fs(fs.GetFileSystem(), opener);
 	auto base = TestCreatePath("extended_directory_permissions");
 	if (fs.DirectoryExists(base)) {
 		fs.RemoveDirectory(base);
@@ -570,7 +573,7 @@ TEST_CASE("Test RemoveFiles", "[file_system]") {
 
 TEST_CASE("extract subsystem", "[file_system]") {
 	duckdb::VirtualFileSystem vfs;
-	duckdb::unique_ptr<FileSystem> local_filesystem = make_uniq<LocalFileSystem>();
+	duckdb::unique_ptr<BaseFileSystem> local_filesystem = make_uniq<LocalFileSystem>();
 	auto *local_filesystem_ptr = local_filesystem.get();
 	vfs.RegisterSubSystem(std::move(local_filesystem));
 
@@ -596,11 +599,11 @@ TEST_CASE("re-register subsystem", "[file_system]") {
 	duckdb::VirtualFileSystem vfs;
 
 	// First time registration should succeed.
-	duckdb::unique_ptr<FileSystem> local_filesystem = make_uniq<LocalFileSystem>();
+	duckdb::unique_ptr<BaseFileSystem> local_filesystem = make_uniq<LocalFileSystem>();
 	vfs.RegisterSubSystem(std::move(local_filesystem));
 
 	// Re-register an already registered subfilesystem should throw.
-	duckdb::unique_ptr<FileSystem> second_local_filesystem = make_uniq<LocalFileSystem>();
+	duckdb::unique_ptr<BaseFileSystem> second_local_filesystem = make_uniq<LocalFileSystem>();
 	REQUIRE_THROWS(vfs.RegisterSubSystem(std::move(second_local_filesystem)));
 }
 
@@ -630,8 +633,8 @@ void CanonicalizationTest::Test(const std::vector<CanonicalizationTest> &test_ca
 		}
 		if (!fs.IsPathAbsolute(test.a)) {
 			// verify absolute and relative paths resolve to the same path
-			auto abs_a = fs.JoinPath(fs.GetWorkingDirectory(), test.a);
-			auto abs_b = fs.JoinPath(fs.GetWorkingDirectory(), test.b);
+			auto abs_a = fs.JoinPath(FileSystem::GetWorkingDirectory(), test.a);
+			auto abs_b = fs.JoinPath(FileSystem::GetWorkingDirectory(), test.b);
 			auto canonical_abs_a = fs.CanonicalizePath(abs_a);
 			auto canonical_abs_b = fs.CanonicalizePath(abs_b);
 			if (canonical_abs_a != canonical_abs_b) {
@@ -683,7 +686,7 @@ TEST_CASE("Test path canonicalization", "[file_system]") {
 
 #ifdef _WIN32
 	auto &fs = TestLocalFileSystem();
-	auto current_drive = fs.GetWorkingDirectory().substr(0, 1);
+	auto current_drive = FileSystem::GetWorkingDirectory().substr(0, 1);
 
 	// Backslash handling
 	test_cases.emplace_back("src\\common", "src/common", "backslash separator equivalant to forward slash");
@@ -752,9 +755,10 @@ TEST_CASE("Test path canonicalization with symlinks", "[file_system]") {
 		REQUIRE_NO_FAIL(con.Query("CREATE TABLE tbl AS SELECT 42 i"));
 	}
 	// create symlink from fake_dir -> real_dir
-	TestCreateSymlink(fake_dir, fs.JoinPath(fs.GetWorkingDirectory(), real_dir), true);
+	TestCreateSymlink(fake_dir, fs.JoinPath(FileSystem::GetWorkingDirectory(), real_dir), true);
 	// create symlink from fake_file -> real_file
-	TestCreateSymlink(fs.JoinPath(fake_dir, "fake_file"), fs.JoinPath(fs.GetWorkingDirectory(), real_file), false);
+	TestCreateSymlink(fs.JoinPath(fake_dir, "fake_file"), fs.JoinPath(FileSystem::GetWorkingDirectory(), real_file),
+	                  false);
 
 	// all of these tests are in the test dir
 	std::vector<CanonicalizationTest> test_cases;
@@ -769,9 +773,9 @@ TEST_CASE("Test path canonicalization with symlinks", "[file_system]") {
 #ifndef _WIN32
 	// dangling symlinks resolve to the (non-existent) file they point to
 	TestCreateSymlink(fs.JoinPath(real_dir, "dangling_link"),
-	                  fs.JoinPath(fs.JoinPath(fs.GetWorkingDirectory(), real_dir), "missing_file"), false);
+	                  fs.JoinPath(fs.JoinPath(FileSystem::GetWorkingDirectory(), real_dir), "missing_file"), false);
 	TestCreateSymlink(fs.JoinPath(real_dir, "dangling_chain"),
-	                  fs.JoinPath(fs.JoinPath(fs.GetWorkingDirectory(), real_dir), "dangling_link"), false);
+	                  fs.JoinPath(fs.JoinPath(FileSystem::GetWorkingDirectory(), real_dir), "dangling_link"), false);
 	test_cases.emplace_back("real_dir/dangling_link", "real_dir/missing_file", "follow dangling symlink");
 	test_cases.emplace_back("fake_dir/dangling_link", "real_dir/missing_file",
 	                        "follow dangling symlink in symlink dir");
@@ -1406,7 +1410,7 @@ TEST_CASE("Path one-off tests", "[file_system]") {
 #ifdef _WIN32
 TEST_CASE("Check path canonicalization on Windows", "[file_system]") {
 	auto &fs = TestLocalFileSystem();
-	auto canonical_work_dir = fs.CanonicalizePath(fs.GetWorkingDirectory());
+	auto canonical_work_dir = fs.CanonicalizePath(FileSystem::GetWorkingDirectory());
 	// check that long path prefix "\\?\" or "\\?\UNC\" is not present
 	REQUIRE(!StringUtil::StartsWith(canonical_work_dir, "\\\\"));
 }
@@ -1447,7 +1451,7 @@ TEST_CASE("Test long paths on Windows", "[file_system]") {
 	idx_t work_dir_path_len = 240;
 
 	auto &fs = TestLocalFileSystem();
-	string cwd = fs.GetWorkingDirectory();
+	string cwd = FileSystem::GetWorkingDirectory();
 	string test_dir = TestDirectoryPath();
 	test_dir = fs.JoinPath(test_dir, "test_long_path");
 	test_dir = fs.JoinPath(cwd, test_dir);

@@ -20,7 +20,7 @@ TEST_CASE("Test ProcessUtil", "[api]") {
 
 	SECTION("describing a process never throws") {
 		// best effort: platforms that cannot say return an empty string rather than failing
-		LocalFileSystem fs;
+		auto &fs = TestLocalFileSystem();
 		REQUIRE_NOTHROW(ProcessUtil::GetProcessDescription(fs, ProcessUtil::CurrentProcessId()));
 		REQUIRE_NOTHROW(ProcessUtil::GetProcessDescription(fs, 0));
 	}

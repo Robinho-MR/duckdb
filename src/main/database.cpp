@@ -399,7 +399,7 @@ void DatabaseInstance::InitializeInstance(const char *database_path, DBConfig *u
 		// if we are opening an extension database - load the extension
 		auto storage_extension = StorageExtension::Find(config, config.options.database_type);
 		if (!storage_extension) {
-			ExtensionHelper::LoadExternalExtension(*this, *config.file_system, {config.options.database_type});
+			ExtensionHelper::LoadExternalExtension(*this, fs, {config.options.database_type});
 		}
 	}
 
@@ -473,7 +473,7 @@ FileSystem &DatabaseInstance::GetLocalFileSystem() {
 	return *local_db_file_system;
 }
 
-static FileSystem &ResolveLocalFileSystem(DatabaseInstance &db) {
+static BaseFileSystem &ResolveLocalFileSystem(DatabaseInstance &db) {
 	return static_cast<VirtualFileSystem &>(*db.config.file_system).GetLocalFileSystem();
 }
 
@@ -481,7 +481,7 @@ LocalDatabaseFileSystem::LocalDatabaseFileSystem(DatabaseInstance &db_p)
     : db(db_p), local_fs(ResolveLocalFileSystem(db_p)), database_opener(db_p) {
 }
 
-FileSystem &LocalDatabaseFileSystem::GetFileSystem() const {
+BaseFileSystem &LocalDatabaseFileSystem::GetFileSystem() const {
 	if (db.config.file_system->SubSystemIsDisabled(local_fs.GetName())) {
 		throw PermissionException("File system %s has been disabled by configuration", local_fs.GetName());
 	}

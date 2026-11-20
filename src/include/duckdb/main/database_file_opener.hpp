@@ -10,7 +10,7 @@
 
 #include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/local_file_system.hpp"
-#include "duckdb/common/opener_file_system.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/main/context.hpp"
 #include "duckdb/main/database.hpp"
@@ -53,12 +53,12 @@ private:
 	Context &context;
 };
 
-class DatabaseFileSystem : public OpenerFileSystem {
+class DatabaseFileSystem : public FileSystem {
 public:
 	explicit DatabaseFileSystem(DatabaseInstance &db_p) : db(db_p), database_opener(db_p) {
 	}
 
-	FileSystem &GetFileSystem() const override {
+	BaseFileSystem &GetFileSystem() const override {
 		auto &config = DBConfig::GetConfig(db);
 		return *config.file_system;
 	}
@@ -71,18 +71,18 @@ private:
 	mutable DatabaseFileOpener database_opener;
 };
 
-class LocalDatabaseFileSystem : public OpenerFileSystem {
+class LocalDatabaseFileSystem : public FileSystem {
 public:
 	explicit LocalDatabaseFileSystem(DatabaseInstance &db_p);
 
-	FileSystem &GetFileSystem() const override;
+	BaseFileSystem &GetFileSystem() const override;
 	optional_ptr<FileOpener> GetOpener() const override {
 		return &database_opener;
 	}
 
 private:
 	DatabaseInstance &db;
-	FileSystem &local_fs;
+	BaseFileSystem &local_fs;
 	mutable DatabaseFileOpener database_opener;
 };
 
