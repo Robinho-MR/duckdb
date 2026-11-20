@@ -16,6 +16,9 @@
 #include "duckdb/common/error_data.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/main/attached_database.hpp"
+#include "duckdb/common/mutex.hpp"
+#include "duckdb/common/condition_variable.hpp"
+#include "duckdb/common/atomic.hpp"
 
 namespace duckdb {
 class AttachedDatabase;
@@ -40,7 +43,8 @@ struct TransactionReference {
 //! The MetaTransaction manages multiple transactions for different attached databases
 class MetaTransaction {
 public:
-	DUCKDB_API MetaTransaction(DatabaseInstance &db, timestamp_t start_timestamp, transaction_t global_transaction_id);
+	DUCKDB_API MetaTransaction(DatabaseInstance &db, shared_ptr<AttachedDatabase> temporary_objects,
+	                           timestamp_t start_timestamp, transaction_t global_transaction_id);
 	DUCKDB_API ~MetaTransaction();
 
 	//! The timestamp when the transaction started
@@ -49,11 +53,42 @@ public:
 	transaction_t global_transaction_id;
 	//! The validity checker of the transaction
 	ValidChecker transaction_validity;
-	//! The active query number
-	atomic<transaction_t> active_query;
 
 public:
 	DUCKDB_API static MetaTransaction &Get(ClientContext &context);
+	//! The temporary objects (temp catalog) the transaction operates on: those of the connection that created it
+	AttachedDatabase &GetTemporaryObjects() const {
+		return *temporary_objects;
+	}
+	const shared_ptr<AttachedDatabase> &GetTemporaryObjectsPtr() const {
+		return temporary_objects;
+	}
+
+	//! Makes the transaction joinable by other connections, returns its identifier
+	string ShareTransaction();
+	//! The identifier under which the transaction was shared (empty if not shared)
+	string GetShareId();
+	//! Waits until no other participant executes a write, then starts executing one
+	void BeginWrite();
+	//! The participant finished executing its write
+	void EndWrite();
+	//! Adds a participant to the shared transaction. Returns false if the transaction already ended.
+	bool Join();
+	struct LeaveResult {
+		//! Whether the participant that left was the last one - it then has to commit or roll back
+		bool last;
+		//! Whether all participants that left voted to commit
+		bool commit;
+	};
+	//! A participant leaves the transaction, voting for a commit or rollback
+	LeaveResult Leave(bool commit);
+	//! Whether the transaction was committed or rolled back
+	bool IsFinished() const {
+		return finished;
+	}
+	void MarkFinished() {
+		finished = true;
+	}
 	timestamp_t GetCurrentTransactionStartTimestamp() const {
 		return start_timestamp;
 	}
@@ -67,9 +102,6 @@ public:
 	void Rollback(ClientContext &context);
 	// Finalize the transaction after a COMMIT of ROLLBACK.
 	void Finalize(ClientContext &context);
-
-	idx_t GetActiveQuery();
-	void SetActiveQuery(transaction_t query_number);
 
 	void SetReadOnly();
 	bool IsReadOnly() const;
@@ -104,6 +136,22 @@ private:
 	reference_map_t<AttachedDatabase, shared_ptr<AttachedDatabase>> referenced_databases;
 	//! Map of name -> database for databases that are in-use by this transaction.
 	identifier_map_t<reference<AttachedDatabase>> used_databases;
+	//! The temporary objects of the connection that created the transaction
+	shared_ptr<AttachedDatabase> temporary_objects;
+	//! Whether the transaction ended (committed or rolled back)
+	atomic<bool> finished;
+	//! Guards the participant state below
+	mutex shared_lock;
+	//! Participants execute their writes one at a time
+	mutex write_lock;
+	condition_variable write_cv;
+	bool write_active = false;
+	//! The number of connections participating in the transaction, starting with the one that created it
+	idx_t participants = 1;
+	//! Whether a participant voted to roll back
+	bool rollback_vote = false;
+	//! The identifier the transaction was exported under
+	string share_id;
 	//! Secrets that only live for the duration of this transaction.
 	unique_ptr<SecretStorage> transaction_secret_storage;
 };

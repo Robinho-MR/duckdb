@@ -1,8 +1,11 @@
 #include "duckdb/transaction/meta_transaction.hpp"
 
 #include "duckdb/common/exception/transaction_exception.hpp"
+#include "duckdb/common/string_util.hpp"
+#include <random>
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/main/client_data.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/transaction/transaction_manager.hpp"
 #include "duckdb/catalog/catalog.hpp"
@@ -10,9 +13,11 @@
 
 namespace duckdb {
 
-MetaTransaction::MetaTransaction(DatabaseInstance &db, timestamp_t start_timestamp_p, transaction_t transaction_id_p)
+MetaTransaction::MetaTransaction(DatabaseInstance &db, shared_ptr<AttachedDatabase> temporary_objects_p,
+                                 timestamp_t start_timestamp_p, transaction_t transaction_id_p)
     : start_timestamp(start_timestamp_p), global_transaction_id(transaction_id_p), transaction_validity(db),
-      active_query(MAXIMUM_QUERY_ID), modified_database(nullptr), is_read_only(false) {
+      modified_database(nullptr), is_read_only(false), temporary_objects(std::move(temporary_objects_p)),
+      finished(false) {
 }
 
 MetaTransaction::~MetaTransaction() = default;
@@ -63,7 +68,6 @@ Transaction &MetaTransaction::GetTransaction(ClientContext &context, AttachedDat
 	auto entry = transactions.find(db);
 	if (entry == transactions.end()) {
 		auto &new_transaction = db.GetTransactionManager().StartTransaction(context.GetContext(), *this);
-		new_transaction.active_query = active_query.load();
 #ifdef DEBUG
 		VerifyAllTransactionsUnique(db, all_transactions);
 #endif
@@ -78,7 +82,6 @@ Transaction &MetaTransaction::GetTransaction(ClientContext &context, AttachedDat
 
 		return new_transaction;
 	} else {
-		D_ASSERT(entry->second.transaction.active_query == active_query);
 		return entry->second.transaction;
 	}
 }
@@ -191,24 +194,67 @@ void MetaTransaction::Rollback(ClientContext &context) {
 	}
 }
 
+string MetaTransaction::ShareTransaction() {
+	lock_guard<mutex> guard(shared_lock);
+	if (share_id.empty()) {
+		// the identifier grants access to the transaction, so it must not be predictable
+		std::random_device random_device;
+		share_id = StringUtil::Format("%08x-%08x-%08x-%08x", random_device(), random_device(), random_device(),
+		                              random_device());
+	}
+	return share_id;
+}
+
+void MetaTransaction::BeginWrite() {
+	unique_lock<mutex> guard(write_lock);
+	write_cv.wait(guard, [&]() { return !write_active; });
+	write_active = true;
+}
+
+void MetaTransaction::EndWrite() {
+	{
+		lock_guard<mutex> guard(write_lock);
+		write_active = false;
+	}
+	write_cv.notify_one();
+}
+
+string MetaTransaction::GetShareId() {
+	lock_guard<mutex> guard(shared_lock);
+	return share_id;
+}
+
+bool MetaTransaction::Join() {
+	lock_guard<mutex> guard(shared_lock);
+	if (finished) {
+		return false;
+	}
+	participants++;
+	return true;
+}
+
+MetaTransaction::LeaveResult MetaTransaction::Leave(bool commit) {
+	lock_guard<mutex> guard(shared_lock);
+	D_ASSERT(participants > 0);
+	if (!commit) {
+		rollback_vote = true;
+	}
+	participants--;
+	LeaveResult result;
+	result.last = participants == 0;
+	result.commit = !rollback_vote;
+	if (result.last) {
+		finished = true;
+	}
+	return result;
+}
+
 void MetaTransaction::Finalize(ClientContext &context) {
 	// Try to checkpoint any attached databases potentially still held by this transaction.
 	for (auto &database : referenced_databases) {
 		// If the use count is down to one, then we already detached the database.
 		// That means new transactions can no longer obtain a shared pointer to it.
 		AttachedDatabase::InvokeCloseIfLastReference(database.second, context);
-	}
-}
-
-idx_t MetaTransaction::GetActiveQuery() {
-	return active_query;
-}
-
-void MetaTransaction::SetActiveQuery(transaction_t query_number) {
-	lock_guard<mutex> guard(lock);
-	active_query = query_number;
-	for (auto &entry : transactions) {
-		entry.second.transaction.active_query = query_number;
 	}
 }
 
