@@ -123,7 +123,29 @@ QueryProfiler &QueryProfiler::Get(Context &context) {
 	return context.GetQueryProfiler();
 }
 
+void QueryProfiler::MoveProfileTo(QueryProfiler &other) {
+	other.Reset();
+	other.root = std::move(root);
+	other.metrics = std::move(metrics);
+	other.result_tree = std::move(result_tree);
+	other.metrics_finalized = metrics_finalized;
+	other.query_metrics.CopyFrom(query_metrics);
+}
+
+const QueryProfiler &QueryProfiler::GetPreviousProfile() const {
+	lock_guard<std::mutex> guard(lock);
+	if (running && previous_profile) {
+		return *previous_profile;
+	}
+	return *this;
+}
+
 void QueryProfiler::Start(const string &query) {
+	// a query that reads the last profile starts after it, so keep that profile available
+	if (!previous_profile) {
+		previous_profile = make_uniq<QueryProfiler>(context);
+	}
+	MoveProfileTo(*previous_profile);
 	Reset();
 	tracked_metric_patterns = make_uniq<GatheredMetrics>(Settings::Get<TrackedMetricsSetting>(context));
 	running = true;

@@ -199,6 +199,34 @@ public:
 	//! The metrics backed by atomic counters, which can be read from any thread while the query runs
 	profiler_metrics_t GetLiveMetrics() const;
 
+	//! Replace the contents with a copy of the other metrics, but for the latency timer
+	void CopyFrom(const QueryMetrics &other) {
+		Reset();
+		Merge(other);
+		query_sql = other.query_sql;
+		system_peak_buffer_memory = other.system_peak_buffer_memory;
+		system_peak_streaming_buffer_size = other.system_peak_streaming_buffer_size;
+		system_peak_temp_dir_size = other.system_peak_temp_dir_size;
+		blocked_thread_time = other.blocked_thread_time;
+		bytes_read = other.bytes_read.load();
+		read_operations = other.read_operations.load();
+		read_time_us = other.read_time_us.load();
+		bytes_written = other.bytes_written.load();
+		write_operations = other.write_operations.load();
+		write_time_us = other.write_time_us.load();
+		bytes_spilled = other.bytes_spilled.load();
+		bytes_scanned = other.bytes_scanned.load();
+		total_memory_allocated = other.total_memory_allocated.load();
+		annotated_lock_guard<annotated_mutex> guard(string_metrics_lock);
+		string_values = other.GetMetricValues();
+	}
+
+	//! A copy of the values set with QueryProfiler::SetMetric
+	profiler_metrics_t GetMetricValues() const {
+		annotated_lock_guard<annotated_mutex> guard(string_metrics_lock);
+		return string_values;
+	}
+
 	void Merge(const QueryMetrics &other) {
 		auto other_timings = other.GetMetricTimings();
 		auto other_counters = other.GetMetricCounters();
