@@ -123,29 +123,7 @@ QueryProfiler &QueryProfiler::Get(Context &context) {
 	return context.GetQueryProfiler();
 }
 
-void QueryProfiler::MoveProfileTo(QueryProfiler &other) {
-	other.Reset();
-	other.root = std::move(root);
-	other.metrics = std::move(metrics);
-	other.result_tree = std::move(result_tree);
-	other.metrics_finalized = metrics_finalized;
-	other.query_metrics.CopyFrom(query_metrics);
-}
-
-const QueryProfiler &QueryProfiler::GetPreviousProfile() const {
-	lock_guard<std::mutex> guard(lock);
-	if (running && previous_profile) {
-		return *previous_profile;
-	}
-	return *this;
-}
-
 void QueryProfiler::Start(const string &query) {
-	// a query that reads the last profile starts after it, so keep that profile available
-	if (!previous_profile) {
-		previous_profile = make_uniq<QueryProfiler>(context);
-	}
-	MoveProfileTo(*previous_profile);
 	Reset();
 	tracked_metric_patterns = make_uniq<GatheredMetrics>(Settings::Get<TrackedMetricsSetting>(context));
 	running = true;
@@ -266,6 +244,7 @@ void QueryProfiler::EndQuery() {
 	}
 	if (!IsEnabled()) {
 		Reset();
+		previous_profiles.clear();
 		return;
 	}
 
@@ -300,6 +279,23 @@ void QueryProfiler::EndQuery() {
 			PrintProfilerOutput(renderer.get(), "\n\n");
 		}
 	}
+
+	const auto history_size = Settings::Get<ProfilingHistorySizeSetting>(context);
+	vector<QueryProfileRecord> record;
+	if (history_size > 0 && has_plan && ClientConfig::GetConfig(context).enable_profiler) {
+		record.push_back({GetQuerySQL(), ToString(ProfilerPrintFormat::JSON())});
+	}
+	lock_guard<std::mutex> history_guard(lock);
+	previous_profiles.insert(previous_profiles.begin(), std::make_move_iterator(record.begin()),
+	                         std::make_move_iterator(record.end()));
+	if (previous_profiles.size() > history_size) {
+		previous_profiles.resize(history_size);
+	}
+}
+
+vector<QueryProfileRecord> QueryProfiler::GetPreviousProfiles() const {
+	lock_guard<std::mutex> guard(lock);
+	return previous_profiles;
 }
 
 void QueryProfiler::FinalizeMetrics() {

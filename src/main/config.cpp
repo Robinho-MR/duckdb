@@ -256,6 +256,7 @@ static const ConfigurationOption internal_options[] = {
     DUCKDB_SETTING(PreserveInsertionOrderSetting),
     DUCKDB_SETTING(ProduceArrowStringViewSetting),
     DUCKDB_SETTING_CALLBACK(ProfilingCoverageSetting),
+    DUCKDB_SETTING(ProfilingHistorySizeSetting),
     DUCKDB_LOCAL(ProfilingModeSetting),
     DUCKDB_SETTING_CALLBACK(ProfilingOutputSetting),
     DUCKDB_SETTING_CALLBACK(ProfilingRendererSettingsSetting),

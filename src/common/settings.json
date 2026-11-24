@@ -1550,6 +1550,13 @@
         ]
     },
     {
+        "name": "profiling_history_size",
+        "description": "The number of profiles of previous queries to keep, readable with duckdb_profiling_info(). Profiles are only collected while profiling is enabled.",
+        "type": "UBIGINT",
+        "default_scope": "local",
+        "default_value": "0"
+    },
+    {
         "name": "profiling_mode",
         "description": "Deprecated setting. Use enable_profiling and profiling_coverage instead.",
         "type": "VARCHAR",

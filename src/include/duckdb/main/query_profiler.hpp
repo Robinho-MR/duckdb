@@ -76,6 +76,12 @@ struct QueryProfileResult {
 	}
 };
 
+//! The text and the JSON profile of a finished query
+struct QueryProfileRecord {
+	string query;
+	string profile;
+};
+
 //! QueryProfiler collects the profiling metrics of a query.
 class QueryProfiler {
 public:
@@ -193,9 +199,9 @@ public:
 	DUCKDB_API idx_t GetBytesWritten() const;
 	DUCKDB_API idx_t GetBytesScanned() const;
 
-	//! The profile of the last query that was not itself profiled as a reader: while this query is being profiled, the
-	//! profile of the query before it, which starting this one replaced; otherwise the current profile.
-	DUCKDB_API const QueryProfiler &GetPreviousProfile() const;
+	//! The profiles of the previous queries as JSON, newest first. At most profiling_history_size are kept, and only
+	//! while profiling is enabled.
+	DUCKDB_API vector<QueryProfileRecord> GetPreviousProfiles() const;
 
 	//! Return the result tree (generating it if it does not yet exist)
 	QueryProfileResult &GetResult();
@@ -203,8 +209,6 @@ public:
 	bool HasRoot() const;
 
 private:
-	//! Move the finished profile of this profiler into the other one, replacing what it holds
-	void MoveProfileTo(QueryProfiler &other);
 	unique_ptr<ProfilingNode> CreateTree(const PhysicalOperator &root, const idx_t depth = 0);
 	void Render(const ProfilingNode &node, BaseTreeRenderer &str) const;
 	//! Render the profiler output to a string via the given renderer (nullptr renders nothing), handling the disabled
@@ -252,8 +256,8 @@ private:
 	QueryMetrics query_metrics;
 
 	unique_ptr<QueryProfileResult> result_tree;
-	//! The profile of the query before the running one, kept so that a query reading the last profile can see it
-	unique_ptr<QueryProfiler> previous_profile;
+	//! The profiles of the previous queries, newest first
+	vector<QueryProfileRecord> previous_profiles;
 
 	//! A map of a Physical Operator pointer to a tree node
 	TreeMap tree_map;

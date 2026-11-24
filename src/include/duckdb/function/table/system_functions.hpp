@@ -163,7 +163,7 @@ struct DuckDBIndexesFun {
 	static void RegisterFunction(BuiltinFunctions &set);
 };
 
-struct DuckDBLastProfileFun {
+struct DuckDBProfilingInfoFun {
 	static void RegisterFunction(BuiltinFunctions &set);
 };
 

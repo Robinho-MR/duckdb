@@ -1,0 +1,114 @@
+# name: test/sql/table_function/duckdb_profiling_info.test
+# description: duckdb_profiling_info() returns the profiles of previous queries
+# group: [table_function]
+
+# the profiles are state of the connection
+require skip_reload
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM duckdb_profiling_info());
+----
+query	VARCHAR
+profile	VARCHAR
+
+query I
+SELECT current_setting('profiling_history_size');
+----
+0
+
+statement ok
+SET enable_profiling = 'json';
+
+statement ok
+SET profiling_output = '{TEST_DIR}/duckdb_profiling_info_output.json';
+
+# no profiles are kept by default
+statement ok
+SELECT count(*) FROM range(4242);
+
+query I
+SELECT count(*) FROM duckdb_profiling_info();
+----
+0
+
+statement ok
+SET profiling_history_size = 1;
+
+statement ok
+SELECT count(*) FROM range(4242);
+
+# the profiles are kept in tables, as the profile of a query that reads the profiles is itself a profile
+statement ok
+CREATE TEMP TABLE first_read AS SELECT * FROM duckdb_profiling_info();
+
+statement ok
+CREATE TEMP TABLE second_read AS SELECT * FROM duckdb_profiling_info();
+
+query III
+SELECT count(*), bool_and(query LIKE 'SELECT count(*) FROM range(4242)%'), bool_and(profile LIKE '{%UNGROUPED_AGGREGATE%')
+FROM first_read;
+----
+1	true	true
+
+# reading does not hide the profiles: the next read sees the first reader
+query III
+SELECT count(*), bool_and(query LIKE 'CREATE TEMP TABLE first_read%'), bool_and(profile LIKE '%DUCKDB_PROFILING_INFO%')
+FROM second_read;
+----
+1	true	true
+
+# more than one profile, newest first
+statement ok
+SET profiling_history_size = 3;
+
+statement ok
+SELECT 1 AS query_a;
+
+statement ok
+SELECT 2 AS query_b;
+
+statement ok
+SELECT 3 AS query_c;
+
+statement ok
+SELECT 4 AS query_d;
+
+statement ok
+CREATE TEMP TABLE many AS SELECT * FROM duckdb_profiling_info();
+
+query I
+SELECT query FROM many;
+----
+SELECT 4 AS query_d;
+SELECT 3 AS query_c;
+SELECT 2 AS query_b;
+
+# lowering the size drops the profiles
+statement ok
+SET profiling_history_size = 0;
+
+statement ok
+SELECT 5;
+
+query I
+SELECT count(*) FROM duckdb_profiling_info();
+----
+0
+
+# with profiling disabled there are no profiles
+statement ok
+SET profiling_history_size = 2;
+
+statement ok
+SELECT 6;
+
+statement ok
+RESET enable_profiling;
+
+statement ok
+SELECT 7;
+
+query I
+SELECT count(*) FROM duckdb_profiling_info();
+----
+0

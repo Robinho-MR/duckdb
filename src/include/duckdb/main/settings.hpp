@@ -2588,6 +2588,20 @@ struct ProfilingCoverageSetting {
 	static void OnSet(SettingCallbackInfo &info, Value &input);
 };
 
+struct ProfilingHistorySizeSetting {
+	using RETURN_TYPE = idx_t;
+	static constexpr const char *Name = "profiling_history_size";
+	static constexpr const char *Description =
+	    "The number of profiles of previous queries to keep, readable with duckdb_profiling_info(). Profiles are only "
+	    "collected while profiling is enabled.";
+	static constexpr const char *InputType = "UBIGINT";
+	static constexpr bool IsDebug = false;
+	static constexpr bool IsDeprecated = false;
+	static constexpr const char *DefaultValue = "0";
+	static constexpr SettingScopeTarget Scope = SettingScopeTarget::LOCAL_DEFAULT;
+	static constexpr idx_t SettingIndex = NEXT_SETTING_INDEX();
+};
+
 struct ProfilingModeSetting {
 	using RETURN_TYPE = string;
 	static constexpr const char *Name = "profiling_mode";
