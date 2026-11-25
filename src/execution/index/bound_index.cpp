@@ -23,13 +23,15 @@ BoundIndex::BoundIndex(const Identifier &name, const string &index_type, IndexCo
                        const vector<column_t> &column_ids, TableIOManager &table_io_manager,
                        const vector<unique_ptr<Expression>> &unbound_expressions_p, AttachedDatabase &db)
     : Index(column_ids, table_io_manager, db), name(name), index_type(index_type),
-      index_constraint_type(index_constraint_type), executor(db.GetDatabase()) {
+      index_constraint_type(index_constraint_type) {
 	for (auto &expr : unbound_expressions_p) {
 		types.push_back(expr->GetReturnType().InternalType());
 		logical_types.push_back(expr->GetReturnType());
 		unbound_expressions.emplace_back(expr->Copy());
 		bound_expressions.push_back(BindExpression(expr->Copy()));
-		executor.AddExpression(*bound_expressions.back());
+		if (bound_expressions.back()->GetExpressionClass() != ExpressionClass::BOUND_REF) {
+			only_column_references = false;
+		}
 	}
 }
 
@@ -143,6 +145,16 @@ idx_t BoundIndex::GetInMemorySize() const {
 }
 
 void BoundIndex::ExecuteExpressions(DataChunk &input, DataChunk &result) const {
+	// plain column indexes only need to reference the input columns
+	if (only_column_references) {
+		for (idx_t i = 0; i < bound_expressions.size(); i++) {
+			auto &ref = bound_expressions[i]->Cast<BoundReferenceExpression>();
+			result.data[i].Reference(input.data[ref.Index()]);
+		}
+		result.SetChildCardinality(input.size());
+		return;
+	}
+	ExpressionExecutor executor(db.GetDatabase(), bound_expressions);
 	executor.Execute(input, result);
 }
 
