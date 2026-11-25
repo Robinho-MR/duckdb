@@ -356,11 +356,11 @@ public:
 	DUCKDB_API TypeManager &GetTypeManager();
 	DUCKDB_API CollationBinding &GetCollationBinding();
 	DUCKDB_API IndexTypeSet &GetIndexTypes();
-	static idx_t GetSystemMaxThreads(Context &context, FileSystem &fs);
-	static idx_t GetSystemMaxAsyncThreads(Context &context, FileSystem &fs);
-	static idx_t GetSystemAvailableMemory(Context &context, FileSystem &fs);
+	static idx_t GetSystemMaxThreads();
+	static idx_t GetSystemMaxAsyncThreads();
+	static idx_t GetSystemAvailableMemory();
 	static optional_idx ParseMemoryLimitSlurm(const string &arg);
-	void SetDefaultMaxMemory(optional_ptr<DatabaseInstance> db);
+	void SetDefaultMaxMemory();
 	void SetDefaultTempDirectory();
 
 	OrderType ResolveOrder(ClientContext &context, OrderType order_type) const;

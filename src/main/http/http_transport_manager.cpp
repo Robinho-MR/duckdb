@@ -238,9 +238,9 @@ bool HTTPTransportManager::AdvanceConnectionEpoch(uint64_t &connection_epoch, bo
 	return false;
 }
 
-void HTTPTransportManager::Initialize(const DBConfig &config, Context &context) {
+void HTTPTransportManager::Initialize(const DBConfig &config) {
 	auto new_capacity = config.options.http_client_pool_capacity == DConstants::INVALID_INDEX
-	                        ? AutomaticCapacity(config, context)
+	                        ? AutomaticCapacity(config)
 	                        : config.options.http_client_pool_capacity;
 	if (new_capacity == 0) {
 		throw InvalidInputException("The HTTP client pool capacity must be at least 1");
@@ -258,13 +258,11 @@ void HTTPTransportManager::Initialize(const DBConfig &config, Context &context) 
 	initialized = true;
 }
 
-idx_t HTTPTransportManager::AutomaticCapacity(const DBConfig &config, Context &context) {
-	auto &fs = *config.file_system;
+idx_t HTTPTransportManager::AutomaticCapacity(const DBConfig &config) {
 	auto io_concurrency = config.options.async_threads == DConstants::INVALID_INDEX
-	                          ? DBConfig::GetSystemMaxAsyncThreads(context, fs)
+	                          ? DBConfig::GetSystemMaxAsyncThreads()
 	                          : config.options.async_threads;
-	return CalculateCapacity(DBConfig::GetSystemMaxThreads(context, fs), FileSystem::GetFileDescriptorLimit(),
-	                         io_concurrency);
+	return CalculateCapacity(DBConfig::GetSystemMaxThreads(), FileSystem::GetFileDescriptorLimit(), io_concurrency);
 }
 
 idx_t HTTPTransportManager::GetCapacity() const {

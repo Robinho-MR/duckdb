@@ -562,7 +562,7 @@ void DatabaseInstance::Configure(DBConfig &new_config, const char *database_path
 		config.file_system = make_uniq<VirtualFileSystem>(FileSystem::CreateLocal());
 	}
 	db_file_system = make_uniq<DatabaseFileSystem>(*this);
-	config.http_transport_manager->Initialize(config, GetServices());
+	config.http_transport_manager->Initialize(config);
 	if (database_path && !Settings::Get<EnableExternalAccessSetting>(*this)) {
 		config.AddAllowedDatabasePath(*Services(), database_path);
 		if (!config.options.temporary_directory.empty()) {
@@ -573,13 +573,13 @@ void DatabaseInstance::Configure(DBConfig &new_config, const char *database_path
 		config.secret_manager = std::move(new_config.secret_manager);
 	}
 	if (config.options.maximum_memory == DConstants::INVALID_INDEX) {
-		config.SetDefaultMaxMemory(this);
+		config.SetDefaultMaxMemory();
 	}
 	if (new_config.options.maximum_threads == DConstants::INVALID_INDEX) {
-		config.options.maximum_threads = config.GetSystemMaxThreads(GetServices(), *config.file_system);
+		config.options.maximum_threads = config.GetSystemMaxThreads();
 	}
 	if (new_config.options.async_threads == DConstants::INVALID_INDEX) {
-		config.options.async_threads = config.GetSystemMaxAsyncThreads(GetServices(), *config.file_system);
+		config.options.async_threads = config.GetSystemMaxAsyncThreads();
 	}
 	config.allocator = std::move(new_config.allocator);
 	if (!config.allocator) {
@@ -589,8 +589,7 @@ void DatabaseInstance::Configure(DBConfig &new_config, const char *database_path
 	if (!config.block_allocator) {
 		auto default_block_size = Settings::Get<DefaultBlockSizeSetting>(config);
 		config.block_allocator =
-		    make_uniq<BlockAllocator>(*config.allocator, default_block_size,
-		                              DBConfig::GetSystemAvailableMemory(GetServices(), *config.file_system));
+		    make_uniq<BlockAllocator>(*config.allocator, default_block_size, DBConfig::GetSystemAvailableMemory());
 	}
 	config.block_allocator->SetEnabled(config.options.enable_block_allocator);
 	config.replacement_scans = std::move(new_config.replacement_scans);

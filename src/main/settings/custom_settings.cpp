@@ -91,16 +91,6 @@ static idx_t ParseMemoryLimitOrPercentage(const string &input, BASE &&get_base) 
 	return LossyNumericCast<idx_t>(result);
 }
 
-//! The available system memory. Options can be configured before the database starts: without a database there is
-//! no Context to read the cgroup limits with, so only the physical memory is used.
-static idx_t GetAvailableSystemMemory(optional_ptr<DatabaseInstance> db) {
-	if (db) {
-		return DBConfig::GetSystemAvailableMemory(db->GetServices(), *db->config.file_system);
-	}
-	auto memory = FileSystem::GetAvailableMemory();
-	return memory.IsValid() ? memory.GetIndex() : DBConfigOptions().maximum_memory;
-}
-
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -1307,7 +1297,7 @@ void LogQueryPathSetting::OnSet(SettingCallbackInfo &info, Value &input) {
 void MaxMemorySetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Value &input) {
 	// a percentage is relative to the system memory, since resolving it against maximum_memory would be circular
 	auto maximum_memory =
-	    ParseMemoryLimitOrPercentage(input.ToString(), [&]() { return GetAvailableSystemMemory(db); });
+	    ParseMemoryLimitOrPercentage(input.ToString(), [&]() { return DBConfig::GetSystemAvailableMemory(); });
 	if (db) {
 		BufferManager::GetBufferManager(*db).SetMemoryLimit(maximum_memory);
 	}
@@ -1316,7 +1306,7 @@ void MaxMemorySetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const V
 
 void MaxMemorySetting::ResetGlobal(DatabaseInstance *db, DBConfig &config) {
 	auto old_memory = config.options.maximum_memory;
-	config.SetDefaultMaxMemory(db);
+	config.SetDefaultMaxMemory();
 	auto new_memory = config.options.maximum_memory;
 	config.options.maximum_memory = old_memory;
 	if (db) {
@@ -1843,7 +1833,7 @@ void ThreadsSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, const Val
 }
 
 void ThreadsSetting::ResetGlobal(DatabaseInstance *db, DBConfig &config) {
-	idx_t new_maximum_threads = config.GetSystemMaxThreads(db->GetServices(), *config.file_system);
+	idx_t new_maximum_threads = config.GetSystemMaxThreads();
 	if (db) {
 		TaskScheduler::GetScheduler(*db).SetThreads(new_maximum_threads, Settings::Get<ExternalThreadsSetting>(config));
 	}
@@ -1859,7 +1849,7 @@ static void ResizeAutomaticHTTPClientPool(optional_ptr<DatabaseInstance> db, DBC
 	if (!db || config.options.http_client_pool_capacity != DConstants::INVALID_INDEX) {
 		return;
 	}
-	config.GetHTTPTransportManager().SetCapacity(HTTPTransportManager::AutomaticCapacity(config, db->GetServices()));
+	config.GetHTTPTransportManager().SetCapacity(HTTPTransportManager::AutomaticCapacity(config));
 }
 
 //===----------------------------------------------------------------------===//
@@ -1882,7 +1872,7 @@ void AsyncThreadsSetting::SetGlobal(DatabaseInstance *db, DBConfig &config, cons
 }
 
 void AsyncThreadsSetting::ResetGlobal(DatabaseInstance *db, DBConfig &config) {
-	idx_t new_async_threads = config.GetSystemMaxAsyncThreads(db->GetServices(), *config.file_system);
+	idx_t new_async_threads = config.GetSystemMaxAsyncThreads();
 	if (db) {
 		TaskScheduler::GetScheduler(*db).SetAsyncThreads(new_async_threads);
 	}
@@ -1913,8 +1903,7 @@ void HTTPClientPoolCapacitySetting::SetGlobal(DatabaseInstance *db, DBConfig &co
 
 void HTTPClientPoolCapacitySetting::ResetGlobal(DatabaseInstance *db, DBConfig &config) {
 	if (db) {
-		config.GetHTTPTransportManager().SetCapacity(
-		    HTTPTransportManager::AutomaticCapacity(config, db->GetServices()));
+		config.GetHTTPTransportManager().SetCapacity(HTTPTransportManager::AutomaticCapacity(config));
 	}
 	config.options.http_client_pool_capacity = DConstants::INVALID_INDEX;
 }
