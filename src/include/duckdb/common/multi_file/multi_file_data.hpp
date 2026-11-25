@@ -24,6 +24,14 @@ public:
 
 public:
 	virtual idx_t Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel) = 0;
+	//! Whether the filter has a value (BIGINT) for the rows it keeps - see GatherRowValues
+	virtual bool HasRowValues() const {
+		return false;
+	}
+	//! Write the value of the rows at the given file row numbers to the result (NULL for a row without a value)
+	virtual void GatherRowValues(const Vector &file_row_numbers, Vector &result, idx_t count) const {
+		throw InternalException("This delete filter does not have row values");
+	}
 };
 
 //! A delete filter that forwards to one owned by somebody else - used to hand a reader the filter of the scan it is
@@ -36,6 +44,12 @@ public:
 public:
 	idx_t Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel) override {
 		return filter.Filter(start_row_index, count, result_sel);
+	}
+	bool HasRowValues() const override {
+		return filter.HasRowValues();
+	}
+	void GatherRowValues(const Vector &file_row_numbers, Vector &result, idx_t count) const override {
+		filter.GatherRowValues(file_row_numbers, result, count);
 	}
 
 private:
