@@ -1126,6 +1126,10 @@ static bool FoldConstantArgument(ClientContext &context, unique_ptr<Expression> 
 	if (child->GetExpressionClass() == ExpressionClass::BOUND_LAMBDA || !child->IsFoldable()) {
 		return false;
 	}
+	// a constant cannot carry the VARIANT type - it would fold to the underlying value
+	if (child->GetReturnType().id() == LogicalTypeId::VARIANT) {
+		return false;
+	}
 	if (binder && child->RequiresRebind()) {
 		// the constant no longer shows that its value can change across queries
 		binder->SetAlwaysRequireRebind();

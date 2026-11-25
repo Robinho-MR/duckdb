@@ -5,6 +5,8 @@
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/union_vector.hpp"
 #include "duckdb/common/vector/variant_vector.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
+#include "duckdb/function/scalar/variant_utils.hpp"
 #include "duckdb/common/vector/vector_iterator.hpp"
 
 namespace duckdb {
@@ -198,7 +200,30 @@ void VectorStructBuffer::ToUnifiedFormat(UnifiedVectorFormat &format) const {
 	format.validity.Initialize(validity.GetData(), validity.Capacity());
 }
 
+void VectorStructBuffer::SetVariantValue(idx_t index, const Value &val) {
+	validity.Set(index, !val.IsNull());
+	if (val.IsNull()) {
+		for (auto &child : children) {
+			child.SetValue(index, Value());
+		}
+		return;
+	}
+	// encode the value as a variant, then copy the encoded children into this row
+	Vector source(val, count_t(1));
+	Vector encoded(LogicalType::VARIANT(), 1);
+	VectorOperations::DefaultCast(source, encoded, 1);
+	auto &encoded_children = StructVector::GetEntries(encoded);
+	D_ASSERT(children.size() == encoded_children.size());
+	for (idx_t i = 0; i < children.size(); i++) {
+		children[i].SetValue(index, encoded_children[i].GetValue(0));
+	}
+}
+
 void VectorStructBuffer::SetValue(const LogicalType &type, idx_t index, const Value &val) {
+	if (type.id() == LogicalTypeId::VARIANT) {
+		SetVariantValue(index, val);
+		return;
+	}
 	if (!val.IsNull() && val.type() != type) {
 		SetValue(type, index, val.DefaultCastAs(type));
 		return;
@@ -243,12 +268,16 @@ Value VectorStructBuffer::GetValue(const LogicalType &type, idx_t index) const {
 		return Value::UNION(members, tag, std::move(value));
 	}
 	case LogicalTypeId::VARIANT: {
-		duckdb::vector<Value> child_values;
-		child_values.emplace_back(children[0].GetValue(index));
-		child_values.emplace_back(children[1].GetValue(index));
-		child_values.emplace_back(children[2].GetValue(index));
-		child_values.emplace_back(children[3].GetValue(index));
-		return Value::VARIANT(child_values);
+		// a variant row is exposed as the underlying value it holds
+		Vector single(type, 1);
+		auto &single_children = StructVector::GetEntries(single);
+		for (idx_t i = 0; i < children.size(); i++) {
+			single_children[i].SetValue(0, children[i].GetValue(index));
+		}
+		RecursiveUnifiedVectorFormat format;
+		Vector::RecursiveToUnifiedFormat(single, format);
+		UnifiedVariantVectorData variant_data(format);
+		return VariantUtils::ConvertVariantToValue(variant_data, 0, 0);
 	}
 	default: {
 		duckdb::vector<Value> child_values;

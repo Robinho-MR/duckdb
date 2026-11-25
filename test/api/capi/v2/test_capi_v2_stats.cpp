@@ -1926,7 +1926,8 @@ TEST_CASE("V2 stats: the output of stats() sets the statistics it shows", "[capi
 	StatsExec(fx.conn,
 	          "CREATE TABLE pairs AS SELECT row(i, 'x' || i) AS r, {'n': i, 'p': row(i)} AS s FROM range(10) t(i)");
 
-	// stats() renders statistics as a VARIANT, with the elements of a TUPLE's child_stats as an array
+	// stats() renders statistics as a VARIANT - read as the value it holds, with the elements of a TUPLE's child_stats
+	// as an array
 	struct Shown {
 		const char *column;
 		const char *type;
@@ -1945,7 +1946,7 @@ TEST_CASE("V2 stats: the output of stats() sets the statistics it shows", "[capi
 	for (auto &test : cases) {
 		auto shown = StatsQueryValue(fx.conn, std::string("SELECT stats(") + test.column + ") FROM pairs LIMIT 1");
 		REQUIRE(shown != nullptr);
-		REQUIRE(TypeIdOf(shown) == DUCKDB_V2_LOGICAL_TYPE_ID_VARIANT);
+		REQUIRE(TypeIdOf(shown) == DUCKDB_V2_LOGICAL_TYPE_ID_STRUCT);
 		auto stats = StatsOfText(fx.factory, test.type, nullptr);
 		REQUIRE(stats != nullptr);
 		duckdb_v2_error_info_handle err = nullptr;

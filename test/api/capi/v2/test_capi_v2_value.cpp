@@ -1749,7 +1749,8 @@ TEST_CASE("V2: VARIANT cells are read by casting them", "[capi_v2][value][varian
 	REQUIRE(duckdb_v2_value_get_logical_type(box, &box_type, nullptr) == DUCKDB_V2_ERROR_NONE);
 	DUCKDB_V2_LOGICAL_TYPE_ID box_id = DUCKDB_V2_LOGICAL_TYPE_ID_INVALID;
 	REQUIRE(duckdb_v2_logical_type_get_id(box_type, &box_id, nullptr) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(box_id == DUCKDB_V2_LOGICAL_TYPE_ID_VARIANT);
+	// a VARIANT cell is read as the value it holds
+	REQUIRE(box_id == DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER);
 	duckdb_v2_logical_type_destroy(&box_type);
 
 	// Cast to the type the cell actually carries.
@@ -1799,7 +1800,8 @@ TEST_CASE("V2: VARIANT values are built by casting into them", "[capi_v2][value]
 	REQUIRE(duckdb_v2_value_get_logical_type(boxed, &boxed_type, nullptr) == DUCKDB_V2_ERROR_NONE);
 	DUCKDB_V2_LOGICAL_TYPE_ID boxed_id = DUCKDB_V2_LOGICAL_TYPE_ID_INVALID;
 	REQUIRE(duckdb_v2_logical_type_get_id(boxed_type, &boxed_id, nullptr) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(boxed_id == DUCKDB_V2_LOGICAL_TYPE_ID_VARIANT);
+	// a value cast to VARIANT is read as the value it holds
+	REQUIRE(boxed_id == DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER);
 	duckdb_v2_logical_type_destroy(&boxed_type);
 
 	auto int_type = MakeType(f.factory, DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER);

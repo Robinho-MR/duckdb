@@ -134,7 +134,7 @@ child_list_t<Value> StructStats::ToStruct(const BaseStatistics &stats, bool exac
 
 //! The children of a TUPLE's `child_stats` are positional: a TUPLE as ToStruct renders it, or a LIST as stats() does
 static void SetTupleChildrenFromValue(BaseStatistics &stats, const Value &children, StatsStructFields &fields) {
-	auto plain = StatsStructFields::Plain(children);
+	auto &plain = children;
 	optional_ptr<const vector<Value>> values;
 	switch (plain.type().id()) {
 	case LogicalTypeId::TUPLE:

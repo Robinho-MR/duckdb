@@ -14,11 +14,6 @@ OpenFileInfo OpenFileInfo::FromValue(const Value &input, const Identifier &funct
 	if (input.type().id() == LogicalTypeId::VARCHAR) {
 		return OpenFileInfo(StringValue::Get(input));
 	}
-	if (input.type().id() == LogicalTypeId::VARIANT) {
-		// a VARIANT lets every file carry its own set of open options - unpack it to its logical value
-		// a variant never unpacks to another variant, so this recurses at most once
-		return FromValue(VariantValue::GetValue(input), function_name);
-	}
 	if (input.type().id() != LogicalTypeId::STRUCT) {
 		throw ParserException("%s reader can only take a list of strings, structs or variants as a parameter",
 		                      function_name);

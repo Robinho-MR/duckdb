@@ -31,6 +31,10 @@ unique_ptr<Expression> ConstantFoldingRule::Apply(LogicalOperator &op, vector<re
 	// the root is a scalar expression that we have to fold
 	D_ASSERT(root.IsFoldable() && root.GetExpressionType() != ExpressionType::VALUE_CONSTANT);
 
+	if (root.GetReturnType().id() == LogicalTypeId::VARIANT) {
+		// a constant cannot carry the VARIANT type - it would fold to the underlying value
+		return nullptr;
+	}
 	// use an ExpressionExecutor to execute the expression
 	Value result_value;
 	if (!ExpressionExecutor::TryEvaluateScalar(GetContext(), root, result_value)) {

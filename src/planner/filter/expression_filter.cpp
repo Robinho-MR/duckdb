@@ -526,9 +526,6 @@ TryPrepareVariantComparisonStats(const BaseStatistics &stats, Value &constant,
 		return nullptr;
 	}
 
-	if (constant.type().id() == LogicalTypeId::VARIANT) {
-		constant = VariantValue::GetValue(constant);
-	}
 	if (constant.IsNull()) {
 		return nullptr;
 	}

@@ -11,17 +11,16 @@ void ConstantVector::ThrowVectorTypeMismatch(PhysicalType expected, PhysicalType
 	throw InternalException("Expected vector of type %s, but found vector of type %s", expected, found);
 }
 
-buffer_ptr<VectorBuffer> CreateConstantBuffer(const Value &value, count_t count) {
-	auto &type = value.type();
+static buffer_ptr<VectorBuffer> CreateConstantBuffer(const LogicalType &type, const Value &value, count_t count) {
 	auto internal_type = type.InternalType();
 	buffer_ptr<VectorBuffer> result;
 	capacity_t capacity(1ULL);
 	if (internal_type == PhysicalType::STRUCT) {
-		result = make_buffer<VectorStructBuffer>(value.type(), capacity);
+		result = make_buffer<VectorStructBuffer>(type, capacity);
 	} else if (internal_type == PhysicalType::LIST) {
-		result = make_buffer<VectorListBuffer>(capacity, value.type());
+		result = make_buffer<VectorListBuffer>(capacity, type);
 	} else if (internal_type == PhysicalType::ARRAY) {
-		result = make_buffer<VectorArrayBuffer>(value.type(), capacity);
+		result = make_buffer<VectorArrayBuffer>(type, capacity);
 	} else if (internal_type == PhysicalType::VARCHAR) {
 		result = make_buffer<VectorStringBuffer>(capacity);
 	} else {
@@ -34,8 +33,9 @@ buffer_ptr<VectorBuffer> CreateConstantBuffer(const Value &value, count_t count)
 }
 
 void ConstantVector::Reference(Vector &vector, const Value &value, count_t count) {
-	D_ASSERT(vector.GetType() == value.type());
-	vector.SetBuffer(CreateConstantBuffer(value, count));
+	// a VARIANT vector holds the underlying value, so it can reference a value of any type
+	D_ASSERT(vector.GetType() == value.type() || vector.GetType().id() == LogicalTypeId::VARIANT);
+	vector.SetBuffer(CreateConstantBuffer(vector.GetType(), value, count));
 }
 
 static bool IsReusableBufferType(VectorBufferType buffer_type) {

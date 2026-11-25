@@ -152,6 +152,8 @@ public:
 
 	idx_t GetDistinctCount();
 	static BaseStatistics FromConstant(const Value &input);
+	//! Statistics of a constant of the given type - the value can hold the underlying value for a VARIANT
+	static BaseStatistics FromConstant(const Value &input, const LogicalType &type);
 
 	template <class T>
 	void UpdateNumericStats(T new_value) {
@@ -170,7 +172,7 @@ private:
 
 	static BaseStatistics CreateUnknownType(LogicalType type);
 	static BaseStatistics CreateEmptyType(LogicalType type);
-	static BaseStatistics FromConstantType(const Value &input);
+	static BaseStatistics FromConstantType(const Value &input, const LogicalType &type);
 
 private:
 	//! The type of the logical segment

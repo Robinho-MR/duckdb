@@ -851,7 +851,7 @@ static bool TryGetStringBound(StatsStructFields &fields, const string &name, str
 	if (!field) {
 		return false;
 	}
-	auto plain = StatsStructFields::Plain(*field);
+	auto &plain = *field;
 	if (plain.type().id() == LogicalTypeId::BLOB || plain.type().id() == LogicalTypeId::VARCHAR) {
 		result = StringValue::Get(plain);
 		return true;

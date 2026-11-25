@@ -235,7 +235,7 @@ void GeometryStats::SetFromStruct(BaseStatistics &stats, StatsStructFields &fiel
 		}
 		auto type_set = GeometryTypeSet::Empty();
 		for (auto &entry : ListValue::GetChildren(*types)) {
-			auto name = StatsStructFields::Plain(entry);
+			auto &name = entry;
 			if (name.IsNull() || name.type().id() != LogicalTypeId::VARCHAR ||
 			    !type_set.TryAdd(StringValue::Get(name))) {
 				fields.Throw("types",

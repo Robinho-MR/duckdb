@@ -5,14 +5,7 @@
 
 namespace duckdb {
 
-Value StatsStructFields::Plain(const Value &value) {
-	if (value.type().id() != LogicalTypeId::VARIANT || value.IsNull()) {
-		return value;
-	}
-	return VariantValue::GetValue(value);
-}
-
-StatsStructFields::StatsStructFields(const Value &input, string path_p) : value(Plain(input)), path(std::move(path_p)) {
+StatsStructFields::StatsStructFields(const Value &input, string path_p) : value(input), path(std::move(path_p)) {
 	if (value.IsNull()) {
 		Throw("expected a struct of statistics, got NULL");
 	}
@@ -37,7 +30,7 @@ bool StatsStructFields::TryGet(const string &name, const LogicalType &type, Valu
 	if (!field) {
 		return false;
 	}
-	auto plain = Plain(*field);
+	auto &plain = *field;
 	string error;
 	auto cast = plain.DefaultTryCastAs(type, &error, true);
 	if (!cast) {
@@ -66,7 +59,7 @@ optional_ptr<const Value> StatsStructFields::FieldValue(idx_t index) {
 }
 
 LogicalType StatsStructFields::FieldType(idx_t index) const {
-	return Plain(StructValue::GetChildren(value)[index]).type();
+	return StructValue::GetChildren(value)[index].type();
 }
 
 const string &StatsStructFields::Path() const {

@@ -41,9 +41,6 @@ public:
 	//! Throws for fields that were never read: statistics of `type` have no such part
 	DUCKDB_API void VerifyAllRead(const LogicalType &type) const;
 
-	//! A VARIANT value as a plain value (objects become STRUCTs, arrays LISTs); other values unchanged
-	DUCKDB_API static Value Plain(const Value &value);
-
 private:
 	Value value;
 	string path;

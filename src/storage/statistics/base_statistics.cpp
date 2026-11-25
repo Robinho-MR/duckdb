@@ -634,16 +634,16 @@ void BaseStatistics::Verify(const Vector &vector, idx_t count) const {
 	Verify(vector, *sel, count, false);
 }
 
-BaseStatistics BaseStatistics::FromConstantType(const Value &input) {
-	switch (GetStatsType(input.type())) {
+BaseStatistics BaseStatistics::FromConstantType(const Value &input, const LogicalType &type) {
+	switch (GetStatsType(type)) {
 	case StatisticsType::NUMERIC_STATS: {
-		auto result = NumericStats::CreateEmpty(input.type());
+		auto result = NumericStats::CreateEmpty(type);
 		NumericStats::SetMin(result, input);
 		NumericStats::SetMax(result, input);
 		return result;
 	}
 	case StatisticsType::STRING_STATS: {
-		auto result = StringStats::CreateEmpty(input.type());
+		auto result = StringStats::CreateEmpty(type);
 		if (!input.IsNull()) {
 			auto &string_value = StringValue::Get(input);
 			StringStats::FromConstant(result, string_t(string_value));
@@ -651,45 +651,46 @@ BaseStatistics BaseStatistics::FromConstantType(const Value &input) {
 		return result;
 	}
 	case StatisticsType::LIST_STATS: {
-		auto result = ListStats::CreateEmpty(input.type());
+		auto result = ListStats::CreateEmpty(type);
 		auto &child_stats = ListStats::GetChildStats(result);
 		if (!input.IsNull()) {
 			auto &list_children = ListValue::GetChildren(input);
 			ListStats::SetLengthBounds(result, list_children.size(), list_children.size());
 			for (auto &child_element : list_children) {
-				child_stats.Merge(FromConstant(child_element));
+				child_stats.Merge(FromConstant(child_element, ListType::GetChildType(type)));
 			}
 		}
 		return result;
 	}
 	case StatisticsType::STRUCT_STATS: {
-		auto result = StructStats::CreateEmpty(input.type());
-		auto &child_types = StructType::GetChildTypes(input.type());
+		auto result = StructStats::CreateEmpty(type);
+		auto &child_types = StructType::GetChildTypes(type);
 		if (input.IsNull()) {
 			for (idx_t i = 0; i < child_types.size(); i++) {
-				StructStats::SetChildStats(result, i, FromConstant(Value(child_types[i].second)));
+				StructStats::SetChildStats(result, i,
+				                           FromConstant(Value(child_types[i].second), child_types[i].second));
 			}
 		} else {
 			auto &struct_children = StructValue::GetChildren(input);
 			for (idx_t i = 0; i < child_types.size(); i++) {
-				StructStats::SetChildStats(result, i, FromConstant(struct_children[i]));
+				StructStats::SetChildStats(result, i, FromConstant(struct_children[i], child_types[i].second));
 			}
 		}
 		return result;
 	}
 	case StatisticsType::ARRAY_STATS: {
-		auto result = ArrayStats::CreateEmpty(input.type());
+		auto result = ArrayStats::CreateEmpty(type);
 		auto &child_stats = ArrayStats::GetChildStats(result);
 		if (!input.IsNull()) {
 			auto &list_children = ArrayValue::GetChildren(input);
 			for (auto &child_element : list_children) {
-				child_stats.Merge(FromConstant(child_element));
+				child_stats.Merge(FromConstant(child_element, ArrayType::GetChildType(type)));
 			}
 		}
 		return result;
 	}
 	case StatisticsType::GEOMETRY_STATS: {
-		auto result = GeometryStats::CreateEmpty(input.type());
+		auto result = GeometryStats::CreateEmpty(type);
 		if (!input.IsNull()) {
 			auto &string_value = StringValue::Get(input);
 			GeometryStats::Update(result, string_t(string_value));
@@ -697,30 +698,29 @@ BaseStatistics BaseStatistics::FromConstantType(const Value &input) {
 		return result;
 	}
 	case StatisticsType::BIGNUM_STATS: {
-		auto result = BignumStats::CreateEmpty(input.type());
+		auto result = BignumStats::CreateEmpty(type);
 		BignumStats::SetMin(result, input);
 		BignumStats::SetMax(result, input);
 		return result;
 	}
 	case StatisticsType::VARIANT_STATS: {
-		auto result = VariantStats::CreateEmpty(input.type());
-		auto unshredded_type = VariantShredding::GetUnshreddedType();
 		if (input.IsNull()) {
-			VariantStats::SetUnshreddedStats(result, FromConstant(Value(unshredded_type)));
-		} else {
-			VariantStats::SetUnshreddedStats(
-			    result, FromConstant(Value::STRUCT(unshredded_type, StructValue::GetChildren(input))));
-			VariantStats::MarkAsNotShredded(result);
+			auto result = VariantStats::CreateEmpty(type);
+			VariantStats::SetUnshreddedStats(result, FromConstant(Value(VariantShredding::GetUnshreddedType())));
+			return result;
 		}
+		// the input is the underlying value of the variant - nothing is known about how it is stored
+		auto result = VariantStats::CreateUnknown(type);
+		VariantStats::MarkAsNotShredded(result);
 		return result;
 	}
 	default:
-		return BaseStatistics(input.type());
+		return BaseStatistics(type);
 	}
 }
 
-BaseStatistics BaseStatistics::FromConstant(const Value &input) {
-	auto result = FromConstantType(input);
+BaseStatistics BaseStatistics::FromConstant(const Value &input, const LogicalType &type) {
+	auto result = FromConstantType(input, type);
 	result.SetDistinctCount(1);
 	if (input.IsNull()) {
 		result.Set(StatsInfo::CAN_HAVE_NULL_VALUES);
@@ -730,6 +730,10 @@ BaseStatistics BaseStatistics::FromConstant(const Value &input) {
 		result.Set(StatsInfo::CAN_HAVE_VALID_VALUES);
 	}
 	return result;
+}
+
+BaseStatistics BaseStatistics::FromConstant(const Value &input) {
+	return FromConstant(input, input.type());
 }
 
 } // namespace duckdb

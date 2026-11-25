@@ -1260,7 +1260,8 @@ TEST_CASE("V2: vector_get_value is the VARIANT cell path", "[capi_v2][vector_wri
 	REQUIRE(duckdb_v2_value_get_logical_type(cell, &t, nullptr) == DUCKDB_V2_ERROR_NONE);
 	DUCKDB_V2_LOGICAL_TYPE_ID id = DUCKDB_V2_LOGICAL_TYPE_ID_INVALID;
 	REQUIRE(duckdb_v2_logical_type_get_id(t, &id, nullptr) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(id == DUCKDB_V2_LOGICAL_TYPE_ID_VARIANT);
+	// a VARIANT cell is read as the value it holds
+	REQUIRE(id == DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER);
 	duckdb_v2_logical_type_destroy(&t);
 	auto text = Render(cell);
 	REQUIRE(std::string(text).find("42") != std::string::npos);

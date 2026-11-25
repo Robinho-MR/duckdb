@@ -189,6 +189,10 @@ Value ExpressionExecutor::EvaluateScalar(Context &context, const Expression &exp
 
 	D_ASSERT(allow_unfoldable || result.GetVectorType() == VectorType::CONSTANT_VECTOR);
 	auto result_value = result.GetValue(0);
+	if (expr.GetReturnType().id() == LogicalTypeId::VARIANT) {
+		// a variant has no Value representation of its own - it is the underlying value it holds
+		return result_value;
+	}
 	D_ASSERT(result_value.type().InternalType() == expr.GetReturnType().InternalType());
 	return result_value.WithType(expr.GetReturnType());
 }

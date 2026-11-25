@@ -340,14 +340,14 @@ TEST_CASE("Stable C++API: writing a VARIANT vector through the boxed value path"
 	REQUIRE(vec.GetValue(3).IsNull());
 	REQUIRE(vec.GetValue(4).Cast(factory, factory.ParseType("BIGINT")).Get<int64_t>() == 43);
 
-	// MakeConstant interplay: the type-equality hardening refuses the
-	// raw non-VARIANT value; the boxed value works.
+	// MakeConstant interplay: a VARIANT vector holds the underlying value, so
+	// the raw value and the cast one both work.
 	std::vector<LogicalType> constant_types;
 	constant_types.push_back(factory.ParseType("VARIANT"));
 	DataChunk constant_chunk(factory, constant_types);
 	auto cvec = constant_chunk.GetVector(0);
-	REQUIRE_THROWS_MATCHES(cvec.MakeConstant(Value::Create(factory, int64_t(7)), 3), Exception,
-	                       HasErrorCode(DUCKDB_V2_ERROR_INPUT_INVALID));
+	cvec.MakeConstant(Value::Create(factory, int64_t(7)), 3);
+	REQUIRE(cvec.GetValue(2).ToText() == "7");
 	auto boxed = Value::Create(factory, int64_t(7)).Cast(factory, variant_type);
 	cvec.MakeConstant(boxed, 3);
 	REQUIRE(cvec.GetValue(2).ToText() == "7");

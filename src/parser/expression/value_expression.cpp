@@ -76,11 +76,21 @@ static unique_ptr<ParsedExpression> ListValueExpression(vector<unique_ptr<Parsed
 	return make_uniq<FunctionExpression>(QualifiedName("system", "main", "list_value"), std::move(children));
 }
 
-static vector<unique_ptr<ParsedExpression>> ChildExpressions(const vector<Value> &values) {
+//! A child of a VARIANT type holds the underlying value, so it is cast back to a VARIANT
+static unique_ptr<ParsedExpression> ChildExpression(const Value &child, const LogicalType &child_type) {
+	auto result = ConstantExpression::FromValue(child);
+	if (child_type.id() == LogicalTypeId::VARIANT && child.type().id() != LogicalTypeId::VARIANT) {
+		return CastTo(child_type, std::move(result));
+	}
+	return result;
+}
+
+static vector<unique_ptr<ParsedExpression>> ChildExpressions(const vector<Value> &values,
+                                                             const LogicalType &child_type = LogicalType::INVALID) {
 	vector<unique_ptr<ParsedExpression>> result;
 	result.reserve(values.size());
 	for (auto &child : values) {
-		result.push_back(ConstantExpression::FromValue(child));
+		result.push_back(ChildExpression(child, child_type));
 	}
 	return result;
 }
@@ -100,12 +110,16 @@ static unique_ptr<ParsedExpression> StructExpression(const Value &value) {
 	auto &type = value.type();
 	auto &children = StructValue::GetChildren(value);
 	if (StructType::IsUnnamed(type)) {
-		return make_uniq<FunctionExpression>(QualifiedName("system", "main", "row"), ChildExpressions(children));
+		vector<unique_ptr<ParsedExpression>> row_children;
+		for (idx_t i = 0; i < children.size(); i++) {
+			row_children.push_back(ChildExpression(children[i], StructType::GetChildType(type, i)));
+		}
+		return make_uniq<FunctionExpression>(QualifiedName("system", "main", "row"), std::move(row_children));
 	}
 	vector<FunctionArgument> arguments;
 	for (idx_t i = 0; i < children.size(); i++) {
 		auto &name = StructType::GetChildName(type, i);
-		auto child = ConstantExpression::FromValue(children[i]);
+		auto child = ChildExpression(children[i], StructType::GetChildType(type, i));
 		child->SetAlias(name);
 		arguments.emplace_back(name, std::move(child));
 	}
@@ -117,8 +131,8 @@ static unique_ptr<ParsedExpression> MapExpression(const Value &value) {
 	vector<unique_ptr<ParsedExpression>> values;
 	for (auto &entry : MapValue::GetChildren(value)) {
 		auto &pair = StructValue::GetChildren(entry);
-		keys.push_back(ConstantExpression::FromValue(pair[0]));
-		values.push_back(ConstantExpression::FromValue(pair[1]));
+		keys.push_back(ChildExpression(pair[0], MapType::KeyType(value.type())));
+		values.push_back(ChildExpression(pair[1], MapType::ValueType(value.type())));
 	}
 	vector<unique_ptr<ParsedExpression>> arguments;
 	arguments.push_back(ListValueExpression(std::move(keys)));
@@ -178,26 +192,6 @@ static unique_ptr<ParsedExpression> GeometryExpression(const Value &value) {
 		result = std::move(typed_null);
 	}
 	return result;
-}
-
-static bool HasUnsupportedVariantKeys(const VariantNode &node) {
-	// Struct literals require nonempty, case-insensitively unique keys; inspect before the lossy STRUCT conversion.
-	if (node.GetTypeId() == VariantLogicalType::OBJECT) {
-		identifier_set_t names;
-		for (auto &child : node.GetObjectChildren()) {
-			if (child.key.GetSize() == 0 || !names.insert(Identifier(child.key.GetString())).second ||
-			    HasUnsupportedVariantKeys(child.value)) {
-				return true;
-			}
-		}
-	} else if (node.GetTypeId() == VariantLogicalType::ARRAY) {
-		for (auto child : node.GetArrayChildren()) {
-			if (HasUnsupportedVariantKeys(child)) {
-				return true;
-			}
-		}
-	}
-	return false;
 }
 
 bool ConstantExpression::RequiresTypeWitness(const LogicalType &type) {
@@ -392,21 +386,12 @@ unique_ptr<ParsedExpression> ConstantExpression::FromValue(const Value &value) {
 		return LiteralOrCast(Literal::Bit(value.ToString()), value);
 	case LogicalTypeId::STRUCT:
 		return StructExpression(value);
-	case LogicalTypeId::VARIANT: {
-		Vector vector(value, count_t(1));
-		VariantIterator iterator(vector);
-		if (HasUnsupportedVariantKeys(iterator.Root(0))) {
-			throw NotImplementedException("VARIANT object keys cannot be represented by a struct literal");
-		}
-		auto payload = VariantValue::GetValue(value);
-		return CastTo(type, CastTo(payload.type(), FromValue(payload)));
-	}
 	case LogicalTypeId::LIST: {
 		auto &children = ListValue::GetChildren(value);
 		if (children.empty()) {
 			return CastTo(type, ListValueExpression({}));
 		}
-		return ListValueExpression(ChildExpressions(children));
+		return ListValueExpression(ChildExpressions(children, ListType::GetChildType(type)));
 	}
 	case LogicalTypeId::ARRAY: {
 		auto &children = ArrayValue::GetChildren(value);
@@ -414,7 +399,7 @@ unique_ptr<ParsedExpression> ConstantExpression::FromValue(const Value &value) {
 			return CastTo(type, ListValueExpression({}));
 		}
 		return CastTo(type, make_uniq<FunctionExpression>(QualifiedName("system", "main", "array_value"),
-		                                                  ChildExpressions(children)));
+		                                                  ChildExpressions(children, ArrayType::GetChildType(type))));
 	}
 	case LogicalTypeId::MAP:
 		return MapExpression(value);

@@ -332,8 +332,7 @@ void ParseStateParameters(const Value &parameters, vector<LogicalType> &argument
 		if (!val.IsNull() && val.type().id() == LogicalTypeId::STRUCT) {
 			// (type, value) pair
 			auto &children = StructValue::GetChildren(val);
-			if (children.size() != 2 || children[0].IsNull() || children[0].type().id() != LogicalTypeId::TYPE ||
-			    children[1].type().id() != LogicalTypeId::VARIANT) {
+			if (children.size() != 2 || children[0].IsNull() || children[0].type().id() != LogicalTypeId::TYPE) {
 				throw InternalException("Aggregate state parameter entry should be a (type, value) pair");
 			}
 			argument_types.push_back(TypeValue::GetType(children[0]));
@@ -341,7 +340,7 @@ void ParseStateParameters(const Value &parameters, vector<LogicalType> &argument
 				// the parameter is bound to a constant - decode it as-is, without casting it to the declared
 				// argument type, so that re-binding sees the same (pre-cast) constant as the original bind
 				// (e.g. a DECIMAL quantile parameter must stay DECIMAL even though the signature says DOUBLE)
-				constant_parameters.emplace(arg_idx, VariantValue::GetValue(children[1]));
+				constant_parameters.emplace(arg_idx, children[1]);
 			}
 			continue;
 		}
@@ -602,18 +601,14 @@ void EncodeStateParameters(ExtensionTypeInfo &ext_info, const BoundAggregateFunc
 	} else {
 		// some parameters were bound to a constant (e.g. string_agg's separator) - store the parameters as a list of
 		// (type, value) pairs, where the value holds the constant the parameter must be re-bound with
-		for (idx_t arg_idx = 0; arg_idx < call_arguments.size(); arg_idx++) {
-			child_list_t<Value> children;
-			children.emplace_back("type", Value::TYPE(call_arguments[arg_idx]));
-			auto constant_entry = layout.constant_parameters.find(arg_idx);
-			if (constant_entry == layout.constant_parameters.end()) {
-				children.emplace_back("value", Value(LogicalType::VARIANT()));
-			} else {
-				children.emplace_back("value", constant_entry->second.DefaultCastAs(LogicalType::VARIANT()));
-			}
-			arguments.push_back(Value::STRUCT(std::move(children)));
-		}
 		auto entry_type = LogicalType::STRUCT({{"type", LogicalType::TYPE()}, {"value", LogicalType::VARIANT()}});
+		for (idx_t arg_idx = 0; arg_idx < call_arguments.size(); arg_idx++) {
+			auto constant_entry = layout.constant_parameters.find(arg_idx);
+			// the value is stored in a VARIANT column, so it keeps its own type when read back
+			auto constant = constant_entry == layout.constant_parameters.end() ? Value(LogicalType::VARIANT())
+			                                                                   : constant_entry->second;
+			arguments.push_back(Value::STRUCT(entry_type, {Value::TYPE(call_arguments[arg_idx]), std::move(constant)}));
+		}
 		ext_info.properties.emplace("parameters", Value::LIST(entry_type, std::move(arguments)));
 	}
 }
@@ -775,7 +770,8 @@ unique_ptr<FunctionData> BindToAggregateState(INPUT &input) {
 	auto function_name = StringValue::Get(function_name_val);
 
 	auto signature_val = input.GetNonNullConstant(2);
-	if (signature_val.type().id() != LogicalTypeId::LIST) {
+	if (signature_val.type().id() != LogicalTypeId::LIST ||
+	    arguments[2]->GetReturnType().id() == LogicalTypeId::VARIANT) {
 		throw BinderException("to_aggregate_state: the signature must be a list of types");
 	}
 	// the signature lists all of the argument types in order, bound within the width limit of the bind

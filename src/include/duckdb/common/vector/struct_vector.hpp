@@ -66,6 +66,9 @@ protected:
 	void ReserveInternal(idx_t new_size) override;
 
 private:
+	void SetVariantValue(idx_t index, const Value &val);
+
+private:
 	ValidityMask validity;
 	//! child vectors used for nested data
 	vector<Vector> children;

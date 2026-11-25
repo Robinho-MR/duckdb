@@ -14,6 +14,7 @@
 #include "duckdb/main/config.hpp"
 #include "duckdb/common/multi_file/multi_file_column_mapper.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/common/exception/parser_exception.hpp"
@@ -384,6 +385,10 @@ static MultiFileColumnDefinition ParseSchemaDefinition(ClientContext &context, c
 		                      result.type.ToString());
 	}
 	result.default_expression = ConstantExpression::FromValue(*default_value);
+	if (default_value->type() != result.type) {
+		// a VARIANT default holds the underlying value, cast it back to the column type
+		result.default_expression = make_uniq<CastExpression>(result.type, std::move(result.default_expression));
+	}
 	if (children.size() > 3 && !children[3].IsNull()) {
 		result.children = ParseSchemaMap(context, children[3], root_key_type, false);
 		VerifySchemaChildren(result);

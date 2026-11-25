@@ -102,6 +102,10 @@ unique_ptr<BaseStatistics> StatisticsPropagator::PropagateConstantInputs(ClientC
 	for (idx_t idx = 0; idx < func.GetChildren().size(); ++idx) {
 		auto &child = *func.GetChildren()[idx];
 		auto &stats = child_stats[idx];
+		// a constant cannot carry the VARIANT type - it would be the underlying value
+		if (child.GetReturnType().id() == LogicalTypeId::VARIANT) {
+			return nullptr;
+		}
 		Value value;
 		if (child.IsFoldable()) {
 			if (!ExpressionExecutor::TryEvaluateScalar(context, child, value)) {
@@ -115,6 +119,10 @@ unique_ptr<BaseStatistics> StatisticsPropagator::PropagateConstantInputs(ClientC
 	Value result;
 	if (!TryEvaluateAtConstants(context, func, values, result)) {
 		return nullptr;
+	}
+	if (func.GetReturnType().id() == LogicalTypeId::VARIANT) {
+		// the result is the underlying value of the variant
+		return BaseStatistics::FromConstant(result, func.GetReturnType()).ToUnique();
 	}
 	return BaseStatistics::FromConstant(result).ToUnique();
 }

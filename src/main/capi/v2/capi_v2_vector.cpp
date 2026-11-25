@@ -226,8 +226,8 @@ DUCKDB_V2_ERROR duckdb_v2_vector_make_constant(duckdb_v2_vector_handle vector, d
 		auto *vec = Convert(vector);
 		auto *val = Convert(value);
 		// The engine only debug-asserts this in ConstantVector::Reference; a
-		// mismatch in release would corrupt the vector silently.
-		if (vec->GetType() != val->type()) {
+		// mismatch in release would corrupt the vector silently. A VARIANT vector accepts a value of any type.
+		if (vec->GetType() != val->type() && vec->GetType().id() != duckdb::LogicalTypeId::VARIANT) {
 			throw duckdb::InvalidInputException(
 			    "duckdb_v2_vector_make_constant: value type does not match the vector's logical type");
 		}

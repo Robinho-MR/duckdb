@@ -136,7 +136,7 @@ struct FieldIdMapper : public ColumnMapper {
 		auto expr = default_val->Copy();
 		LogicalType target_type = column.type;
 		auto bound = constant_binder.Bind(expr, &target_type);
-		if (!bound->IsFoldable()) {
+		if (!bound->IsFoldable() || bound->GetReturnType().id() == LogicalTypeId::VARIANT) {
 			return bound;
 		}
 		// a constant default is kept as a constant so filters on the missing column can be evaluated up front
@@ -840,7 +840,7 @@ static unique_ptr<Expression> ApplyPushdownExtract(ClientContext &context, uniqu
 	if (expr->GetReturnType() != scan_type) {
 		expr = BoundCastExpression::AddCastToType(context, std::move(expr), scan_type);
 	}
-	if (expr->IsFoldable()) {
+	if (expr->IsFoldable() && expr->GetReturnType().id() != LogicalTypeId::VARIANT) {
 		// keep constants constant so filters on them can be evaluated up front
 		return make_uniq<BoundConstantExpression>(ExpressionExecutor::EvaluateScalar(context, *expr, true));
 	}

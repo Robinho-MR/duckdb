@@ -27,14 +27,16 @@ TEST_CASE("Value expression conversion preserves VARIANT payloads and floating z
 		INFO(rendered);
 		auto restored = con.Query("SELECT " + rendered);
 		REQUIRE_NO_FAIL(*restored);
-		REQUIRE(restored->GetTypes() == original->GetTypes());
+		// a VARIANT is read as the value it holds, so the literal has the type of that value
+		REQUIRE(restored->GetTypes()[0] == value.type());
 		REQUIRE_FALSE(ValueOperations::DistinctFrom(restored->Collection().GetValue(0, 0), value));
-		if (value.type().id() == LogicalTypeId::VARIANT) {
-			auto types = con.Query("SELECT variant_typeof(" + string(sql) + ") = variant_typeof(" + rendered + ")");
+		if (original->GetTypes()[0].id() == LogicalTypeId::VARIANT) {
+			auto types =
+			    con.Query("SELECT variant_typeof(" + string(sql) + ") = variant_typeof((" + rendered + ")::VARIANT)");
 			REQUIRE_NO_FAIL(*types);
 			REQUIRE(types->Collection().GetValue(0, 0) == Value::BOOLEAN(true));
 			auto strings = con.Query("SELECT variant_extract_string(" + string(sql) +
-			                         ", '') = variant_extract_string(" + rendered + ", '')");
+			                         ", '') = variant_extract_string((" + rendered + ")::VARIANT, '')");
 			REQUIRE_NO_FAIL(*strings);
 			REQUIRE(strings->Collection().GetValue(0, 0) == Value::BOOLEAN(true));
 		}
