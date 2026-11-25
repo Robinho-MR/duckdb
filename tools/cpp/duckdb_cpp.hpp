@@ -900,7 +900,8 @@ class Connection final : public detail::Handle<Connection> {
 	friend detail::HandleFactory;
 
 public:
-	Connection(Connection &&other) noexcept : factory(std::move(other.factory)), config(std::move(other.config)) {
+	Connection(Connection &&other) noexcept
+	    : factory(std::move(other.factory)), config(std::move(other.config)), context(std::move(other.context)) {
 		std::swap(impl, other.impl);
 		std::swap(owned, other.owned);
 	}
@@ -909,6 +910,7 @@ public:
 		std::swap(impl, other.impl);
 		std::swap(factory, other.factory);
 		std::swap(config, other.config);
+		std::swap(context, other.context);
 		std::swap(owned, other.owned);
 		return *this;
 	}
@@ -929,6 +931,13 @@ public:
 	/// The factory values, types and data chunks are created through on this connection.
 	auto GetFactory() -> Factory & {
 		return factory;
+	}
+
+	/// The context of this connection, for what takes a context outside of a callback, such as `ArrowExporter`.
+	/// Each use joins the connection's transaction, or runs in a transaction of its own when none is open. Borrowed,
+	/// and valid only while the connection is.
+	auto GetContext() -> Context & {
+		return context;
 	}
 
 	/// Registers on this connection's database, in the connection's transaction: inside an explicit transaction a
@@ -1140,6 +1149,7 @@ private:
 	explicit Connection(void *impl, bool owned);
 	Factory factory;
 	Config config;
+	Context context;
 
 	auto ExecuteArrowNamed(const SqlStatement &statement, const NamedParam *parameters, idx_t parameter_count,
 	                       ArrowFormat format) -> ArrowResult;

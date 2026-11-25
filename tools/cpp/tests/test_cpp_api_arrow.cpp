@@ -94,3 +94,32 @@ TEST_CASE("Stable C++API: ArrowExporter and ArrowImporter round-trip", "[cpp_api
 	REQUIRE(observed_arrays == 1);
 	REQUIRE(observed_value == 4242);
 }
+
+TEST_CASE("Stable C++API: a connection's context drives ArrowExporter outside of a callback", "[cpp_api][arrow]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+
+	std::vector<LogicalType> types;
+	types.push_back(conn.GetFactory().ParseType("BIGINT"));
+	ArrowExporter exporter(conn.GetContext(), types, {"a"});
+
+	ArrowSchema schema {};
+	exporter.GetSchema(schema);
+	REQUIRE(schema.n_children == 1);
+	schema.release(&schema);
+
+	DataChunk chunk(conn.GetFactory(), types);
+	auto column = chunk.GetVector(0);
+	column.GetDataMutable<int64_t>()[0] = 4242;
+	column.SetSize(1);
+	exporter.Append(chunk, /*flush=*/true);
+
+	ArrowArray array {};
+	REQUIRE(exporter.NextArray(array));
+	REQUIRE(array.length == 1);
+	array.release(&array);
+	REQUIRE_FALSE(exporter.NextArray(array));
+
+	// The context does not keep a transaction open
+	REQUIRE(conn.Execute("SELECT 1").Drain() == 0);
+}

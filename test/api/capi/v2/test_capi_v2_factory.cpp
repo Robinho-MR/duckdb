@@ -68,6 +68,26 @@ TEST_CASE("V2 factory: getters borrow one factory per source", "[capi_v2][factor
 	REQUIRE(out == nullptr);
 }
 
+TEST_CASE("V2 context: a connection borrows its context", "[capi_v2][factory]") {
+	EnvFixture fx;
+	duckdb_v2_context_handle context = nullptr;
+	REQUIRE(duckdb_v2_connection_get_context(fx.conn, &context, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(context != nullptr);
+
+	// The same one every time, that shares the factory of the connection
+	duckdb_v2_context_handle again = nullptr;
+	REQUIRE(duckdb_v2_connection_get_context(fx.conn, &again, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(again == context);
+	duckdb_v2_factory_handle from_context = nullptr;
+	REQUIRE(duckdb_v2_context_get_factory(context, &from_context, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(from_context == fx.factory);
+
+	duckdb_v2_context_handle out = nullptr;
+	REQUIRE(duckdb_v2_connection_get_context(nullptr, &out, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_connection_get_context(fx.conn, nullptr, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(out == nullptr);
+}
+
 TEST_CASE("V2 factory: an instance's factory creates built-in types and values", "[capi_v2][factory]") {
 	UnstartedInstance fx;
 

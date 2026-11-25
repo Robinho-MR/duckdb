@@ -48,6 +48,34 @@ functions:
         indirection: 1
         description: "The connection to destroy."
     return_type: ERROR
+  connection_get_context:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-25" ]
+    description: |
+      Borrows the context of a connection.
+
+      The context is the handle that the functions which a callback runs under take, such as the Arrow exporter and
+      importer, so it lets a client use them outside of a callback, for the queries of one connection. Each call
+      that is made with it joins the connection's transaction, or runs in a transaction of its own when none is
+      open. The returned handle is borrowed: it is valid for as long as the connection is, and must not be
+      destroyed.
+    role: getter
+    belongs_to: connection
+    parameters:
+      conn:
+        type: connection
+        description: "The connection."
+      out_context:
+        type: context
+        indirection: 1
+        kind: OUT
+        description: "Receives the borrowed context."
+      err:
+        type: error_info
+        indirection: 1
+        kind: OUT
+        description: "Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`."
+    return_type: ERROR
   connection_interrupt:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-08-04" ]
