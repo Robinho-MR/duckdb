@@ -555,12 +555,7 @@ AggregateFunction GetContinuousQuantileTemplated(const LogicalType &type) {
 		fun.SetFallible(); // the TIMESTAMP cast throws for out-of-range dates, interpolation for the infinities
 		return fun;
 	}
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS: {
+	case LogicalTypeId::TIMESTAMP: {
 		auto fun = OP::template GetFunction<timestamp_t, timestamp_t>(type, type);
 		fun.SetFallible(); // interpolation throws for the infinities
 		return fun;
@@ -707,11 +702,6 @@ static bool CanInterpolate(const LogicalType &type) {
 	case LogicalTypeId::DOUBLE:
 	case LogicalTypeId::DATE:
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
 	case LogicalTypeId::TIME:
 	case LogicalTypeId::TIME_TZ:
 	case LogicalTypeId::INTERVAL:
@@ -934,9 +924,9 @@ AggregateFunctionSet QuantileDiscFun::GetFunctions() {
 }
 
 static vector<LogicalType> GetContinuousQuantileTypes() {
-	return {LogicalType::TINYINT,   LogicalType::SMALLINT, LogicalType::INTEGER,      LogicalType::BIGINT,
-	        LogicalType::HUGEINT,   LogicalType::FLOAT,    LogicalType::DOUBLE,       LogicalType::DATE,
-	        LogicalType::TIMESTAMP, LogicalType::TIME,     LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP_TZ_NS,
+	return {LogicalType::TINYINT,   LogicalType::SMALLINT, LogicalType::INTEGER,        LogicalType::BIGINT,
+	        LogicalType::HUGEINT,   LogicalType::FLOAT,    LogicalType::DOUBLE,         LogicalType::DATE,
+	        LogicalType::TIMESTAMP, LogicalType::TIME,     LogicalType::TIMESTAMP_TZ(), LogicalType::TIMESTAMP_TZ_NS(),
 	        LogicalType::TIME_TZ};
 }
 

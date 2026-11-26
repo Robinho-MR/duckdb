@@ -124,8 +124,7 @@ public:
 		case VariantLogicalType::TIMESTAMP_NANOS_TZ:
 			return Visitor::VisitTimestampTZNanos(Load<timestamp_tz_ns_t>(ptr), std::forward<Args>(args)...);
 		default:
-			return Visitor::VisitDefault(VariantDefaultType(VariantTypeToLogicalTypeId(type_id)), ptr,
-			                             std::forward<Args>(args)...);
+			return Visitor::VisitDefault(VariantDefaultType(type_id), ptr, std::forward<Args>(args)...);
 		}
 	}
 
@@ -191,18 +190,28 @@ public:
 			return Visitor::VisitTimeNanos(node.GetData<dtime_ns_t>(), std::forward<Args>(args)...);
 		case LogicalTypeId::TIME_TZ:
 			return Visitor::VisitTimeTZ(node.GetData<dtime_tz_t>(), std::forward<Args>(args)...);
-		case LogicalTypeId::TIMESTAMP_SEC:
-			return Visitor::VisitTimestampSec(node.GetData<timestamp_sec_t>(), std::forward<Args>(args)...);
-		case LogicalTypeId::TIMESTAMP_MS:
-			return Visitor::VisitTimestampMs(node.GetData<timestamp_ms_t>(), std::forward<Args>(args)...);
-		case LogicalTypeId::TIMESTAMP:
-			return Visitor::VisitTimestamp(node.GetData<timestamp_t>(), std::forward<Args>(args)...);
-		case LogicalTypeId::TIMESTAMP_NS:
-			return Visitor::VisitTimestampNanos(node.GetData<timestamp_ns_t>(), std::forward<Args>(args)...);
-		case LogicalTypeId::TIMESTAMP_TZ:
-			return Visitor::VisitTimestampTZ(node.GetData<timestamp_tz_t>(), std::forward<Args>(args)...);
-		case LogicalTypeId::TIMESTAMP_TZ_NS:
-			return Visitor::VisitTimestampTZNanos(node.GetData<timestamp_tz_ns_t>(), std::forward<Args>(args)...);
+		case LogicalTypeId::TIMESTAMP: {
+			auto type = node.GetType();
+			switch (TimestampType::GetScale(type)) {
+			case TimestampType::SECOND_SCALE:
+				return Visitor::VisitTimestampSec(node.GetData<timestamp_sec_t>(), std::forward<Args>(args)...);
+			case TimestampType::MILLISECOND_SCALE:
+				return Visitor::VisitTimestampMs(node.GetData<timestamp_ms_t>(), std::forward<Args>(args)...);
+			case TimestampType::MICROSECOND_SCALE:
+				if (TimestampType::HasTimeZone(type)) {
+					return Visitor::VisitTimestampTZ(node.GetData<timestamp_tz_t>(), std::forward<Args>(args)...);
+				}
+				return Visitor::VisitTimestamp(node.GetData<timestamp_t>(), std::forward<Args>(args)...);
+			case TimestampType::NANOSECOND_SCALE:
+				if (TimestampType::HasTimeZone(type)) {
+					return Visitor::VisitTimestampTZNanos(node.GetData<timestamp_tz_ns_t>(),
+					                                      std::forward<Args>(args)...);
+				}
+				return Visitor::VisitTimestampNanos(node.GetData<timestamp_ns_t>(), std::forward<Args>(args)...);
+			default:
+				throw InternalException("Unsupported TIMESTAMP scale");
+			}
+		}
 		default:
 			return Visitor::VisitDefault(node.GetType(), nullptr, std::forward<Args>(args)...);
 		}

@@ -428,13 +428,14 @@ void StringValueResult::AddValueToVector(const char *value_ptr, idx_t size, bool
 		                               static_cast<dtime_t *>(vector_ptr[chunk_col_id])[number_of_rows], false);
 		break;
 	}
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ: {
+	case LogicalTypeId::TIMESTAMP: {
+		// only microsecond timestamps are cast directly (see CanDirectlyCast)
+		D_ASSERT(parse_types[chunk_col_id].timestamp_scale == TimestampType::MICROSECOND_SCALE);
 		if (!timestamp_format.Empty()) {
 			success = timestamp_format.TryParseTimestamp(
 			    value_ptr, size, static_cast<timestamp_t *>(vector_ptr[chunk_col_id])[number_of_rows]);
 		} else {
-			const bool use_offset = (parse_types[chunk_col_id].type_id == LogicalTypeId::TIMESTAMP_TZ);
+			const bool use_offset = parse_types[chunk_col_id].has_time_zone;
 			success = Timestamp::TryConvertTimestamp(
 			              value_ptr, size, static_cast<timestamp_t *>(vector_ptr[chunk_col_id])[number_of_rows],
 			              use_offset) == TimestampCastResult::SUCCESS;
@@ -509,7 +510,7 @@ void StringValueResult::AddValueToVector(const char *value_ptr, idx_t size, bool
 			std::ostringstream error;
 			// Casting Error Message
 			error << "Could not convert string \"" << std::string(value_ptr, size) << "\" to \'"
-			      << LogicalTypeIdToString(parse_types[chunk_col_id].type_id) << "\'";
+			      << parse_types[chunk_col_id].TypeName() << "\'";
 			auto error_string = error.str();
 			FullLinePosition::SanitizeError(error_string);
 
@@ -613,7 +614,7 @@ void StringValueResult::AddPossiblyEscapedValue(StringValueResult &result, const
 					std::ostringstream error;
 					// Casting Error Message
 					error << "Could not convert string \"" << std::string(value_ptr, length) << "\" to \'"
-					      << LogicalTypeIdToString(result.parse_types[result.chunk_col_id].type_id) << "\'";
+					      << result.parse_types[result.chunk_col_id].TypeName() << "\'";
 					auto error_string = error.str();
 					FullLinePosition::SanitizeError(error_string);
 					result.current_errors.ModifyErrorMessageOfLastError(error_string);
@@ -781,25 +782,25 @@ bool LineError::HandleErrors(StringValueResult &result) {
 			break;
 		case CAST_ERROR: {
 			string column_name;
-			LogicalTypeId type_id = LogicalTypeId::INVALID;
+			string type_name = LogicalTypeIdToString(LogicalTypeId::INVALID);
 			if (cur_error.col_idx < result.names.size()) {
 				column_name = result.names[cur_error.col_idx];
 			}
 			if (cur_error.col_idx < result.number_of_columns) {
-				type_id = result.parse_types[cur_error.chunk_idx].type_id;
+				type_name = result.parse_types[cur_error.chunk_idx].TypeName();
 			}
 			if (result.current_line_position.begin == line_pos) {
 				csv_error = CSVError::CastError(
 				    result.state_machine.options, column_name, cur_error.error_message, cur_error.col_idx, borked_line,
 				    lines_per_batch,
 				    result.current_line_position.begin.GetGlobalPosition(result.requested_size, first_nl),
-				    line_pos.GetGlobalPosition(result.requested_size, first_nl), type_id, result.path);
+				    line_pos.GetGlobalPosition(result.requested_size, first_nl), type_name, result.path);
 			} else {
 				csv_error = CSVError::CastError(
 				    result.state_machine.options, column_name, cur_error.error_message, cur_error.col_idx, borked_line,
 				    lines_per_batch,
 				    result.current_line_position.begin.GetGlobalPosition(result.requested_size, first_nl),
-				    line_pos.GetGlobalPosition(result.requested_size), type_id, result.path);
+				    line_pos.GetGlobalPosition(result.requested_size), type_name, result.path);
 			}
 		} break;
 		case MAXIMUM_LINE_SIZE:
@@ -1222,9 +1223,10 @@ void StringValueScanner::Flush(DataChunk &insert_chunk) {
 							row_byte_pos = result.line_positions_per_row[line_error].begin.GetGlobalPosition(
 							    result.result_size, first_nl);
 						}
-						auto csv_error = CSVError::CastError(
-						    state_machine->options, names[i], error_msg, i, borked_line, lines_per_batch, row_byte_pos,
-						    optional_idx::Invalid(), result_vector.GetType().id(), result.path);
+						auto csv_error =
+						    CSVError::CastError(state_machine->options, names[i], error_msg, i, borked_line,
+						                        lines_per_batch, row_byte_pos, optional_idx::Invalid(),
+						                        ParseTypeInfo(result_vector.GetType(), false).TypeName(), result.path);
 						error_handler->Error(csv_error);
 					}
 				}
@@ -1254,7 +1256,8 @@ void StringValueScanner::Flush(DataChunk &insert_chunk) {
 							    state_machine->options, names[i], error_msg, i, borked_line, lines_per_batch,
 							    result.line_positions_per_row[line_error].begin.GetGlobalPosition(result.result_size,
 							                                                                      first_nl),
-							    optional_idx::Invalid(), result_vector.GetType().id(), result.path);
+							    optional_idx::Invalid(), ParseTypeInfo(result_vector.GetType(), false).TypeName(),
+							    result.path);
 							error_handler->Error(csv_error);
 						}
 					}
@@ -1619,7 +1622,7 @@ void StringValueScanner::ProcessOverBufferValue() {
 							// Casting Error Message
 							error << "Could not convert string \""
 							      << std::string(over_buffer_string.c_str(), over_buffer_string.size()) << "\" to \'"
-							      << LogicalTypeIdToString(result.parse_types[result.chunk_col_id].type_id) << "\'";
+							      << result.parse_types[result.chunk_col_id].TypeName() << "\'";
 							auto error_string = error.str();
 							FullLinePosition::SanitizeError(error_string);
 							result.current_errors.ModifyErrorMessageOfLastError(error_string);
@@ -1650,7 +1653,7 @@ void StringValueScanner::ProcessOverBufferValue() {
 							// Casting Error Message
 							error << "Could not convert string \""
 							      << std::string(over_buffer_string.c_str(), over_buffer_string.size()) << "\" to \'"
-							      << LogicalTypeIdToString(result.parse_types[result.chunk_col_id].type_id) << "\'";
+							      << result.parse_types[result.chunk_col_id].TypeName() << "\'";
 							auto error_string = error.str();
 							FullLinePosition::SanitizeError(error_string);
 							result.current_errors.ModifyErrorMessageOfLastError(error_string);
@@ -1901,15 +1904,17 @@ bool StringValueScanner::CanDirectlyCast(const LogicalType &type, bool icu_loade
 	case LogicalTypeId::DOUBLE:
 	case LogicalTypeId::FLOAT:
 	case LogicalTypeId::DATE:
-	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIME:
 	case LogicalType::BOOLEAN:
 	case LogicalTypeId::DECIMAL:
 		return true;
-	case LogicalType::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP:
+		if (TimestampType::GetScale(type) != TimestampType::MICROSECOND_SCALE) {
+			return false;
+		}
 		// We only try to do direct cast of timestamp tz if the ICU extension is not loaded, otherwise, it needs to go
 		// through string -> timestamp_tz casting
-		return !icu_loaded;
+		return !TimestampType::HasTimeZone(type) || !icu_loaded;
 	case LogicalType::VARCHAR:
 		return !type.IsJSONType();
 	default:

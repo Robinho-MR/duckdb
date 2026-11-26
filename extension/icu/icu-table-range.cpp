@@ -166,7 +166,7 @@ struct ICUTableRange {
 	                                     vector<LogicalType> &return_types, vector<Identifier> &names) {
 		auto result = make_uniq<ICURangeBindData>(context, input.inputs);
 
-		return_types.push_back(LogicalType::TIMESTAMP_TZ);
+		return_types.push_back(LogicalType::TIMESTAMP_TZ());
 		if (GENERATE_SERIES) {
 			names.emplace_back("generate_series");
 		} else {
@@ -263,8 +263,8 @@ struct ICUTableRange {
 
 	static void AddICUTableRangeFunction(ExtensionLoader &loader) {
 		const auto timestamps = FunctionSignature()
-		                            .AddPositionalOnly("start", LogicalType::TIMESTAMP_TZ)
-		                            .AddPositionalOnly("stop", LogicalType::TIMESTAMP_TZ)
+		                            .AddPositionalOnly("start", LogicalType::TIMESTAMP_TZ())
+		                            .AddPositionalOnly("stop", LogicalType::TIMESTAMP_TZ())
 		                            .AddPositionalOnly("step", LogicalType::INTERVAL);
 		TableFunctionSet range("range");
 		TableFunction range_function(timestamps, nullptr, Bind<false>, RangeDateTimeGlobalInit, RangeDateTimeLocalInit);

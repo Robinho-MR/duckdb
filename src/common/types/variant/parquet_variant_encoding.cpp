@@ -145,11 +145,13 @@ static unordered_set<LogicalTypeId> GetVariantType(const LogicalType &type) {
 	case LogicalTypeId::DOUBLE:
 	case LogicalTypeId::DECIMAL:
 	case LogicalTypeId::DATE:
-	case LogicalTypeId::TIME:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_NS:
+		if (TimestampType::GetScale(type) != TimestampType::MICROSECOND_SCALE &&
+		    TimestampType::GetScale(type) != TimestampType::NANOSECOND_SCALE) {
+			throw BinderException("Type '%s' can't be translated to a VARIANT type", type.ToString());
+		}
+		return {type.id()};
+	case LogicalTypeId::TIME:
 	case LogicalTypeId::BLOB:
 	case LogicalTypeId::VARCHAR:
 	case LogicalTypeId::UUID:

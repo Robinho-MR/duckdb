@@ -217,42 +217,11 @@ static auto RelaxedTypeMatch(MAP &map, const LogicalType &type) -> decltype(map.
 struct MapCastInfo : public BindCastInfo {
 public:
 	optional_ptr<const MapCastNode> GetEntry(const LogicalType &source, const LogicalType &target) const {
-		auto source_type_id_entry = casts.find(source.id());
-		if (source_type_id_entry == casts.end()) {
-			source_type_id_entry = casts.find(LogicalTypeId::ANY);
-			if (source_type_id_entry == casts.end()) {
-				return nullptr;
-			}
+		auto source_entry = FindEntry(casts, source);
+		if (!source_entry) {
+			return nullptr;
 		}
-
-		auto &source_type_entries = source_type_id_entry->second;
-		auto source_type_entry = source_type_entries.find(source);
-		if (source_type_entry == source_type_entries.end()) {
-			source_type_entry = RelaxedTypeMatch(source_type_entries, source);
-			if (source_type_entry == source_type_entries.end()) {
-				return nullptr;
-			}
-		}
-
-		auto &target_type_id_entries = source_type_entry->second;
-		auto target_type_id_entry = target_type_id_entries.find(target.id());
-		if (target_type_id_entry == target_type_id_entries.end()) {
-			target_type_id_entry = target_type_id_entries.find(LogicalTypeId::ANY);
-			if (target_type_id_entry == target_type_id_entries.end()) {
-				return nullptr;
-			}
-		}
-
-		auto &target_type_entries = target_type_id_entry->second;
-		auto target_type_entry = target_type_entries.find(target);
-		if (target_type_entry == target_type_entries.end()) {
-			target_type_entry = RelaxedTypeMatch(target_type_entries, target);
-			if (target_type_entry == target_type_entries.end()) {
-				return nullptr;
-			}
-		}
-
-		return &target_type_entry->second;
+		return FindEntry(*source_entry, target);
 	}
 
 	vector<LogicalType> GetSourceTypes(const LogicalType &target) const {
@@ -272,6 +241,35 @@ public:
 	}
 
 private:
+	//! Finds the entry of the type - falling back to the entries registered for ANY if its id has none
+	template <class T>
+	static optional_ptr<const T> FindEntry(const type_id_map_t<type_map_t<T>> &map, const LogicalType &type) {
+		auto find = [&](LogicalTypeId id) -> optional_ptr<const T> {
+			auto id_entry = map.find(id);
+			if (id_entry == map.end()) {
+				return nullptr;
+			}
+			auto &entries = id_entry->second;
+			auto entry = entries.find(type);
+			if (entry == entries.end()) {
+				entry = RelaxedTypeMatch(entries, type);
+				if (entry == entries.end()) {
+					return nullptr;
+				}
+			}
+			return &entry->second;
+		};
+		if (map.find(type.id()) == map.end()) {
+			return find(LogicalTypeId::ANY);
+		}
+		auto result = find(type.id());
+		if (!result && type.id() == LogicalTypeId::TIMESTAMP) {
+			// the timestamps share an id: a cast registered for one timestamp does not hide the ANY casts of others
+			result = find(LogicalTypeId::ANY);
+		}
+		return result;
+	}
+
 	type_id_map_t<type_map_t<type_id_map_t<type_map_t<MapCastNode>>>> casts;
 };
 

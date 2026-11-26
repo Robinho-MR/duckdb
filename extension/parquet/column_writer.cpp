@@ -309,6 +309,40 @@ void ColumnWriter::HandleDefineLevels(ColumnWriterState &state, ColumnWriterStat
 // Create Column Writer
 //===--------------------------------------------------------------------===//
 
+static unique_ptr<ColumnWriter> CreateTimestampWriter(ParquetWriter &writer, ParquetColumnSchema schema,
+                                                      vector<Identifier> path_in_schema, bool write_as_int96) {
+	switch (TimestampType::GetScale(schema.type)) {
+	case TimestampType::SECOND_SCALE:
+		if (write_as_int96) {
+			return make_uniq<StandardColumnWriter<int64_t, Int96, ParquetTimestampSInt96Operator>>(
+			    writer, std::move(schema), path_in_schema);
+		}
+		return make_uniq<StandardColumnWriter<int64_t, int64_t, ParquetTimestampSOperator>>(writer, std::move(schema),
+		                                                                                    path_in_schema);
+	case TimestampType::MILLISECOND_SCALE:
+		if (write_as_int96) {
+			return make_uniq<StandardColumnWriter<int64_t, Int96, ParquetTimestampMSInt96Operator>>(
+			    writer, std::move(schema), path_in_schema);
+		}
+		return make_uniq<StandardColumnWriter<int64_t, int64_t>>(writer, std::move(schema), path_in_schema);
+	case TimestampType::MICROSECOND_SCALE:
+		if (write_as_int96) {
+			return make_uniq<StandardColumnWriter<int64_t, Int96, ParquetTimestampInt96Operator>>(
+			    writer, std::move(schema), path_in_schema);
+		}
+		return make_uniq<StandardColumnWriter<int64_t, int64_t>>(writer, std::move(schema), path_in_schema);
+	case TimestampType::NANOSECOND_SCALE:
+		if (write_as_int96) {
+			return make_uniq<StandardColumnWriter<int64_t, Int96, ParquetTimestampNSInt96Operator>>(
+			    writer, std::move(schema), path_in_schema);
+		}
+		return make_uniq<StandardColumnWriter<int64_t, int64_t, ParquetTimestampNSOperator>>(writer, std::move(schema),
+		                                                                                     path_in_schema);
+	default:
+		throw InternalException("Unsupported TIMESTAMP scale for the Parquet writer");
+	}
+}
+
 unique_ptr<ColumnWriter> ColumnWriter::CreateWriterRecursive(ClientContext &context, ParquetWriter &writer,
                                                              vector<Identifier> path_in_schema, const LogicalType &type,
                                                              const Identifier &name, bool allow_geometry,
@@ -496,18 +530,8 @@ unique_ptr<ColumnWriter> ColumnWriter::CreateWriterRecursive(ClientContext &cont
 	case LogicalTypeId::TIME_NS:
 		return make_uniq<StandardColumnWriter<int64_t, int64_t>>(writer, std::move(schema), path_in_schema);
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-		if (parquet_write_timestamp_as_int96) {
-			return make_uniq<StandardColumnWriter<int64_t, Int96, ParquetTimestampInt96Operator>>(
-			    writer, std::move(schema), path_in_schema);
-		}
-		return make_uniq<StandardColumnWriter<int64_t, int64_t>>(writer, std::move(schema), path_in_schema);
-	case LogicalTypeId::TIMESTAMP_MS:
-		if (parquet_write_timestamp_as_int96) {
-			return make_uniq<StandardColumnWriter<int64_t, Int96, ParquetTimestampMSInt96Operator>>(
-			    writer, std::move(schema), path_in_schema);
-		}
-		return make_uniq<StandardColumnWriter<int64_t, int64_t>>(writer, std::move(schema), path_in_schema);
+		return CreateTimestampWriter(writer, std::move(schema), std::move(path_in_schema),
+		                             parquet_write_timestamp_as_int96);
 	case LogicalTypeId::TIME_TZ:
 		return make_uniq<StandardColumnWriter<dtime_tz_t, int64_t, ParquetTimeTZOperator>>(writer, std::move(schema),
 		                                                                                   path_in_schema);
@@ -516,21 +540,6 @@ unique_ptr<ColumnWriter> ColumnWriter::CreateWriterRecursive(ClientContext &cont
 		                                                                                  path_in_schema);
 	case LogicalTypeId::UHUGEINT:
 		return make_uniq<StandardColumnWriter<uhugeint_t, double, ParquetUhugeintOperator>>(writer, std::move(schema),
-		                                                                                    path_in_schema);
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		if (parquet_write_timestamp_as_int96) {
-			return make_uniq<StandardColumnWriter<int64_t, Int96, ParquetTimestampNSInt96Operator>>(
-			    writer, std::move(schema), path_in_schema);
-		}
-		return make_uniq<StandardColumnWriter<int64_t, int64_t, ParquetTimestampNSOperator>>(writer, std::move(schema),
-		                                                                                     path_in_schema);
-	case LogicalTypeId::TIMESTAMP_SEC:
-		if (parquet_write_timestamp_as_int96) {
-			return make_uniq<StandardColumnWriter<int64_t, Int96, ParquetTimestampSInt96Operator>>(
-			    writer, std::move(schema), path_in_schema);
-		}
-		return make_uniq<StandardColumnWriter<int64_t, int64_t, ParquetTimestampSOperator>>(writer, std::move(schema),
 		                                                                                    path_in_schema);
 	case LogicalTypeId::UTINYINT:
 		return make_uniq<StandardColumnWriter<uint8_t, int32_t>>(writer, std::move(schema), path_in_schema);

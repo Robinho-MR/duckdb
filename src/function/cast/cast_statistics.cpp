@@ -9,24 +9,16 @@
 
 namespace duckdb {
 
-static bool IsPlainTimestamp(const LogicalTypeId id) {
-	switch (id) {
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
-		return true;
-	default:
-		return false;
-	}
+static bool IsPlainTimestamp(const LogicalType &type) {
+	return type.id() == LogicalTypeId::TIMESTAMP && !TimestampType::HasTimeZone(type);
 }
 
-static bool IsTzTimestamp(const LogicalTypeId id) {
-	return id == LogicalTypeId::TIMESTAMP_TZ || id == LogicalTypeId::TIMESTAMP_TZ_NS;
+static bool IsTzTimestamp(const LogicalType &type) {
+	return TimestampType::HasTimeZone(type);
 }
 
 static bool HasInfinities(const LogicalType &type) {
-	return type.id() == LogicalTypeId::DATE || IsPlainTimestamp(type.id()) || IsTzTimestamp(type.id());
+	return type.id() == LogicalTypeId::DATE || type.id() == LogicalTypeId::TIMESTAMP;
 }
 
 //! Date and timestamp casts are discontinuous at -infinity, which sorts above the smallest finite value
@@ -166,29 +158,15 @@ bool CastStatistics::CanPropagate(const LogicalType &source, const LogicalType &
 	case LogicalTypeId::TIME_NS: {
 		switch (source.id()) {
 		case LogicalTypeId::TIMESTAMP:
-		case LogicalTypeId::TIMESTAMP_SEC:
-		case LogicalTypeId::TIMESTAMP_MS:
-		case LogicalTypeId::TIMESTAMP_NS:
-		case LogicalTypeId::TIMESTAMP_TZ:
-		case LogicalTypeId::TIMESTAMP_TZ_NS:
 			return false;
 		default:
 			break;
 		}
 		break;
 	}
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS: {
-		if (IsTzTimestamp(source.id())) {
-			return false;
-		}
-		break;
-	}
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS: {
-		if (IsPlainTimestamp(source.id())) {
+	case LogicalTypeId::TIMESTAMP: {
+		// casts between timestamps with and without time zone are time zone dependent
+		if (TimestampType::HasTimeZone(target) ? IsPlainTimestamp(source) : IsTzTimestamp(source)) {
 			return false;
 		}
 		break;
@@ -202,11 +180,6 @@ bool CastStatistics::CanPropagate(const LogicalType &source, const LogicalType &
 		switch (source.id()) {
 		case LogicalTypeId::TIME:
 		case LogicalTypeId::TIMESTAMP:
-		case LogicalTypeId::TIMESTAMP_SEC:
-		case LogicalTypeId::TIMESTAMP_MS:
-		case LogicalTypeId::TIMESTAMP_NS:
-		case LogicalTypeId::TIMESTAMP_TZ:
-		case LogicalTypeId::TIMESTAMP_TZ_NS:
 			return false;
 		default:
 			break;

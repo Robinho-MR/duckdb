@@ -62,6 +62,9 @@ unique_ptr<LogicalTypeInfo> LogicalTypeInfo::Deserialize(Deserializer &deseriali
 	case LogicalTypeInfoType::TEMPLATE_TYPE_INFO:
 		result = TemplateTypeInfo::Deserialize(deserializer);
 		break;
+	case LogicalTypeInfoType::TIMESTAMP_TYPE_INFO:
+		result = TimestampTypeInfo::Deserialize(deserializer);
+		break;
 	case LogicalTypeInfoType::UNBOUND_TYPE_INFO:
 		result = UnboundTypeInfo::Deserialize(deserializer);
 		break;
@@ -214,6 +217,19 @@ void TemplateTypeInfo::Serialize(Serializer &serializer) const {
 unique_ptr<LogicalTypeInfo> TemplateTypeInfo::Deserialize(Deserializer &deserializer) {
 	auto result = duckdb::unique_ptr<TemplateTypeInfo>(new TemplateTypeInfo());
 	deserializer.ReadPropertyWithDefault<string>(200, "name", result->name);
+	return std::move(result);
+}
+
+void TimestampTypeInfo::Serialize(Serializer &serializer) const {
+	LogicalTypeInfo::Serialize(serializer);
+	serializer.WritePropertyWithDefault<uint8_t>(200, "scale", scale);
+	serializer.WritePropertyWithDefault<bool>(201, "has_time_zone", has_time_zone);
+}
+
+unique_ptr<LogicalTypeInfo> TimestampTypeInfo::Deserialize(Deserializer &deserializer) {
+	auto result = duckdb::unique_ptr<TimestampTypeInfo>(new TimestampTypeInfo());
+	deserializer.ReadPropertyWithDefault<uint8_t>(200, "scale", result->scale);
+	deserializer.ReadPropertyWithDefault<bool>(201, "has_time_zone", result->has_time_zone);
 	return std::move(result);
 }
 

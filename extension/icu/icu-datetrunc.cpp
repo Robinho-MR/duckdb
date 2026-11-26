@@ -190,16 +190,16 @@ struct ICUDateTrunc : public ICUDateFunc {
 	}
 
 	template <typename TA>
-	static ScalarFunction GetDateTruncFunction(const LogicalTypeId &type) {
-		ScalarFunction fun({}, LogicalType::TIMESTAMP_TZ, ICUDateTruncFunction<TA>, Bind);
+	static ScalarFunction GetDateTruncFunction(const LogicalType &type) {
+		ScalarFunction fun({}, LogicalType::TIMESTAMP_TZ(), ICUDateTruncFunction<TA>, Bind);
 		fun.GetSignature().AddParameter("part", LogicalType::VARCHAR).AddParameter("timestamp", type);
 		return fun;
 	}
 
 	static void AddBinaryTimestampFunction(const Identifier &name, ExtensionLoader &loader) {
 		ScalarFunctionSet set {name};
-		set.AddFunction(GetDateTruncFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ));
-		set.AddFunction(GetDateTruncFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS));
+		set.AddFunction(GetDateTruncFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ()));
+		set.AddFunction(GetDateTruncFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS()));
 		// throws for unrecognized part specifiers and for dates that overflow the timestamp range
 		set.SetFallible();
 		set.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);

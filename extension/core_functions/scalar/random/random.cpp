@@ -139,7 +139,7 @@ ScalarFunction UUIDExtractVersionFun::GetFunction() {
 }
 
 ScalarFunction UUIDExtractTimestampFun::GetFunction() {
-	ScalarFunction function({}, LogicalType::TIMESTAMP_TZ,
+	ScalarFunction function({}, LogicalType::TIMESTAMP_TZ(),
 	                        ExtractTimestampFunction<hugeint_t, ExtractTimestampUuidOperator>);
 	function.GetSignature().AddParameter("uuid", LogicalType::UUID);
 	// throws if the UUID is not a version 7 UUID

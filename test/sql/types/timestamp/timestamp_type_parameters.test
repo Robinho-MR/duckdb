@@ -1,0 +1,120 @@
+# name: test/sql/types/timestamp/timestamp_type_parameters.test
+# description: The timestamp types are a single TIMESTAMP type parameterized by scale and time zone
+# group: [timestamp]
+
+require icu
+
+statement ok
+SET TimeZone='UTC'
+
+statement ok
+CREATE TABLE ts AS SELECT
+	'2020-01-02 03:04:05.123456789'::TIMESTAMP_S AS s,
+	'2020-01-02 03:04:05.123456789'::TIMESTAMP_MS AS ms,
+	'2020-01-02 03:04:05.123456789'::TIMESTAMP AS us,
+	'2020-01-02 03:04:05.123456789'::TIMESTAMP_NS AS ns,
+	'2020-01-02 03:04:05.123456789'::TIMESTAMPTZ AS tz,
+	'2020-01-02 03:04:05.123456789'::TIMESTAMPTZ_NS AS tz_ns
+
+query TTTTTT
+SELECT typeof(s), typeof(ms), typeof(us), typeof(ns), typeof(tz), typeof(tz_ns) FROM ts
+----
+TIMESTAMP_S	TIMESTAMP_MS	TIMESTAMP	TIMESTAMP_NS	TIMESTAMP WITH TIME ZONE	TIMESTAMPTZ_NS
+
+query TTTTTT
+SELECT * FROM ts
+----
+2020-01-02 03:04:05	2020-01-02 03:04:05.123	2020-01-02 03:04:05.123457	2020-01-02 03:04:05.123456789	2020-01-02 03:04:05.123457+00	2020-01-02 03:04:05.123456789+00
+
+# the precision modifier selects the scale
+query TTTTT
+SELECT typeof(s::TIMESTAMP(0)), typeof(s::TIMESTAMP(2)), typeof(s::TIMESTAMP(5)), typeof(s::TIMESTAMP(9)), typeof(s::DATETIME) FROM ts
+----
+TIMESTAMP_S	TIMESTAMP_MS	TIMESTAMP	TIMESTAMP_NS	TIMESTAMP
+
+# different scales / time zones are different types
+query IIIII
+SELECT s = ms, ms = us, us = ns, us = tz, ns = tz_ns FROM ts
+----
+false	false	false	true	true
+
+query TTT
+SELECT typeof(s + INTERVAL 1 SECOND), typeof(ns - INTERVAL 1 SECOND), typeof(tz + INTERVAL 1 SECOND) FROM ts
+----
+TIMESTAMP	TIMESTAMP_NS	TIMESTAMP WITH TIME ZONE
+
+# combining timestamps of different scales picks the wider one
+query TTT
+SELECT typeof([s, ms]), typeof([ms, ns]), typeof([us, tz]) FROM ts
+----
+TIMESTAMP_MS[]	TIMESTAMP_NS[]	TIMESTAMP WITH TIME ZONE[]
+
+query TT
+SELECT typeof(a), typeof(b) FROM (SELECT s a FROM ts UNION ALL SELECT ms FROM ts), (SELECT ns b FROM ts UNION ALL SELECT us FROM ts) LIMIT 1
+----
+TIMESTAMP_MS	TIMESTAMP_NS
+
+statement error
+SELECT [ns, tz_ns] FROM ts
+----
+Cannot deduce template type
+
+# nested and aliased timestamp types
+statement ok
+CREATE TYPE my_ts AS TIMESTAMP_NS
+
+query TT
+SELECT typeof(NULL::my_ts), typeof({'a': ns, 'b': [tz_ns]}) FROM ts
+----
+TIMESTAMP_NS	STRUCT(a TIMESTAMP_NS, b TIMESTAMPTZ_NS[])
+
+query TT
+SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'ts' ORDER BY ordinal_position
+----
+s	TIMESTAMP_S
+ms	TIMESTAMP_MS
+us	TIMESTAMP
+ns	TIMESTAMP_NS
+tz	TIMESTAMP WITH TIME ZONE
+tz_ns	TIMESTAMPTZ_NS
+
+# the types round-trip through storage, both in the legacy format (one type id per variant) and the parameterized one
+foreach storage_version v1.0.0 v2.0.0 v2.1.0
+
+statement ok
+ATTACH '{TEST_DIR}/timestamp_type_parameters_{storage_version}.db' AS db (STORAGE_VERSION '{storage_version}')
+
+statement ok
+CREATE TYPE db.my_ts AS TIMESTAMP_NS
+
+statement ok
+CREATE TABLE db.ts AS SELECT *, ns::db.my_ts AS aliased, [ns] AS nested, {'tz': tz_ns} AS struct_tz FROM ts
+
+statement ok
+CREATE VIEW db.v AS SELECT ms::TIMESTAMP_S AS s, us::TIMESTAMPTZ_NS AS tz_ns FROM db.ts
+
+statement ok
+DETACH db
+
+statement ok
+ATTACH '{TEST_DIR}/timestamp_type_parameters_{storage_version}.db' AS db
+
+query TTTTTTTTT
+SELECT typeof(s), typeof(ms), typeof(us), typeof(ns), typeof(tz), typeof(tz_ns), typeof(aliased), typeof(nested), typeof(struct_tz) FROM db.ts
+----
+TIMESTAMP_S	TIMESTAMP_MS	TIMESTAMP	TIMESTAMP_NS	TIMESTAMP WITH TIME ZONE	TIMESTAMPTZ_NS	TIMESTAMP_NS	TIMESTAMP_NS[]	STRUCT(tz TIMESTAMPTZ_NS)
+
+query TTTTTTTTT
+SELECT * FROM db.ts
+----
+2020-01-02 03:04:05	2020-01-02 03:04:05.123	2020-01-02 03:04:05.123457	2020-01-02 03:04:05.123456789	2020-01-02 03:04:05.123457+00	2020-01-02 03:04:05.123456789+00	2020-01-02 03:04:05.123456789	['2020-01-02 03:04:05.123456789']	{'tz': '2020-01-02 03:04:05.123456789+00'}
+
+query TTTT
+SELECT typeof(s), typeof(tz_ns), s, tz_ns FROM db.v
+----
+TIMESTAMP_S	TIMESTAMPTZ_NS	2020-01-02 03:04:05	2020-01-02 03:04:05.123457+00
+
+statement ok
+DETACH db
+
+endloop

@@ -168,7 +168,7 @@ struct ICUCalendarSub : public ICUDateFunc {
 	}
 
 	template <typename TA>
-	static ScalarFunction GetFunction(const LogicalTypeId &type) {
+	static ScalarFunction GetFunction(const LogicalType &type) {
 		ScalarFunction fun({}, LogicalType::BIGINT, ICUDateSubFunction<TA>, Bind);
 		fun.GetSignature()
 		    .AddParameter("part", LogicalType::VARCHAR)
@@ -179,7 +179,7 @@ struct ICUCalendarSub : public ICUDateFunc {
 
 	static void AddFunctions(const Identifier &name, ExtensionLoader &loader) {
 		ScalarFunctionSet set {name};
-		set.AddFunction(GetFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ));
+		set.AddFunction(GetFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ()));
 		// throws for unrecognized part specifiers and for dates that overflow the timestamp range
 		set.SetFallible();
 		set.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
@@ -364,7 +364,7 @@ struct ICUCalendarDiff : public ICUDateFunc {
 	}
 
 	template <typename TA>
-	static ScalarFunction GetFunction(const LogicalTypeId &type) {
+	static ScalarFunction GetFunction(const LogicalType &type) {
 		ScalarFunction fun({}, LogicalType::BIGINT, ICUDateDiffFunction<TA>, Bind);
 		fun.GetSignature()
 		    .AddParameter("part", LogicalType::VARCHAR)
@@ -375,8 +375,8 @@ struct ICUCalendarDiff : public ICUDateFunc {
 
 	static void AddFunctions(const Identifier &name, ExtensionLoader &loader) {
 		ScalarFunctionSet set {name};
-		set.AddFunction(GetFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ));
-		set.AddFunction(GetFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS));
+		set.AddFunction(GetFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ()));
+		set.AddFunction(GetFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS()));
 		// throws for unrecognized part specifiers and for dates that overflow the timestamp range
 		set.SetFallible();
 		set.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);

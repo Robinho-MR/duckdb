@@ -211,10 +211,12 @@ enum class LogicalTypeId : uint8_t {
 	BIGINT = 14,
 	DATE = 15,
 	TIME = 16,
-	TIMESTAMP_SEC = 17,
-	TIMESTAMP_MS = 18,
-	TIMESTAMP = 19, //! us
-	TIMESTAMP_NS = 20,
+	//! Before the TIMESTAMP type was parameterized, every scale / time zone combination had its own id. The legacy ids
+	//! are only used to read and write old storage formats, and are never the id of a LogicalType.
+	LEGACY_TIMESTAMP_SEC = 17,
+	LEGACY_TIMESTAMP_MS = 18,
+	TIMESTAMP = 19, //! parameterized by TimestampTypeInfo (scale and time zone) - microseconds without time zone by default
+	LEGACY_TIMESTAMP_NS = 20,
 	DECIMAL = 21,
 	FLOAT = 22,
 	DOUBLE = 23,
@@ -226,8 +228,8 @@ enum class LogicalTypeId : uint8_t {
 	USMALLINT = 29,
 	UINTEGER = 30,
 	UBIGINT = 31,
-	TIMESTAMP_TZ = 32,
-	TIMESTAMP_TZ_NS = 33,
+	LEGACY_TIMESTAMP_TZ = 32,
+	LEGACY_TIMESTAMP_TZ_NS = 33,
 	TIME_TZ = 34,
 	TIME_NS = 35,
 	BIT = 36,
@@ -273,7 +275,8 @@ enum class LogicalTypeInfoType : uint8_t {
 	ANY_TYPE_INFO = 10,
 	INTEGER_LITERAL_TYPE_INFO = 11,
 	TEMPLATE_TYPE_INFO = 12,
-	GEO_TYPE_INFO = 13
+	GEO_TYPE_INFO = 13,
+	TIMESTAMP_TYPE_INFO = 14
 };
 
 //! The intrusively ref-counted data behind a LogicalType. Types without parameters use an INVALID_TYPE_INFO.
@@ -435,9 +438,7 @@ struct LogicalType {
 	DUCKDB_API static LogicalType Deserialize(Deserializer &deserializer);
 
 	static bool TypeIsTimestamp(LogicalTypeId id) {
-		return (id == LogicalTypeId::TIMESTAMP || id == LogicalTypeId::TIMESTAMP_MS ||
-		        id == LogicalTypeId::TIMESTAMP_NS || id == LogicalTypeId::TIMESTAMP_SEC ||
-		        id == LogicalTypeId::TIMESTAMP_TZ);
+		return id == LogicalTypeId::TIMESTAMP;
 	}
 	static bool TypeIsTimestamp(const LogicalType &type) {
 		return TypeIsTimestamp(type.id());
@@ -549,14 +550,10 @@ public:
 	static constexpr const LogicalTypeId FLOAT = LogicalTypeId::FLOAT;
 	static constexpr const LogicalTypeId DOUBLE = LogicalTypeId::DOUBLE;
 	static constexpr const LogicalTypeId DATE = LogicalTypeId::DATE;
+	//! TIMESTAMP with microsecond scale and without time zone
 	static constexpr const LogicalTypeId TIMESTAMP = LogicalTypeId::TIMESTAMP;
-	static constexpr const LogicalTypeId TIMESTAMP_S = LogicalTypeId::TIMESTAMP_SEC;
-	static constexpr const LogicalTypeId TIMESTAMP_MS = LogicalTypeId::TIMESTAMP_MS;
-	static constexpr const LogicalTypeId TIMESTAMP_NS = LogicalTypeId::TIMESTAMP_NS;
 	static constexpr const LogicalTypeId TIME = LogicalTypeId::TIME;
 	static constexpr const LogicalTypeId TIME_NS = LogicalTypeId::TIME_NS;
-	static constexpr const LogicalTypeId TIMESTAMP_TZ = LogicalTypeId::TIMESTAMP_TZ;
-	static constexpr const LogicalTypeId TIMESTAMP_TZ_NS = LogicalTypeId::TIMESTAMP_TZ_NS;
 	static constexpr const LogicalTypeId TIME_TZ = LogicalTypeId::TIME_TZ;
 	static constexpr const LogicalTypeId VARCHAR = LogicalTypeId::VARCHAR;
 	static constexpr const LogicalTypeId ANY = LogicalTypeId::ANY;
@@ -578,6 +575,13 @@ public:
 	// explicitly allowing these functions to be capitalized to be in-line with the remaining functions
 	DUCKDB_API static LogicalType DECIMAL(uint32_t width, uint32_t scale);    // NOLINT
 	DUCKDB_API static LogicalType VARCHAR_COLLATION(string collation);        // NOLINT
+	//! A TIMESTAMP with the given scale (fractional second digits: 0, 3, 6 or 9) and time zone
+	DUCKDB_API static LogicalType TIMESTAMP_TYPE(uint8_t scale, bool has_time_zone); // NOLINT
+	DUCKDB_API static LogicalType TIMESTAMP_S();                                    // NOLINT
+	DUCKDB_API static LogicalType TIMESTAMP_MS();                                   // NOLINT
+	DUCKDB_API static LogicalType TIMESTAMP_NS();                                   // NOLINT
+	DUCKDB_API static LogicalType TIMESTAMP_TZ();                                   // NOLINT
+	DUCKDB_API static LogicalType TIMESTAMP_TZ_NS();                                // NOLINT
 	DUCKDB_API static LogicalType LIST(const LogicalType &child);             // NOLINT
 	DUCKDB_API static LogicalType STRUCT(child_list_t<LogicalType> children); // NOLINT
 	//! Unnamed struct - shares the physical representation of STRUCT but is a distinct logical type
@@ -630,6 +634,31 @@ struct DecimalType {
 
 struct StringType {
 	DUCKDB_API static string GetCollation(const LogicalType &type);
+};
+
+struct TimestampType {
+	//! The supported scales - the number of fractional second digits
+	static constexpr uint8_t SECOND_SCALE = 0;
+	static constexpr uint8_t MILLISECOND_SCALE = 3;
+	static constexpr uint8_t MICROSECOND_SCALE = 6;
+	static constexpr uint8_t NANOSECOND_SCALE = 9;
+
+	//! The scale of a TIMESTAMP type
+	DUCKDB_API static uint8_t GetScale(const LogicalType &type);
+	//! Whether the type is a TIMESTAMP with time zone - false for any other type
+	DUCKDB_API static bool HasTimeZone(const LogicalType &type);
+	//! Whether the type is a TIMESTAMP with the given scale and time zone
+	DUCKDB_API static bool Is(const LogicalType &type, uint8_t scale, bool has_time_zone);
+	//! Whether a TIMESTAMP with this scale and time zone is supported
+	DUCKDB_API static bool IsValid(uint8_t scale, bool has_time_zone);
+	//! The number of timestamp units in a second (1 for seconds, 1000 for milliseconds, ...)
+	DUCKDB_API static int64_t UnitsPerSecond(uint8_t scale);
+	//! The name of the timestamp type, e.g. TIMESTAMP_NS or TIMESTAMP WITH TIME ZONE
+	DUCKDB_API static string GetName(uint8_t scale, bool has_time_zone);
+	//! The legacy (pre-parameterization) id of a TIMESTAMP type, or TIMESTAMP for the default scale
+	DUCKDB_API static LogicalTypeId GetLegacyId(const LogicalType &type);
+	//! Whether the id is one of the legacy timestamp ids - if so, outputs the scale and time zone it stands for
+	DUCKDB_API static bool TryGetLegacyParameters(LogicalTypeId id, uint8_t &scale, bool &has_time_zone);
 };
 
 struct ListType {

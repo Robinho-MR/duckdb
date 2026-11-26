@@ -123,7 +123,8 @@ static bool ConstantCastIsInvertible(ClientContext &context, BoundFunctionExpres
 		}
 		return CompareWithRoundedConstant(expr, column_ref_left, *roundtrip > constant_value);
 	}
-	if (target_type.id() != LogicalTypeId::DATE || cast_type.id() != LogicalTypeId::TIMESTAMP) {
+	if (target_type.id() != LogicalTypeId::DATE ||
+	    !TimestampType::Is(cast_type, TimestampType::MICROSECOND_SCALE, false)) {
 		return false;
 	}
 	return DateTimestampComparisonIsInvertible(context, expr, cast_expression, constant_value, cast_constant,

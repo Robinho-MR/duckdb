@@ -75,8 +75,8 @@ VariantNumberKey IntegerNumberKey(T value) {
 }
 } // namespace
 
-VariantComparisonType GetVariantComparisonType(LogicalTypeId type) {
-	switch (type) {
+VariantComparisonType GetVariantComparisonType(const LogicalType &type) {
+	switch (type.id()) {
 	case LogicalTypeId::SQLNULL:
 		return VariantComparisonType::NULL_VALUE;
 	case LogicalTypeId::BOOLEAN:
@@ -108,15 +108,11 @@ VariantComparisonType GetVariantComparisonType(LogicalTypeId type) {
 		// DATE folds into the TIMESTAMP rank (a date compares as midnight of that day), together with all
 		// non-tz TIMESTAMP precisions (SEC / MILIS / MICROS / NANOS)
 	case LogicalTypeId::DATE:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_NS:
 		return VariantComparisonType::TIMESTAMP;
 		// TIMESTAMP WITH TIME ZONE precisions fold into a single TIMESTAMP_TZ rank
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return VariantComparisonType::TIMESTAMP_TZ;
+	case LogicalTypeId::TIMESTAMP:
+		return TimestampType::HasTimeZone(type) ? VariantComparisonType::TIMESTAMP_TZ
+		                                        : VariantComparisonType::TIMESTAMP;
 		// TIME precisions fold into a single TIME rank
 	case LogicalTypeId::TIME:
 	case LogicalTypeId::TIME_NS:
@@ -136,7 +132,7 @@ VariantComparisonType GetVariantComparisonType(LogicalTypeId type) {
 	case LogicalTypeId::STRUCT:
 		return VariantComparisonType::OBJECT;
 	default:
-		throw NotImplementedException("Variant type %s is not supported", EnumUtil::ToString(type));
+		throw NotImplementedException("Variant type %s is not supported", type.ToString());
 	}
 }
 double VariantGetRealValue(LogicalTypeId type_id, const VariantNode &node) {
@@ -222,28 +218,34 @@ hugeint_t VariantGetTimestampValue(LogicalTypeId type_id, const VariantNode &nod
 	switch (type_id) {
 	case LogicalTypeId::DATE:
 		return hugeint_t(node.GetData<int32_t>()) * hugeint_t(NANOS_PER_DAY);
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return hugeint_t(node.GetData<int64_t>()) * hugeint_t(NANOS_PER_SEC);
-	case LogicalTypeId::TIMESTAMP_MS:
-		return hugeint_t(node.GetData<int64_t>()) * hugeint_t(NANOS_PER_MILLI);
-	case LogicalTypeId::TIMESTAMP:
-		return hugeint_t(node.GetData<int64_t>()) * hugeint_t(NANOS_PER_MICRO);
-	case LogicalTypeId::TIMESTAMP_NS:
-		return hugeint_t(node.GetData<int64_t>());
-	default:
-		throw InternalException("VariantGetTimestampValue called on non-TIMESTAMP type");
+	case LogicalTypeId::TIMESTAMP: {
+		auto type = node.GetType();
+		if (TimestampType::HasTimeZone(type)) {
+			break;
+		}
+		auto nanos_per_unit = NANOS_PER_SEC / TimestampType::UnitsPerSecond(TimestampType::GetScale(type));
+		return hugeint_t(node.GetData<int64_t>()) * hugeint_t(nanos_per_unit);
 	}
+	default:
+		break;
+	}
+	throw InternalException("VariantGetTimestampValue called on non-TIMESTAMP type");
 }
 
 hugeint_t VariantGetTimestampTZValue(LogicalTypeId type_id, const VariantNode &node) {
 	switch (type_id) {
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return hugeint_t(node.GetData<int64_t>()) * hugeint_t(NANOS_PER_MICRO);
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return hugeint_t(node.GetData<int64_t>());
-	default:
-		throw InternalException("VariantGetTimestampTZValue called on non-TIMESTAMP_TZ type");
+	case LogicalTypeId::TIMESTAMP: {
+		auto type = node.GetType();
+		if (!TimestampType::HasTimeZone(type)) {
+			break;
+		}
+		auto nanos_per_unit = NANOS_PER_SEC / TimestampType::UnitsPerSecond(TimestampType::GetScale(type));
+		return hugeint_t(node.GetData<int64_t>()) * hugeint_t(nanos_per_unit);
 	}
+	default:
+		break;
+	}
+	throw InternalException("VariantGetTimestampTZValue called on non-TIMESTAMP_TZ type");
 }
 
 int64_t VariantGetTimeValue(LogicalTypeId type_id, const VariantNode &node) {

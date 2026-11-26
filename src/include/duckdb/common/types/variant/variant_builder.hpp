@@ -259,25 +259,10 @@ struct VariantBuilder {
 			variant_type = VariantLogicalType::DATE;
 			VariantBuilderAppendFixed(blob, primitive.GetValueUnsafe<date_t>());
 			break;
-		case LogicalTypeId::TIMESTAMP_TZ:
-			variant_type = VariantLogicalType::TIMESTAMP_MICROS_TZ;
-			VariantBuilderAppendFixed(blob, primitive.GetValueUnsafe<timestamp_tz_t>());
-			break;
-		case LogicalTypeId::TIMESTAMP_TZ_NS:
-			variant_type = VariantLogicalType::TIMESTAMP_NANOS_TZ;
-			VariantBuilderAppendFixed(blob, primitive.GetValueUnsafe<timestamp_tz_ns_t>());
-			break;
 		case LogicalTypeId::TIMESTAMP:
-			variant_type = VariantLogicalType::TIMESTAMP_MICROS;
+			// all timestamps are stored as their int64 value
+			variant_type = VariantTypeFromLogicalType(primitive.type());
 			VariantBuilderAppendFixed(blob, primitive.GetValueUnsafe<timestamp_t>());
-			break;
-		case LogicalTypeId::TIMESTAMP_SEC:
-			variant_type = VariantLogicalType::TIMESTAMP_SEC;
-			VariantBuilderAppendFixed(blob, primitive.GetValueUnsafe<timestamp_sec_t>());
-			break;
-		case LogicalTypeId::TIMESTAMP_MS:
-			variant_type = VariantLogicalType::TIMESTAMP_MILIS;
-			VariantBuilderAppendFixed(blob, primitive.GetValueUnsafe<timestamp_ms_t>());
 			break;
 		case LogicalTypeId::TIME:
 			variant_type = VariantLogicalType::TIME_MICROS;
@@ -290,10 +275,6 @@ struct VariantBuilder {
 		case LogicalTypeId::TIME_TZ:
 			variant_type = VariantLogicalType::TIME_MICROS_TZ;
 			VariantBuilderAppendFixed(blob, primitive.GetValueUnsafe<dtime_tz_t>());
-			break;
-		case LogicalTypeId::TIMESTAMP_NS:
-			variant_type = VariantLogicalType::TIMESTAMP_NANOS;
-			VariantBuilderAppendFixed(blob, primitive.GetValueUnsafe<timestamp_ns_t>());
 			break;
 		case LogicalTypeId::INTERVAL:
 			variant_type = VariantLogicalType::INTERVAL;

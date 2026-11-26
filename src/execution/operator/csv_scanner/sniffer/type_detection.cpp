@@ -160,6 +160,13 @@ bool CSVSniffer::CanYouCastIt(ClientContext &context, const string_t value, cons
 	if (is_null) {
 		return true;
 	}
+	if (type.id() == LogicalTypeId::TIMESTAMP && !TimestampType::Is(type, TimestampType::MICROSECOND_SCALE, false)) {
+		// only the default timestamp is parsed directly
+		string error_message;
+		Value str_value(value);
+		auto new_value = str_value.TryCastAs(context, type, &error_message, true);
+		return new_value.has_value() && error_message.empty();
+	}
 	auto value_ptr = value.GetData();
 	auto value_size = value.GetSize();
 	string strip_thousands;
@@ -396,7 +403,8 @@ void CSVSniffer::SniffTypes(DataChunk &data_chunk, CSVStateMachine &state_machin
 				// If Value is not Null, Has a numeric date format, and the current investigated candidate is
 				// either a timestamp or a date
 				if (null_mask.RowIsValid(row_idx) && StartsWithNumericDate(separator, vector_data[row_idx]) &&
-				    ((col_type_candidates.back().id() == LogicalTypeId::TIMESTAMP && !has_type.timestamp) ||
+				    ((TimestampType::Is(col_type_candidates.back(), TimestampType::MICROSECOND_SCALE, false) &&
+				      !has_type.timestamp) ||
 				     (col_type_candidates.back().id() == LogicalTypeId::DATE && !has_type.date))) {
 					DetectDateAndTimeStampFormats(state_machine, sql_type, separator, vector_data[row_idx]);
 				}
@@ -415,8 +423,8 @@ void CSVSniffer::SniffTypes(DataChunk &data_chunk, CSVStateMachine &state_machin
 				    (cur_top_candidate == LogicalType::BOOLEAN || cur_top_candidate == LogicalType::DATE ||
 				     cur_top_candidate == LogicalType::TIME ||
 				     (cur_top_candidate == LogicalType::TIMESTAMP &&
-				      col_type_candidates[col_type_candidates.size() - 2] != LogicalType::TIMESTAMP_TZ) ||
-				     cur_top_candidate == LogicalType::TIMESTAMP_TZ)) {
+				      col_type_candidates[col_type_candidates.size() - 2] != LogicalType::TIMESTAMP_TZ()) ||
+				     cur_top_candidate == LogicalType::TIMESTAMP_TZ())) {
 					// If we thought this was a boolean value (i.e., T,F, True, False) and it is not, we
 					// immediately pop to varchar.
 					while (col_type_candidates.back() != LogicalType::VARCHAR) {
@@ -430,7 +438,7 @@ void CSVSniffer::SniffTypes(DataChunk &data_chunk, CSVStateMachine &state_machin
 		if (col_type_candidates.back().id() == LogicalTypeId::DATE) {
 			has_type.date = true;
 		}
-		if (col_type_candidates.back().id() == LogicalTypeId::TIMESTAMP) {
+		if (TimestampType::Is(col_type_candidates.back(), TimestampType::MICROSECOND_SCALE, false)) {
 			has_type.timestamp = true;
 		}
 	}

@@ -115,16 +115,13 @@ bool IsSupportedKeyType(const LogicalType &type, bool exact) {
 	case LogicalTypeId::DECIMAL:
 	case LogicalTypeId::DATE:
 	case LogicalTypeId::TIME:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_TZ:
 	case LogicalTypeId::VARCHAR:
 	case LogicalTypeId::BLOB:
 	case LogicalTypeId::UUID:
 	case LogicalTypeId::ENUM:
 		return true;
+	case LogicalTypeId::TIMESTAMP:
+		return !TimestampType::Is(type, TimestampType::NANOSECOND_SCALE, true);
 	case LogicalTypeId::FLOAT:
 	case LogicalTypeId::DOUBLE:
 		return !exact;

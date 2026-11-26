@@ -151,14 +151,18 @@ VariantLogicalType ShreddedLeafTypeId(const ShreddedGroupView &view, idx_t index
 		return VariantLogicalType::DATE;
 	case LogicalTypeId::TIME:
 		return VariantLogicalType::TIME_MICROS;
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return VariantLogicalType::TIMESTAMP_MICROS_TZ;
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return VariantLogicalType::TIMESTAMP_NANOS_TZ;
-	case LogicalTypeId::TIMESTAMP:
-		return VariantLogicalType::TIMESTAMP_MICROS;
-	case LogicalTypeId::TIMESTAMP_NS:
-		return VariantLogicalType::TIMESTAMP_NANOS;
+	case LogicalTypeId::TIMESTAMP: {
+		auto has_time_zone = TimestampType::HasTimeZone(view.typed_type);
+		switch (TimestampType::GetScale(view.typed_type)) {
+		case TimestampType::MICROSECOND_SCALE:
+			return has_time_zone ? VariantLogicalType::TIMESTAMP_MICROS_TZ : VariantLogicalType::TIMESTAMP_MICROS;
+		case TimestampType::NANOSECOND_SCALE:
+			return has_time_zone ? VariantLogicalType::TIMESTAMP_NANOS_TZ : VariantLogicalType::TIMESTAMP_NANOS;
+		default:
+			throw NotImplementedException("Variant shredding on type: '%s' is not implemented",
+			                              view.typed_type.ToString());
+		}
+	}
 	case LogicalTypeId::BLOB:
 		return VariantLogicalType::BLOB;
 	case LogicalTypeId::VARCHAR:
@@ -485,7 +489,7 @@ LogicalType ParquetVariantNode::GetType() const {
 		auto properties = GetDecimalProperties();
 		return LogicalType::DECIMAL(properties.width, properties.scale);
 	}
-	return VariantDefaultType(type_id);
+	return VariantDefaultType(GetVariantType());
 }
 
 bool ParquetVariantNode::GetBool() const {

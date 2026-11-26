@@ -310,7 +310,11 @@ void ExpressionExecutor::Execute(const Expression &expr, ExpressionState *state,
 	if (count == 0) {
 		return;
 	}
-	if (result.GetType().id() != expr.GetReturnType().id()) {
+	auto &result_type = result.GetType();
+	auto &return_type = expr.GetReturnType();
+	if (result_type.id() != return_type.id() || (result_type.id() == LogicalTypeId::TIMESTAMP &&
+	                                             !TimestampType::Is(result_type, TimestampType::GetScale(return_type),
+	                                                                TimestampType::HasTimeZone(return_type)))) {
 		throw InternalException(
 		    "ExpressionExecutor::Execute called with a result vector of type %s that does not match expression type %s",
 		    result.GetType(), expr.GetReturnType());

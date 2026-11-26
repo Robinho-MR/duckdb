@@ -132,7 +132,7 @@ PEGTransformerFactory::TransformTimeType(PEGTransformer &transformer, const Logi
 	if (type == LogicalTypeId::TIMESTAMP) {
 		if (modifiers.empty()) {
 			if (with_timezone) {
-				return make_uniq<TypeExpression>(Identifier(EnumUtil::ToString(LogicalType::TIMESTAMP_TZ)),
+				return make_uniq<TypeExpression>(Identifier(LogicalType::TIMESTAMP_TZ().ToString()),
 				                                 vector<unique_ptr<ParsedExpression>> {});
 			}
 			return make_uniq<TypeExpression>(Identifier(EnumUtil::ToString(LogicalType::TIMESTAMP)),
@@ -162,11 +162,11 @@ PEGTransformerFactory::TransformTimeType(PEGTransformer &transformer, const Logi
 			throw ParserException("TIMESTAMP precision should be between 0 and 10 (inclusive)");
 		}
 		if (timestamp_precision == 0) {
-			return make_uniq<TypeExpression>(Identifier(EnumUtil::ToString(LogicalType::TIMESTAMP_S)),
+			return make_uniq<TypeExpression>(Identifier(LogicalType::TIMESTAMP_S().ToString()),
 			                                 vector<unique_ptr<ParsedExpression>> {});
 		}
 		if (timestamp_precision <= 3) {
-			return make_uniq<TypeExpression>(Identifier(EnumUtil::ToString(LogicalType::TIMESTAMP_MS)),
+			return make_uniq<TypeExpression>(Identifier(LogicalType::TIMESTAMP_MS().ToString()),
 			                                 vector<unique_ptr<ParsedExpression>> {});
 		}
 		if (timestamp_precision <= 6) {
@@ -174,7 +174,7 @@ PEGTransformerFactory::TransformTimeType(PEGTransformer &transformer, const Logi
 			return make_uniq<TypeExpression>(Identifier(EnumUtil::ToString(LogicalType::TIMESTAMP)),
 			                                 vector<unique_ptr<ParsedExpression>> {});
 		}
-		return make_uniq<TypeExpression>(Identifier(EnumUtil::ToString(LogicalType::TIMESTAMP_NS)),
+		return make_uniq<TypeExpression>(Identifier(LogicalType::TIMESTAMP_NS().ToString()),
 		                                 vector<unique_ptr<ParsedExpression>> {});
 	}
 	throw ParserException("Unexpected time type encountered");

@@ -1727,7 +1727,7 @@ ScalarFunctionSet IsInfiniteFun::GetFunctions() {
 	    LogicalType::TIMESTAMP));
 	funcs.AddFunction(NameXArgument(
 	    ScalarFunction({}, LogicalType::BOOLEAN, ScalarFunction::UnaryFunction<timestamp_t, bool, IsInfiniteOperator>),
-	    LogicalType::TIMESTAMP_TZ));
+	    LogicalType::TIMESTAMP_TZ()));
 	return funcs;
 }
 
@@ -1761,7 +1761,7 @@ ScalarFunctionSet IsFiniteFun::GetFunctions() {
 	    LogicalType::TIMESTAMP));
 	funcs.AddFunction(NameXArgument(
 	    ScalarFunction({}, LogicalType::BOOLEAN, ScalarFunction::UnaryFunction<timestamp_t, bool, IsFiniteOperator>),
-	    LogicalType::TIMESTAMP_TZ));
+	    LogicalType::TIMESTAMP_TZ()));
 	return funcs;
 }
 

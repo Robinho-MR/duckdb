@@ -214,30 +214,33 @@ void SetArrowFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, co
 	case LogicalTypeId::TIME_NS:
 		child.format = "ttn";
 		break;
-	case LogicalTypeId::TIMESTAMP:
-		child.format = "tsu:";
-		break;
-	case LogicalTypeId::TIMESTAMP_TZ: {
-		string format = "tsu:" + options.time_zone;
+	case LogicalTypeId::TIMESTAMP: {
+		const char *unit;
+		switch (TimestampType::GetScale(type)) {
+		case TimestampType::SECOND_SCALE:
+			unit = "tss:";
+			break;
+		case TimestampType::MILLISECOND_SCALE:
+			unit = "tsm:";
+			break;
+		case TimestampType::MICROSECOND_SCALE:
+			unit = "tsu:";
+			break;
+		case TimestampType::NANOSECOND_SCALE:
+			unit = "tsn:";
+			break;
+		default:
+			throw InternalException("Unsupported TIMESTAMP scale");
+		}
+		if (!TimestampType::HasTimeZone(type)) {
+			child.format = unit;
+			break;
+		}
+		string format = unit + options.time_zone;
 		root_holder.owned_type_names.push_back(AddName(format));
 		child.format = root_holder.owned_type_names.back().get();
 		break;
 	}
-	case LogicalTypeId::TIMESTAMP_TZ_NS: {
-		string format = "tsn:" + options.time_zone;
-		root_holder.owned_type_names.push_back(AddName(format));
-		child.format = root_holder.owned_type_names.back().get();
-		break;
-	}
-	case LogicalTypeId::TIMESTAMP_SEC:
-		child.format = "tss:";
-		break;
-	case LogicalTypeId::TIMESTAMP_NS:
-		child.format = "tsn:";
-		break;
-	case LogicalTypeId::TIMESTAMP_MS:
-		child.format = "tsm:";
-		break;
 	case LogicalTypeId::INTERVAL:
 		child.format = "tin";
 		break;

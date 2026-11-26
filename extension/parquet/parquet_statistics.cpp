@@ -173,6 +173,39 @@ static Value ParquetDecimalStatsValue(T value, uint32_t width, uint32_t scale) {
 	return Value::DECIMAL(value, width, scale);
 }
 
+static Value ParquetTimestampNSStatsValue(const LogicalType &type, const ParquetColumnSchema &schema_ele,
+                                          const std::string &stats) {
+	auto stats_data = const_data_ptr_cast(stats.c_str());
+	timestamp_ns_t timestamp_value;
+	if (schema_ele.type_info == ParquetExtraTypeInfo::IMPALA_TIMESTAMP) {
+		if (stats.size() != sizeof(Int96)) {
+			throw InvalidInputException("Incorrect stats size for type TIMESTAMP_NS");
+		}
+		timestamp_value = ImpalaTimestampToTimestampNS(Load<Int96>(stats_data));
+	} else {
+		if (stats.size() != sizeof(int64_t)) {
+			throw InvalidInputException("Incorrect stats size for type TIMESTAMP_NS");
+		}
+		auto val = Load<int64_t>(stats_data);
+		switch (schema_ele.type_info) {
+		case ParquetExtraTypeInfo::UNIT_MS:
+			timestamp_value = ParquetTimestampMsToTimestampNs(val);
+			break;
+		case ParquetExtraTypeInfo::UNIT_NS:
+			timestamp_value = ParquetTimestampNsToTimestampNs(val);
+			break;
+		case ParquetExtraTypeInfo::UNIT_MICROS:
+		default:
+			timestamp_value = ParquetTimestampUsToTimestampNs(val);
+			break;
+		}
+	}
+	if (TimestampType::HasTimeZone(type)) {
+		return Value::TIMESTAMPTZNS(timestamp_tz_ns_t(timestamp_value.value));
+	}
+	return Value::TIMESTAMPNS(timestamp_value);
+}
+
 Value ParquetStatisticsUtils::ConvertValueInternal(const LogicalType &type, const ParquetColumnSchema &schema_ele,
                                                    const std::string &stats) {
 	auto stats_data = const_data_ptr_cast(stats.c_str());
@@ -350,8 +383,10 @@ Value ParquetStatisticsUtils::ConvertValueInternal(const LogicalType &type, cons
 			return Value::TIMETZ(ParquetIntToTimeTZ(val));
 		}
 	}
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ: {
+	case LogicalTypeId::TIMESTAMP: {
+		if (TimestampType::GetScale(type) == TimestampType::NANOSECOND_SCALE) {
+			return ParquetTimestampNSStatsValue(type, schema_ele, stats);
+		}
 		timestamp_t timestamp_value;
 		if (schema_ele.type_info == ParquetExtraTypeInfo::IMPALA_TIMESTAMP) {
 			if (stats.size() != sizeof(Int96)) {
@@ -373,41 +408,10 @@ Value ParquetStatisticsUtils::ConvertValueInternal(const LogicalType &type, cons
 				break;
 			}
 		}
-		if (type.id() == LogicalTypeId::TIMESTAMP_TZ) {
+		if (TimestampType::HasTimeZone(type)) {
 			return Value::TIMESTAMPTZ(timestamp_tz_t(timestamp_value));
 		}
 		return Value::TIMESTAMP(timestamp_value);
-	}
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	case LogicalTypeId::TIMESTAMP_NS: {
-		timestamp_ns_t timestamp_value;
-		if (schema_ele.type_info == ParquetExtraTypeInfo::IMPALA_TIMESTAMP) {
-			if (stats.size() != sizeof(Int96)) {
-				throw InvalidInputException("Incorrect stats size for type TIMESTAMP_NS");
-			}
-			timestamp_value = ImpalaTimestampToTimestampNS(Load<Int96>(stats_data));
-		} else {
-			if (stats.size() != sizeof(int64_t)) {
-				throw InvalidInputException("Incorrect stats size for type TIMESTAMP_NS");
-			}
-			auto val = Load<int64_t>(stats_data);
-			switch (schema_ele.type_info) {
-			case ParquetExtraTypeInfo::UNIT_MS:
-				timestamp_value = ParquetTimestampMsToTimestampNs(val);
-				break;
-			case ParquetExtraTypeInfo::UNIT_NS:
-				timestamp_value = ParquetTimestampNsToTimestampNs(val);
-				break;
-			case ParquetExtraTypeInfo::UNIT_MICROS:
-			default:
-				timestamp_value = ParquetTimestampUsToTimestampNs(val);
-				break;
-			}
-		}
-		if (type.id() == LogicalTypeId::TIMESTAMP_TZ_NS) {
-			return Value::TIMESTAMPTZNS(timestamp_tz_ns_t(timestamp_value.value));
-		}
-		return Value::TIMESTAMPNS(timestamp_value);
 	}
 	case LogicalTypeId::UUID: {
 		if (stats.size() != 16) {
@@ -566,11 +570,6 @@ unique_ptr<BaseStatistics> ParquetStatisticsUtils::TransformParquetStatistics(
 	case LogicalTypeId::TIME_NS:
 	case LogicalTypeId::TIME_TZ:
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
 	case LogicalTypeId::UUID:
 		return CreateNumericStats(type, schema, parquet_stats);
 	case LogicalTypeId::DECIMAL:
@@ -993,7 +992,8 @@ static optional<uint64_t> TryHashTime(const Value &constant, const ParquetColumn
 
 // Recreate the Parquet millisecond hash input from DuckDB's microsecond timestamp representation.
 static optional<uint64_t> TryHashTimestamp(const Value &constant, const ParquetColumnSchema &schema) {
-	D_ASSERT(constant.type().id() == LogicalTypeId::TIMESTAMP || constant.type().id() == LogicalTypeId::TIMESTAMP_TZ);
+	D_ASSERT(constant.type().id() == LogicalTypeId::TIMESTAMP &&
+	         TimestampType::GetScale(constant.type()) == TimestampType::MICROSECOND_SCALE);
 	auto value = constant.GetValue<int64_t>();
 	switch (schema.type_info) {
 	case ParquetExtraTypeInfo::UNIT_MS:
@@ -1026,7 +1026,10 @@ static optional<uint64_t> ValueXXH64(const Value &constant, const ParquetColumnS
 	case LogicalTypeId::TIME_TZ:
 		return TryHashTime(constant, schema);
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
+		if (TimestampType::GetScale(constant.type()) != TimestampType::MICROSECOND_SCALE) {
+			// other scales are hashed by their physical representation
+			break;
+		}
 		return TryHashTimestamp(constant, schema);
 	case LogicalTypeId::INTERVAL: {
 		if (!UsesNormalizedIntervalHash(hash_strategy)) {
@@ -1229,20 +1232,24 @@ ParquetStatisticsUtils::GetBloomFilterHashStrategy(const ParquetColumnSchema &sc
 		}
 		return nullopt;
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-		// When type info is UNIT_NS, DuckDB type TIMESTAMP_NS/TIMESTAMP_TZ_NS is used.
-		if (schema.parquet_type == duckdb_parquet::Type::INT64 &&
-		    (schema.type_info == ParquetExtraTypeInfo::UNIT_MS ||
-		     schema.type_info == ParquetExtraTypeInfo::UNIT_MICROS)) {
-			return ParquetBloomFilterHashStrategy::STANDARD;
+		switch (TimestampType::GetScale(schema.type)) {
+		case TimestampType::MICROSECOND_SCALE:
+			// When type info is UNIT_NS, a nanosecond TIMESTAMP is used.
+			if (schema.parquet_type == duckdb_parquet::Type::INT64 &&
+			    (schema.type_info == ParquetExtraTypeInfo::UNIT_MS ||
+			     schema.type_info == ParquetExtraTypeInfo::UNIT_MICROS)) {
+				return ParquetBloomFilterHashStrategy::STANDARD;
+			}
+			return nullopt;
+		case TimestampType::NANOSECOND_SCALE:
+			if (schema.parquet_type == duckdb_parquet::Type::INT64 &&
+			    schema.type_info == ParquetExtraTypeInfo::UNIT_NS) {
+				return ParquetBloomFilterHashStrategy::STANDARD;
+			}
+			return nullopt;
+		default:
+			return nullopt;
 		}
-		return nullopt;
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		if (schema.parquet_type == duckdb_parquet::Type::INT64 && schema.type_info == ParquetExtraTypeInfo::UNIT_NS) {
-			return ParquetBloomFilterHashStrategy::STANDARD;
-		}
-		return nullopt;
 	case LogicalTypeId::TIME:
 	case LogicalTypeId::TIME_TZ: {
 		// Nanosecond values lose sub-microsecond precision when read as TIME or TIME_TZ.

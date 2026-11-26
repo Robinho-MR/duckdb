@@ -47,7 +47,8 @@ static optional_ptr<BoundFunctionExpression> GetTimestampCast(Expression &expr) 
 		return nullptr;
 	}
 	if (BoundCastExpression::Child(cast_expr).GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF ||
-	    BoundCastExpression::Child(cast_expr).GetReturnType().id() != LogicalTypeId::TIMESTAMP) {
+	    !TimestampType::Is(BoundCastExpression::Child(cast_expr).GetReturnType(), TimestampType::MICROSECOND_SCALE,
+	                       false)) {
 		return nullptr;
 	}
 	return &cast_expr;

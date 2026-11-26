@@ -68,12 +68,7 @@ static bool TryGetBuiltinPhysicalType(LogicalTypeId id, PhysicalType &result) no
 	case LogicalTypeId::TIME:
 	case LogicalTypeId::TIME_NS:
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_MS:
 	case LogicalTypeId::TIME_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
 		result = PhysicalType::INT64;
 		return true;
 	case LogicalTypeId::UBIGINT:
@@ -321,6 +316,8 @@ bool LogicalType::HasParameters() const {
 	case LogicalTypeId::GEOMETRY:
 	case LogicalTypeId::GEOGRAPHY:
 		return info_type == LogicalTypeInfoType::GEO_TYPE_INFO;
+	case LogicalTypeId::TIMESTAMP:
+		return info_type == LogicalTypeInfoType::TIMESTAMP_TYPE_INFO;
 	case LogicalTypeId::UNBOUND:
 		return info_type == LogicalTypeInfoType::UNBOUND_TYPE_INFO;
 	default:
@@ -353,16 +350,11 @@ constexpr const LogicalTypeId LogicalType::DOUBLE;
 constexpr const LogicalTypeId LogicalType::DATE;
 
 constexpr const LogicalTypeId LogicalType::TIMESTAMP;
-constexpr const LogicalTypeId LogicalType::TIMESTAMP_MS;
-constexpr const LogicalTypeId LogicalType::TIMESTAMP_NS;
-constexpr const LogicalTypeId LogicalType::TIMESTAMP_S;
 
 constexpr const LogicalTypeId LogicalType::TIME;
 constexpr const LogicalTypeId LogicalType::TIME_NS;
 
 constexpr const LogicalTypeId LogicalType::TIME_TZ;
-constexpr const LogicalTypeId LogicalType::TIMESTAMP_TZ;
-constexpr const LogicalTypeId LogicalType::TIMESTAMP_TZ_NS;
 
 constexpr const LogicalTypeId LogicalType::HASH;
 constexpr const LogicalTypeId LogicalType::POINTER;
@@ -406,19 +398,19 @@ const vector<LogicalType> LogicalType::Real() {
 
 const vector<LogicalType> LogicalType::AllTypes() {
 	vector<LogicalType> types = {
-	    LogicalTypeId::BOOLEAN,   LogicalTypeId::TINYINT,       LogicalTypeId::SMALLINT,
-	    LogicalTypeId::INTEGER,   LogicalTypeId::BIGINT,        LogicalTypeId::DATE,
-	    LogicalTypeId::TIME,      LogicalTypeId::TIMESTAMP_SEC, LogicalTypeId::TIMESTAMP_MS,
-	    LogicalTypeId::TIMESTAMP, LogicalTypeId::TIMESTAMP_NS,  LogicalTypeId::DECIMAL,
-	    LogicalTypeId::FLOAT,     LogicalTypeId::DOUBLE,        LogicalTypeId::CHAR,
-	    LogicalTypeId::VARCHAR,   LogicalTypeId::BLOB,          LogicalTypeId::INTERVAL,
-	    LogicalTypeId::UTINYINT,  LogicalTypeId::USMALLINT,     LogicalTypeId::UINTEGER,
-	    LogicalTypeId::UBIGINT,   LogicalTypeId::TIMESTAMP_TZ,  LogicalTypeId::TIMESTAMP_TZ_NS,
-	    LogicalTypeId::TIME_TZ,   LogicalTypeId::TIME_NS,       LogicalTypeId::BIT,
-	    LogicalTypeId::BIGNUM,    LogicalTypeId::UHUGEINT,      LogicalTypeId::HUGEINT,
-	    LogicalTypeId::UUID,      LogicalTypeId::GEOMETRY,      LogicalTypeId::GEOGRAPHY,
-	    LogicalTypeId::STRUCT,    LogicalTypeId::TUPLE,         LogicalTypeId::LIST,
-	    LogicalTypeId::MAP,       LogicalTypeId::ENUM,          LogicalTypeId::UNION,
+	    LogicalTypeId::BOOLEAN,   LogicalTypeId::TINYINT,      LogicalTypeId::SMALLINT,
+	    LogicalTypeId::INTEGER,   LogicalTypeId::BIGINT,       LogicalTypeId::DATE,
+	    LogicalTypeId::TIME,      LogicalType::TIMESTAMP_S(),  LogicalType::TIMESTAMP_MS(),
+	    LogicalTypeId::TIMESTAMP, LogicalType::TIMESTAMP_NS(), LogicalTypeId::DECIMAL,
+	    LogicalTypeId::FLOAT,     LogicalTypeId::DOUBLE,       LogicalTypeId::CHAR,
+	    LogicalTypeId::VARCHAR,   LogicalTypeId::BLOB,         LogicalTypeId::INTERVAL,
+	    LogicalTypeId::UTINYINT,  LogicalTypeId::USMALLINT,    LogicalTypeId::UINTEGER,
+	    LogicalTypeId::UBIGINT,   LogicalType::TIMESTAMP_TZ(), LogicalType::TIMESTAMP_TZ_NS(),
+	    LogicalTypeId::TIME_TZ,   LogicalTypeId::TIME_NS,      LogicalTypeId::BIT,
+	    LogicalTypeId::BIGNUM,    LogicalTypeId::UHUGEINT,     LogicalTypeId::HUGEINT,
+	    LogicalTypeId::UUID,      LogicalTypeId::GEOMETRY,     LogicalTypeId::GEOGRAPHY,
+	    LogicalTypeId::STRUCT,    LogicalTypeId::TUPLE,        LogicalTypeId::LIST,
+	    LogicalTypeId::MAP,       LogicalTypeId::ENUM,         LogicalTypeId::UNION,
 	    LogicalTypeId::ARRAY,     LogicalTypeId::VARIANT,
 	};
 	return types;
@@ -741,6 +733,9 @@ string LogicalType::ToString() const {
 			result += "VARCHAR";
 			break;
 		}
+		case LogicalTypeId::TIMESTAMP:
+			result += TimestampType::GetName(TimestampType::GetScale(type), TimestampType::HasTimeZone(type));
+			break;
 		default:
 			result += EnumUtil::ToString(type.id());
 			break;
@@ -852,11 +847,6 @@ bool LogicalType::IsTemporal() const {
 	case LogicalTypeId::TIME_NS:
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIME_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
 		return true;
 	default:
 		return false;
@@ -934,12 +924,7 @@ bool LogicalType::EqualValuesAreIdentical() const {
 	case LogicalTypeId::DATE:
 	case LogicalTypeId::TIME:
 	case LogicalTypeId::TIME_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::BLOB:
 	case LogicalTypeId::UUID:
 	case LogicalTypeId::ENUM:
@@ -1248,7 +1233,7 @@ static bool TryGetMaxLogicalTypeInternal(LogicalTypeResolver &logical_type_resol
 		return success;
 	}
 	// unequal types fallthrough
-	if (left.id() != right.id()) {
+	if (left.id() != right.id() || (left.id() == LogicalTypeId::TIMESTAMP && left != right)) {
 		// for other types - try to combine through the generic implicit cast rules
 		if (TryCombineViaImplicitCast(logical_type_resolver, left, right, result)) {
 			return true;
@@ -1360,16 +1345,17 @@ static idx_t GetLogicalTypeScore(const LogicalType &type) {
 		return 51;
 	case LogicalTypeId::DATE:
 		return 52;
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return 53;
-	case LogicalTypeId::TIMESTAMP_MS:
-		return 54;
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return 55;
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return 56;
+		switch (TimestampType::GetScale(type)) {
+		case TimestampType::SECOND_SCALE:
+			return 53;
+		case TimestampType::MILLISECOND_SCALE:
+			return 54;
+		case TimestampType::MICROSECOND_SCALE:
+			return 55;
+		default:
+			return 56;
+		}
 	case LogicalTypeId::INTERVAL:
 		return 58;
 	// text/character strings
@@ -1581,12 +1567,24 @@ void LogicalType::Serialize(Serializer &serializer) const {
 	if (id() == LogicalTypeId::TUPLE && !serializer.ShouldSerialize(StorageVersion::V2_0_0)) {
 		serialized_id = LogicalTypeId::STRUCT;
 	}
-	serializer.WriteProperty<LogicalTypeId>(100, "id", serialized_id);
 	// types without parameters are written without type info
 	optional_ptr<const LogicalTypeInfo> type_info;
 	if (type_info_.get().type != LogicalTypeInfoType::INVALID_TYPE_INFO) {
 		type_info = type_info_.get();
 	}
+	// older storage formats have a separate id per timestamp scale / time zone instead of a TimestampTypeInfo
+	unique_ptr<LogicalTypeInfo> legacy_timestamp_info;
+	if (id() == LogicalTypeId::TIMESTAMP && type_info_.get().type == LogicalTypeInfoType::TIMESTAMP_TYPE_INFO &&
+	    !serializer.ShouldSerialize(StorageVersion::V2_1_0)) {
+		serialized_id = TimestampType::GetLegacyId(*this);
+		type_info = nullptr;
+		if (!type_info_.get().alias.empty() || type_info_.get().extension_info) {
+			legacy_timestamp_info = make_uniq<LogicalTypeInfo>(LogicalTypeInfoType::GENERIC_TYPE_INFO);
+			type_info_.get().CopyBaseInfo(*legacy_timestamp_info);
+			type_info = legacy_timestamp_info.get();
+		}
+	}
+	serializer.WriteProperty<LogicalTypeId>(100, "id", serialized_id);
 	serializer.WritePropertyWithDefault<optional_ptr<const LogicalTypeInfo>>(101, "type_info", type_info);
 }
 
@@ -1612,6 +1610,38 @@ LogicalType LogicalType::Deserialize(Deserializer &deserializer) {
 	if (id == LogicalTypeId::LEGACY_AGGREGATE_STATE) {
 		// convert legacy aggregate state to blob on deserialize
 		return LogicalType::BLOB;
+	}
+
+	// convert the legacy timestamp ids into a TIMESTAMP with the matching parameters
+	uint8_t legacy_scale;
+	bool legacy_has_time_zone;
+	if (TimestampType::TryGetLegacyParameters(id, legacy_scale, legacy_has_time_zone)) {
+		if (type_info && type_info->type != LogicalTypeInfoType::GENERIC_TYPE_INFO) {
+			throw SerializationException("Failed to deserialize type %s: unexpected type info %s",
+			                             EnumUtil::ToString(id), EnumUtil::ToString(type_info->type));
+		}
+		auto timestamp_info = make_uniq<TimestampTypeInfo>(legacy_scale, legacy_has_time_zone);
+		if (type_info) {
+			type_info->CopyBaseInfo(*timestamp_info);
+		}
+		id = LogicalTypeId::TIMESTAMP;
+		type_info = std::move(timestamp_info);
+	}
+	if (id == LogicalTypeId::TIMESTAMP && type_info && type_info->type == LogicalTypeInfoType::TIMESTAMP_TYPE_INFO) {
+		auto &timestamp_info = type_info->Cast<TimestampTypeInfo>();
+		if (!TimestampType::IsValid(timestamp_info.scale, timestamp_info.has_time_zone)) {
+			throw SerializationException("Failed to deserialize type: invalid TIMESTAMP scale %d%s",
+			                             timestamp_info.scale, timestamp_info.has_time_zone ? " with time zone" : "");
+		}
+		if (timestamp_info.scale == TimestampType::MICROSECOND_SCALE && !timestamp_info.has_time_zone) {
+			// the default timestamp has no timestamp parameters
+			unique_ptr<LogicalTypeInfo> base_info;
+			if (!type_info->alias.empty() || type_info->extension_info) {
+				base_info = make_uniq<LogicalTypeInfo>(LogicalTypeInfoType::GENERIC_TYPE_INFO);
+				type_info->CopyBaseInfo(*base_info);
+			}
+			type_info = std::move(base_info);
+		}
 	}
 
 	// Convert unnamed (non-empty) STRUCTs back to TUPLE
@@ -1767,6 +1797,156 @@ string StringType::GetCollation(const LogicalType &type) {
 LogicalType LogicalType::VARCHAR_COLLATION(string collation) { // NOLINT
 	auto string_info = make_uniq<StringTypeInfo>(std::move(collation));
 	return LogicalType(LogicalTypeId::VARCHAR, std::move(string_info));
+}
+
+//===--------------------------------------------------------------------===//
+// Timestamp Type
+//===--------------------------------------------------------------------===//
+uint8_t TimestampType::GetScale(const LogicalType &type) {
+	D_ASSERT(type.id() == LogicalTypeId::TIMESTAMP);
+	return TimestampTypeInfo::GetScale(type.GetTypeInfo());
+}
+
+bool TimestampType::HasTimeZone(const LogicalType &type) {
+	if (type.id() != LogicalTypeId::TIMESTAMP) {
+		return false;
+	}
+	return TimestampTypeInfo::HasTimeZone(type.GetTypeInfo());
+}
+
+bool TimestampType::Is(const LogicalType &type, uint8_t scale, bool has_time_zone) {
+	if (type.id() != LogicalTypeId::TIMESTAMP) {
+		return false;
+	}
+	return GetScale(type) == scale && HasTimeZone(type) == has_time_zone;
+}
+
+bool TimestampType::IsValid(uint8_t scale, bool has_time_zone) {
+	switch (scale) {
+	case SECOND_SCALE:
+	case MILLISECOND_SCALE:
+		return !has_time_zone;
+	case MICROSECOND_SCALE:
+	case NANOSECOND_SCALE:
+		return true;
+	default:
+		return false;
+	}
+}
+
+int64_t TimestampType::UnitsPerSecond(uint8_t scale) {
+	switch (scale) {
+	case SECOND_SCALE:
+		return 1;
+	case MILLISECOND_SCALE:
+		return 1000;
+	case MICROSECOND_SCALE:
+		return 1000000;
+	case NANOSECOND_SCALE:
+		return 1000000000;
+	default:
+		throw InternalException("Unsupported TIMESTAMP scale %d", scale);
+	}
+}
+
+string TimestampType::GetName(uint8_t scale, bool has_time_zone) {
+	switch (scale) {
+	case SECOND_SCALE:
+		return "TIMESTAMP_S";
+	case MILLISECOND_SCALE:
+		return "TIMESTAMP_MS";
+	case MICROSECOND_SCALE:
+		return has_time_zone ? "TIMESTAMP WITH TIME ZONE" : "TIMESTAMP";
+	case NANOSECOND_SCALE:
+		return has_time_zone ? "TIMESTAMPTZ_NS" : "TIMESTAMP_NS";
+	default:
+		throw InternalException("Unsupported TIMESTAMP scale %d", scale);
+	}
+}
+
+LogicalTypeId TimestampType::GetLegacyId(const LogicalType &type) {
+	switch (GetScale(type)) {
+	case SECOND_SCALE:
+		return LogicalTypeId::LEGACY_TIMESTAMP_SEC;
+	case MILLISECOND_SCALE:
+		return LogicalTypeId::LEGACY_TIMESTAMP_MS;
+	case MICROSECOND_SCALE:
+		return HasTimeZone(type) ? LogicalTypeId::LEGACY_TIMESTAMP_TZ : LogicalTypeId::TIMESTAMP;
+	case NANOSECOND_SCALE:
+		return HasTimeZone(type) ? LogicalTypeId::LEGACY_TIMESTAMP_TZ_NS : LogicalTypeId::LEGACY_TIMESTAMP_NS;
+	default:
+		throw InternalException("Unsupported TIMESTAMP scale %d", GetScale(type));
+	}
+}
+
+bool TimestampType::TryGetLegacyParameters(LogicalTypeId id, uint8_t &scale, bool &has_time_zone) {
+	has_time_zone = false;
+	switch (id) {
+	case LogicalTypeId::LEGACY_TIMESTAMP_SEC:
+		scale = SECOND_SCALE;
+		return true;
+	case LogicalTypeId::LEGACY_TIMESTAMP_MS:
+		scale = MILLISECOND_SCALE;
+		return true;
+	case LogicalTypeId::LEGACY_TIMESTAMP_NS:
+		scale = NANOSECOND_SCALE;
+		return true;
+	case LogicalTypeId::LEGACY_TIMESTAMP_TZ:
+		scale = MICROSECOND_SCALE;
+		has_time_zone = true;
+		return true;
+	case LogicalTypeId::LEGACY_TIMESTAMP_TZ_NS:
+		scale = NANOSECOND_SCALE;
+		has_time_zone = true;
+		return true;
+	default:
+		return false;
+	}
+}
+
+LogicalType LogicalType::TIMESTAMP_TYPE(uint8_t scale, bool has_time_zone) { // NOLINT
+	if (!TimestampType::IsValid(scale, has_time_zone)) {
+		throw InternalException("Unsupported TIMESTAMP scale %d%s", scale, has_time_zone ? " with time zone" : "");
+	}
+	if (scale == TimestampType::MICROSECOND_SCALE && !has_time_zone) {
+		return LogicalType(LogicalTypeId::TIMESTAMP);
+	}
+	// the parameterized timestamps are immortal, so creating and copying them never allocates
+	static const auto types = []() {
+		vector<LogicalType> result;
+		for (idx_t i = 0; i < 20; i++) {
+			auto type_scale = UnsafeNumericCast<uint8_t>(i / 2);
+			auto type_has_time_zone = i % 2 == 1;
+			if (!TimestampType::IsValid(type_scale, type_has_time_zone)) {
+				result.emplace_back(LogicalTypeId::INVALID);
+				continue;
+			}
+			result.push_back(
+			    CreateImmortal(LogicalTypeId::TIMESTAMP, make_uniq<TimestampTypeInfo>(type_scale, type_has_time_zone)));
+		}
+		return result;
+	}();
+	return types[scale * 2 + (has_time_zone ? 1 : 0)];
+}
+
+LogicalType LogicalType::TIMESTAMP_S() { // NOLINT
+	return TIMESTAMP_TYPE(TimestampType::SECOND_SCALE, false);
+}
+
+LogicalType LogicalType::TIMESTAMP_MS() { // NOLINT
+	return TIMESTAMP_TYPE(TimestampType::MILLISECOND_SCALE, false);
+}
+
+LogicalType LogicalType::TIMESTAMP_NS() { // NOLINT
+	return TIMESTAMP_TYPE(TimestampType::NANOSECOND_SCALE, false);
+}
+
+LogicalType LogicalType::TIMESTAMP_TZ() { // NOLINT
+	return TIMESTAMP_TYPE(TimestampType::MICROSECOND_SCALE, true);
+}
+
+LogicalType LogicalType::TIMESTAMP_TZ_NS() { // NOLINT
+	return TIMESTAMP_TYPE(TimestampType::NANOSECOND_SCALE, true);
 }
 
 //===--------------------------------------------------------------------===//

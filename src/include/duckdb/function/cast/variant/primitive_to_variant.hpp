@@ -331,28 +331,39 @@ bool ConvertPrimitiveToVariant(ToVariantSourceData &source, ToVariantGlobalResul
 		return ConvertPrimitiveTemplated<WRITE_DATA, IGNORE_NULLS, VariantLogicalType::TIME_NANOS, dtime_ns_t>(
 		    source, result, count, selvec, values_index_selvec, empty_payload, is_root);
 	case LogicalTypeId::TIMESTAMP:
-		return ConvertPrimitiveTemplated<WRITE_DATA, IGNORE_NULLS, VariantLogicalType::TIMESTAMP_MICROS, timestamp_t>(
-		    source, result, count, selvec, values_index_selvec, empty_payload, is_root);
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return ConvertPrimitiveTemplated<WRITE_DATA, IGNORE_NULLS, VariantLogicalType::TIMESTAMP_SEC, timestamp_sec_t>(
-		    source, result, count, selvec, values_index_selvec, empty_payload, is_root);
-	case LogicalTypeId::TIMESTAMP_NS:
-		return ConvertPrimitiveTemplated<WRITE_DATA, IGNORE_NULLS, VariantLogicalType::TIMESTAMP_NANOS, timestamp_ns_t>(
-		    source, result, count, selvec, values_index_selvec, empty_payload, is_root);
-	case LogicalTypeId::TIMESTAMP_MS:
-		return ConvertPrimitiveTemplated<WRITE_DATA, IGNORE_NULLS, VariantLogicalType::TIMESTAMP_MILIS, timestamp_ms_t>(
-		    source, result, count, selvec, values_index_selvec, empty_payload, is_root);
+		switch (TimestampType::GetScale(type)) {
+		case TimestampType::SECOND_SCALE:
+			return ConvertPrimitiveTemplated<WRITE_DATA, IGNORE_NULLS, VariantLogicalType::TIMESTAMP_SEC,
+			                                 timestamp_sec_t>(source, result, count, selvec, values_index_selvec,
+			                                                  empty_payload, is_root);
+		case TimestampType::MILLISECOND_SCALE:
+			return ConvertPrimitiveTemplated<WRITE_DATA, IGNORE_NULLS, VariantLogicalType::TIMESTAMP_MILIS,
+			                                 timestamp_ms_t>(source, result, count, selvec, values_index_selvec,
+			                                                 empty_payload, is_root);
+		case TimestampType::MICROSECOND_SCALE:
+			if (TimestampType::HasTimeZone(type)) {
+				return ConvertPrimitiveTemplated<WRITE_DATA, IGNORE_NULLS, VariantLogicalType::TIMESTAMP_MICROS_TZ,
+				                                 timestamp_tz_t>(source, result, count, selvec, values_index_selvec,
+				                                                 empty_payload, is_root);
+			}
+			return ConvertPrimitiveTemplated<WRITE_DATA, IGNORE_NULLS, VariantLogicalType::TIMESTAMP_MICROS,
+			                                 timestamp_t>(source, result, count, selvec, values_index_selvec,
+			                                              empty_payload, is_root);
+		case TimestampType::NANOSECOND_SCALE:
+			if (TimestampType::HasTimeZone(type)) {
+				return ConvertPrimitiveTemplated<WRITE_DATA, IGNORE_NULLS, VariantLogicalType::TIMESTAMP_NANOS_TZ,
+				                                 timestamp_tz_ns_t>(source, result, count, selvec, values_index_selvec,
+				                                                    empty_payload, is_root);
+			}
+			return ConvertPrimitiveTemplated<WRITE_DATA, IGNORE_NULLS, VariantLogicalType::TIMESTAMP_NANOS,
+			                                 timestamp_ns_t>(source, result, count, selvec, values_index_selvec,
+			                                                 empty_payload, is_root);
+		default:
+			throw InternalException("Unsupported TIMESTAMP scale");
+		}
 	case LogicalTypeId::TIME_TZ:
 		return ConvertPrimitiveTemplated<WRITE_DATA, IGNORE_NULLS, VariantLogicalType::TIME_MICROS_TZ, dtime_tz_t>(
 		    source, result, count, selvec, values_index_selvec, empty_payload, is_root);
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return ConvertPrimitiveTemplated<WRITE_DATA, IGNORE_NULLS, VariantLogicalType::TIMESTAMP_MICROS_TZ,
-		                                 timestamp_tz_t>(source, result, count, selvec, values_index_selvec,
-		                                                 empty_payload, is_root);
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return ConvertPrimitiveTemplated<WRITE_DATA, IGNORE_NULLS, VariantLogicalType::TIMESTAMP_NANOS_TZ,
-		                                 timestamp_tz_ns_t>(source, result, count, selvec, values_index_selvec,
-		                                                    empty_payload, is_root);
 	case LogicalTypeId::UUID:
 		return ConvertPrimitiveTemplated<WRITE_DATA, IGNORE_NULLS, VariantLogicalType::UUID, hugeint_t>(
 		    source, result, count, selvec, values_index_selvec, empty_payload, is_root);

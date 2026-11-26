@@ -198,7 +198,7 @@ ScalarFunctionSet MakeTimestampFun::GetFunctions() {
 
 ScalarFunctionSet MakeTimestampNsFun::GetFunctions() {
 	ScalarFunctionSet operator_set("make_timestamp_ns");
-	ScalarFunction nanos_fun({}, LogicalType::TIMESTAMP_NS, ExecuteMakeTimestampNs<int64_t>);
+	ScalarFunction nanos_fun({}, LogicalType::TIMESTAMP_NS(), ExecuteMakeTimestampNs<int64_t>);
 	nanos_fun.GetSignature().AddParameter("nanos", LogicalType::BIGINT);
 	operator_set.AddFunction(nanos_fun);
 	// throws if the microseconds are out of range for a timestamp

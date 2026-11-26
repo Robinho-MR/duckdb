@@ -739,7 +739,8 @@ string_t StrfTimeFormat::ConvertTimestampValue(const timestamp_ns_t &input, Stri
 }
 
 void StrfTimeFormat::ConvertTimestampVector(const Vector &input, Vector &result) const {
-	D_ASSERT(input.GetType().id() == LogicalTypeId::TIMESTAMP || input.GetType().id() == LogicalTypeId::TIMESTAMP_TZ);
+	D_ASSERT(input.GetType().id() == LogicalTypeId::TIMESTAMP &&
+	         TimestampType::GetScale(input.GetType()) == TimestampType::MICROSECOND_SCALE);
 	D_ASSERT(result.GetType().id() == LogicalTypeId::VARCHAR);
 	auto &heap = StringVector::GetStringHeap(result);
 	UnaryExecutor::Execute<timestamp_t, string_t>(input, result,
@@ -747,8 +748,8 @@ void StrfTimeFormat::ConvertTimestampVector(const Vector &input, Vector &result)
 }
 
 void StrfTimeFormat::ConvertTimestampNSVector(const Vector &input, Vector &result) const {
-	D_ASSERT(input.GetType().id() == LogicalTypeId::TIMESTAMP_NS ||
-	         input.GetType().id() == LogicalTypeId::TIMESTAMP_TZ_NS);
+	D_ASSERT(input.GetType().id() == LogicalTypeId::TIMESTAMP &&
+	         TimestampType::GetScale(input.GetType()) == TimestampType::NANOSECOND_SCALE);
 	D_ASSERT(result.GetType().id() == LogicalTypeId::VARCHAR);
 	auto &heap = StringVector::GetStringHeap(result);
 	UnaryExecutor::Execute<timestamp_ns_t, string_t>(

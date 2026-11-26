@@ -157,7 +157,7 @@ static unordered_set<LogicalTypeId> GetVariantType(const LogicalType &type) {
 		return {};
 	}
 	VariantLogicalType variant_type;
-	if (type.id() == LogicalTypeId::SQLNULL || !TryVariantTypeFromLogicalTypeId(type.id(), variant_type)) {
+	if (type.id() == LogicalTypeId::SQLNULL || !TryVariantTypeFromLogicalType(type, variant_type)) {
 		throw BinderException("Type '%s' can't be translated to a VARIANT type", type.ToString());
 	}
 	return {type.id()};
@@ -303,19 +303,19 @@ static LogicalType ProduceShreddedType(VariantLogicalType type_id) {
 	case VariantLogicalType::TIME_NANOS:
 		return LogicalTypeId::TIME_NS;
 	case VariantLogicalType::TIMESTAMP_SEC:
-		return LogicalTypeId::TIMESTAMP_SEC;
+		return LogicalType::TIMESTAMP_S();
 	case VariantLogicalType::TIMESTAMP_MILIS:
-		return LogicalTypeId::TIMESTAMP_MS;
+		return LogicalType::TIMESTAMP_MS();
 	case VariantLogicalType::TIMESTAMP_MICROS:
 		return LogicalTypeId::TIMESTAMP;
 	case VariantLogicalType::TIMESTAMP_NANOS:
-		return LogicalTypeId::TIMESTAMP_NS;
+		return LogicalType::TIMESTAMP_NS();
 	case VariantLogicalType::TIME_MICROS_TZ:
 		return LogicalTypeId::TIME_TZ;
 	case VariantLogicalType::TIMESTAMP_MICROS_TZ:
-		return LogicalTypeId::TIMESTAMP_TZ;
+		return LogicalType::TIMESTAMP_TZ();
 	case VariantLogicalType::TIMESTAMP_NANOS_TZ:
-		return LogicalTypeId::TIMESTAMP_TZ_NS;
+		return LogicalType::TIMESTAMP_TZ_NS();
 	case VariantLogicalType::INTERVAL:
 		return LogicalTypeId::INTERVAL;
 	case VariantLogicalType::BIGNUM:

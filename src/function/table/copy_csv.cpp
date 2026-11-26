@@ -131,7 +131,8 @@ static vector<unique_ptr<Expression>> CreateCastExpressions(const WriteCSVData &
 		auto &name = names[i];
 		auto column = make_uniq_base<Expression, BoundReferenceExpression>(name, type, i);
 
-		bool is_timestamp = type.id() == LogicalTypeId::TIMESTAMP || type.id() == LogicalTypeId::TIMESTAMP_TZ;
+		bool is_timestamp =
+		    type.id() == LogicalTypeId::TIMESTAMP && TimestampType::GetScale(type) == TimestampType::MICROSECOND_SCALE;
 		unique_ptr<Expression> expr;
 		if ((has_dateformat && type.id() == LogicalTypeId::DATE) || (has_timestampformat && is_timestamp)) {
 			// strftime(<name>, 'format')

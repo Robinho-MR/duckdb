@@ -66,8 +66,20 @@ static bool TruncatesToDays(DatePartSpecifier part) {
 	}
 }
 
-static bool TruncatesInSessionTimeZone(LogicalTypeId type) {
-	return type == LogicalTypeId::TIMESTAMP_TZ || type == LogicalTypeId::TIMESTAMP_TZ_NS;
+static bool TruncatesInSessionTimeZone(const LogicalType &type) {
+	return TimestampType::HasTimeZone(type);
+}
+
+//! Whether the types differ in their id - or in their scale / time zone for timestamps
+static bool TypeKindDiffers(const LogicalType &left, const LogicalType &right) {
+	if (left.id() != right.id()) {
+		return true;
+	}
+	if (left.id() != LogicalTypeId::TIMESTAMP) {
+		return false;
+	}
+	return TimestampType::GetScale(left) != TimestampType::GetScale(right) ||
+	       TimestampType::HasTimeZone(left) != TimestampType::HasTimeZone(right);
 }
 
 static bool TruncatesToSecondOrFiner(DatePartSpecifier part) {
@@ -148,7 +160,7 @@ unique_ptr<Expression> DateTruncSimplificationRule::Apply(LogicalOperator &op, v
 
 	// Truncating a time zone aware timestamp to a minute or longer can cross a UTC offset change, so keep the
 	// comparison.
-	if (TruncatesInSessionTimeZone(column_part.GetReturnType().id()) && !TruncatesToSecondOrFiner(part)) {
+	if (TruncatesInSessionTimeZone(column_part.GetReturnType()) && !TruncatesToSecondOrFiner(part)) {
 		return nullptr;
 	}
 
@@ -385,7 +397,7 @@ unique_ptr<Expression> DateTruncSimplificationRule::CreateTrunc(const BoundConst
 	auto trunc = binder.BindScalarFunction(Identifier::DefaultSchema(), "date_trunc", std::move(args), error);
 
 	// Ensure that the RHS type matches the column type.
-	if (trunc->GetReturnType().id() != return_type.id()) {
+	if (TypeKindDiffers(trunc->GetReturnType(), return_type)) {
 		if (CastFunctionSet::Get(rewriter.context).CanOverrideDefaultCast(trunc->GetReturnType(), return_type)) {
 			return nullptr;
 		}
@@ -439,7 +451,7 @@ unique_ptr<Expression> DateTruncSimplificationRule::CreateTruncAdd(const BoundCo
 	auto trunc = binder.BindScalarFunction(Identifier::DefaultSchema(), "date_trunc", std::move(args3), error);
 
 	// Ensure that the RHS type matches the column type.
-	if (trunc->GetReturnType().id() != return_type.id()) {
+	if (TypeKindDiffers(trunc->GetReturnType(), return_type)) {
 		if (CastFunctionSet::Get(rewriter.context).CanOverrideDefaultCast(trunc->GetReturnType(), return_type)) {
 			return nullptr;
 		}
@@ -485,11 +497,6 @@ bool DateTruncSimplificationRule::IsInfinity(const Value &value) {
 	}
 	switch (value.type().id()) {
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
 		return value == Value::Infinity(value.type()) || value == Value::NegativeInfinity(value.type());
 	default:
 		return false;
@@ -500,7 +507,7 @@ void DateTruncSimplificationRule::ReplaceDateTruncWithColumn(unique_ptr<Expressi
                                                              unique_ptr<Expression> &constant_side,
                                                              const BoundColumnRefExpression &column_part) {
 	column_side = column_part.Copy();
-	if (constant_side->GetReturnType().id() != column_side->GetReturnType().id()) {
+	if (TypeKindDiffers(constant_side->GetReturnType(), column_side->GetReturnType())) {
 		constant_side = CastAndEvaluate(std::move(constant_side), column_side->GetReturnType());
 	}
 }

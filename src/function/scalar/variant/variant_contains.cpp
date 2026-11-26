@@ -17,7 +17,7 @@ namespace {
 //! The value that is looked for, with its type. The key a NUMBER is compared by is built once
 struct VariantNeedle {
 	explicit VariantNeedle(const VariantNode &node_p)
-	    : node(node_p), type_id(node.GetTypeId()), category(GetVariantComparisonType(type_id)) {
+	    : node(node_p), type_id(node.GetTypeId()), category(GetVariantComparisonType(node.GetType())) {
 	}
 
 	const VariantNumberKey &NumberKey() {
@@ -280,7 +280,7 @@ bool ChildrenMatch(const VariantNode &haystack, const VariantNode &needle, Varia
 
 		VariantNeedle needle_child(needle_child_node);
 		const auto haystack_child_type = haystack_child.GetTypeId();
-		const auto child_category = GetVariantComparisonType(haystack_child_type);
+		const auto child_category = GetVariantComparisonType(haystack_child.GetType());
 
 		if (child_category != needle_child.category) {
 			frame.PairCompared(false);
@@ -299,7 +299,7 @@ bool ChildrenMatch(const VariantNode &haystack, const VariantNode &needle, Varia
 //! Whether the haystack value itself matches the needle
 bool MatchesNeedle(const VariantNode &haystack, LogicalTypeId haystack_type, VariantNeedle &needle,
                    vector<VariantMatchFrame> &frames) {
-	const auto category = GetVariantComparisonType(haystack_type);
+	const auto category = GetVariantComparisonType(haystack.GetType());
 	if (category != needle.category) {
 		return false;
 	}

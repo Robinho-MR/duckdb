@@ -133,14 +133,14 @@ void JSONStructureNode::InitializeCandidateTypes(const idx_t max_depth, const bo
 				                               LogicalTypeId::DATE, LogicalTypeId::TIME};
 			} else {
 				description.candidate_types = {LogicalTypeId::UUID,      LogicalTypeId::BIGINT,
-				                               LogicalTypeId::TIMESTAMP, LogicalTypeId::TIMESTAMP_TZ,
+				                               LogicalTypeId::TIMESTAMP, LogicalType::TIMESTAMP_TZ(),
 				                               LogicalTypeId::DATE,      LogicalTypeId::TIME};
 			}
 		} else if (user_specified_timestamp_format) {
 			description.candidate_types = {LogicalTypeId::UUID, LogicalTypeId::TIMESTAMP, LogicalTypeId::DATE,
 			                               LogicalTypeId::TIME};
 		} else {
-			description.candidate_types = {LogicalTypeId::UUID, LogicalTypeId::TIMESTAMP, LogicalTypeId::TIMESTAMP_TZ,
+			description.candidate_types = {LogicalTypeId::UUID, LogicalTypeId::TIMESTAMP, LogicalType::TIMESTAMP_TZ(),
 			                               LogicalTypeId::DATE, LogicalTypeId::TIME};
 		}
 		initialized = true;
@@ -379,7 +379,7 @@ void JSONStructureNode::EliminateCandidateTypes(const idx_t vec_count, Vector &s
 		}
 		const auto type = candidate_types.back();
 		Vector result_vector(type, vec_count);
-		if (type == LogicalTypeId::TIMESTAMP_TZ) {
+		if (TimestampType::HasTimeZone(type)) {
 			// Defense in depth: InitializeCandidateTypes already omits TZ when the user set timestamp_format=.
 			if (user_specified_timestamp_format) {
 				candidate_types.pop_back();
@@ -397,7 +397,7 @@ void JSONStructureNode::EliminateCandidateTypes(const idx_t vec_count, Vector &s
 			} else {
 				return;
 			}
-		} else if (date_format_map.HasFormats(type)) {
+		} else if (date_format_map.HasFormats(type.id())) {
 			if (EliminateCandidateFormats(vec_count, string_vector, result_vector, date_format_map)) {
 				return;
 			} else {

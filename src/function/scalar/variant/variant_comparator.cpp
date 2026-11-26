@@ -45,8 +45,8 @@ constexpr data_t BLOB_ESCAPE_CHARACTER = 1;
 constexpr data_t BIT_SORT_KEY_ZERO = 2;
 constexpr data_t BIT_SORT_KEY_ONE = 3;
 
-data_t GetVariantTypeRank(const LogicalTypeId type_id) {
-	return static_cast<data_t>(GetVariantComparisonType(type_id));
+data_t GetVariantTypeRank(VariantComparisonType comparison_type) {
+	return static_cast<data_t>(comparison_type);
 }
 
 template <class SINK>
@@ -145,9 +145,9 @@ struct VariantEncodeFrame {
 template <class SINK>
 bool EncodeVariantNode(const VariantNode &it, SINK &sink, vector<VariantEncodeFrame> &frames) {
 	const auto type_id = it.GetTypeId();
-	const auto comparison_type = GetVariantComparisonType(type_id);
+	const auto comparison_type = GetVariantComparisonType(it.GetType());
 	// write the type rank - this guarantees values are ordered by type first
-	sink.Write(GetVariantTypeRank(type_id));
+	sink.Write(GetVariantTypeRank(comparison_type));
 
 	switch (comparison_type) {
 	case VariantComparisonType::NULL_VALUE:

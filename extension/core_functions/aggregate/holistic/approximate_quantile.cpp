@@ -373,8 +373,8 @@ AggregateFunction GetApproximateQuantileAggregateFunction(const LogicalType &typ
 		return AggregateFunction::UnaryAggregate<ApproxQuantileState, dtime_t, dtime_t, ApproxQuantileScalarOperation>(
 		    type, type);
 	}
-	if (type.id() == LogicalTypeId::TIMESTAMP || type.id() == LogicalTypeId::TIMESTAMP_TZ ||
-	    type.id() == LogicalTypeId::TIMESTAMP_NS || type.id() == LogicalTypeId::TIMESTAMP_TZ_NS) {
+	if (type.id() == LogicalTypeId::TIMESTAMP && (TimestampType::GetScale(type) == TimestampType::MICROSECOND_SCALE ||
+	                                              TimestampType::GetScale(type) == TimestampType::NANOSECOND_SCALE)) {
 		// every timestamp precision stores an int64 with the same two infinities, which the coding keeps infinite
 		return AggregateFunction::UnaryAggregate<ApproxQuantileState, timestamp_t, timestamp_t,
 		                                         ApproxQuantileScalarOperation>(type, type);
@@ -578,7 +578,9 @@ AggregateFunction GetApproxQuantileListAggregateFunction(const LogicalType &type
 	case LogicalTypeId::TIME:
 		return GetTypedApproxQuantileListAggregateFunction<dtime_t, dtime_t>(type);
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
+		if (TimestampType::GetScale(type) != TimestampType::MICROSECOND_SCALE) {
+			throw NotImplementedException("Unimplemented approximate quantile list aggregate");
+		}
 		return GetTypedApproxQuantileListAggregateFunction<timestamp_t, timestamp_t>(type);
 	case LogicalTypeId::TIME_TZ:
 		//	Not binary comparable
@@ -719,11 +721,11 @@ AggregateFunctionSet ApproxQuantileFun::GetFunctions() {
 	approx_quantile.AddFunction(GetApproximateQuantileAggregate(LogicalType::TIME_NS));
 	approx_quantile.AddFunction(GetApproximateQuantileAggregate(LogicalType::TIME_TZ));
 	approx_quantile.AddFunction(GetApproximateQuantileAggregate(LogicalType::TIMESTAMP));
-	approx_quantile.AddFunction(GetApproximateQuantileAggregate(LogicalType::TIMESTAMP_NS));
-	approx_quantile.AddFunction(GetApproximateQuantileAggregate(LogicalType::TIMESTAMP_TZ));
-	approx_quantile.AddFunction(GetApproximateQuantileAggregate(LogicalType::TIMESTAMP_TZ_NS));
-	approx_quantile.AddFunction(GetApproxQuantileWidenedTimestamp(LogicalType::TIMESTAMP_S));
-	approx_quantile.AddFunction(GetApproxQuantileWidenedTimestamp(LogicalType::TIMESTAMP_MS));
+	approx_quantile.AddFunction(GetApproximateQuantileAggregate(LogicalType::TIMESTAMP_NS()));
+	approx_quantile.AddFunction(GetApproximateQuantileAggregate(LogicalType::TIMESTAMP_TZ()));
+	approx_quantile.AddFunction(GetApproximateQuantileAggregate(LogicalType::TIMESTAMP_TZ_NS()));
+	approx_quantile.AddFunction(GetApproxQuantileWidenedTimestamp(LogicalType::TIMESTAMP_S()));
+	approx_quantile.AddFunction(GetApproxQuantileWidenedTimestamp(LogicalType::TIMESTAMP_MS()));
 
 	// List variants
 	approx_quantile.AddFunction(GetApproxQuantileDecimalList());
@@ -740,7 +742,7 @@ AggregateFunctionSet ApproxQuantileFun::GetFunctions() {
 	approx_quantile.AddFunction(GetApproxQuantileListAggregate(LogicalType::TIME));
 	approx_quantile.AddFunction(GetApproxQuantileListAggregate(LogicalType::TIME_TZ));
 	approx_quantile.AddFunction(GetApproxQuantileListAggregate(LogicalType::TIMESTAMP));
-	approx_quantile.AddFunction(GetApproxQuantileListAggregate(LogicalType::TIMESTAMP_TZ));
+	approx_quantile.AddFunction(GetApproxQuantileListAggregate(LogicalType::TIMESTAMP_TZ()));
 
 	return approx_quantile;
 }

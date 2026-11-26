@@ -79,7 +79,7 @@ VariantLogicalType ResolveShreddedTypeId(const LogicalType &type, bool &resolved
 	//! BOOLEAN resolves to BOOL_TRUE / BOOL_FALSE per value
 	auto variant_type = VariantLogicalType::VARIANT_NULL;
 	resolved = type.id() != LogicalTypeId::BOOLEAN && type.id() != LogicalTypeId::SQLNULL &&
-	           TryVariantTypeFromLogicalTypeId(type.id(), variant_type);
+	           TryVariantTypeFromLogicalType(type, variant_type);
 	return resolved ? variant_type : VariantLogicalType::VARIANT_NULL;
 }
 
@@ -336,7 +336,7 @@ LogicalType VariantNode::GetType() const {
 		auto properties = GetDecimalProperties();
 		return LogicalType::DECIMAL(properties.width, properties.scale);
 	}
-	return VariantDefaultType(type_id);
+	return VariantDefaultType(GetVariantType());
 }
 
 bool VariantNode::GetBool() const {

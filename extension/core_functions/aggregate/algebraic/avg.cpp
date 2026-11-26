@@ -819,13 +819,14 @@ AggregateFunctionSet AvgFun::GetFunctions() {
 	avg.AddFunction(GetAverageAggregate(PhysicalType::DOUBLE));
 
 	avg.AddFunction(GetTimestampAverage());
-	for (auto &type : {LogicalType::TIMESTAMP_S, LogicalType::TIMESTAMP_MS, LogicalType::DATE}) {
+	for (auto &type :
+	     vector<LogicalType> {LogicalType::TIMESTAMP_S(), LogicalType::TIMESTAMP_MS(), LogicalType::DATE}) {
 		avg.AddFunction(GetWidenedTimestampAverage(type));
 	}
 
 	auto timestamp_tz_avg =
 	    AggregateFunction::UnaryAggregate<AvgState<hugeint_t>, int64_t, int64_t, TimestampAverageOperation>(
-	        LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP_TZ);
+	        LogicalType::TIMESTAMP_TZ(), LogicalType::TIMESTAMP_TZ());
 	timestamp_tz_avg.GetSignature().GetParameter(0).SetName("x");
 	timestamp_tz_avg.SetStructStateExport(TimestampAverageStateLayout);
 	avg.AddFunction(timestamp_tz_avg);
@@ -845,14 +846,14 @@ AggregateFunctionSet AvgFun::GetFunctions() {
 
 	auto timestamp_ns_avg = AggregateFunction::UnaryAggregate<AvgState<hugeint_t>, int64_t, int64_t,
 	                                                          TimestampNSAverageOperation<timestamp_ns_t>>(
-	    LogicalType::TIMESTAMP_NS, LogicalType::TIMESTAMP_NS);
+	    LogicalType::TIMESTAMP_NS(), LogicalType::TIMESTAMP_NS());
 	timestamp_ns_avg.GetSignature().GetParameter(0).SetName("x");
 	timestamp_ns_avg.SetStructStateExport(TimestampAverageStateLayout);
 	avg.AddFunction(timestamp_ns_avg);
 
 	auto timestamp_tz_ns_avg = AggregateFunction::UnaryAggregate<AvgState<hugeint_t>, int64_t, int64_t,
 	                                                             TimestampNSAverageOperation<timestamp_tz_ns_t>>(
-	    LogicalType::TIMESTAMP_TZ_NS, LogicalType::TIMESTAMP_TZ_NS);
+	    LogicalType::TIMESTAMP_TZ_NS(), LogicalType::TIMESTAMP_TZ_NS());
 	timestamp_tz_ns_avg.GetSignature().GetParameter(0).SetName("x");
 	timestamp_tz_ns_avg.SetStructStateExport(TimestampAverageStateLayout);
 	avg.AddFunction(timestamp_tz_ns_avg);

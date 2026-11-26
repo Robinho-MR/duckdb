@@ -71,18 +71,18 @@ vector<TestType> TestAllTypesFun::GetTestTypes(const bool use_large_enum, const 
 	result.emplace_back(LogicalType::DATE, "date", Value::DATE(min_date), Value::DATE(max_date));
 	result.emplace_back(LogicalType::TIME, "time");
 	result.emplace_back(LogicalType::TIMESTAMP, "timestamp", Value::TIMESTAMP(min_ts), Value::TIMESTAMP(max_ts));
-	result.emplace_back(LogicalType::TIMESTAMP_S, "timestamp_s",
+	result.emplace_back(LogicalType::TIMESTAMP_S(), "timestamp_s",
 	                    Value::TIMESTAMPSEC(timestamp_sec_t(min_ts.value / Interval::MICROS_PER_SEC)),
 	                    Value::TIMESTAMPSEC(timestamp_sec_t(max_ts.value / Interval::MICROS_PER_SEC)));
-	result.emplace_back(LogicalType::TIMESTAMP_MS, "timestamp_ms",
+	result.emplace_back(LogicalType::TIMESTAMP_MS(), "timestamp_ms",
 	                    Value::TIMESTAMPMS(timestamp_ms_t(min_ts.value / Interval::MICROS_PER_MSEC)),
 	                    Value::TIMESTAMPMS(timestamp_ms_t(max_ts.value / Interval::MICROS_PER_MSEC)));
-	result.emplace_back(LogicalType::TIMESTAMP_NS, "timestamp_ns", Value::TIMESTAMPNS(timestamp_ns_t(min_ns)),
+	result.emplace_back(LogicalType::TIMESTAMP_NS(), "timestamp_ns", Value::TIMESTAMPNS(timestamp_ns_t(min_ns)),
 	                    Value::TIMESTAMPNS(timestamp_ns_t(max_ns)));
 	result.emplace_back(LogicalType::TIME_TZ, "time_tz");
-	result.emplace_back(LogicalType::TIMESTAMP_TZ, "timestamp_tz", Value::TIMESTAMPTZ(timestamp_tz_t(min_ts)),
+	result.emplace_back(LogicalType::TIMESTAMP_TZ(), "timestamp_tz", Value::TIMESTAMPTZ(timestamp_tz_t(min_ts)),
 	                    Value::TIMESTAMPTZ(timestamp_tz_t(max_ts)));
-	result.emplace_back(LogicalType::TIMESTAMP_TZ_NS, "timestamp_tz_ns",
+	result.emplace_back(LogicalType::TIMESTAMP_TZ_NS(), "timestamp_tz_ns",
 	                    Value::TIMESTAMPTZNS(timestamp_tz_ns_t(min_ns)),
 	                    Value::TIMESTAMPTZNS(timestamp_tz_ns_t(max_ns)));
 
@@ -178,12 +178,12 @@ vector<TestType> TestAllTypesFun::GetTestTypes(const bool use_large_enum, const 
 	                                         Value::TIMESTAMP(Timestamp::FromString("2022-05-12 16:23:45", false))});
 	result.emplace_back(timestamp_list_type, "timestamp_array", empty_timestamp_list, timestamp_list);
 
-	auto timestamptz_list_type = LogicalType::LIST(LogicalType::TIMESTAMP_TZ);
-	auto empty_timestamptz_list = Value::LIST(LogicalType::TIMESTAMP_TZ, vector<Value>());
+	auto timestamptz_list_type = LogicalType::LIST(LogicalType::TIMESTAMP_TZ());
+	auto empty_timestamptz_list = Value::LIST(LogicalType::TIMESTAMP_TZ(), vector<Value>());
 	auto timestamptz_list =
-	    Value::LIST(LogicalType::TIMESTAMP_TZ,
+	    Value::LIST(LogicalType::TIMESTAMP_TZ(),
 	                {Value::TIMESTAMPTZ(timestamp_tz_t()), Value::TIMESTAMPTZ(timestamp_tz_t::infinity()),
-	                 Value::TIMESTAMPTZ(timestamp_tz_t::ninfinity()), Value(LogicalType::TIMESTAMP_TZ),
+	                 Value::TIMESTAMPTZ(timestamp_tz_t::ninfinity()), Value(LogicalType::TIMESTAMP_TZ()),
 	                 Value::TIMESTAMPTZ(timestamp_tz_t(Timestamp::FromString("2022-05-12 16:23:45-07", true)))});
 	result.emplace_back(timestamptz_list_type, "timestamptz_array", empty_timestamptz_list, timestamptz_list);
 

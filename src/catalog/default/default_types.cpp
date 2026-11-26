@@ -89,15 +89,15 @@ LogicalType BindTimestampType(BindLogicalTypeInput &input) {
 		throw BinderException(input.GetLocation(0), "TIMESTAMP only supports until nano-second precision (9)");
 	}
 	if (precision == 0) {
-		return LogicalType::TIMESTAMP_S;
+		return LogicalType::TIMESTAMP_TYPE(TimestampType::SECOND_SCALE, false);
 	}
 	if (precision <= 3) {
-		return LogicalType::TIMESTAMP_MS;
+		return LogicalType::TIMESTAMP_TYPE(TimestampType::MILLISECOND_SCALE, false);
 	}
 	if (precision <= 6) {
-		return LogicalType::TIMESTAMP;
+		return LogicalType::TIMESTAMP_TYPE(TimestampType::MICROSECOND_SCALE, false);
 	}
-	return LogicalType::TIMESTAMP_NS;
+	return LogicalType::TIMESTAMP_TYPE(TimestampType::NANOSECOND_SCALE, false);
 }
 
 void RegisterTimestampConstructors(TypeConstructorSet &set) {
@@ -413,6 +413,7 @@ using constructor_registration_t = void (*)(TypeConstructorSet &set);
 
 struct DefaultType {
 	const char *name;
+	//! The legacy timestamp ids stand for the TIMESTAMP with the matching scale and time zone
 	LogicalTypeId type;
 	//! Registers the constructors accepting this type's modifiers, or null if it takes no modifiers
 	constructor_registration_t register_constructors;
@@ -429,12 +430,12 @@ const builtin_type_array BUILTIN_TYPES = {{{"decimal", LogicalTypeId::DECIMAL, R
                                            {"timestamp", LogicalTypeId::TIMESTAMP, RegisterTimestampConstructors},
                                            {"datetime", LogicalTypeId::TIMESTAMP, RegisterTimestampConstructors},
                                            {"timestamp_us", LogicalTypeId::TIMESTAMP, nullptr},
-                                           {"timestamp_ms", LogicalTypeId::TIMESTAMP_MS, nullptr},
-                                           {"timestamp_ns", LogicalTypeId::TIMESTAMP_NS, nullptr},
-                                           {"timestamp_s", LogicalTypeId::TIMESTAMP_SEC, nullptr},
-                                           {"timestamptz", LogicalTypeId::TIMESTAMP_TZ, nullptr},
-                                           {"timestamp with time zone", LogicalTypeId::TIMESTAMP_TZ, nullptr},
-                                           {"timestamptz_ns", LogicalTypeId::TIMESTAMP_TZ_NS, nullptr},
+                                           {"timestamp_ms", LogicalTypeId::LEGACY_TIMESTAMP_MS, nullptr},
+                                           {"timestamp_ns", LogicalTypeId::LEGACY_TIMESTAMP_NS, nullptr},
+                                           {"timestamp_s", LogicalTypeId::LEGACY_TIMESTAMP_SEC, nullptr},
+                                           {"timestamptz", LogicalTypeId::LEGACY_TIMESTAMP_TZ, nullptr},
+                                           {"timestamp with time zone", LogicalTypeId::LEGACY_TIMESTAMP_TZ, nullptr},
+                                           {"timestamptz_ns", LogicalTypeId::LEGACY_TIMESTAMP_TZ_NS, nullptr},
                                            {"timetz", LogicalTypeId::TIME_TZ, nullptr},
                                            {"time with time zone", LogicalTypeId::TIME_TZ, nullptr},
                                            {"interval", LogicalTypeId::INTERVAL, RegisterIntervalConstructors},
@@ -505,6 +506,15 @@ const builtin_type_array BUILTIN_TYPES = {{{"decimal", LogicalTypeId::DECIMAL, R
                                            {"geography", LogicalTypeId::GEOGRAPHY, RegisterGeographyConstructors},
                                            {"type", LogicalTypeId::TYPE, nullptr}}};
 
+LogicalType GetEntryType(const DefaultType &entry) {
+	uint8_t scale;
+	bool has_time_zone;
+	if (TimestampType::TryGetLegacyParameters(entry.type, scale, has_time_zone)) {
+		return LogicalType::TIMESTAMP_TYPE(scale, has_time_zone);
+	}
+	return LogicalType(entry.type);
+}
+
 TypeConstructorSet GetConstructors(const DefaultType &entry, const Identifier &name) {
 	TypeConstructorSet result(name);
 	if (entry.register_constructors) {
@@ -531,13 +541,15 @@ optional_ptr<const DefaultType> TryGetDefaultTypeEntry(const Identifier &name) {
 // Default Type Generator
 //----------------------------------------------------------------------------------------------------------------------
 LogicalTypeId DefaultTypeGenerator::GetDefaultType(const Identifier &name) {
-	auto &internal_types = BUILTIN_TYPES;
-	for (auto &type : internal_types) {
-		if (name == type.name) {
-			return type.type;
-		}
+	return GetDefaultLogicalType(name).id();
+}
+
+LogicalType DefaultTypeGenerator::GetDefaultLogicalType(const Identifier &name) {
+	auto entry = TryGetDefaultTypeEntry(name);
+	if (!entry) {
+		return LogicalType::INVALID;
 	}
-	return LogicalType::INVALID;
+	return GetEntryType(*entry);
 }
 
 LogicalType DefaultTypeGenerator::TryDefaultBind(const string &name, const vector<pair<string, Value>> &params) {
@@ -552,7 +564,7 @@ LogicalType DefaultTypeGenerator::TryDefaultBind(const string &name, const vecto
 	}
 
 	// no context is available here, so only the built-in types are reachable
-	return GetConstructors(*entry, Identifier(name)).Bind(nullptr, LogicalType(entry->type), args);
+	return GetConstructors(*entry, Identifier(name)).Bind(nullptr, GetEntryType(*entry), args);
 }
 
 DefaultTypeGenerator::DefaultTypeGenerator(Catalog &catalog, SchemaCatalogEntry &schema)
@@ -570,7 +582,7 @@ unique_ptr<CatalogEntry> DefaultTypeGenerator::CreateDefaultEntry(ClientContext 
 	}
 	CreateTypeInfo info;
 	info.SetTypeName(entry_name);
-	info.type = LogicalType(entry->type);
+	info.type = GetEntryType(*entry);
 	info.internal = true;
 	info.temporary = true;
 	info.constructors = GetConstructors(*entry, entry_name);

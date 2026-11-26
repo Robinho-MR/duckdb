@@ -428,11 +428,11 @@ AggregateFunctionSet LttbFun::GetFunctions() {
 	AddLTTBFunctions<float>(lttb, LogicalType::FLOAT);
 	AddLTTBFunctions<double>(lttb, LogicalType::DOUBLE);
 	AddLTTBFunctions<int64_t>(lttb, LogicalType::TIMESTAMP);
-	AddLTTBFunctions<int64_t>(lttb, LogicalType::TIMESTAMP_S);
-	AddLTTBFunctions<int64_t>(lttb, LogicalType::TIMESTAMP_MS);
-	AddLTTBFunctions<int64_t>(lttb, LogicalType::TIMESTAMP_NS);
-	AddLTTBFunctions<int64_t>(lttb, LogicalType::TIMESTAMP_TZ);
-	AddLTTBFunctions<int64_t>(lttb, LogicalType::TIMESTAMP_TZ_NS);
+	AddLTTBFunctions<int64_t>(lttb, LogicalType::TIMESTAMP_S());
+	AddLTTBFunctions<int64_t>(lttb, LogicalType::TIMESTAMP_MS());
+	AddLTTBFunctions<int64_t>(lttb, LogicalType::TIMESTAMP_NS());
+	AddLTTBFunctions<int64_t>(lttb, LogicalType::TIMESTAMP_TZ());
+	AddLTTBFunctions<int64_t>(lttb, LogicalType::TIMESTAMP_TZ_NS());
 	return lttb;
 }
 

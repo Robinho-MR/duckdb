@@ -1,4 +1,5 @@
 #include "duckdb/main/config.hpp"
+#include "duckdb/catalog/default/default_types.hpp"
 
 #include "duckdb/common/cgroups.hpp"
 #include "duckdb/common/file_system.hpp"
@@ -602,12 +603,15 @@ LogicalType DBConfig::ParseLogicalType(const string &type) {
 		return LogicalType::STRUCT(struct_members);
 	}
 
-	const auto type_id = StringUtil::CIEquals(type, "ANY") ? LogicalTypeId::ANY : TransformStringToLogicalTypeId(type);
-	if (type_id == LogicalTypeId::UNBOUND) {
+	if (StringUtil::CIEquals(type, "ANY")) {
+		return LogicalType::ANY;
+	}
+	auto result = DefaultTypeGenerator::GetDefaultLogicalType(Identifier(type));
+	if (result.id() == LogicalTypeId::INVALID) {
 		throw InternalException("Error while generating extension function overloads - unrecognized logical type %s",
 		                        type);
 	}
-	return type_id;
+	return result;
 }
 
 ExtensionOptionInfo::~ExtensionOptionInfo() {

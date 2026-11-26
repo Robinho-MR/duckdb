@@ -45,29 +45,41 @@ enum class ParquetExtraTypeInfo {
 	FLOAT16
 };
 
-constexpr LogicalTypeId ParquetTimestampLogicalType(ParquetExtraTypeInfo type_info) {
+//! The DuckDB TIMESTAMP scale a Parquet timestamp is read as (INVALID_PARQUET_TIMESTAMP_SCALE if not a timestamp)
+static constexpr uint8_t INVALID_PARQUET_TIMESTAMP_SCALE = 255;
+
+constexpr uint8_t ParquetTimestampScale(ParquetExtraTypeInfo type_info) {
 	switch (type_info) {
 	case ParquetExtraTypeInfo::IMPALA_TIMESTAMP:
 	case ParquetExtraTypeInfo::UNIT_MS:
 	case ParquetExtraTypeInfo::UNIT_MICROS:
-		return LogicalTypeId::TIMESTAMP;
+		return TimestampType::MICROSECOND_SCALE;
 	case ParquetExtraTypeInfo::UNIT_NS:
-		return LogicalTypeId::TIMESTAMP_NS;
+		return TimestampType::NANOSECOND_SCALE;
 	default:
-		return LogicalTypeId::INVALID;
+		return INVALID_PARQUET_TIMESTAMP_SCALE;
 	}
 }
 
-constexpr LogicalTypeId ParquetTimestampTzLogicalType(ParquetExtraTypeInfo type_info) {
-	switch (type_info) {
-	case ParquetExtraTypeInfo::UNIT_NS:
-		return LogicalTypeId::TIMESTAMP_TZ_NS;
-	case ParquetExtraTypeInfo::UNIT_MS:
-	case ParquetExtraTypeInfo::UNIT_MICROS:
-		return LogicalTypeId::TIMESTAMP_TZ;
-	default:
+constexpr uint8_t ParquetTimestampTzScale(ParquetExtraTypeInfo type_info) {
+	return type_info == ParquetExtraTypeInfo::IMPALA_TIMESTAMP ? INVALID_PARQUET_TIMESTAMP_SCALE
+	                                                           : ParquetTimestampScale(type_info);
+}
+
+inline LogicalType ParquetTimestampLogicalType(ParquetExtraTypeInfo type_info) {
+	auto scale = ParquetTimestampScale(type_info);
+	if (scale == INVALID_PARQUET_TIMESTAMP_SCALE) {
 		return LogicalTypeId::INVALID;
 	}
+	return LogicalType::TIMESTAMP_TYPE(scale, false);
+}
+
+inline LogicalType ParquetTimestampTzLogicalType(ParquetExtraTypeInfo type_info) {
+	auto scale = ParquetTimestampTzScale(type_info);
+	if (scale == INVALID_PARQUET_TIMESTAMP_SCALE) {
+		return LogicalTypeId::INVALID;
+	}
+	return LogicalType::TIMESTAMP_TYPE(scale, true);
 }
 
 constexpr LogicalTypeId ParquetTimeLogicalType(ParquetExtraTypeInfo type_info) {

@@ -205,9 +205,9 @@ struct StrpTimeFunction {
 			}
 			if (format.HasFormatSpecifier(StrTimeSpecifier::NANOSECOND_PADDED)) {
 				if (format.HasFormatSpecifier(StrTimeSpecifier::UTC_OFFSET)) {
-					bound_function.SetReturnType(LogicalType::TIMESTAMP_TZ_NS);
+					bound_function.SetReturnType(LogicalType::TIMESTAMP_TZ_NS());
 				} else {
-					bound_function.SetReturnType(LogicalType::TIMESTAMP_NS);
+					bound_function.SetReturnType(LogicalType::TIMESTAMP_NS());
 				}
 				if (bound_function.GetName() == "strptime") {
 					bound_function.SetFunctionCallback(Parse<timestamp_ns_t>);
@@ -215,7 +215,7 @@ struct StrpTimeFunction {
 					bound_function.SetFunctionCallback(TryParse<timestamp_ns_t>);
 				}
 			} else if (format.HasFormatSpecifier(StrTimeSpecifier::UTC_OFFSET)) {
-				bound_function.SetReturnType(LogicalType::TIMESTAMP_TZ);
+				bound_function.SetReturnType(LogicalType::TIMESTAMP_TZ());
 			}
 			return make_uniq<StrpTimeBindData>(format, format_string);
 		} else if (format_value.type() == LogicalType::LIST(LogicalType::VARCHAR)) {
@@ -246,9 +246,9 @@ struct StrpTimeFunction {
 				// If any format has nanoseconds, then we have to produce TSNS
 				if (has_offset) {
 					// If any format has UTC offsets, then we have to produce TSTZ
-					bound_function.SetReturnType(LogicalType::TIMESTAMP_TZ_NS);
+					bound_function.SetReturnType(LogicalType::TIMESTAMP_TZ_NS());
 				} else {
-					bound_function.SetReturnType(LogicalType::TIMESTAMP_NS);
+					bound_function.SetReturnType(LogicalType::TIMESTAMP_NS());
 				}
 				if (bound_function.GetName() == "strptime") {
 					bound_function.SetFunctionCallback(Parse<timestamp_ns_t>);
@@ -257,7 +257,7 @@ struct StrpTimeFunction {
 				}
 			} else if (has_offset) {
 				// If any format has UTC offsets, then we have to produce TSTZ
-				bound_function.SetReturnType(LogicalType::TIMESTAMP_TZ);
+				bound_function.SetReturnType(LogicalType::TIMESTAMP_TZ());
 			}
 			return make_uniq<StrpTimeBindData>(formats, format_strings);
 		} else {
@@ -296,7 +296,7 @@ ScalarFunctionSet StrfTimeFun::GetFunctions() {
 	ScalarFunction ts_ns_data_format({}, LogicalType::VARCHAR, StrfTimeFunctionTimestampNS<false>,
 	                                 StrfTimeBindFunction<false>);
 	ts_ns_data_format.GetSignature()
-	    .AddParameter("data", LogicalType::TIMESTAMP_NS)
+	    .AddParameter("data", LogicalType::TIMESTAMP_NS())
 	    .AddParameter("format", LogicalType::VARCHAR);
 	strftime.AddFunction(ts_ns_data_format);
 
@@ -304,13 +304,13 @@ ScalarFunctionSet StrfTimeFun::GetFunctions() {
 	                                 StrfTimeBindFunction<true>);
 	ts_ns_format_data.GetSignature()
 	    .AddParameter("format", LogicalType::VARCHAR)
-	    .AddParameter("data", LogicalType::TIMESTAMP_NS);
+	    .AddParameter("data", LogicalType::TIMESTAMP_NS());
 	strftime.AddFunction(ts_ns_format_data);
 
 	ScalarFunction ts_tz_data_format({}, LogicalType::VARCHAR, StrfTimeFunctionTimestamp<false>,
 	                                 StrfTimeBindFunction<false>);
 	ts_tz_data_format.GetSignature()
-	    .AddParameter("data", LogicalType::TIMESTAMP_TZ)
+	    .AddParameter("data", LogicalType::TIMESTAMP_TZ())
 	    .AddParameter("format", LogicalType::VARCHAR);
 	strftime.AddFunction(ts_tz_data_format);
 
@@ -318,13 +318,13 @@ ScalarFunctionSet StrfTimeFun::GetFunctions() {
 	                                 StrfTimeBindFunction<true>);
 	ts_tz_format_data.GetSignature()
 	    .AddParameter("format", LogicalType::VARCHAR)
-	    .AddParameter("data", LogicalType::TIMESTAMP_TZ);
+	    .AddParameter("data", LogicalType::TIMESTAMP_TZ());
 	strftime.AddFunction(ts_tz_format_data);
 
 	ScalarFunction ts_tz_ns_data_format({}, LogicalType::VARCHAR, StrfTimeFunctionTimestampNS<false>,
 	                                    StrfTimeBindFunction<false>);
 	ts_tz_ns_data_format.GetSignature()
-	    .AddParameter("data", LogicalType::TIMESTAMP_TZ_NS)
+	    .AddParameter("data", LogicalType::TIMESTAMP_TZ_NS())
 	    .AddParameter("format", LogicalType::VARCHAR);
 	strftime.AddFunction(ts_tz_ns_data_format);
 
@@ -332,7 +332,7 @@ ScalarFunctionSet StrfTimeFun::GetFunctions() {
 	                                    StrfTimeBindFunction<true>);
 	ts_tz_ns_format_data.GetSignature()
 	    .AddParameter("format", LogicalType::VARCHAR)
-	    .AddParameter("data", LogicalType::TIMESTAMP_TZ_NS);
+	    .AddParameter("data", LogicalType::TIMESTAMP_TZ_NS());
 	strftime.AddFunction(ts_tz_ns_format_data);
 
 	// throws for unsupported format specifiers

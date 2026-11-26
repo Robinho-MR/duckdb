@@ -50,7 +50,10 @@ static bool GetFiniteDomain(const LogicalType &type, int64_t &lo, int64_t &hi, b
 		has_infinity = true;
 		return true;
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
+		if (TimestampType::GetScale(type) != TimestampType::MICROSECOND_SCALE) {
+			// other timestamp resolutions are handled by the default case
+			return false;
+		}
 		// every non-sentinel int64 is a valid, comparable timestamp (make_timestamp accepts all of them). Search
 		// between the ±infinity sentinels so that hi+1 and lo-1 stay representable. Apply handles the finite
 		// INT64_MIN below -infinity.

@@ -100,7 +100,9 @@ struct VariantNumberKey {
 	}
 };
 
-VariantComparisonType GetVariantComparisonType(LogicalTypeId type);
+VariantComparisonType GetVariantComparisonType(const LogicalType &type);
+//! The id does not tell timestamps with and without time zone apart - pass the full type
+VariantComparisonType GetVariantComparisonType(LogicalTypeId type) = delete;
 //! Compute the canonical logical value in the REAL rank, this is not directly byte comparable.
 double VariantGetRealValue(LogicalTypeId type_id, const VariantNode &node);
 //! Compute the number key for any value in the NUMBER rank (integer, decimal or bignum)

@@ -660,15 +660,15 @@ struct ICUTimeBucket : public ICUDateFunc {
 	}
 
 	template <typename TB>
-	static ScalarFunction GetTimeBucketFunction(const LogicalTypeId &type) {
-		ScalarFunction fun({}, LogicalType::TIMESTAMP_TZ, ICUTimeBucketFunction<TB>, Bind);
+	static ScalarFunction GetTimeBucketFunction(const LogicalType &type) {
+		ScalarFunction fun({}, LogicalType::TIMESTAMP_TZ(), ICUTimeBucketFunction<TB>, Bind);
 		fun.GetSignature().AddParameter("bucket_width", LogicalType::INTERVAL).AddParameter("timestamp", type);
 		return fun;
 	}
 
 	template <typename TB>
-	static ScalarFunction GetTimeBucketOffsetFunction(const LogicalTypeId &type) {
-		ScalarFunction fun({}, LogicalType::TIMESTAMP_TZ, ICUTimeBucketOffsetFunction<TB>, Bind);
+	static ScalarFunction GetTimeBucketOffsetFunction(const LogicalType &type) {
+		ScalarFunction fun({}, LogicalType::TIMESTAMP_TZ(), ICUTimeBucketOffsetFunction<TB>, Bind);
 		fun.GetSignature()
 		    .AddParameter("bucket_width", LogicalType::INTERVAL)
 		    .AddParameter("timestamp", type)
@@ -677,18 +677,18 @@ struct ICUTimeBucket : public ICUDateFunc {
 	}
 
 	template <typename TB>
-	static ScalarFunction GetTimeBucketOriginFunction(const LogicalTypeId &type) {
-		ScalarFunction fun({}, LogicalType::TIMESTAMP_TZ, ICUTimeBucketOriginFunction<TB>, Bind);
+	static ScalarFunction GetTimeBucketOriginFunction(const LogicalType &type) {
+		ScalarFunction fun({}, LogicalType::TIMESTAMP_TZ(), ICUTimeBucketOriginFunction<TB>, Bind);
 		fun.GetSignature()
 		    .AddParameter("bucket_width", LogicalType::INTERVAL)
 		    .AddParameter("timestamp", type)
-		    .AddParameter("origin", LogicalType::TIMESTAMP_TZ);
+		    .AddParameter("origin", LogicalType::TIMESTAMP_TZ());
 		return fun;
 	}
 
 	template <typename TB>
-	static ScalarFunction GetTimeBucketTimeZoneFunction(const LogicalTypeId &type) {
-		ScalarFunction fun({}, LogicalType::TIMESTAMP_TZ, ICUTimeBucketTimeZoneFunction<TB>, Bind);
+	static ScalarFunction GetTimeBucketTimeZoneFunction(const LogicalType &type) {
+		ScalarFunction fun({}, LogicalType::TIMESTAMP_TZ(), ICUTimeBucketTimeZoneFunction<TB>, Bind);
 		fun.GetSignature()
 		    .AddParameter("bucket_width", LogicalType::INTERVAL)
 		    .AddParameter("timestamp", type)
@@ -698,17 +698,17 @@ struct ICUTimeBucket : public ICUDateFunc {
 
 	static void AddTimeBucketFunction(ExtensionLoader &loader) {
 		ScalarFunctionSet set("time_bucket");
-		set.AddFunction(GetTimeBucketFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ));
-		set.AddFunction(GetTimeBucketFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS));
+		set.AddFunction(GetTimeBucketFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ()));
+		set.AddFunction(GetTimeBucketFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS()));
 
-		set.AddFunction(GetTimeBucketOffsetFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ));
-		set.AddFunction(GetTimeBucketOffsetFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS));
+		set.AddFunction(GetTimeBucketOffsetFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ()));
+		set.AddFunction(GetTimeBucketOffsetFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS()));
 
-		set.AddFunction(GetTimeBucketOriginFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ));
-		set.AddFunction(GetTimeBucketOriginFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS));
+		set.AddFunction(GetTimeBucketOriginFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ()));
+		set.AddFunction(GetTimeBucketOriginFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS()));
 
-		set.AddFunction(GetTimeBucketTimeZoneFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ));
-		set.AddFunction(GetTimeBucketTimeZoneFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS));
+		set.AddFunction(GetTimeBucketTimeZoneFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ()));
+		set.AddFunction(GetTimeBucketTimeZoneFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS()));
 
 		set.ApplyToFunctions([](ScalarFunction &func) {
 			func.SetFallible();

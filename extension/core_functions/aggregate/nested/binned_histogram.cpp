@@ -185,11 +185,6 @@ bool SupportsOtherBucket(const LogicalType &type) {
 	case LogicalTypeId::TIME_TZ:
 	case LogicalTypeId::DATE:
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
 	case LogicalTypeId::VARCHAR:
 	case LogicalTypeId::BLOB:
 	case LogicalTypeId::STRUCT:
@@ -217,11 +212,6 @@ Value OtherBucketValue(const LogicalType &type) {
 		return Value::MaximumValue(type);
 	case LogicalTypeId::DATE:
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
 	case LogicalTypeId::FLOAT:
 	case LogicalTypeId::DOUBLE:
 		return Value::Infinity(type);

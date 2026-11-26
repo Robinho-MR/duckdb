@@ -864,104 +864,137 @@ static bool IsLessThan(ExpressionType type) {
 	return type == ExpressionType::COMPARE_LESSTHAN || type == ExpressionType::COMPARE_LESSTHANOREQUALTO;
 }
 
+//! The temporal types a relaxed cast filter can be pushed through
+enum class TemporalKind : uint8_t {
+	OTHER,
+	DATE,
+	TIMESTAMP,
+	TIMESTAMP_TZ,
+	TIMESTAMP_NS,
+	TIMESTAMP_TZ_NS,
+	TIMESTAMP_MS,
+	TIMESTAMP_SEC
+};
+
+static TemporalKind GetTemporalKind(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::DATE:
+		return TemporalKind::DATE;
+	case LogicalTypeId::TIMESTAMP:
+		switch (TimestampType::GetScale(type)) {
+		case TimestampType::SECOND_SCALE:
+			return TemporalKind::TIMESTAMP_SEC;
+		case TimestampType::MILLISECOND_SCALE:
+			return TemporalKind::TIMESTAMP_MS;
+		case TimestampType::MICROSECOND_SCALE:
+			return TimestampType::HasTimeZone(type) ? TemporalKind::TIMESTAMP_TZ : TemporalKind::TIMESTAMP;
+		case TimestampType::NANOSECOND_SCALE:
+			return TimestampType::HasTimeZone(type) ? TemporalKind::TIMESTAMP_TZ_NS : TemporalKind::TIMESTAMP_NS;
+		default:
+			return TemporalKind::OTHER;
+		}
+	default:
+		return TemporalKind::OTHER;
+	}
+}
+
 //! Returns the relaxation margin in native units of the source type for a temporal cast.
 //! Returns -1 if the cast pair is not supported for relaxed pushdown.
 //! Margins: 48h for timestamp casts that read the time zone, 1 day DATE->TIMESTAMPTZ, 24h for time of day, 1s rounding.
-static int64_t GetTemporalCastMargin(LogicalTypeId source, LogicalTypeId target) {
+static int64_t GetTemporalCastMargin(TemporalKind source, TemporalKind target) {
 	static constexpr int64_t TIME_ZONE_MARGIN = 2LL * Interval::MICROS_PER_DAY; // microseconds
 	if (source == target) {
 		switch (source) {
-		case LogicalTypeId::DATE:
-		case LogicalTypeId::TIMESTAMP:
-		case LogicalTypeId::TIMESTAMP_TZ:
-		case LogicalTypeId::TIMESTAMP_NS:
-		case LogicalTypeId::TIMESTAMP_TZ_NS:
-		case LogicalTypeId::TIMESTAMP_MS:
-		case LogicalTypeId::TIMESTAMP_SEC:
+		case TemporalKind::DATE:
+		case TemporalKind::TIMESTAMP:
+		case TemporalKind::TIMESTAMP_TZ:
+		case TemporalKind::TIMESTAMP_NS:
+		case TemporalKind::TIMESTAMP_TZ_NS:
+		case TemporalKind::TIMESTAMP_MS:
+		case TemporalKind::TIMESTAMP_SEC:
 			return 0;
 		default:
-			// non-temporal types with the same id can differ (e.g. UNION or DECIMAL types)
 			return -1;
 		}
 	}
 	switch (source) {
-	case LogicalTypeId::TIMESTAMP:
+	case TemporalKind::TIMESTAMP:
 		// native unit: microseconds
 		switch (target) {
-		case LogicalTypeId::TIMESTAMP_TZ:
+		case TemporalKind::TIMESTAMP_TZ:
 			return TIME_ZONE_MARGIN;
-		case LogicalTypeId::DATE:
+		case TemporalKind::DATE:
 			return Interval::MICROS_PER_DAY;
-		case LogicalTypeId::TIMESTAMP_MS:
-		case LogicalTypeId::TIMESTAMP_SEC:
+		case TemporalKind::TIMESTAMP_MS:
+		case TemporalKind::TIMESTAMP_SEC:
 			return Interval::MICROS_PER_SEC;
 		default:
 			return -1;
 		}
-	case LogicalTypeId::TIMESTAMP_TZ:
+	case TemporalKind::TIMESTAMP_TZ:
 		// native unit: microseconds
 		switch (target) {
-		case LogicalTypeId::TIMESTAMP:
-		case LogicalTypeId::DATE:
-		case LogicalTypeId::TIMESTAMP_MS:
-		case LogicalTypeId::TIMESTAMP_SEC:
+		case TemporalKind::TIMESTAMP:
+		case TemporalKind::DATE:
+		case TemporalKind::TIMESTAMP_MS:
+		case TemporalKind::TIMESTAMP_SEC:
 			return TIME_ZONE_MARGIN;
 		default:
 			return -1;
 		}
-	case LogicalTypeId::TIMESTAMP_NS:
+	case TemporalKind::TIMESTAMP_NS:
 		// native unit: nanoseconds
 		switch (target) {
-		case LogicalTypeId::TIMESTAMP:
-		case LogicalTypeId::TIMESTAMP_MS:
-		case LogicalTypeId::TIMESTAMP_SEC:
+		case TemporalKind::TIMESTAMP:
+		case TemporalKind::TIMESTAMP_MS:
+		case TemporalKind::TIMESTAMP_SEC:
 			return Interval::MICROS_PER_SEC * 1000LL;
-		case LogicalTypeId::DATE:
+		case TemporalKind::DATE:
 			return Interval::MICROS_PER_DAY * 1000LL;
 		default:
 			return -1;
 		}
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
+	case TemporalKind::TIMESTAMP_TZ_NS:
 		// native unit: nanoseconds
 		switch (target) {
 		// ICU does not override these, so they only lose precision
-		case LogicalTypeId::TIMESTAMP_MS:
-		case LogicalTypeId::TIMESTAMP_SEC:
+		case TemporalKind::TIMESTAMP_MS:
+		case TemporalKind::TIMESTAMP_SEC:
 			return Interval::MICROS_PER_SEC * 1000LL;
-		case LogicalTypeId::TIMESTAMP:
-		case LogicalTypeId::DATE:
+		case TemporalKind::TIMESTAMP:
+		case TemporalKind::DATE:
 			return TIME_ZONE_MARGIN * 1000LL;
 		default:
 			return -1;
 		}
-	case LogicalTypeId::TIMESTAMP_MS:
+	case TemporalKind::TIMESTAMP_MS:
 		// native unit: milliseconds
 		switch (target) {
-		case LogicalTypeId::DATE:
+		case TemporalKind::DATE:
 			return Interval::MICROS_PER_DAY / Interval::MICROS_PER_MSEC;
-		case LogicalTypeId::TIMESTAMP_SEC:
+		case TemporalKind::TIMESTAMP_SEC:
 			return Interval::MICROS_PER_SEC / Interval::MICROS_PER_MSEC;
 		default:
 			return -1;
 		}
-	case LogicalTypeId::TIMESTAMP_SEC:
+	case TemporalKind::TIMESTAMP_SEC:
 		// native unit: seconds
 		switch (target) {
-		case LogicalTypeId::DATE:
+		case TemporalKind::DATE:
 			return Interval::MICROS_PER_DAY / Interval::MICROS_PER_SEC;
 		default:
 			return -1;
 		}
-	case LogicalTypeId::DATE:
+	case TemporalKind::DATE:
 		// native unit: days
 		switch (target) {
-		case LogicalTypeId::TIMESTAMP:
-		case LogicalTypeId::TIMESTAMP_MS:
-		case LogicalTypeId::TIMESTAMP_SEC:
-		case LogicalTypeId::TIMESTAMP_NS:
+		case TemporalKind::TIMESTAMP:
+		case TemporalKind::TIMESTAMP_MS:
+		case TemporalKind::TIMESTAMP_SEC:
+		case TemporalKind::TIMESTAMP_NS:
 			return 0;
-		case LogicalTypeId::TIMESTAMP_TZ:
-		case LogicalTypeId::TIMESTAMP_TZ_NS:
+		case TemporalKind::TIMESTAMP_TZ:
+		case TemporalKind::TIMESTAMP_TZ_NS:
 			return 1;
 		default:
 			return -1;
@@ -972,21 +1005,21 @@ static int64_t GetTemporalCastMargin(LogicalTypeId source, LogicalTypeId target)
 }
 
 //! Create a temporal Value from a raw int64 (or int32 for DATE) value.
-static Value MakeTemporalValue(LogicalTypeId type_id, int64_t result) {
+static Value MakeTemporalValue(TemporalKind type_id, int64_t result) {
 	switch (type_id) {
-	case LogicalTypeId::TIMESTAMP:
+	case TemporalKind::TIMESTAMP:
 		return Value::TIMESTAMP(timestamp_t(result));
-	case LogicalTypeId::TIMESTAMP_TZ:
+	case TemporalKind::TIMESTAMP_TZ:
 		return Value::TIMESTAMPTZ(timestamp_tz_t(result));
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
+	case TemporalKind::TIMESTAMP_TZ_NS:
 		return Value::TIMESTAMPTZNS(timestamp_tz_ns_t(result));
-	case LogicalTypeId::TIMESTAMP_MS:
+	case TemporalKind::TIMESTAMP_MS:
 		return Value::TIMESTAMPMS(timestamp_ms_t(result));
-	case LogicalTypeId::TIMESTAMP_SEC:
+	case TemporalKind::TIMESTAMP_SEC:
 		return Value::TIMESTAMPSEC(timestamp_sec_t(result));
-	case LogicalTypeId::TIMESTAMP_NS:
+	case TemporalKind::TIMESTAMP_NS:
 		return Value::TIMESTAMPNS(timestamp_ns_t(result));
-	case LogicalTypeId::DATE:
+	case TemporalKind::DATE:
 		return Value::DATE(date_t(static_cast<int32_t>(std::max<int64_t>(
 		    std::min<int64_t>(result, NumericLimits<int32_t>::Maximum()), NumericLimits<int32_t>::Minimum()))));
 	default:
@@ -1001,26 +1034,27 @@ static bool AdjustTemporalValue(Value &val, int64_t margin) {
 		return true;
 	}
 	int64_t raw;
-	switch (val.type().id()) {
-	case LogicalTypeId::TIMESTAMP:
+	auto kind = GetTemporalKind(val.type());
+	switch (kind) {
+	case TemporalKind::TIMESTAMP:
 		raw = val.GetValueUnsafe<timestamp_t>().value;
 		break;
-	case LogicalTypeId::TIMESTAMP_TZ:
+	case TemporalKind::TIMESTAMP_TZ:
 		raw = val.GetValueUnsafe<timestamp_tz_t>().value;
 		break;
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
+	case TemporalKind::TIMESTAMP_TZ_NS:
 		raw = val.GetValueUnsafe<timestamp_tz_ns_t>().value;
 		break;
-	case LogicalTypeId::TIMESTAMP_MS:
+	case TemporalKind::TIMESTAMP_MS:
 		raw = val.GetValueUnsafe<timestamp_ms_t>().value;
 		break;
-	case LogicalTypeId::TIMESTAMP_SEC:
+	case TemporalKind::TIMESTAMP_SEC:
 		raw = val.GetValueUnsafe<timestamp_sec_t>().value;
 		break;
-	case LogicalTypeId::TIMESTAMP_NS:
+	case TemporalKind::TIMESTAMP_NS:
 		raw = val.GetValueUnsafe<timestamp_ns_t>().value;
 		break;
-	case LogicalTypeId::DATE:
+	case TemporalKind::DATE:
 		raw = val.GetValueUnsafe<date_t>().days;
 		break;
 	default:
@@ -1030,7 +1064,7 @@ static bool AdjustTemporalValue(Value &val, int64_t margin) {
 	if (!TryAddOperator::Operation(raw, margin, result)) {
 		return false;
 	}
-	val = MakeTemporalValue(val.type().id(), result);
+	val = MakeTemporalValue(kind, result);
 	return true;
 }
 
@@ -1064,7 +1098,7 @@ FilterPushdownResult FilterCombiner::TryPushdownTemporalCastFilter(TableFilterSe
 	auto &cast_expr = cast_side.Cast<BoundFunctionExpression>();
 	auto source_type = BoundCastExpression::SourceType(cast_expr);
 	auto &target_type = cast_expr.GetReturnType();
-	int64_t margin = GetTemporalCastMargin(source_type.id(), target_type.id());
+	int64_t margin = GetTemporalCastMargin(GetTemporalKind(source_type), GetTemporalKind(target_type));
 	if (margin < 0) {
 		return FilterPushdownResult::NO_PUSHDOWN;
 	}

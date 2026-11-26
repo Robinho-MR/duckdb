@@ -314,7 +314,9 @@ AggregateFunction GetMedianAbsoluteDeviationAggregateFunctionInternal(const Logi
 		return GetTypedMedianAbsoluteDeviationAggregateFunction<date_t, timestamp_t, interval_t>(type,
 		                                                                                         LogicalType::INTERVAL);
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
+		if (TimestampType::GetScale(type) != TimestampType::MICROSECOND_SCALE) {
+			throw NotImplementedException("Unimplemented Median Absolute Deviation aggregate");
+		}
 		return GetTypedMedianAbsoluteDeviationAggregateFunction<timestamp_t, timestamp_t, interval_t>(
 		    type, LogicalType::INTERVAL);
 	case LogicalTypeId::TIME:
@@ -355,7 +357,7 @@ AggregateFunctionSet MadFun::GetFunctions() {
 	mad.AddFunction(decimal_mad);
 
 	const vector<LogicalType> MAD_TYPES = {LogicalType::FLOAT,     LogicalType::DOUBLE, LogicalType::DATE,
-	                                       LogicalType::TIMESTAMP, LogicalType::TIME,   LogicalType::TIMESTAMP_TZ,
+	                                       LogicalType::TIMESTAMP, LogicalType::TIME,   LogicalType::TIMESTAMP_TZ(),
 	                                       LogicalType::TIME_TZ};
 	for (const auto &type : MAD_TYPES) {
 		mad.AddFunction(GetMedianAbsoluteDeviationAggregateFunction(type));

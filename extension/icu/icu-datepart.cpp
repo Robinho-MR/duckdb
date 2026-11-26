@@ -594,9 +594,10 @@ struct ICUDatePart : public ICUDateFunc {
 	                                      const LogicalType &result_type = LogicalType::BIGINT,
 	                                      ArgProperties unary_arg0_props = {}) {
 		ScalarFunctionSet set {name};
-		set.AddFunction(GetUnaryPartCodeFunction<timestamp_tz_t, RESULT_TYPE>(LogicalType::TIMESTAMP_TZ, result_type));
 		set.AddFunction(
-		    GetUnaryPartCodeFunction<timestamp_tz_ns_t, RESULT_TYPE>(LogicalType::TIMESTAMP_TZ_NS, result_type));
+		    GetUnaryPartCodeFunction<timestamp_tz_t, RESULT_TYPE>(LogicalType::TIMESTAMP_TZ(), result_type));
+		set.AddFunction(
+		    GetUnaryPartCodeFunction<timestamp_tz_ns_t, RESULT_TYPE>(LogicalType::TIMESTAMP_TZ_NS(), result_type));
 		set.SetFallible();
 		set.SetStability(PartCodeStability(GetDatePartSpecifier(name.GetIdentifierName())));
 		set.SetUnaryArgProperties(unary_arg0_props);
@@ -627,10 +628,10 @@ struct ICUDatePart : public ICUDateFunc {
 
 	static void AddDatePartFunctions(const Identifier &name, ExtensionLoader &loader) {
 		ScalarFunctionSet set {name};
-		set.AddFunction(GetBinaryPartCodeFunction<timestamp_tz_t, double>(LogicalType::TIMESTAMP_TZ));
-		set.AddFunction(GetStructFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ));
-		set.AddFunction(GetBinaryPartCodeFunction<timestamp_tz_ns_t, double>(LogicalType::TIMESTAMP_TZ_NS));
-		set.AddFunction(GetStructFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS));
+		set.AddFunction(GetBinaryPartCodeFunction<timestamp_tz_t, double>(LogicalType::TIMESTAMP_TZ()));
+		set.AddFunction(GetStructFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ()));
+		set.AddFunction(GetBinaryPartCodeFunction<timestamp_tz_ns_t, double>(LogicalType::TIMESTAMP_TZ_NS()));
+		set.AddFunction(GetStructFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS()));
 		set.SetFallible();
 		set.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
 		loader.RegisterFunction(set);
@@ -653,8 +654,8 @@ struct ICUDatePart : public ICUDateFunc {
 	}
 	static void AddLastDayFunctions(const Identifier &name, ExtensionLoader &loader) {
 		ScalarFunctionSet set {name};
-		set.AddFunction(GetLastDayFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ));
-		set.AddFunction(GetLastDayFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS));
+		set.AddFunction(GetLastDayFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ()));
+		set.AddFunction(GetLastDayFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS()));
 		set.SetFallible();
 		set.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
 		loader.RegisterFunction(set);
@@ -676,8 +677,8 @@ struct ICUDatePart : public ICUDateFunc {
 	}
 	static void AddMonthNameFunctions(const Identifier &name, ExtensionLoader &loader) {
 		ScalarFunctionSet set {name};
-		set.AddFunction(GetMonthNameFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ));
-		set.AddFunction(GetMonthNameFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS));
+		set.AddFunction(GetMonthNameFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ()));
+		set.AddFunction(GetMonthNameFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS()));
 		set.SetFallible();
 		set.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
 		loader.RegisterFunction(set);
@@ -699,8 +700,8 @@ struct ICUDatePart : public ICUDateFunc {
 	}
 	static void AddDayNameFunctions(const Identifier &name, ExtensionLoader &loader) {
 		ScalarFunctionSet set {name};
-		set.AddFunction(GetDayNameFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ));
-		set.AddFunction(GetDayNameFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS));
+		set.AddFunction(GetDayNameFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ()));
+		set.AddFunction(GetDayNameFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS()));
 		set.SetFallible();
 		set.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
 		loader.RegisterFunction(set);

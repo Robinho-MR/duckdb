@@ -206,12 +206,7 @@ static void InitializeFunctionPointers(ArrowAppendData &append_data, const Logic
 	}
 	case LogicalTypeId::TIME:
 	case LogicalTypeId::TIME_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::BIGINT:
 		InitializeAppenderForType<ArrowScalarData<int64_t>>(append_data);
 		break;

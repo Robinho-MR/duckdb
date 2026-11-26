@@ -247,11 +247,6 @@ Value Value::MinimumValue(const LogicalType &type) {
 		return Value::UBIGINT(NumericLimits<uint64_t>::Minimum());
 	case LogicalTypeId::DATE:
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
 		return Value::NegativeInfinity(type);
 	case LogicalTypeId::TIME:
 		return Value::TIME(dtime_t(0));
@@ -332,11 +327,6 @@ Value Value::MaximumValue(const LogicalType &type) {
 		return Value::UBIGINT(NumericLimits<uint64_t>::Maximum());
 	case LogicalTypeId::DATE:
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
 		return Value::Infinity(type);
 	case LogicalTypeId::TIME:
 		//	24:00:00 according to PG
@@ -397,17 +387,24 @@ Value Value::Infinity(const LogicalType &type) {
 	case LogicalTypeId::DATE:
 		return Value::DATE(date_t::infinity());
 	case LogicalTypeId::TIMESTAMP:
-		return Value::TIMESTAMP(timestamp_t::infinity());
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return Value::TIMESTAMPSEC(timestamp_sec_t::infinity());
-	case LogicalTypeId::TIMESTAMP_MS:
-		return Value::TIMESTAMPMS(timestamp_ms_t::infinity());
-	case LogicalTypeId::TIMESTAMP_NS:
-		return Value::TIMESTAMPNS(timestamp_ns_t::infinity());
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return Value::TIMESTAMPTZ(timestamp_tz_t::infinity());
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return Value::TIMESTAMPTZNS(timestamp_tz_ns_t::infinity());
+		switch (TimestampType::GetScale(type)) {
+		case TimestampType::SECOND_SCALE:
+			return Value::TIMESTAMPSEC(timestamp_sec_t::infinity());
+		case TimestampType::MILLISECOND_SCALE:
+			return Value::TIMESTAMPMS(timestamp_ms_t::infinity());
+		case TimestampType::MICROSECOND_SCALE:
+			if (TimestampType::HasTimeZone(type)) {
+				return Value::TIMESTAMPTZ(timestamp_tz_t::infinity());
+			}
+			return Value::TIMESTAMP(timestamp_t::infinity());
+		case TimestampType::NANOSECOND_SCALE:
+			if (TimestampType::HasTimeZone(type)) {
+				return Value::TIMESTAMPTZNS(timestamp_tz_ns_t::infinity());
+			}
+			return Value::TIMESTAMPNS(timestamp_ns_t::infinity());
+		default:
+			throw InternalException("Unsupported TIMESTAMP scale");
+		}
 	case LogicalTypeId::FLOAT:
 		return Value::FLOAT(std::numeric_limits<float>::infinity());
 	case LogicalTypeId::DOUBLE:
@@ -422,17 +419,24 @@ Value Value::NegativeInfinity(const LogicalType &type) {
 	case LogicalTypeId::DATE:
 		return Value::DATE(date_t::ninfinity());
 	case LogicalTypeId::TIMESTAMP:
-		return Value::TIMESTAMP(timestamp_t::ninfinity());
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return Value::TIMESTAMPSEC(timestamp_sec_t::ninfinity());
-	case LogicalTypeId::TIMESTAMP_MS:
-		return Value::TIMESTAMPMS(timestamp_ms_t::ninfinity());
-	case LogicalTypeId::TIMESTAMP_NS:
-		return Value::TIMESTAMPNS(timestamp_ns_t::ninfinity());
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return Value::TIMESTAMPTZ(timestamp_tz_t::ninfinity());
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return Value::TIMESTAMPTZNS(timestamp_tz_ns_t::ninfinity());
+		switch (TimestampType::GetScale(type)) {
+		case TimestampType::SECOND_SCALE:
+			return Value::TIMESTAMPSEC(timestamp_sec_t::ninfinity());
+		case TimestampType::MILLISECOND_SCALE:
+			return Value::TIMESTAMPMS(timestamp_ms_t::ninfinity());
+		case TimestampType::MICROSECOND_SCALE:
+			if (TimestampType::HasTimeZone(type)) {
+				return Value::TIMESTAMPTZ(timestamp_tz_t::ninfinity());
+			}
+			return Value::TIMESTAMP(timestamp_t::ninfinity());
+		case TimestampType::NANOSECOND_SCALE:
+			if (TimestampType::HasTimeZone(type)) {
+				return Value::TIMESTAMPTZNS(timestamp_tz_ns_t::ninfinity());
+			}
+			return Value::TIMESTAMPNS(timestamp_ns_t::ninfinity());
+		default:
+			throw InternalException("Unsupported TIMESTAMP scale");
+		}
 	case LogicalTypeId::FLOAT:
 		return Value::FLOAT(-std::numeric_limits<float>::infinity());
 	case LogicalTypeId::DOUBLE:
@@ -731,35 +735,35 @@ Value Value::TIMESTAMP(timestamp_t value) {
 }
 
 Value Value::TIMESTAMPSEC(timestamp_sec_t timestamp) {
-	Value result(LogicalType::TIMESTAMP_S);
+	Value result(LogicalType::TIMESTAMP_S());
 	result.value_.timestamp_s = timestamp;
 	result.is_null = false;
 	return result;
 }
 
 Value Value::TIMESTAMPMS(timestamp_ms_t timestamp) {
-	Value result(LogicalType::TIMESTAMP_MS);
+	Value result(LogicalType::TIMESTAMP_MS());
 	result.value_.timestamp_ms = timestamp;
 	result.is_null = false;
 	return result;
 }
 
 Value Value::TIMESTAMPNS(timestamp_ns_t timestamp) {
-	Value result(LogicalType::TIMESTAMP_NS);
+	Value result(LogicalType::TIMESTAMP_NS());
 	result.value_.timestamp_ns = timestamp;
 	result.is_null = false;
 	return result;
 }
 
 Value Value::TIMESTAMPTZ(timestamp_tz_t value) {
-	Value result(LogicalType::TIMESTAMP_TZ);
+	Value result(LogicalType::TIMESTAMP_TZ());
 	result.value_.timestamp_tz = value;
 	result.is_null = false;
 	return result;
 }
 
 Value Value::TIMESTAMPTZNS(timestamp_tz_ns_t value) {
-	Value result(LogicalType::TIMESTAMP_TZ_NS);
+	Value result(LogicalType::TIMESTAMP_TZ_NS());
 	result.value_.timestamp_tz_ns = value;
 	result.is_null = false;
 	return result;
@@ -1259,17 +1263,24 @@ T Value::GetValueInternal() const {
 	case LogicalTypeId::TIME_TZ:
 		return Cast::Operation<dtime_tz_t, T>(value_.timetz);
 	case LogicalTypeId::TIMESTAMP:
-		return Cast::Operation<timestamp_t, T>(value_.timestamp);
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return Cast::Operation<timestamp_sec_t, T>(value_.timestamp_s);
-	case LogicalTypeId::TIMESTAMP_MS:
-		return Cast::Operation<timestamp_ms_t, T>(value_.timestamp_ms);
-	case LogicalTypeId::TIMESTAMP_NS:
-		return Cast::Operation<timestamp_ns_t, T>(value_.timestamp_ns);
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return Cast::Operation<timestamp_tz_t, T>(value_.timestamp_tz);
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return Cast::Operation<timestamp_tz_ns_t, T>(value_.timestamp_tz_ns);
+		switch (TimestampType::GetScale(type_)) {
+		case TimestampType::SECOND_SCALE:
+			return Cast::Operation<timestamp_sec_t, T>(value_.timestamp_s);
+		case TimestampType::MILLISECOND_SCALE:
+			return Cast::Operation<timestamp_ms_t, T>(value_.timestamp_ms);
+		case TimestampType::MICROSECOND_SCALE:
+			if (TimestampType::HasTimeZone(type_)) {
+				return Cast::Operation<timestamp_tz_t, T>(value_.timestamp_tz);
+			}
+			return Cast::Operation<timestamp_t, T>(value_.timestamp);
+		case TimestampType::NANOSECOND_SCALE:
+			if (TimestampType::HasTimeZone(type_)) {
+				return Cast::Operation<timestamp_tz_ns_t, T>(value_.timestamp_tz_ns);
+			}
+			return Cast::Operation<timestamp_ns_t, T>(value_.timestamp_ns);
+		default:
+			throw InternalException("Unsupported TIMESTAMP scale");
+		}
 	case LogicalTypeId::UTINYINT:
 		return Cast::Operation<uint8_t, T>(value_.utinyint);
 	case LogicalTypeId::USMALLINT:
@@ -1331,17 +1342,24 @@ int64_t Value::GetValue() const {
 	}
 	switch (type_.id()) {
 	case LogicalTypeId::TIMESTAMP:
-		return value_.timestamp.value;
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return value_.timestamp_s.value;
-	case LogicalTypeId::TIMESTAMP_MS:
-		return value_.timestamp_ms.value;
-	case LogicalTypeId::TIMESTAMP_NS:
-		return value_.timestamp_ns.value;
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return value_.timestamp_tz.value;
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return value_.timestamp_tz_ns.value;
+		switch (TimestampType::GetScale(type_)) {
+		case TimestampType::SECOND_SCALE:
+			return value_.timestamp_s.value;
+		case TimestampType::MILLISECOND_SCALE:
+			return value_.timestamp_ms.value;
+		case TimestampType::MICROSECOND_SCALE:
+			if (TimestampType::HasTimeZone(type_)) {
+				return value_.timestamp_tz.value;
+			}
+			return value_.timestamp.value;
+		case TimestampType::NANOSECOND_SCALE:
+			if (TimestampType::HasTimeZone(type_)) {
+				return value_.timestamp_tz_ns.value;
+			}
+			return value_.timestamp_ns.value;
+		default:
+			throw InternalException("Unsupported TIMESTAMP scale");
+		}
 	case LogicalTypeId::TIME:
 		return value_.bigint;
 	default:
@@ -1501,17 +1519,24 @@ Value Value::Numeric(const LogicalType &type, int64_t value) {
 	case LogicalTypeId::TIME_NS:
 		return Value::TIME_NS(dtime_ns_t(value));
 	case LogicalTypeId::TIMESTAMP:
-		return Value::TIMESTAMP(timestamp_t(value));
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return Value::TIMESTAMPSEC(timestamp_sec_t(value));
-	case LogicalTypeId::TIMESTAMP_MS:
-		return Value::TIMESTAMPMS(timestamp_ms_t(value));
-	case LogicalTypeId::TIMESTAMP_NS:
-		return Value::TIMESTAMPNS(timestamp_ns_t(value));
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return Value::TIMESTAMPTZ(timestamp_tz_t(value));
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return Value::TIMESTAMPTZNS(timestamp_tz_ns_t(value));
+		switch (TimestampType::GetScale(type)) {
+		case TimestampType::SECOND_SCALE:
+			return Value::TIMESTAMPSEC(timestamp_sec_t(value));
+		case TimestampType::MILLISECOND_SCALE:
+			return Value::TIMESTAMPMS(timestamp_ms_t(value));
+		case TimestampType::MICROSECOND_SCALE:
+			if (TimestampType::HasTimeZone(type)) {
+				return Value::TIMESTAMPTZ(timestamp_tz_t(value));
+			}
+			return Value::TIMESTAMP(timestamp_t(value));
+		case TimestampType::NANOSECOND_SCALE:
+			if (TimestampType::HasTimeZone(type)) {
+				return Value::TIMESTAMPTZNS(timestamp_tz_ns_t(value));
+			}
+			return Value::TIMESTAMPNS(timestamp_ns_t(value));
+		default:
+			throw InternalException("Unsupported TIMESTAMP scale");
+		}
 	case LogicalTypeId::ENUM:
 		return Value::ENUM(NumericCast<uint64_t>(value), type);
 	default:
@@ -1758,11 +1783,6 @@ string Value::ToSQLString() const {
 	case LogicalTypeId::TIME_NS:
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIME_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
 	case LogicalTypeId::INTERVAL:
 	case LogicalTypeId::BLOB:
 	case LogicalTypeId::BIT:
