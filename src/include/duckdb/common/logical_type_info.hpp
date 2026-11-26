@@ -73,6 +73,8 @@ struct StructTypeInfo : public LogicalTypeInfo {
 	explicit StructTypeInfo(child_list_t<LogicalType> child_types_p);
 
 	child_list_t<LogicalType> child_types;
+	//! Whether a struct with only empty member names is a TUPLE (older versions store a TUPLE as such a STRUCT)
+	bool is_tuple = true;
 
 public:
 	void Serialize(Serializer &serializer) const override;
