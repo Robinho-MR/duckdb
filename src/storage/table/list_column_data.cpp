@@ -117,31 +117,10 @@ void ListColumnData::StartStoredScan(ColumnScanState &state) {
 	state.last_offset = last_offset;
 }
 
-idx_t ListColumnData::CountValidLists(idx_t start_row, idx_t row_count) {
-	if (row_count == 0) {
-		return 0;
-	}
-	if (!implied_can_have_null && start_row + row_count <= implied_count) {
-		return row_count;
-	}
-	ColumnScanState validity_state(nullptr);
-	validity->InitializeScanWithOffset(validity_state, start_row);
-	idx_t valid_count = 0;
-	for (idx_t scanned = 0; scanned < row_count; scanned += STANDARD_VECTOR_SIZE) {
-		auto scan_count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, row_count - scanned);
-		Vector validity_vector(LogicalType::BOOLEAN, scan_count);
-		validity->ScanCount(validity_state, validity_vector, scan_count);
-		valid_count += FlatVector::Validity(validity_vector).CountValid(scan_count);
-	}
-	return valid_count;
-}
-
-idx_t ListColumnData::ImpliedOffset(idx_t row_idx) {
+idx_t ListColumnData::ImpliedOffset(idx_t row_idx) const {
 	D_ASSERT(row_idx <= implied_count);
-	if (row_idx == 0) {
-		return 0;
-	}
-	return implied_list_length.GetIndex() * CountValidLists(0, row_idx);
+	// the lists with implied offsets are laid out like arrays
+	return row_idx == 0 ? 0 : row_idx * implied_list_length.GetIndex();
 }
 
 void ListColumnData::InitializeScan(ColumnScanState &state) {
@@ -242,12 +221,13 @@ idx_t ListColumnData::ScanCount(ColumnScanState &state, Vector &result, idx_t co
 	idx_t current_offset = 0;
 	auto child_count = child_column->GetMaxEntry();
 	if (implied_rows > 0) {
-		auto &list_validity = FlatVector::Validity(result);
+		if (!FlatVector::Validity(result).CheckAllValid(implied_rows)) {
+			throw DataCorruptionException("Corrupted LIST column: a list with an implied offset is NULL");
+		}
 		auto list_length = implied_list_length.GetIndex();
 		for (idx_t i = 0; i < implied_rows; i++) {
-			auto length = list_validity.RowIsValid(i) ? list_length : 0;
-			result_data.WriteValue(list_entry_t(current_offset, length));
-			current_offset += length;
+			result_data.WriteValue(list_entry_t(current_offset, list_length));
+			current_offset += list_length;
 		}
 		previous_offset += current_offset;
 		ValidateListOffset(previous_offset, child_count);
@@ -291,10 +271,9 @@ void ListColumnData::Skip(ColumnScanState &state, idx_t count) {
 
 	idx_t child_skip_count = 0;
 	if (ScansImpliedOffsets(state)) {
-		// the rows with implied offsets have the implied list length if they are not NULL
+		// the rows with implied offsets all have the implied list length
 		auto implied_rows = MinValue<idx_t>(count, implied_count - state.offset_in_column);
-		auto list_length = implied_list_length.GetIndex();
-		child_skip_count = list_length * CountValidLists(state.offset_in_column, implied_rows);
+		child_skip_count = implied_rows * implied_list_length.GetIndex();
 		state.offset_in_column += implied_rows;
 		state.internal_index = state.offset_in_column;
 		state.last_offset += child_skip_count;
@@ -467,45 +446,16 @@ void ListColumnData::FetchRows(TransactionData transaction, ColumnFetchState &st
 
 	auto start_data = make_unsafe_uniq_array<idx_t>(fetch_count);
 	auto end_data = make_unsafe_uniq_array<idx_t>(fetch_count);
-	// the rows with implied offsets
-	optional_idx max_implied_row;
 	idx_t stored_count = 0;
 	for (idx_t idx = 0; idx < fetch_count; idx++) {
-		auto row_id = offsets[sel.get_index(idx)];
-		if (row_id < implied_count) {
-			max_implied_row = MaxValue<idx_t>(max_implied_row.IsValid() ? max_implied_row.GetIndex() : 0, row_id);
-		} else {
+		const auto row_id = offsets[sel.get_index(idx)];
+		if (row_id >= implied_count) {
 			stored_count++;
+			continue;
 		}
-	}
-	if (max_implied_row.IsValid()) {
-		// each list starts at the list length times the number of non-NULL lists before it
-		auto list_length = implied_list_length.GetIndex();
-		auto row_count = max_implied_row.GetIndex() + 1;
-		ValidityMask list_validity(row_count);
-		if (implied_can_have_null) {
-			ColumnScanState validity_state(nullptr);
-			validity->InitializeScan(validity_state);
-			for (idx_t row_idx = 0; row_idx < row_count; row_idx += STANDARD_VECTOR_SIZE) {
-				auto scan_count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, row_count - row_idx);
-				Vector validity_vector(LogicalType::BOOLEAN, scan_count);
-				validity->ScanCount(validity_state, validity_vector, scan_count);
-				auto &scanned_validity = FlatVector::Validity(validity_vector);
-				for (idx_t i = 0; i < scan_count; i++) {
-					if (!scanned_validity.RowIsValid(i)) {
-						list_validity.SetInvalid(row_idx + i);
-					}
-				}
-			}
-		}
-		for (idx_t idx = 0; idx < fetch_count; idx++) {
-			const auto row_id = offsets[sel.get_index(idx)];
-			if (row_id >= implied_count) {
-				continue;
-			}
-			start_data[idx] = list_length * list_validity.CountValid(row_id);
-			end_data[idx] = start_data[idx] + (list_validity.RowIsValid(row_id) ? list_length : 0);
-		}
+		// the lists with implied offsets are laid out like arrays
+		start_data[idx] = ImpliedOffset(row_id);
+		end_data[idx] = start_data[idx] + implied_list_length.GetIndex();
 	}
 	if (stored_count > 0) {
 		// each list ends at its own offset and starts at the offset of the row before it
@@ -639,7 +589,6 @@ struct ListColumnCheckpointState : public ColumnCheckpointState {
 	//! The lists in [0, implied_count) have length implied_list_length, and their offsets are not written
 	idx_t implied_count = 0;
 	optional_idx implied_list_length;
-	bool implied_can_have_null = true;
 
 public:
 	shared_ptr<ColumnData> CreateEmptyColumnData() override {
@@ -656,7 +605,6 @@ public:
 			column_data.SetChildData(child_state->GetFinalResult());
 			column_data.implied_list_length = implied_list_length;
 			column_data.implied_count = implied_count;
-			column_data.implied_can_have_null = implied_can_have_null;
 		}
 		return ColumnCheckpointState::GetFinalResult();
 	}
@@ -720,8 +668,9 @@ unique_ptr<ColumnCheckpointState> ListColumnData::Checkpoint(const RowGroup &row
                                                              const BaseStatistics &old_stats) {
 	auto list_length = GetCheckpointListLength(old_stats);
 	unique_ptr<ColumnCheckpointState> base_state;
-	if (list_length.IsValid()) {
-		// all lists have the same length: their offsets are implied by it and are not written
+	if (list_length.IsValid() && !old_stats.CanHaveNull()) {
+		// no list is NULL and all lists have the same length: they are laid out like arrays and their offsets are not
+		// written
 		base_state =
 		    CreateCheckpointState(row_group, checkpoint_info.GetContext(), checkpoint_info.GetPartialBlockManager());
 		if (data.GetRootSegment()) {
@@ -735,14 +684,12 @@ unique_ptr<ColumnCheckpointState> ListColumnData::Checkpoint(const RowGroup &row
 		auto &list_state = base_state->Cast<ListColumnCheckpointState>();
 		list_state.implied_count = count;
 		list_state.implied_list_length = list_length;
-		list_state.implied_can_have_null = old_stats.CanHaveNull();
 	} else {
 		// the offset segments hold the offsets of the rows from implied_count on
 		base_state = ColumnData::Checkpoint(row_group, checkpoint_info, old_stats);
 		auto &list_state = base_state->Cast<ListColumnCheckpointState>();
 		list_state.implied_count = implied_count;
 		list_state.implied_list_length = implied_list_length;
-		list_state.implied_can_have_null = implied_can_have_null;
 	}
 	auto validity_state = validity->Checkpoint(row_group, checkpoint_info, old_stats);
 	auto child_state = child_column->Checkpoint(row_group, checkpoint_info, ListStats::GetChildStats(old_stats));
@@ -879,14 +826,16 @@ void ListColumnData::InitializeColumn(PersistentColumnData &column_data, BaseSta
 		throw DataCorruptionException("Corrupted LIST column: the list offsets do not match the row count");
 	}
 	auto child_count = child_column->GetMaxEntry();
+	auto implied_rows = row_count - stored_count;
 	auto length = list_length.GetIndex();
-	if (stored_count == 0 &&
-	    (length == 0 ? child_count != 0 : (child_count % length != 0 || child_count / length > row_count))) {
+	if (length > 0 && implied_rows > child_count / length) {
+		throw DataCorruptionException("Corrupted LIST column: the child row count does not match the list length");
+	}
+	if (stored_count == 0 && implied_rows * length != child_count) {
 		throw DataCorruptionException("Corrupted LIST column: the child row count does not match the list length");
 	}
 	implied_list_length = list_length;
-	implied_count = row_count - stored_count;
-	implied_can_have_null = target_stats.CanHaveNull();
+	implied_count = implied_rows;
 	count = row_count;
 }
 

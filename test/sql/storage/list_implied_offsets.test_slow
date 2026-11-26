@@ -1,5 +1,5 @@
 # name: test/sql/storage/list_implied_offsets.test_slow
-# description: Test that the offsets of lists that all have the same length are not stored
+# description: Test that the offsets of lists that are all non-NULL and have the same length are not stored
 # group: [storage]
 
 load {TEST_DIR}/list_implied_offsets.db readwrite v2.1.0
@@ -10,11 +10,8 @@ PRAGMA disable_checkpoint_on_shutdown;
 statement ok
 SET checkpoint_threshold='1TB';
 
-# every third list is NULL
 statement ok
-CREATE TABLE t AS
-SELECT i AS id, CASE WHEN i % 3 = 0 THEN NULL ELSE [i, i + 1, i + 2] END AS l
-FROM range(300000) t(i);
+CREATE TABLE t AS SELECT i AS id, [i, i + 1, i + 2] AS l FROM range(300000) t(i);
 
 statement ok
 CHECKPOINT;
@@ -30,39 +27,37 @@ SELECT COUNT(*) FROM pragma_storage_info('t') WHERE column_name = 'l' AND column
 query IIII
 SELECT COUNT(*), COUNT(l), SUM(len(l)), SUM(l[3]) FROM t;
 ----
-300000	200000	600000	30000400000
+300000	300000	900000	45000450000
 
 # skipping vectors with zonemaps on another column skips the lists
 query II
 SELECT COUNT(l), SUM(l[1]) FROM t WHERE id >= 250000;
 ----
-33334	9166833333
+50000	13749975000
 
 query II
-SELECT id, l FROM t WHERE id BETWEEN 199997 AND 200001 ORDER BY id;
+SELECT id, l FROM t WHERE id BETWEEN 199998 AND 200001 ORDER BY id;
 ----
-199997	[199997, 199998, 199999]
-199998	NULL
+199998	[199998, 199999, 200000]
 199999	[199999, 200000, 200001]
 200000	[200000, 200001, 200002]
-200001	NULL
+200001	[200001, 200002, 200003]
 
 # fetching rows by row id
 query II
-SELECT rowid, l FROM t WHERE rowid IN (0, 1, 2, 122879, 122880, 299999) ORDER BY rowid;
+SELECT rowid, l FROM t WHERE rowid IN (0, 1, 122879, 122880, 299999) ORDER BY rowid;
 ----
-0	NULL
+0	[0, 1, 2]
 1	[1, 2, 3]
-2	[2, 3, 4]
 122879	[122879, 122880, 122881]
-122880	NULL
+122880	[122880, 122881, 122882]
 299999	[299999, 300000, 300001]
 
 statement ok
 CREATE TABLE idx(id INTEGER PRIMARY KEY, l INTEGER[]);
 
 statement ok
-INSERT INTO idx SELECT i, CASE WHEN i % 5 = 0 THEN NULL ELSE [i, -i] END FROM range(10000) t(i);
+INSERT INTO idx SELECT i, [i, -i] FROM range(10000) t(i);
 
 statement ok
 CHECKPOINT;
@@ -79,19 +74,14 @@ SELECT l FROM idx WHERE id = 4321;
 ----
 [4321, -4321]
 
-query I
-SELECT l FROM idx WHERE id = 4320;
-----
-NULL
-
-# appending to a row group with implied offsets stores the offsets again
+# appending to a row group with implied offsets stores the offsets of the appended lists
 statement ok
 INSERT INTO idx VALUES (10000, [1, 2, 3]), (10001, NULL), (10002, [4, 5]);
 
 query III
 SELECT COUNT(l), SUM(len(l)), SUM(l[1]) FROM idx;
 ----
-8002	16005	40000005
+10002	20005	49995005
 
 query I
 SELECT l FROM idx WHERE id IN (9999, 10000, 10001, 10002) ORDER BY id;
@@ -121,7 +111,7 @@ CHECKPOINT;
 
 restart
 
-# the lists no longer have the same length: only the offsets of the appended lists are stored
+# the lists no longer all have the same length: only the offsets of the appended lists are stored
 query I
 SELECT SUM(count) FROM pragma_storage_info('idx') WHERE column_name = 'l' AND column_path = '[1]';
 ----
@@ -130,14 +120,50 @@ SELECT SUM(count) FROM pragma_storage_info('idx') WHERE column_name = 'l' AND co
 query III
 SELECT COUNT(l), SUM(len(l)), SUM(l[1]) FROM idx;
 ----
-8002	16005	40000005
+10002	20005	49995005
+
+# the rows around the first row with a stored offset, also when scanned in a single vector
+query II
+SELECT id, l FROM idx WHERE id >= 9998 ORDER BY id;
+----
+9998	[9998, -9998]
+9999	[9999, -9999]
+10000	[1, 2, 3]
+10001	NULL
+10002	[4, 5]
 
 query I
-SELECT l FROM idx WHERE id IN (4321, 10000, 10002) ORDER BY id;
+SELECT l FROM idx WHERE id IN (4321, 9999, 10000, 10001, 10002) ORDER BY id;
 ----
 [4321, -4321]
+[9999, -9999]
 [1, 2, 3]
+NULL
 [4, 5]
+
+query I
+SELECT SUM(l[2]) FROM idx WHERE id > 5000;
+----
+-37492493
+
+# appending to a row group with implied and stored offsets
+statement ok
+INSERT INTO idx VALUES (10005, [6, 6]);
+
+query II
+SELECT COUNT(l), SUM(l[1]) FROM idx;
+----
+10003	49995011
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query II
+SELECT COUNT(l), SUM(l[1]) FROM idx;
+----
+10003	49995011
 
 # appending lists of the same length to a row group with implied offsets
 statement ok
@@ -187,17 +213,54 @@ SELECT COUNT(*), SUM(l[2]) FROM same;
 
 # empty lists
 statement ok
-CREATE TABLE empty_lists AS SELECT CASE WHEN i % 2 = 0 THEN [] ELSE NULL END::INT[] AS l FROM range(5000) t(i);
+CREATE TABLE empty_lists AS SELECT []::INT[] AS l FROM range(5000) t(i);
 
 statement ok
 CHECKPOINT;
 
 restart
 
-query III
-SELECT COUNT(l), SUM(len(l)), COUNT(*) FROM empty_lists;
+query I
+SELECT COUNT(*) FROM pragma_storage_info('empty_lists') WHERE column_name = 'l' AND column_path = '[0]';
 ----
-2500	0	5000
+0
+
+query II
+SELECT COUNT(l), SUM(len(l)) FROM empty_lists;
+----
+5000	0
+
+# NULL lists or lists of different lengths store their offsets
+statement ok
+CREATE TABLE with_nulls AS SELECT CASE WHEN i % 3 = 0 THEN NULL ELSE [i, i] END AS l FROM range(5000) t(i);
+
+statement ok
+CREATE TABLE mixed AS SELECT range(i % 3) AS l FROM range(5000) t(i);
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query II
+SELECT COUNT(*) > 0, SUM(count) FROM pragma_storage_info('with_nulls') WHERE column_name = 'l' AND column_path = '[0]';
+----
+true	5000
+
+query I
+SELECT COUNT(*) > 0 FROM pragma_storage_info('mixed') WHERE column_name = 'l' AND column_path = '[0]';
+----
+true
+
+query III
+SELECT COUNT(l), SUM(l[2]), SUM(len(l)) FROM with_nulls;
+----
+3333	8331667	6666
+
+query II
+SELECT COUNT(*), SUM(len(l)) FROM mixed;
+----
+5000	4999
 
 # lists nested in structs and lists, and maps
 statement ok
@@ -211,7 +274,7 @@ CHECKPOINT;
 restart
 
 query IIII
-SELECT SUM(s.a[2]), SUM(ll[2][1]), SUM(m[i]), COUNT(*) FROM nested, (SELECT 1) t(x), LATERAL (SELECT s.b AS i);
+SELECT SUM(s.a[2]), SUM(ll[2][1]), SUM(m[s.b]), COUNT(*) FROM nested;
 ----
 12497500	12502500	24995000	5000
 
@@ -219,25 +282,6 @@ query III
 SELECT s, ll, m FROM nested WHERE s.b = 4242;
 ----
 {'a': [4242, 4242], 'b': 4242}	[[4242], [4243]]	{4242=8484}
-
-# lists that do not all have the same length still store their offsets
-statement ok
-CREATE TABLE mixed AS SELECT range(i % 3) AS l FROM range(5000) t(i);
-
-statement ok
-CHECKPOINT;
-
-restart
-
-query I
-SELECT COUNT(*) > 0 FROM pragma_storage_info('mixed') WHERE column_name = 'l' AND column_path = '[0]';
-----
-true
-
-query II
-SELECT COUNT(*), SUM(len(l)) FROM mixed;
-----
-5000	4999
 
 # filters on the list column skip the lists that do not pass the filter
 statement ok

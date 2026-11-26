@@ -101,12 +101,11 @@ protected:
 	//! The validity column data of the list
 	shared_ptr<ValidityColumnData> validity;
 
-	//! The lists in [0, implied_count) all have length implied_list_length: their offsets are not stored, and the
-	//! offset segments hold the offsets of the rows from implied_count on
+	//! The lists in [0, implied_count) are not NULL and all have length implied_list_length, so they are laid out
+	//! like arrays: their offsets are not stored, and the offset segments hold the offsets of the rows from
+	//! implied_count on
 	optional_idx implied_list_length;
 	idx_t implied_count = 0;
-	//! Whether any of the lists in [0, implied_count) can be NULL
-	bool implied_can_have_null = true;
 
 private:
 	uint64_t FetchListOffset(idx_t row_idx);
@@ -117,10 +116,8 @@ private:
 	void InitializeImpliedScan(ColumnScanState &state, idx_t row_idx);
 	//! Moves a scan from the rows with implied offsets to the first row with stored offsets
 	void StartStoredScan(ColumnScanState &state);
-	//! Counts the non-NULL lists in [start_row, start_row + row_count)
-	idx_t CountValidLists(idx_t start_row, idx_t row_count);
 	//! The child row the list at row_idx starts at, for row_idx <= implied_count
-	idx_t ImpliedOffset(idx_t row_idx);
+	idx_t ImpliedOffset(idx_t row_idx) const;
 	//! The list length if the offsets do not have to be stored when checkpointing
 	optional_idx GetCheckpointListLength(const BaseStatistics &stats);
 };
