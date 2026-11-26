@@ -209,18 +209,7 @@ const char *BuiltinTypeName(const LogicalType &type) {
 	case LogicalTypeId::TIME_TZ:
 		return "TIMETZ";
 	case LogicalTypeId::TIMESTAMP:
-		switch (TimestampType::GetScale(type)) {
-		case TimestampType::SECOND_SCALE:
-			return "TIMESTAMP_S";
-		case TimestampType::MILLISECOND_SCALE:
-			return "TIMESTAMP_MS";
-		case TimestampType::MICROSECOND_SCALE:
-			return TimestampType::HasTimeZone(type) ? "TIMESTAMPTZ" : "TIMESTAMP_US";
-		case TimestampType::NANOSECOND_SCALE:
-			return TimestampType::HasTimeZone(type) ? "TIMESTAMPTZ_NS" : "TIMESTAMP_NS";
-		default:
-			return nullptr;
-		}
+		return TimestampType::HasTimeZone(type) ? "TIMESTAMPTZ" : "TIMESTAMP";
 	case LogicalTypeId::INTERVAL:
 		return "INTERVAL";
 	case LogicalTypeId::VARCHAR:
@@ -294,6 +283,11 @@ unique_ptr<TypeExpression> TypeExpression::FromLogicalType(const LogicalType &ty
 	}
 
 	switch (type.id()) {
+	case LogicalTypeId::TIMESTAMP:
+		if (TimestampType::GetScale(type) != TimestampType::MICROSECOND_SCALE) {
+			children.push_back(LiteralChild(ConstantExpression::Integer(TimestampType::GetScale(type))));
+		}
+		break;
 	case LogicalTypeId::DECIMAL:
 		children.push_back(LiteralChild(ConstantExpression::Integer(DecimalType::GetWidth(type))));
 		children.push_back(LiteralChild(ConstantExpression::Integer(DecimalType::GetScale(type))));

@@ -20,6 +20,8 @@ struct DuckDBTypesData : public GlobalTableFunctionState {
 	//! Every type emits one row per constructor overload, like duckdb_functions() does for functions
 	idx_t constructor_offset;
 	unordered_set<int64_t> oids;
+	//! Whether the TIMESTAMP without / with time zone has been given its oid
+	bool timestamp_oid_assigned[2] = {false, false};
 };
 
 static unique_ptr<FunctionData> DuckDBTypesBind(ClientContext &context, TableFunctionBindInput &input,
@@ -147,20 +149,24 @@ void DuckDBTypesFunction(ClientContext &context, TableFunctionInput &data_p, Dat
 		database_oid.Append(Value::BIGINT(NumericCast<int64_t>(type_entry.catalog.GetOid())));
 		schema_name.Append(Value(type_entry.schema.name));
 		schema_oid.Append(Value::BIGINT(NumericCast<int64_t>(type_entry.schema.oid)));
-		// the timestamp variants keep the oids and names of their legacy ids
-		auto type_id = type.id() == LogicalTypeId::TIMESTAMP ? TimestampType::GetLegacyId(type) : type.id();
 		int64_t oid;
 		if (type_entry.internal) {
-			oid = NumericCast<int64_t>(type_id);
+			oid = NumericCast<int64_t>(type.id());
 		} else {
 			oid = NumericCast<int64_t>(type_entry.oid);
 		}
 		Value oid_val;
-		if (data.oids.find(oid) == data.oids.end()) {
+		if (type_entry.internal && type.id() == LogicalTypeId::TIMESTAMP) {
+			// like PostgreSQL's timestamp and timestamptz, the default timestamps with and without time zone have an
+			// oid - the scale is a parameter of the type
+			auto &assigned = data.timestamp_oid_assigned[TimestampType::HasTimeZone(type) ? 1 : 0];
+			if (!assigned && TimestampType::GetScale(type) == TimestampType::MICROSECOND_SCALE) {
+				assigned = true;
+				oid_val = Value::BIGINT(oid);
+			}
+		} else if (data.oids.find(oid) == data.oids.end()) {
 			data.oids.insert(oid);
 			oid_val = Value::BIGINT(oid);
-		} else {
-			oid_val = Value();
 		}
 		type_oid.Append(oid_val);
 		type_name.Append(Value(type_entry.name));
@@ -168,7 +174,12 @@ void DuckDBTypesFunction(ClientContext &context, TableFunctionInput &data_p, Dat
 		type_size.Append(internal_type == PhysicalType::INVALID
 		                     ? Value()
 		                     : Value::BIGINT(NumericCast<int64_t>(GetTypeIdSize(internal_type))));
-		logical_type.Append(Value(EnumUtil::ToString(type_id)));
+		if (type.id() == LogicalTypeId::TIMESTAMP) {
+			logical_type.Append(
+			    Value(TimestampType::GetName(TimestampType::GetScale(type), TimestampType::HasTimeZone(type))));
+		} else {
+			logical_type.Append(Value(EnumUtil::ToString(type.id())));
+		}
 		string category;
 		switch (type.id()) {
 		case LogicalTypeId::TINYINT:

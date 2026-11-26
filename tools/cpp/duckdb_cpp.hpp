@@ -1504,10 +1504,8 @@ enum class LogicalTypeId : uint32_t {
 	BIGINT = 14,
 	DATE = 15,
 	TIME = 16,
-	TIMESTAMP_SEC = 17,
-	TIMESTAMP_MS = 18,
+	/// Parameterized by its precision and whether it has a time zone
 	TIMESTAMP = 19,
-	TIMESTAMP_NS = 20,
 	DECIMAL = 21,
 	FLOAT = 22,
 	DOUBLE = 23,
@@ -1518,8 +1516,6 @@ enum class LogicalTypeId : uint32_t {
 	USMALLINT = 29,
 	UINTEGER = 30,
 	UBIGINT = 31,
-	TIMESTAMP_TZ = 32,
-	TIMESTAMP_TZ_NS = 33,
 	TIME_TZ = 34,
 	TIME_NS = 35,
 	BIT = 36,
@@ -1791,28 +1787,28 @@ struct timestamp_t {
 	int64_t micros = 0;
 };
 
-/// TIMESTAMP_SEC: seconds since 1970-01-01 00:00:00.
+/// TIMESTAMP(0): seconds since 1970-01-01 00:00:00.
 struct timestamp_s_t {
 	int64_t seconds = 0;
 };
 
-/// TIMESTAMP_MS: milliseconds since 1970-01-01 00:00:00.
+/// TIMESTAMP(3): milliseconds since 1970-01-01 00:00:00.
 struct timestamp_ms_t {
 	int64_t millis = 0;
 };
 
-/// TIMESTAMP_NS: nanoseconds since 1970-01-01 00:00:00.
+/// TIMESTAMP(9): nanoseconds since 1970-01-01 00:00:00.
 struct timestamp_ns_t {
 	int64_t nanos = 0;
 };
 
-/// TIMESTAMP_TZ: microseconds since the epoch, in UTC. The display time zone is a session setting, not part of the
-/// value.
+/// TIMESTAMP WITH TIME ZONE: microseconds since the epoch, in UTC. The display time zone is a session setting, not part
+/// of the value.
 struct timestamp_tz_t {
 	int64_t micros = 0;
 };
 
-/// TIMESTAMP_TZ_NS: nanoseconds since the epoch, in UTC.
+/// TIMESTAMP(9) WITH TIME ZONE: nanoseconds since the epoch, in UTC.
 struct timestamp_tz_ns_t {
 	int64_t nanos = 0;
 };

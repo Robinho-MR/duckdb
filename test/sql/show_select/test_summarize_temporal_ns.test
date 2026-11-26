@@ -28,12 +28,12 @@ TIME_NS
 query T
 SELECT typeof(approx_quantile(x, 0.5)) FROM (SELECT TIMESTAMP_NS '2026-01-01 00:00:00' AS x);
 ----
-TIMESTAMP_NS
+TIMESTAMP(9)
 
 query T
 SELECT typeof(approx_quantile(x, 0.5)) FROM (SELECT TIMESTAMPTZ_NS '2026-01-01 00:00:00+00:00' AS x);
 ----
-TIMESTAMPTZ_NS
+TIMESTAMP(9) WITH TIME ZONE
 
 # SUMMARIZE over the previously-failing types must not error
 statement ok

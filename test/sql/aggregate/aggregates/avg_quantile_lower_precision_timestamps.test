@@ -64,7 +64,7 @@ SELECT avg(t), approx_quantile(t, 0.5) FROM ts_ms;
 query II
 SELECT typeof(avg(TIMESTAMP_NS '2000-01-01')), typeof(approx_quantile(TIMESTAMP_NS '2000-01-01', 0.5));
 ----
-TIMESTAMP_NS	TIMESTAMP_NS
+TIMESTAMP(9)	TIMESTAMP(9)
 
 # infinities and NULLs behave as for TIMESTAMP
 query III

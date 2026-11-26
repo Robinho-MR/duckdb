@@ -319,9 +319,7 @@ void ColumnHelper::WriteColumns(idx_t start_col, idx_t end_col, DataChunk &outpu
 		is_nullable.Append(Value::BOOLEAN(IsNullable(i)));
 		const LogicalType &type = ColumnType(i);
 		data_type.Append(type.id() == LogicalTypeId::INVALID ? Value() : Value(type.ToString()));
-		// the timestamp variants keep the ids they had before TIMESTAMP was parameterized
-		auto type_id = type.id() == LogicalTypeId::TIMESTAMP ? TimestampType::GetLegacyId(type) : type.id();
-		data_type_id.Append(type.id() == LogicalTypeId::INVALID ? Value() : Value::BIGINT(int(type_id)));
+		data_type_id.Append(type.id() == LogicalTypeId::INVALID ? Value() : Value::BIGINT(int(type.id())));
 		// FIXME: need check constraints in place to set this correctly for VARCHAR
 		character_maximum_length.Append(Value());
 

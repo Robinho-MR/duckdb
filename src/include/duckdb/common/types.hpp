@@ -653,12 +653,8 @@ struct TimestampType {
 	DUCKDB_API static bool IsValid(uint8_t scale, bool has_time_zone);
 	//! The number of timestamp units in a second (1 for seconds, 1000 for milliseconds, ...)
 	DUCKDB_API static int64_t UnitsPerSecond(uint8_t scale);
-	//! The name of the timestamp type, e.g. TIMESTAMP_NS or TIMESTAMP WITH TIME ZONE
+	//! The name of the timestamp type, e.g. TIMESTAMP(9) or TIMESTAMP WITH TIME ZONE
 	DUCKDB_API static string GetName(uint8_t scale, bool has_time_zone);
-	//! The legacy (pre-parameterization) id of a TIMESTAMP type, or TIMESTAMP for the default scale
-	DUCKDB_API static LogicalTypeId GetLegacyId(const LogicalType &type);
-	//! Whether the id is one of the legacy timestamp ids - if so, outputs the scale and time zone it stands for
-	DUCKDB_API static bool TryGetLegacyParameters(LogicalTypeId id, uint8_t &scale, bool &has_time_zone);
 };
 
 struct ListType {

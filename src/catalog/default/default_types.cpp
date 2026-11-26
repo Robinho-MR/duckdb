@@ -78,34 +78,48 @@ void RegisterDecimalConstructors(TypeConstructorSet &set) {
 //----------------------------------------------------------------------------------------------------------------------
 // TIMESTAMP Type
 //----------------------------------------------------------------------------------------------------------------------
-LogicalType BindDefaultTimestampType(BindLogicalTypeInput &input) {
-	return LogicalType::TIMESTAMP;
-}
-
-LogicalType BindTimestampType(BindLogicalTypeInput &input) {
+//! Rounds the precision up to the next supported scale
+uint8_t BindTimestampScale(BindLogicalTypeInput &input) {
 	auto precision = input.modifiers[0].GetValue().GetValue<uint8_t>();
-
-	if (precision > 9) {
+	if (precision > TimestampType::NANOSECOND_SCALE) {
 		throw BinderException(input.GetLocation(0), "TIMESTAMP only supports until nano-second precision (9)");
 	}
 	if (precision == 0) {
-		return LogicalType::TIMESTAMP_TYPE(TimestampType::SECOND_SCALE, false);
+		return TimestampType::SECOND_SCALE;
 	}
 	if (precision <= 3) {
-		return LogicalType::TIMESTAMP_TYPE(TimestampType::MILLISECOND_SCALE, false);
+		return TimestampType::MILLISECOND_SCALE;
 	}
 	if (precision <= 6) {
-		return LogicalType::TIMESTAMP_TYPE(TimestampType::MICROSECOND_SCALE, false);
+		return TimestampType::MICROSECOND_SCALE;
 	}
-	return LogicalType::TIMESTAMP_TYPE(TimestampType::NANOSECOND_SCALE, false);
+	return TimestampType::NANOSECOND_SCALE;
+}
+
+LogicalType BindTimestampType(BindLogicalTypeInput &input, bool has_time_zone) {
+	auto scale = BindTimestampScale(input);
+	if (has_time_zone) {
+		// a timestamp with time zone has at least microsecond precision
+		scale = MaxValue(scale, TimestampType::MICROSECOND_SCALE);
+	}
+	return LogicalType::TIMESTAMP_TYPE(scale, has_time_zone);
 }
 
 void RegisterTimestampConstructors(TypeConstructorSet &set) {
-	set.AddFunction(TypeConstructor(TypeConstructor::Signature(), BindDefaultTimestampType));
-
 	auto signature = TypeConstructor::Signature();
-	signature.AddParameter("precision", LogicalType::UTINYINT);
-	set.AddFunction(TypeConstructor(std::move(signature), BindTimestampType));
+	signature.AddParameter("precision", LogicalType::UTINYINT, Value::UTINYINT(TimestampType::MICROSECOND_SCALE));
+	signature.AddParameter("time_zone", LogicalType::BOOLEAN, Value::BOOLEAN(false));
+	set.AddFunction(TypeConstructor(std::move(signature), [](BindLogicalTypeInput &input) -> LogicalType {
+		return BindTimestampType(input, input.modifiers[1].GetValue().GetValue<bool>());
+	}));
+}
+
+void RegisterTimestampTZConstructors(TypeConstructorSet &set) {
+	auto signature = TypeConstructor::Signature();
+	signature.AddParameter("precision", LogicalType::UTINYINT, Value::UTINYINT(TimestampType::MICROSECOND_SCALE));
+	set.AddFunction(TypeConstructor(std::move(signature), [](BindLogicalTypeInput &input) -> LogicalType {
+		return BindTimestampType(input, true);
+	}));
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -413,104 +427,106 @@ using constructor_registration_t = void (*)(TypeConstructorSet &set);
 
 struct DefaultType {
 	const char *name;
-	//! The legacy timestamp ids stand for the TIMESTAMP with the matching scale and time zone
 	LogicalTypeId type;
 	//! Registers the constructors accepting this type's modifiers, or null if it takes no modifiers
 	constructor_registration_t register_constructors;
+	//! The scale and time zone of a TIMESTAMP
+	uint8_t timestamp_scale = TimestampType::MICROSECOND_SCALE;
+	bool timestamp_has_time_zone = false;
 };
 
 using builtin_type_array = std::array<DefaultType, 84>;
 
-const builtin_type_array BUILTIN_TYPES = {{{"decimal", LogicalTypeId::DECIMAL, RegisterDecimalConstructors},
-                                           {"dec", LogicalTypeId::DECIMAL, RegisterDecimalConstructors},
-                                           {"numeric", LogicalTypeId::DECIMAL, RegisterDecimalConstructors},
-                                           {"time", LogicalTypeId::TIME, nullptr},
-                                           {"time_ns", LogicalTypeId::TIME_NS, nullptr},
-                                           {"date", LogicalTypeId::DATE, nullptr},
-                                           {"timestamp", LogicalTypeId::TIMESTAMP, RegisterTimestampConstructors},
-                                           {"datetime", LogicalTypeId::TIMESTAMP, RegisterTimestampConstructors},
-                                           {"timestamp_us", LogicalTypeId::TIMESTAMP, nullptr},
-                                           {"timestamp_ms", LogicalTypeId::LEGACY_TIMESTAMP_MS, nullptr},
-                                           {"timestamp_ns", LogicalTypeId::LEGACY_TIMESTAMP_NS, nullptr},
-                                           {"timestamp_s", LogicalTypeId::LEGACY_TIMESTAMP_SEC, nullptr},
-                                           {"timestamptz", LogicalTypeId::LEGACY_TIMESTAMP_TZ, nullptr},
-                                           {"timestamp with time zone", LogicalTypeId::LEGACY_TIMESTAMP_TZ, nullptr},
-                                           {"timestamptz_ns", LogicalTypeId::LEGACY_TIMESTAMP_TZ_NS, nullptr},
-                                           {"timetz", LogicalTypeId::TIME_TZ, nullptr},
-                                           {"time with time zone", LogicalTypeId::TIME_TZ, nullptr},
-                                           {"interval", LogicalTypeId::INTERVAL, RegisterIntervalConstructors},
-                                           {"varchar", LogicalTypeId::VARCHAR, RegisterVarcharConstructors},
-                                           {"bpchar", LogicalTypeId::VARCHAR, RegisterVarcharConstructors},
-                                           {"string", LogicalTypeId::VARCHAR, RegisterVarcharConstructors},
-                                           {"char", LogicalTypeId::VARCHAR, RegisterVarcharConstructors},
-                                           {"nvarchar", LogicalTypeId::VARCHAR, RegisterVarcharConstructors},
-                                           {"text", LogicalTypeId::VARCHAR, RegisterVarcharConstructors},
-                                           {"blob", LogicalTypeId::BLOB, nullptr},
-                                           {"bytea", LogicalTypeId::BLOB, nullptr},
-                                           {"varbinary", LogicalTypeId::BLOB, nullptr},
-                                           {"binary", LogicalTypeId::BLOB, nullptr},
-                                           {"hugeint", LogicalTypeId::HUGEINT, nullptr},
-                                           {"int128", LogicalTypeId::HUGEINT, nullptr},
-                                           {"uhugeint", LogicalTypeId::UHUGEINT, nullptr},
-                                           {"uint128", LogicalTypeId::UHUGEINT, nullptr},
-                                           {"bigint", LogicalTypeId::BIGINT, nullptr},
-                                           {"oid", LogicalTypeId::BIGINT, nullptr},
-                                           {"long", LogicalTypeId::BIGINT, nullptr},
-                                           {"int8", LogicalTypeId::BIGINT, nullptr},
-                                           {"int64", LogicalTypeId::BIGINT, nullptr},
-                                           {"ubigint", LogicalTypeId::UBIGINT, nullptr},
-                                           {"uint64", LogicalTypeId::UBIGINT, nullptr},
-                                           {"integer", LogicalTypeId::INTEGER, nullptr},
-                                           {"int", LogicalTypeId::INTEGER, nullptr},
-                                           {"int4", LogicalTypeId::INTEGER, nullptr},
-                                           {"signed", LogicalTypeId::INTEGER, nullptr},
-                                           {"integral", LogicalTypeId::INTEGER, nullptr},
-                                           {"int32", LogicalTypeId::INTEGER, nullptr},
-                                           {"uinteger", LogicalTypeId::UINTEGER, nullptr},
-                                           {"uint32", LogicalTypeId::UINTEGER, nullptr},
-                                           {"smallint", LogicalTypeId::SMALLINT, nullptr},
-                                           {"int2", LogicalTypeId::SMALLINT, nullptr},
-                                           {"short", LogicalTypeId::SMALLINT, nullptr},
-                                           {"int16", LogicalTypeId::SMALLINT, nullptr},
-                                           {"usmallint", LogicalTypeId::USMALLINT, nullptr},
-                                           {"uint16", LogicalTypeId::USMALLINT, nullptr},
-                                           {"tinyint", LogicalTypeId::TINYINT, nullptr},
-                                           {"int1", LogicalTypeId::TINYINT, nullptr},
-                                           {"utinyint", LogicalTypeId::UTINYINT, nullptr},
-                                           {"uint8", LogicalTypeId::UTINYINT, nullptr},
-                                           {"struct", LogicalTypeId::STRUCT, RegisterStructConstructors},
-                                           {"row", LogicalTypeId::STRUCT, RegisterStructConstructors},
-                                           {"tuple", LogicalTypeId::TUPLE, RegisterTupleConstructors},
-                                           {"list", LogicalTypeId::LIST, RegisterListConstructors},
-                                           {"array", LogicalTypeId::ARRAY, RegisterArrayConstructors},
-                                           {"map", LogicalTypeId::MAP, RegisterMapConstructors},
-                                           {"union", LogicalTypeId::UNION, RegisterUnionConstructors},
-                                           {"bit", LogicalTypeId::BIT, RegisterBitConstructors},
-                                           {"bitstring", LogicalTypeId::BIT, RegisterBitConstructors},
-                                           {"variant", LogicalTypeId::VARIANT, RegisterVariantConstructors},
-                                           {"bignum", LogicalTypeId::BIGNUM, nullptr},
-                                           {"varint", LogicalTypeId::BIGNUM, nullptr},
-                                           {"boolean", LogicalTypeId::BOOLEAN, nullptr},
-                                           {"bool", LogicalTypeId::BOOLEAN, nullptr},
-                                           {"logical", LogicalTypeId::BOOLEAN, nullptr},
-                                           {"uuid", LogicalTypeId::UUID, nullptr},
-                                           {"guid", LogicalTypeId::UUID, nullptr},
-                                           {"enum", LogicalTypeId::ENUM, RegisterEnumConstructors},
-                                           {"null", LogicalTypeId::SQLNULL, nullptr},
-                                           {"float", LogicalTypeId::FLOAT, RegisterFloatConstructors},
-                                           {"real", LogicalTypeId::FLOAT, nullptr},
-                                           {"float4", LogicalTypeId::FLOAT, nullptr},
-                                           {"double", LogicalTypeId::DOUBLE, nullptr},
-                                           {"float8", LogicalTypeId::DOUBLE, nullptr},
-                                           {"geometry", LogicalTypeId::GEOMETRY, RegisterGeometryConstructors},
-                                           {"geography", LogicalTypeId::GEOGRAPHY, RegisterGeographyConstructors},
-                                           {"type", LogicalTypeId::TYPE, nullptr}}};
+const builtin_type_array BUILTIN_TYPES = {
+    {{"decimal", LogicalTypeId::DECIMAL, RegisterDecimalConstructors},
+     {"dec", LogicalTypeId::DECIMAL, RegisterDecimalConstructors},
+     {"numeric", LogicalTypeId::DECIMAL, RegisterDecimalConstructors},
+     {"time", LogicalTypeId::TIME, nullptr},
+     {"time_ns", LogicalTypeId::TIME_NS, nullptr},
+     {"date", LogicalTypeId::DATE, nullptr},
+     {"timestamp", LogicalTypeId::TIMESTAMP, RegisterTimestampConstructors},
+     {"datetime", LogicalTypeId::TIMESTAMP, RegisterTimestampConstructors},
+     {"timestamp_us", LogicalTypeId::TIMESTAMP, nullptr},
+     {"timestamp_ms", LogicalTypeId::TIMESTAMP, nullptr, TimestampType::MILLISECOND_SCALE, false},
+     {"timestamp_ns", LogicalTypeId::TIMESTAMP, nullptr, TimestampType::NANOSECOND_SCALE, false},
+     {"timestamp_s", LogicalTypeId::TIMESTAMP, nullptr, TimestampType::SECOND_SCALE, false},
+     {"timestamptz", LogicalTypeId::TIMESTAMP, RegisterTimestampTZConstructors, TimestampType::MICROSECOND_SCALE, true},
+     {"timestamp with time zone", LogicalTypeId::TIMESTAMP, RegisterTimestampTZConstructors,
+      TimestampType::MICROSECOND_SCALE, true},
+     {"timestamptz_ns", LogicalTypeId::TIMESTAMP, nullptr, TimestampType::NANOSECOND_SCALE, true},
+     {"timetz", LogicalTypeId::TIME_TZ, nullptr},
+     {"time with time zone", LogicalTypeId::TIME_TZ, nullptr},
+     {"interval", LogicalTypeId::INTERVAL, RegisterIntervalConstructors},
+     {"varchar", LogicalTypeId::VARCHAR, RegisterVarcharConstructors},
+     {"bpchar", LogicalTypeId::VARCHAR, RegisterVarcharConstructors},
+     {"string", LogicalTypeId::VARCHAR, RegisterVarcharConstructors},
+     {"char", LogicalTypeId::VARCHAR, RegisterVarcharConstructors},
+     {"nvarchar", LogicalTypeId::VARCHAR, RegisterVarcharConstructors},
+     {"text", LogicalTypeId::VARCHAR, RegisterVarcharConstructors},
+     {"blob", LogicalTypeId::BLOB, nullptr},
+     {"bytea", LogicalTypeId::BLOB, nullptr},
+     {"varbinary", LogicalTypeId::BLOB, nullptr},
+     {"binary", LogicalTypeId::BLOB, nullptr},
+     {"hugeint", LogicalTypeId::HUGEINT, nullptr},
+     {"int128", LogicalTypeId::HUGEINT, nullptr},
+     {"uhugeint", LogicalTypeId::UHUGEINT, nullptr},
+     {"uint128", LogicalTypeId::UHUGEINT, nullptr},
+     {"bigint", LogicalTypeId::BIGINT, nullptr},
+     {"oid", LogicalTypeId::BIGINT, nullptr},
+     {"long", LogicalTypeId::BIGINT, nullptr},
+     {"int8", LogicalTypeId::BIGINT, nullptr},
+     {"int64", LogicalTypeId::BIGINT, nullptr},
+     {"ubigint", LogicalTypeId::UBIGINT, nullptr},
+     {"uint64", LogicalTypeId::UBIGINT, nullptr},
+     {"integer", LogicalTypeId::INTEGER, nullptr},
+     {"int", LogicalTypeId::INTEGER, nullptr},
+     {"int4", LogicalTypeId::INTEGER, nullptr},
+     {"signed", LogicalTypeId::INTEGER, nullptr},
+     {"integral", LogicalTypeId::INTEGER, nullptr},
+     {"int32", LogicalTypeId::INTEGER, nullptr},
+     {"uinteger", LogicalTypeId::UINTEGER, nullptr},
+     {"uint32", LogicalTypeId::UINTEGER, nullptr},
+     {"smallint", LogicalTypeId::SMALLINT, nullptr},
+     {"int2", LogicalTypeId::SMALLINT, nullptr},
+     {"short", LogicalTypeId::SMALLINT, nullptr},
+     {"int16", LogicalTypeId::SMALLINT, nullptr},
+     {"usmallint", LogicalTypeId::USMALLINT, nullptr},
+     {"uint16", LogicalTypeId::USMALLINT, nullptr},
+     {"tinyint", LogicalTypeId::TINYINT, nullptr},
+     {"int1", LogicalTypeId::TINYINT, nullptr},
+     {"utinyint", LogicalTypeId::UTINYINT, nullptr},
+     {"uint8", LogicalTypeId::UTINYINT, nullptr},
+     {"struct", LogicalTypeId::STRUCT, RegisterStructConstructors},
+     {"row", LogicalTypeId::STRUCT, RegisterStructConstructors},
+     {"tuple", LogicalTypeId::TUPLE, RegisterTupleConstructors},
+     {"list", LogicalTypeId::LIST, RegisterListConstructors},
+     {"array", LogicalTypeId::ARRAY, RegisterArrayConstructors},
+     {"map", LogicalTypeId::MAP, RegisterMapConstructors},
+     {"union", LogicalTypeId::UNION, RegisterUnionConstructors},
+     {"bit", LogicalTypeId::BIT, RegisterBitConstructors},
+     {"bitstring", LogicalTypeId::BIT, RegisterBitConstructors},
+     {"variant", LogicalTypeId::VARIANT, RegisterVariantConstructors},
+     {"bignum", LogicalTypeId::BIGNUM, nullptr},
+     {"varint", LogicalTypeId::BIGNUM, nullptr},
+     {"boolean", LogicalTypeId::BOOLEAN, nullptr},
+     {"bool", LogicalTypeId::BOOLEAN, nullptr},
+     {"logical", LogicalTypeId::BOOLEAN, nullptr},
+     {"uuid", LogicalTypeId::UUID, nullptr},
+     {"guid", LogicalTypeId::UUID, nullptr},
+     {"enum", LogicalTypeId::ENUM, RegisterEnumConstructors},
+     {"null", LogicalTypeId::SQLNULL, nullptr},
+     {"float", LogicalTypeId::FLOAT, RegisterFloatConstructors},
+     {"real", LogicalTypeId::FLOAT, nullptr},
+     {"float4", LogicalTypeId::FLOAT, nullptr},
+     {"double", LogicalTypeId::DOUBLE, nullptr},
+     {"float8", LogicalTypeId::DOUBLE, nullptr},
+     {"geometry", LogicalTypeId::GEOMETRY, RegisterGeometryConstructors},
+     {"geography", LogicalTypeId::GEOGRAPHY, RegisterGeographyConstructors},
+     {"type", LogicalTypeId::TYPE, nullptr}}};
 
 LogicalType GetEntryType(const DefaultType &entry) {
-	uint8_t scale;
-	bool has_time_zone;
-	if (TimestampType::TryGetLegacyParameters(entry.type, scale, has_time_zone)) {
-		return LogicalType::TIMESTAMP_TYPE(scale, has_time_zone);
+	if (entry.type == LogicalTypeId::TIMESTAMP) {
+		return LogicalType::TIMESTAMP_TYPE(entry.timestamp_scale, entry.timestamp_has_time_zone);
 	}
 	return LogicalType(entry.type);
 }

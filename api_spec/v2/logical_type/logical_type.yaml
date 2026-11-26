@@ -61,18 +61,12 @@ enums:
       LOGICAL_TYPE_ID_TIME:
         value: 16
         description: 64-bit microseconds since midnight.
-      LOGICAL_TYPE_ID_TIMESTAMP_SEC:
-        value: 17
-        description: 64-bit seconds since epoch.
-      LOGICAL_TYPE_ID_TIMESTAMP_MS:
-        value: 18
-        description: 64-bit milliseconds since epoch.
       LOGICAL_TYPE_ID_TIMESTAMP:
         value: 19
-        description: 64-bit microseconds since epoch.
-      LOGICAL_TYPE_ID_TIMESTAMP_NS:
-        value: 20
-        description: 64-bit nanoseconds since epoch.
+        description: |
+          64-bit offset since epoch, parameterized by its precision (0, 3, 6 or
+          9 fractional second digits, 6 by default) and whether it has a time
+          zone (false by default); see logical_type_get_param.
       LOGICAL_TYPE_ID_DECIMAL:
         value: 21
         description: Decimal with width and scale parameters.
@@ -94,12 +88,6 @@ enums:
         value: 30
       LOGICAL_TYPE_ID_UBIGINT:
         value: 31
-      LOGICAL_TYPE_ID_TIMESTAMP_TZ:
-        value: 32
-        description: 64-bit microseconds since epoch, timezone-aware.
-      LOGICAL_TYPE_ID_TIMESTAMP_TZ_NS:
-        value: 33
-        description: 64-bit nanoseconds since epoch, timezone-aware.
       LOGICAL_TYPE_ID_TIME_TZ:
         value: 34
         description: 64-bit microseconds since midnight + 32-bit offset.
@@ -154,7 +142,7 @@ functions:
       kind, and the parameters bind it. With param_count 0 it instantiates a
       primitive directly, without touching the catalog: BOOLEAN,
       TINYINT..BIGINT, UTINYINT..UBIGINT, HUGEINT, UHUGEINT, FLOAT, DOUBLE,
-      DATE, every TIME and TIMESTAMP variant, INTERVAL, VARCHAR, BLOB, BIT,
+      DATE, every TIME variant, TIMESTAMP, INTERVAL, VARCHAR, BLOB, BIT,
       BIGNUM, and UUID. ANY is accepted as well.
 
       ANY is a function-signature wildcard, constructible here so it can be
@@ -167,7 +155,8 @@ functions:
       With parameters, the id resolves to its canonical built-in type and binds
       through the same constructors as factory_create_type_from_name, so the parameterized
       kinds construct here too: decimal(width, scale); list(T); array(T, size);
-      map(K, V); struct(fields); union(members); enum(entries); and varchar
+      map(K, V); struct(fields); union(members); enum(entries); timestamp with
+      an optional precision and a named "time_zone" parameter; and varchar
       with a named "collation" parameter. Parameters are (name, value) pairs in
       two parallel arrays, exactly as for factory_create_type_from_name.
 
@@ -462,7 +451,7 @@ functions:
 
       The alias when one is set — an extension or user-defined name such as
       "POINT_2D" — otherwise the canonical name of the type id, such as
-      "INTEGER", "DECIMAL", or "TIMESTAMP WITH TIME ZONE". Never the empty
+      "INTEGER", "DECIMAL", or "TIMESTAMP". Never the empty
       view. This is exactly the name vocabulary create_type_from_name accepts.
       The view is valid until the logical type is destroyed; a canonical name
       points at static storage.
@@ -552,6 +541,8 @@ functions:
       LIST 1 (element type); ARRAY 2 (element type, size); MAP 2 (key type,
       value type); STRUCT and TUPLE one per field; UNION one per member; ENUM
       one per dictionary entry; VARCHAR 1 when a collation is set, else 0;
+      TIMESTAMP 1 (the precision) when its precision is not the default 6, plus
+      1 (a "time_zone" parameter) when it has a time zone;
       GEOMETRY and GEOGRAPHY 1 when a coordinate system is set, else 0;
       everything else 0. A
       bound type reports only what it actually carries, so a bind-time modifier
@@ -582,12 +573,13 @@ functions:
       Returns one value parameter of a logical type.
 
       out_name receives a borrowed view of the parameter name — a STRUCT field
-      name, a UNION member name, "collation" — or an empty name for
+      name, a UNION member name, "collation", "time_zone" — or an empty name for
       a positional parameter. A non-empty view is valid until the logical type
       is destroyed. out_value receives an owned value, destroyed via
       value_destroy: child types come back as TYPE values (unwrap them with
       value_get_type), DECIMAL width and scale as UINTEGER, ARRAY size as
-      BIGINT, and ENUM dictionary entries and collations as VARCHAR. An
+      BIGINT, TIMESTAMP precision as UTINYINT and its time zone as BOOLEAN,
+      and ENUM dictionary entries and collations as VARCHAR. An
       out-of-range index returns ERROR_INPUT_INVALID. Each call allocates one
       owned value.
     role: getter

@@ -449,8 +449,8 @@ TEST_CASE("V2: TIME_TZ carries the packed time and offset", "[capi_v2][value][te
 
 TEST_CASE("V2: temporal getters refuse a mismatched unit and a NULL value", "[capi_v2][value][temporal]") {
 	EnvFixture fx;
-	// The units are distinct types, so a TIMESTAMP is not readable as a
-	// TIMESTAMP_NS even though both are int64: exactly why they are separate
+	// The precisions are distinct types, so a TIMESTAMP is not readable as a
+	// TIMESTAMP(9) even though both are int64: exactly why they are separate
 	// entry points.
 	// Units convert rather than reinterpret: every TIMESTAMP variant is stored
 	// as an int64, so only the type id can tell micros from nanos.
@@ -501,9 +501,6 @@ TEST_CASE("V2: temporal and UUID values are built from text", "[capi_v2][value][
 	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIME, "12:34:56"},
 	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIME_NS, "12:34:56.123456789"},
 	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP, "2024-03-15 12:34:56"},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_SEC, "2024-03-15 12:34:56"},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_MS, "2024-03-15 12:34:56.123"},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_NS, "2024-03-15 12:34:56.123456789"},
 	    {DUCKDB_V2_LOGICAL_TYPE_ID_INTERVAL, "1 month 2 days 00:00:03"},
 	    {DUCKDB_V2_LOGICAL_TYPE_ID_UUID, "47183823-2574-4bfd-b411-99ed177d3e43"},
 	};
@@ -511,6 +508,25 @@ TEST_CASE("V2: temporal and UUID values are built from text", "[capi_v2][value][
 		auto v = MakeValueFromText(fx.factory, c.id, c.text);
 		REQUIRE(Render(v) == c.text);
 		duckdb_v2_value_destroy(&v);
+	}
+
+	// the other timestamp precisions are TIMESTAMP with a precision parameter
+	struct {
+		uint8_t precision;
+		const char *text;
+	} timestamp_cases[] = {
+	    {0, "2024-03-15 12:34:56"},
+	    {3, "2024-03-15 12:34:56.123"},
+	    {9, "2024-03-15 12:34:56.123456789"},
+	};
+	for (auto &c : timestamp_cases) {
+		duckdb_v2_value_handle precision = nullptr;
+		REQUIRE(duckdb_v2_value_create_utinyint(fx.factory, c.precision, &precision, nullptr) == DUCKDB_V2_ERROR_NONE);
+		auto t = MakeType(fx.factory, "TIMESTAMP", nullptr, {precision});
+		auto v = MakeValueFromText(fx.factory, t, c.text);
+		REQUIRE(Render(v) == c.text);
+		duckdb_v2_value_destroy(&v);
+		duckdb_v2_logical_type_destroy(&t);
 	}
 }
 

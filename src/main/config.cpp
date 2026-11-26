@@ -608,6 +608,10 @@ LogicalType DBConfig::ParseLogicalType(const string &type) {
 	}
 	auto result = DefaultTypeGenerator::GetDefaultLogicalType(Identifier(type));
 	if (result.id() == LogicalTypeId::INVALID) {
+		// e.g. TIMESTAMP(9) WITH TIME ZONE
+		result = UnboundType::TryParseAndDefaultBind(type);
+	}
+	if (result.id() == LogicalTypeId::INVALID || result.id() == LogicalTypeId::UNBOUND) {
 		throw InternalException("Error while generating extension function overloads - unrecognized logical type %s",
 		                        type);
 	}

@@ -49,7 +49,7 @@ DECIMAL(9,2)	INTEGER[3]	INTEGER[]	INTEGER[][]	STRUCT(k INTEGER, v VARCHAR)	TUPLE
 query IIIIII
 SELECT typeof(c_map), typeof(c_union), typeof(c_tsns), typeof(c_tstz), typeof(c_ts_s), typeof(c_timetz) FROM gen
 ----
-MAP(VARCHAR, INTEGER)	UNION(n INTEGER, s VARCHAR)	TIMESTAMP_NS	TIMESTAMP WITH TIME ZONE	TIMESTAMP_S	TIME WITH TIME ZONE
+MAP(VARCHAR, INTEGER)	UNION(n INTEGER, s VARCHAR)	TIMESTAMP(9)	TIMESTAMP WITH TIME ZONE	TIMESTAMP(0)	TIME WITH TIME ZONE
 
 query IIIIIII
 SELECT typeof(c_uuid), typeof(c_blob), typeof(c_bit), typeof(c_bignum), typeof(c_hugeint), typeof(c_uhugeint), typeof(c_interval) FROM gen

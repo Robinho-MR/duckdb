@@ -23,12 +23,12 @@ module: vector
 #
 # view.data semantics by kind; the caller dispatches on the logical type. The
 # storage units for the temporal kinds — DATE in days since 1970-01-01, TIME /
-# TIMESTAMP / TIMESTAMP_MS / TIMESTAMP_NS and their variants as signed offsets
-# from the epoch in their named unit — are the ones DuckDB uses throughout, and
+# TIMESTAMP (of every precision, with or without time zone) as signed offsets
+# from the epoch in the unit of their precision — are the ones DuckDB uses throughout, and
 # the logical type module carries the full table.
 #
 #   - primitives (BOOL, INT(8/16/32/64), UINT(8/16/32/64), FLOAT, DOUBLE, DATE, TIME,
-#     TIME_TZ, TIMESTAMP(_S/_MS/_NS/_TZ))
+#     TIME_TZ, TIMESTAMP)
 #     → typed leaf array (cast to const T *)
 #   - HUGEINT / UUID / DECIMAL128 → cast to const hugeint_t *
 #     (decimal width and scale via logical_type_get_param; UUID stores the

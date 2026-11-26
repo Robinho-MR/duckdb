@@ -277,6 +277,22 @@ static bool EqualMatchesDecimal(const LogicalType &left, const LogicalType &righ
 	return left.id() == LogicalTypeId::DECIMAL;
 }
 
+static bool EqualMatchesTimestamp(const LogicalType &left, const LogicalType &right) {
+	return left.id() == LogicalTypeId::TIMESTAMP && right.id() == LogicalTypeId::TIMESTAMP && left != right;
+}
+
+static bool CombineEqualTimestamp(LogicalTypeResolver &logical_type_resolver, const LogicalType &left,
+                                  const LogicalType &right, LogicalType &result) {
+	// the combined timestamp has the largest scale, and a time zone if either side has one
+	auto scale = MaxValue(TimestampType::GetScale(left), TimestampType::GetScale(right));
+	auto has_time_zone = TimestampType::HasTimeZone(left) || TimestampType::HasTimeZone(right);
+	if (has_time_zone) {
+		scale = MaxValue(scale, TimestampType::MICROSECOND_SCALE);
+	}
+	result = LogicalType::TIMESTAMP_TYPE(scale, has_time_zone);
+	return true;
+}
+
 static bool EqualMatchesList(const LogicalType &left, const LogicalType &right) {
 	if (left.id() != right.id()) {
 		// rule only applies to equal types
@@ -427,6 +443,7 @@ const vector<CombineTypesRule> &DefaultCombineTypesRules() {
 	    {EqualMatchesEnum, CombineEqualEnum},
 	    {EqualMatchesVarchar, CombineEqualVarchar},
 	    {EqualMatchesDecimal, CombineEqualDecimal},
+	    {EqualMatchesTimestamp, CombineEqualTimestamp},
 	    {EqualMatchesList, CombineEqualList},
 	    {EqualMatchesArray, CombineEqualArray},
 	    {EqualMatchesMap, CombineEqualMap},

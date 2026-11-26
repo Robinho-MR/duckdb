@@ -130,16 +130,9 @@ PEGTransformerFactory::TransformTimeType(PEGTransformer &transformer, const Logi
 		                                 vector<unique_ptr<ParsedExpression>> {});
 	}
 	if (type == LogicalTypeId::TIMESTAMP) {
+		auto type_name = Identifier(with_timezone ? "TIMESTAMPTZ" : "TIMESTAMP");
 		if (modifiers.empty()) {
-			if (with_timezone) {
-				return make_uniq<TypeExpression>(Identifier(LogicalType::TIMESTAMP_TZ().ToString()),
-				                                 vector<unique_ptr<ParsedExpression>> {});
-			}
-			return make_uniq<TypeExpression>(Identifier(EnumUtil::ToString(LogicalType::TIMESTAMP)),
-			                                 vector<unique_ptr<ParsedExpression>> {});
-		}
-		if (with_timezone) {
-			throw ParserException("TIMESTAMP WITH TIME ZONE does not take a precision");
+			return make_uniq<TypeExpression>(type_name, vector<unique_ptr<ParsedExpression>> {});
 		}
 		if (modifiers.size() > 1) {
 			throw ParserException("TIMESTAMP only supports a single modifier");
@@ -161,21 +154,11 @@ PEGTransformerFactory::TransformTimeType(PEGTransformer &transformer, const Logi
 		if (timestamp_precision < 0) {
 			throw ParserException("TIMESTAMP precision should be between 0 and 10 (inclusive)");
 		}
-		if (timestamp_precision == 0) {
-			return make_uniq<TypeExpression>(Identifier(LogicalType::TIMESTAMP_S().ToString()),
-			                                 vector<unique_ptr<ParsedExpression>> {});
-		}
-		if (timestamp_precision <= 3) {
-			return make_uniq<TypeExpression>(Identifier(LogicalType::TIMESTAMP_MS().ToString()),
-			                                 vector<unique_ptr<ParsedExpression>> {});
-		}
-		if (timestamp_precision <= 6) {
-			// Corresponds to microseconds, which is the default TIMESTAMP
-			return make_uniq<TypeExpression>(Identifier(EnumUtil::ToString(LogicalType::TIMESTAMP)),
-			                                 vector<unique_ptr<ParsedExpression>> {});
-		}
-		return make_uniq<TypeExpression>(Identifier(LogicalType::TIMESTAMP_NS().ToString()),
-		                                 vector<unique_ptr<ParsedExpression>> {});
+		// a precision of 10 is accepted and treated as nanoseconds
+		vector<unique_ptr<ParsedExpression>> children;
+		children.push_back(
+		    ConstantExpression::Integer(MinValue<int64_t>(timestamp_precision, TimestampType::NANOSECOND_SCALE)));
+		return make_uniq<TypeExpression>(type_name, std::move(children));
 	}
 	throw ParserException("Unexpected time type encountered");
 }

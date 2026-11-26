@@ -453,7 +453,7 @@ TEST_CASE("V2 scalar: dictionary results can be followed by mutable writes",
 	MixedWriteState state;
 	REQUIRE(duckdb_v2_instance_get_factory(fx.instance, &state.factory, nullptr) == DUCKDB_V2_ERROR_NONE);
 	auto input_type = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP);
-	auto output_type = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_TZ);
+	auto output_type = MakeType(fx.factory, "TIMESTAMPTZ", nullptr, {});
 	auto function = MakeScalar(fx.conn, "mixed_timestamp");
 	auto sig = SigOf(function);
 	SigParam(sig, "ts", input_type);

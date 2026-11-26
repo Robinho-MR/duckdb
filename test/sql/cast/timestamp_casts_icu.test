@@ -41,7 +41,7 @@ SET TimeZone = 'America/Los_Angeles';
 query I
 SELECT typeof(CAST(now() AS TIMESTAMPTZ_NS));
 ----
-TIMESTAMPTZ_NS
+TIMESTAMP(9) WITH TIME ZONE
 
 # The instant is unchanged; only the display follows the session zone (PST and PDT)
 query III

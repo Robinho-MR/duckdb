@@ -21,7 +21,7 @@ true	true
 query T
 SELECT typeof(ts) FROM read_parquet('{TEST_DIR}/timestamptz_ns.parquet') LIMIT 1
 ----
-TIMESTAMPTZ_NS
+TIMESTAMP(9) WITH TIME ZONE
 
 # reading the file into a table whose column is TIMESTAMP casts the column while scanning
 statement ok

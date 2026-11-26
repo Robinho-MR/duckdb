@@ -57,35 +57,18 @@ TEST_CASE("V2: logical_type create_from_id primitives", "[capi_v2][logical_type]
 	struct {
 		DUCKDB_V2_LOGICAL_TYPE_ID id;
 	} cases[] = {
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_BOOLEAN},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_TINYINT},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_SMALLINT},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_BIGINT},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_UTINYINT},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_USMALLINT},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_UINTEGER},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_UBIGINT},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_HUGEINT},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_UHUGEINT},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_FLOAT},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_DOUBLE},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_DATE},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIME},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIME_TZ},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIME_NS},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_SEC},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_MS},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_NS},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_TZ},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_TZ_NS},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_INTERVAL},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_BLOB},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_BIT},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_BIGNUM},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_UUID},
+	    {DUCKDB_V2_LOGICAL_TYPE_ID_BOOLEAN},   {DUCKDB_V2_LOGICAL_TYPE_ID_TINYINT},
+	    {DUCKDB_V2_LOGICAL_TYPE_ID_SMALLINT},  {DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER},
+	    {DUCKDB_V2_LOGICAL_TYPE_ID_BIGINT},    {DUCKDB_V2_LOGICAL_TYPE_ID_UTINYINT},
+	    {DUCKDB_V2_LOGICAL_TYPE_ID_USMALLINT}, {DUCKDB_V2_LOGICAL_TYPE_ID_UINTEGER},
+	    {DUCKDB_V2_LOGICAL_TYPE_ID_UBIGINT},   {DUCKDB_V2_LOGICAL_TYPE_ID_HUGEINT},
+	    {DUCKDB_V2_LOGICAL_TYPE_ID_UHUGEINT},  {DUCKDB_V2_LOGICAL_TYPE_ID_FLOAT},
+	    {DUCKDB_V2_LOGICAL_TYPE_ID_DOUBLE},    {DUCKDB_V2_LOGICAL_TYPE_ID_DATE},
+	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIME},      {DUCKDB_V2_LOGICAL_TYPE_ID_TIME_TZ},
+	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIME_NS},   {DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP},
+	    {DUCKDB_V2_LOGICAL_TYPE_ID_INTERVAL},  {DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR},
+	    {DUCKDB_V2_LOGICAL_TYPE_ID_BLOB},      {DUCKDB_V2_LOGICAL_TYPE_ID_BIT},
+	    {DUCKDB_V2_LOGICAL_TYPE_ID_BIGNUM},    {DUCKDB_V2_LOGICAL_TYPE_ID_UUID},
 	};
 	for (auto &c : cases) {
 		duckdb_v2_logical_type_handle type = nullptr;
@@ -320,10 +303,10 @@ TEST_CASE("V2: logical_type get_name is the canonical id name when no alias is s
 	duckdb_v2_logical_type_destroy(&dec);
 
 	// The spaced canonical spellings come through verbatim.
-	duckdb_v2_factory_create_type_from_id(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_TZ, nullptr, nullptr, nullptr,
-	                                      0, &t, nullptr);
+	duckdb_v2_factory_create_type_from_id(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_TIME_TZ, nullptr, nullptr, nullptr, 0,
+	                                      &t, nullptr);
 	REQUIRE(duckdb_v2_logical_type_get_name(t, &name, &name_length, nullptr) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(std::string_view(name, name_length) == "TIMESTAMP WITH TIME ZONE");
+	REQUIRE(std::string_view(name, name_length) == "TIME WITH TIME ZONE");
 	REQUIRE(name_length > 0);
 	duckdb_v2_logical_type_destroy(&t);
 }
@@ -580,6 +563,16 @@ std::string V2KindName(duckdb_v2_logical_type_handle t) {
 	return std::string(name, name_length);
 }
 
+//! The canonical renderings of every timestamp precision / time zone combination
+std::vector<std::string> TimestampVariantTexts() {
+	return {"TIMESTAMP(0)",
+	        "TIMESTAMP(3)",
+	        "TIMESTAMP",
+	        "TIMESTAMP(9)",
+	        "TIMESTAMP WITH TIME ZONE",
+	        "TIMESTAMP(9) WITH TIME ZONE"};
+}
+
 // The param round trip the design pins: create(name, params(t)) equals t.
 void RequireParamRoundTrip(duckdb_v2_factory_handle factory, duckdb_v2_logical_type_handle t) {
 	idx_t count = V2ParamCount(t);
@@ -622,6 +615,80 @@ void RequireParamRoundTrip(duckdb_v2_factory_handle factory, duckdb_v2_logical_t
 
 } // namespace
 
+TEST_CASE("V2: logical_type timestamps are one id parameterized by precision and time zone",
+          "[capi_v2][logical_type][param]") {
+	EnvFixture f;
+	struct {
+		const char *text;
+		//! The precision parameter, or -1 if the timestamp has the default precision
+		int precision;
+		bool time_zone;
+	} cases[] = {
+	    {"TIMESTAMP(0)", 0, false},
+	    {"TIMESTAMP(3)", 3, false},
+	    {"TIMESTAMP", -1, false},
+	    {"TIMESTAMP(9)", 9, false},
+	    {"TIMESTAMP WITH TIME ZONE", -1, true},
+	    {"TIMESTAMP(9) WITH TIME ZONE", 9, true},
+	};
+	for (auto &c : cases) {
+		auto t = V2TypeFromText(f.factory, c.text);
+		REQUIRE(V2TypeIdOf(t) == DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP);
+		REQUIRE(V2KindName(t) == "TIMESTAMP");
+		idx_t expected_count = (c.precision >= 0 ? 1 : 0) + (c.time_zone ? 1 : 0);
+		REQUIRE(V2ParamCount(t) == expected_count);
+
+		StrArray names;
+		std::vector<duckdb_v2_value_handle> values;
+		for (idx_t i = 0; i < expected_count; i++) {
+			const char *name = nullptr;
+			idx_t name_length = 0;
+			duckdb_v2_value_handle value = nullptr;
+			REQUIRE(duckdb_v2_logical_type_get_param(t, i, &name, &name_length, &value, nullptr) ==
+			        DUCKDB_V2_ERROR_NONE);
+			bool is_precision = c.precision >= 0 && i == 0;
+			if (is_precision) {
+				REQUIRE(name_length == 0);
+				uint8_t precision = 0;
+				REQUIRE(duckdb_v2_value_get_utinyint(value, &precision, nullptr) == DUCKDB_V2_ERROR_NONE);
+				REQUIRE(precision == c.precision);
+			} else {
+				REQUIRE(std::string_view(name, name_length) == "time_zone");
+				bool time_zone = false;
+				REQUIRE(duckdb_v2_value_get_bool(value, &time_zone, nullptr) == DUCKDB_V2_ERROR_NONE);
+				REQUIRE(time_zone);
+			}
+			names.push_back(is_precision ? std::string_view() : std::string_view("time_zone"));
+			values.push_back(value);
+		}
+
+		// the id and the params reconstruct the type
+		duckdb_v2_logical_type_handle rebuilt = nullptr;
+		auto rc = duckdb_v2_factory_create_type_from_id(
+		    f.factory, DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP, values.empty() ? nullptr : names.ptrs(),
+		    values.empty() ? nullptr : names.lengths(), values.empty() ? nullptr : values.data(), values.size(),
+		    &rebuilt, nullptr);
+		for (auto &v : values) {
+			duckdb_v2_value_destroy(&v);
+		}
+		REQUIRE(rc == DUCKDB_V2_ERROR_NONE);
+		REQUIRE(V2TypesEqual(t, rebuilt));
+		duckdb_v2_logical_type_destroy(&rebuilt);
+		duckdb_v2_logical_type_destroy(&t);
+	}
+
+	// the ids timestamps had before they were parameterized are not type ids
+	for (uint32_t legacy_id : {17u, 18u, 20u, 32u, 33u}) {
+		duckdb_v2_logical_type_handle t = nullptr;
+		duckdb_v2_error_info_handle err = nullptr;
+		REQUIRE(duckdb_v2_factory_create_type_from_id(f.factory, static_cast<DUCKDB_V2_LOGICAL_TYPE_ID>(legacy_id),
+		                                              nullptr, nullptr, nullptr, 0, &t,
+		                                              &err) == DUCKDB_V2_ERROR_INPUT_INVALID);
+		REQUIRE(t == nullptr);
+		duckdb_v2_error_info_destroy(&err);
+	}
+}
+
 TEST_CASE("V2: LOGICAL_TYPE_ID_TYPE mirrors duckdb::LogicalTypeId::TYPE", "[capi_v2][logical_type][type_value]") {
 	REQUIRE(static_cast<uint32_t>(duckdb::LogicalTypeId::TYPE) ==
 	        static_cast<uint32_t>(DUCKDB_V2_LOGICAL_TYPE_ID_TYPE));
@@ -638,9 +705,8 @@ TEST_CASE("V2: logical_type to_text renders primitives", "[capi_v2][logical_type
 	    {DUCKDB_V2_LOGICAL_TYPE_ID_BOOLEAN, "BOOLEAN"},
 	    // Engine spellings for the tz kinds carry spaces; pinned here because
 	    // from_text must accept exactly what to_text emits.
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_TZ, "TIMESTAMP WITH TIME ZONE"},
 	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIME_TZ, "TIME WITH TIME ZONE"},
-	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_SEC, "TIMESTAMP_S"},
+	    {DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP, "TIMESTAMP"},
 	};
 	for (auto &c : cases) {
 		duckdb_v2_logical_type_handle t = nullptr;
@@ -820,35 +886,14 @@ TEST_CASE("V2: logical_type from_text(to_text) round-trips constructible kinds",
 
 	// Every id create_from_id accepts.
 	DUCKDB_V2_LOGICAL_TYPE_ID primitives[] = {
-	    DUCKDB_V2_LOGICAL_TYPE_ID_BOOLEAN,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TINYINT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_SMALLINT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_BIGINT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_UTINYINT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_USMALLINT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_UINTEGER,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_UBIGINT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_HUGEINT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_UHUGEINT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_FLOAT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_DOUBLE,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_DATE,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TIME,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TIME_TZ,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TIME_NS,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_SEC,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_MS,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_NS,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_TZ,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_TZ_NS,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_INTERVAL,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_BLOB,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_BIT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_BIGNUM,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_UUID,
+	    DUCKDB_V2_LOGICAL_TYPE_ID_BOOLEAN,   DUCKDB_V2_LOGICAL_TYPE_ID_TINYINT,  DUCKDB_V2_LOGICAL_TYPE_ID_SMALLINT,
+	    DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER,   DUCKDB_V2_LOGICAL_TYPE_ID_BIGINT,   DUCKDB_V2_LOGICAL_TYPE_ID_UTINYINT,
+	    DUCKDB_V2_LOGICAL_TYPE_ID_USMALLINT, DUCKDB_V2_LOGICAL_TYPE_ID_UINTEGER, DUCKDB_V2_LOGICAL_TYPE_ID_UBIGINT,
+	    DUCKDB_V2_LOGICAL_TYPE_ID_HUGEINT,   DUCKDB_V2_LOGICAL_TYPE_ID_UHUGEINT, DUCKDB_V2_LOGICAL_TYPE_ID_FLOAT,
+	    DUCKDB_V2_LOGICAL_TYPE_ID_DOUBLE,    DUCKDB_V2_LOGICAL_TYPE_ID_DATE,     DUCKDB_V2_LOGICAL_TYPE_ID_TIME,
+	    DUCKDB_V2_LOGICAL_TYPE_ID_TIME_TZ,   DUCKDB_V2_LOGICAL_TYPE_ID_TIME_NS,  DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP,
+	    DUCKDB_V2_LOGICAL_TYPE_ID_INTERVAL,  DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR,  DUCKDB_V2_LOGICAL_TYPE_ID_BLOB,
+	    DUCKDB_V2_LOGICAL_TYPE_ID_BIT,       DUCKDB_V2_LOGICAL_TYPE_ID_BIGNUM,   DUCKDB_V2_LOGICAL_TYPE_ID_UUID,
 	};
 	for (auto id : primitives) {
 		duckdb_v2_logical_type_handle t = nullptr;
@@ -856,6 +901,14 @@ TEST_CASE("V2: logical_type from_text(to_text) round-trips constructible kinds",
 		        DUCKDB_V2_ERROR_NONE);
 		require_round_trip(t);
 		duckdb_v2_logical_type_destroy(&t);
+	}
+
+	// Every timestamp precision, with and without time zone.
+	for (auto &text : TimestampVariantTexts()) {
+		auto ts = V2TypeFromText(f.factory, text);
+		REQUIRE(V2TypeText(ts) == text);
+		require_round_trip(ts);
+		duckdb_v2_logical_type_destroy(&ts);
 	}
 
 	// Composites (built via V1 fixtures), including nesting.
@@ -1544,35 +1597,14 @@ TEST_CASE("V2: create(name, params(t)) round-trips every constructible kind",
 
 	// Primitives: zero params, the rendered text is the name.
 	DUCKDB_V2_LOGICAL_TYPE_ID primitives[] = {
-	    DUCKDB_V2_LOGICAL_TYPE_ID_BOOLEAN,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TINYINT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_SMALLINT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_BIGINT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_UTINYINT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_USMALLINT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_UINTEGER,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_UBIGINT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_HUGEINT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_UHUGEINT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_FLOAT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_DOUBLE,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_DATE,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TIME,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TIME_TZ,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TIME_NS,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_SEC,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_MS,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_NS,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_TZ,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_TZ_NS,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_INTERVAL,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_BLOB,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_BIT,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_BIGNUM,
-	    DUCKDB_V2_LOGICAL_TYPE_ID_UUID,
+	    DUCKDB_V2_LOGICAL_TYPE_ID_BOOLEAN,   DUCKDB_V2_LOGICAL_TYPE_ID_TINYINT,  DUCKDB_V2_LOGICAL_TYPE_ID_SMALLINT,
+	    DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER,   DUCKDB_V2_LOGICAL_TYPE_ID_BIGINT,   DUCKDB_V2_LOGICAL_TYPE_ID_UTINYINT,
+	    DUCKDB_V2_LOGICAL_TYPE_ID_USMALLINT, DUCKDB_V2_LOGICAL_TYPE_ID_UINTEGER, DUCKDB_V2_LOGICAL_TYPE_ID_UBIGINT,
+	    DUCKDB_V2_LOGICAL_TYPE_ID_HUGEINT,   DUCKDB_V2_LOGICAL_TYPE_ID_UHUGEINT, DUCKDB_V2_LOGICAL_TYPE_ID_FLOAT,
+	    DUCKDB_V2_LOGICAL_TYPE_ID_DOUBLE,    DUCKDB_V2_LOGICAL_TYPE_ID_DATE,     DUCKDB_V2_LOGICAL_TYPE_ID_TIME,
+	    DUCKDB_V2_LOGICAL_TYPE_ID_TIME_TZ,   DUCKDB_V2_LOGICAL_TYPE_ID_TIME_NS,  DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP,
+	    DUCKDB_V2_LOGICAL_TYPE_ID_INTERVAL,  DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR,  DUCKDB_V2_LOGICAL_TYPE_ID_BLOB,
+	    DUCKDB_V2_LOGICAL_TYPE_ID_BIT,       DUCKDB_V2_LOGICAL_TYPE_ID_BIGNUM,   DUCKDB_V2_LOGICAL_TYPE_ID_UUID,
 	};
 	for (auto id : primitives) {
 		duckdb_v2_logical_type_handle t = nullptr;
@@ -1580,6 +1612,13 @@ TEST_CASE("V2: create(name, params(t)) round-trips every constructible kind",
 		        DUCKDB_V2_ERROR_NONE);
 		RequireParamRoundTrip(f.factory, t);
 		duckdb_v2_logical_type_destroy(&t);
+	}
+
+	// Every timestamp precision, with and without time zone.
+	for (auto &text : TimestampVariantTexts()) {
+		auto ts = V2TypeFromText(f.factory, text);
+		RequireParamRoundTrip(f.factory, ts);
+		duckdb_v2_logical_type_destroy(&ts);
 	}
 
 	// Composites, nesting included.

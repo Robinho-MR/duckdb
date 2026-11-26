@@ -45,7 +45,7 @@ VARCHAR
 query I
 SELECT typeof(TIMESTAMP(3) '2024-01-01 00:00:00');
 ----
-TIMESTAMP_MS
+TIMESTAMP(3)
 
 statement ok
 CREATE TABLE Produce AS

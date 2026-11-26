@@ -148,7 +148,7 @@ SELECT
 query I
 SELECT typeof(CAST(now() AS TIMESTAMPTZ_NS));
 ----
-TIMESTAMPTZ_NS
+TIMESTAMP(9) WITH TIME ZONE
 
 # Microsecond parts are scaled to nanoseconds, not truncated
 query II

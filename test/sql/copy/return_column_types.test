@@ -269,9 +269,9 @@ date_col	DATE
 time_col	TIME
 timetz_col	TIME WITH TIME ZONE
 timestamp_col	TIMESTAMP
-timestamp_s_col	TIMESTAMP_S
-timestamp_ms_col	TIMESTAMP_MS
-timestamp_ns_col	TIMESTAMP_NS
+timestamp_s_col	TIMESTAMP(0)
+timestamp_ms_col	TIMESTAMP(3)
+timestamp_ns_col	TIMESTAMP(9)
 timestamptz_col	TIMESTAMP WITH TIME ZONE
 interval_col	INTERVAL
 varchar_col	VARCHAR

@@ -32,9 +32,9 @@ false	false	false	false	false	false	false	false	false	false	false	false
 query I
 SELECT typeof([TIMESTAMP '2000-01-01 01:12:23.123456', TIMESTAMP_NS '2000-01-01 01:12:23.123456'])
 ----
-TIMESTAMP_NS[]
+TIMESTAMP(9)[]
 
 query I
 SELECT typeof([TIMESTAMP_NS '2000-01-01 01:12:23.123456', TIMESTAMP '2000-01-01 01:12:23.123456'])
 ----
-TIMESTAMP_NS[]
+TIMESTAMP(9)[]

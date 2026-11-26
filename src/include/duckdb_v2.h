@@ -11395,17 +11395,11 @@ typedef enum DUCKDB_V2_LOGICAL_TYPE_ID {
 	//! 64-bit microseconds since midnight.
 	DUCKDB_V2_LOGICAL_TYPE_ID_TIME = 16,
 
-	//! 64-bit seconds since epoch.
-	DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_SEC = 17,
-
-	//! 64-bit milliseconds since epoch.
-	DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_MS = 18,
-
-	//! 64-bit microseconds since epoch.
+	/*!
+	 * 64-bit offset since epoch, parameterized by its precision (0, 3, 6 or 9 fractional second digits, 6 by default)
+	 * and whether it has a time zone (false by default); see logical_type_get_param.
+	 */
 	DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP = 19,
-
-	//! 64-bit nanoseconds since epoch.
-	DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_NS = 20,
 
 	//! Decimal with width and scale parameters.
 	DUCKDB_V2_LOGICAL_TYPE_ID_DECIMAL = 21,
@@ -11418,12 +11412,6 @@ typedef enum DUCKDB_V2_LOGICAL_TYPE_ID {
 	DUCKDB_V2_LOGICAL_TYPE_ID_USMALLINT = 29,
 	DUCKDB_V2_LOGICAL_TYPE_ID_UINTEGER = 30,
 	DUCKDB_V2_LOGICAL_TYPE_ID_UBIGINT = 31,
-
-	//! 64-bit microseconds since epoch, timezone-aware.
-	DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_TZ = 32,
-
-	//! 64-bit nanoseconds since epoch, timezone-aware.
-	DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_TZ_NS = 33,
 
 	//! 64-bit microseconds since midnight + 32-bit offset.
 	DUCKDB_V2_LOGICAL_TYPE_ID_TIME_TZ = 34,
@@ -11472,7 +11460,7 @@ typedef enum DUCKDB_V2_LOGICAL_TYPE_ID {
  *
  * The id-keyed twin of factory_create_type_from_name: the type id names the kind, and the parameters bind it. With
  * param_count 0 it instantiates a primitive directly, without touching the catalog: BOOLEAN, TINYINT..BIGINT,
- * UTINYINT..UBIGINT, HUGEINT, UHUGEINT, FLOAT, DOUBLE, DATE, every TIME and TIMESTAMP variant, INTERVAL, VARCHAR, BLOB,
+ * UTINYINT..UBIGINT, HUGEINT, UHUGEINT, FLOAT, DOUBLE, DATE, every TIME variant, TIMESTAMP, INTERVAL, VARCHAR, BLOB,
  * BIT, BIGNUM, and UUID. ANY is accepted as well.
  *
  * ANY is a function-signature wildcard, constructible here so it can be passed to the function parameter and varargs
@@ -11482,8 +11470,9 @@ typedef enum DUCKDB_V2_LOGICAL_TYPE_ID {
  *
  * With parameters, the id resolves to its canonical built-in type and binds through the same constructors as
  * factory_create_type_from_name, so the parameterized kinds construct here too: decimal(width, scale); list(T);
- * array(T, size); map(K, V); struct(fields); union(members); enum(entries); and varchar with a named "collation"
- * parameter. Parameters are (name, value) pairs in two parallel arrays, exactly as for factory_create_type_from_name.
+ * array(T, size); map(K, V); struct(fields); union(members); enum(entries); timestamp with an optional precision and a
+ * named "time_zone" parameter; and varchar with a named "collation" parameter. Parameters are (name, value) pairs in
+ * two parallel arrays, exactly as for factory_create_type_from_name.
  *
  * Returns ERROR_INPUT_INVALID when param_count is 0 and the id needs parameters (DECIMAL, LIST, STRUCT, TUPLE, MAP,
  * ARRAY, UNION, ENUM, VARIANT, GEOMETRY, GEOGRAPHY), for the bind-time-only ids (SQLNULL, UNKNOWN), for TYPE —
@@ -11680,9 +11669,9 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_logical_type_get_id(duckdb_v2_logical_typ
  * Borrows the logical type's name.
  *
  * The alias when one is set — an extension or user-defined name such as "POINT_2D" — otherwise the canonical name of
- * the type id, such as "INTEGER", "DECIMAL", or "TIMESTAMP WITH TIME ZONE". Never the empty view. This is exactly the
- * name vocabulary create_type_from_name accepts. The view is valid until the logical type is destroyed; a canonical
- * name points at static storage.
+ * the type id, such as "INTEGER", "DECIMAL", or "TIMESTAMP". Never the empty view. This is exactly the name vocabulary
+ * create_type_from_name accepts. The view is valid until the logical type is destroyed; a canonical name points at
+ * static storage.
  *
  * history:
  * - unstable: v2.0.0
@@ -11739,9 +11728,10 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_logical_type_to_text(duckdb_v2_logical_ty
  * The inspection dual of create_type_from_name: these are the parameters that reconstruct the type through it. Per
  * kind: DECIMAL 2 (width, scale); LIST 1 (element type); ARRAY 2 (element type, size); MAP 2 (key type, value type);
  * STRUCT and TUPLE one per field; UNION one per member; ENUM one per dictionary entry; VARCHAR 1 when a collation is
- * set, else 0; GEOMETRY and GEOGRAPHY 1 when a coordinate system is set, else 0; everything else 0. A bound type
- * reports only what it actually carries, so a bind-time modifier that is not retained — an ignored VARCHAR length, say
- * — does not reappear.
+ * set, else 0; TIMESTAMP 1 (the precision) when its precision is not the default 6, plus 1 (a "time_zone" parameter)
+ * when it has a time zone; GEOMETRY and GEOGRAPHY 1 when a coordinate system is set, else 0; everything else 0. A bound
+ * type reports only what it actually carries, so a bind-time modifier that is not retained — an ignored VARCHAR length,
+ * say — does not reappear.
  *
  * history:
  * - unstable: v2.0.0
@@ -11759,11 +11749,12 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_logical_type_get_param_count(duckdb_v2_lo
 /*!
  * Returns one value parameter of a logical type.
  *
- * out_name receives a borrowed view of the parameter name — a STRUCT field name, a UNION member name, "collation" — or
- * an empty name for a positional parameter. A non-empty view is valid until the logical type is destroyed. out_value
- * receives an owned value, destroyed via value_destroy: child types come back as TYPE values (unwrap them with
- * value_get_type), DECIMAL width and scale as UINTEGER, ARRAY size as BIGINT, and ENUM dictionary entries and
- * collations as VARCHAR. An out-of-range index returns ERROR_INPUT_INVALID. Each call allocates one owned value.
+ * out_name receives a borrowed view of the parameter name — a STRUCT field name, a UNION member name, "collation",
+ * "time_zone" — or an empty name for a positional parameter. A non-empty view is valid until the logical type is
+ * destroyed. out_value receives an owned value, destroyed via value_destroy: child types come back as TYPE values
+ * (unwrap them with value_get_type), DECIMAL width and scale as UINTEGER, ARRAY size as BIGINT, TIMESTAMP precision as
+ * UTINYINT and its time zone as BOOLEAN, and ENUM dictionary entries and collations as VARCHAR. An out-of-range index
+ * returns ERROR_INPUT_INVALID. Each call allocates one owned value.
  *
  * history:
  * - unstable: v2.0.0
@@ -17920,7 +17911,7 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_value_get_timestamp(duckdb_v2_value_handl
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
- * Returns the value as a TIMESTAMP_SEC.
+ * Returns the value as a TIMESTAMP(0).
  *
  * The payload is seconds since 1970-01-01, the same unit a vector of this type exposes.
  *
@@ -17941,7 +17932,7 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_value_get_timestamp_sec(duckdb_v2_value_h
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
- * Returns the value as a TIMESTAMP_MS.
+ * Returns the value as a TIMESTAMP(3).
  *
  * The payload is milliseconds since 1970-01-01, the same unit a vector of this type exposes.
  *
@@ -17962,7 +17953,7 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_value_get_timestamp_ms(duckdb_v2_value_ha
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
- * Returns the value as a TIMESTAMP_NS.
+ * Returns the value as a TIMESTAMP(9).
  *
  * The payload is nanoseconds since 1970-01-01, the same unit a vector of this type exposes.
  *
@@ -17983,7 +17974,7 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_value_get_timestamp_ns(duckdb_v2_value_ha
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
- * Returns the value as a TIMESTAMP_TZ.
+ * Returns the value as a TIMESTAMP WITH TIME ZONE.
  *
  * The payload is microseconds since 1970-01-01, in UTC, the same unit a vector of this type exposes.
  *
@@ -18004,7 +17995,7 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_value_get_timestamp_tz(duckdb_v2_value_ha
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
- * Returns the value as a TIMESTAMP_TZ_NS.
+ * Returns the value as a TIMESTAMP(9) WITH TIME ZONE.
  *
  * The payload is nanoseconds since 1970-01-01, in UTC, the same unit a vector of this type exposes.
  *
@@ -18568,7 +18559,7 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_value_create_timestamp(duckdb_v2_factory_
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
- * Creates a TIMESTAMP_SEC value.
+ * Creates a TIMESTAMP(0) value.
  *
  * The payload is seconds since 1970-01-01, the same unit value_get_timestamp_sec reports. It is not range-checked here;
  * value_cast is the validating path. The returned value is caller-owned; destroy it via value_destroy.
@@ -18578,7 +18569,7 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_value_create_timestamp(duckdb_v2_factory_
  *
  * @param factory The factory to create with.
  * @param in_value The payload to wrap.
- * @param out_value Receives the new TIMESTAMP_SEC value.
+ * @param out_value Receives the new TIMESTAMP(0) value.
  * @param err Optional. On failure, receives an opaque info handle the caller must destroy via error_info_destroy.
  * @return DUCKDB_V2_ERROR
  */
@@ -18589,7 +18580,7 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_value_create_timestamp_sec(duckdb_v2_fact
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
- * Creates a TIMESTAMP_MS value.
+ * Creates a TIMESTAMP(3) value.
  *
  * The payload is milliseconds since 1970-01-01, the same unit value_get_timestamp_ms reports. It is not range-checked
  * here; value_cast is the validating path. The returned value is caller-owned; destroy it via value_destroy.
@@ -18599,7 +18590,7 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_value_create_timestamp_sec(duckdb_v2_fact
  *
  * @param factory The factory to create with.
  * @param in_value The payload to wrap.
- * @param out_value Receives the new TIMESTAMP_MS value.
+ * @param out_value Receives the new TIMESTAMP(3) value.
  * @param err Optional. On failure, receives an opaque info handle the caller must destroy via error_info_destroy.
  * @return DUCKDB_V2_ERROR
  */
@@ -18610,7 +18601,7 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_value_create_timestamp_ms(duckdb_v2_facto
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
- * Creates a TIMESTAMP_NS value.
+ * Creates a TIMESTAMP(9) value.
  *
  * The payload is nanoseconds since 1970-01-01, the same unit value_get_timestamp_ns reports. It is not range-checked
  * here; value_cast is the validating path. The returned value is caller-owned; destroy it via value_destroy.
@@ -18620,7 +18611,7 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_value_create_timestamp_ms(duckdb_v2_facto
  *
  * @param factory The factory to create with.
  * @param in_value The payload to wrap.
- * @param out_value Receives the new TIMESTAMP_NS value.
+ * @param out_value Receives the new TIMESTAMP(9) value.
  * @param err Optional. On failure, receives an opaque info handle the caller must destroy via error_info_destroy.
  * @return DUCKDB_V2_ERROR
  */
@@ -18631,7 +18622,7 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_value_create_timestamp_ns(duckdb_v2_facto
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
- * Creates a TIMESTAMP_TZ value.
+ * Creates a TIMESTAMP WITH TIME ZONE value.
  *
  * The payload is microseconds since 1970-01-01, in UTC, the same unit value_get_timestamp_tz reports. It is not
  * range-checked here; value_cast is the validating path. The returned value is caller-owned; destroy it via
@@ -18642,7 +18633,7 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_value_create_timestamp_ns(duckdb_v2_facto
  *
  * @param factory The factory to create with.
  * @param in_value The payload to wrap.
- * @param out_value Receives the new TIMESTAMP_TZ value.
+ * @param out_value Receives the new TIMESTAMP WITH TIME ZONE value.
  * @param err Optional. On failure, receives an opaque info handle the caller must destroy via error_info_destroy.
  * @return DUCKDB_V2_ERROR
  */
@@ -18653,7 +18644,7 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_value_create_timestamp_tz(duckdb_v2_facto
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
- * Creates a TIMESTAMP_TZ_NS value.
+ * Creates a TIMESTAMP(9) WITH TIME ZONE value.
  *
  * The payload is nanoseconds since 1970-01-01, in UTC, the same unit value_get_timestamp_tz_ns reports. It is not
  * range-checked here; value_cast is the validating path. The returned value is caller-owned; destroy it via
@@ -18664,7 +18655,7 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_value_create_timestamp_tz(duckdb_v2_facto
  *
  * @param factory The factory to create with.
  * @param in_value The payload to wrap.
- * @param out_value Receives the new TIMESTAMP_TZ_NS value.
+ * @param out_value Receives the new TIMESTAMP(9) WITH TIME ZONE value.
  * @param err Optional. On failure, receives an opaque info handle the caller must destroy via error_info_destroy.
  * @return DUCKDB_V2_ERROR
  */

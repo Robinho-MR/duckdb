@@ -36,7 +36,7 @@ infinity	infinity	infinity
 query III
 SELECT typeof(try_strptime('epoch', '%Y-%m-%d %H:%M:%S.%n')), typeof(try_strptime('epoch', '%Y-%m-%d %z')), typeof(try_strptime('epoch', '%Y-%m-%d %H:%M:%S.%n %z'))
 ----
-TIMESTAMP_NS	TIMESTAMP WITH TIME ZONE	TIMESTAMPTZ_NS
+TIMESTAMP(9)	TIMESTAMP WITH TIME ZONE	TIMESTAMP(9) WITH TIME ZONE
 
 query III
 SELECT w, try_strptime(w, '%Y-%m-%d %z'), strptime(w, '%Y-%m-%d %z') FROM words ORDER BY i

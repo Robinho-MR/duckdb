@@ -520,10 +520,10 @@ tm_ns	INT64	false	false	true	TIME_NS
 tm_tz	INT64	false	true	false	TIME WITH TIME ZONE
 ts	INT64	false	true	false	TIMESTAMP
 ts_ms	INT64	true	false	false	TIMESTAMP
-ts_ns	INT64	false	false	true	TIMESTAMP_NS
+ts_ns	INT64	false	false	true	TIMESTAMP(9)
 ts_sec	INT64	false	true	false	TIMESTAMP
 ts_tz	INT64	false	true	false	TIMESTAMP WITH TIME ZONE
-ts_tz_ns	INT64	false	false	true	TIMESTAMPTZ_NS
+ts_tz_ns	INT64	false	false	true	TIMESTAMP(9) WITH TIME ZONE
 
 query I
 SELECT bool_and(bloom_filter_excludes)

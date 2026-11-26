@@ -19,14 +19,6 @@
 namespace duckdb::capiv2 {
 namespace {
 
-//! The C API keeps a separate id per timestamp scale and time zone
-LogicalTypeId GetCTypeId(const LogicalType &type) {
-	if (type.id() == LogicalTypeId::TIMESTAMP) {
-		return TimestampType::GetLegacyId(type);
-	}
-	return type.id();
-}
-
 // The set of LogicalTypeIds a parameterless duckdb_v2_*_create_type_from_id
 // instantiates directly, without touching the catalog. Includes ANY, the
 // function-signature wildcard: it is constructible so it can be passed to
@@ -79,6 +71,12 @@ bool IsNonConstructible(LogicalTypeId id) {
 	case LogicalTypeId::SQLNULL:
 	case LogicalTypeId::UNKNOWN:
 	case LogicalTypeId::TYPE:
+	// the ids timestamps had before they were parameterized only exist in old storage formats
+	case LogicalTypeId::LEGACY_TIMESTAMP_SEC:
+	case LogicalTypeId::LEGACY_TIMESTAMP_MS:
+	case LogicalTypeId::LEGACY_TIMESTAMP_NS:
+	case LogicalTypeId::LEGACY_TIMESTAMP_TZ:
+	case LogicalTypeId::LEGACY_TIMESTAMP_TZ_NS:
 		return true;
 	default:
 		return false;
@@ -174,6 +172,10 @@ idx_t TypeParamCount(const LogicalType &type) {
 		return EnumType::GetSize(type);
 	case LogicalTypeId::VARCHAR:
 		return StringType::GetCollation(type).empty() ? 0 : 1;
+	case LogicalTypeId::TIMESTAMP:
+		// the precision when it is not the default, then the time zone when there is one
+		return (TimestampType::GetScale(type) != TimestampType::MICROSECOND_SCALE ? 1 : 0) +
+		       (TimestampType::HasTimeZone(type) ? 1 : 0);
 	case LogicalTypeId::GEOMETRY:
 	case LogicalTypeId::GEOGRAPHY:
 		return GeoType::HasCRS(type) ? 1 : 0;
@@ -214,6 +216,12 @@ Value TypeParamValue(const LogicalType &type, idx_t index, std::string_view &out
 	case LogicalTypeId::VARCHAR:
 		out_name = "collation";
 		return Value(StringType::GetCollation(type));
+	case LogicalTypeId::TIMESTAMP:
+		if (index == 0 && TimestampType::GetScale(type) != TimestampType::MICROSECOND_SCALE) {
+			return Value::UTINYINT(TimestampType::GetScale(type));
+		}
+		out_name = "time_zone";
+		return Value::BOOLEAN(true);
 	case LogicalTypeId::GEOMETRY:
 	case LogicalTypeId::GEOGRAPHY:
 		return Value(GeoType::GetCRS(type).GetDefinition());
@@ -302,14 +310,6 @@ static void CreateLogicalTypeFromIdV2(CV2Factory &factory, DUCKDB_V2_LOGICAL_TYP
 	auto id = static_cast<duckdb::LogicalTypeId>(type_id);
 	if (IsNonConstructible(id)) {
 		throw duckdb::InvalidInputException("%s does not accept this type id", fn);
-	}
-	uint8_t timestamp_scale;
-	bool timestamp_has_time_zone;
-	if (param_count == 0 &&
-	    duckdb::TimestampType::TryGetLegacyParameters(id, timestamp_scale, timestamp_has_time_zone)) {
-		// the C API keeps a separate id per timestamp scale and time zone
-		*out_type = Convert(duckdb::LogicalType::TIMESTAMP_TYPE(timestamp_scale, timestamp_has_time_zone));
-		return;
 	}
 	if (param_count == 0) {
 		if (!IsPrimitiveCreatable(id)) {
@@ -441,7 +441,7 @@ DUCKDB_V2_ERROR duckdb_v2_logical_type_get_id(duckdb_v2_logical_type_handle type
 	DUCKDB_CHECK_ARG(out_id);
 	return WithErrorHandler(err, [&]() {
 		auto type_ref = Convert(type);
-		*out_id = static_cast<DUCKDB_V2_LOGICAL_TYPE_ID>(GetCTypeId(*type_ref));
+		*out_id = static_cast<DUCKDB_V2_LOGICAL_TYPE_ID>(type_ref->id());
 	});
 }
 
@@ -459,7 +459,7 @@ DUCKDB_V2_ERROR duckdb_v2_logical_type_get_name(duckdb_v2_logical_type_handle ty
 		}
 		// Canonical fixed name of the id: static storage, so the borrowed
 		// view outlives even the handle.
-		const char *canonical = duckdb::EnumUtil::ToChars<duckdb::LogicalTypeId>(GetCTypeId(*lt));
+		const char *canonical = duckdb::EnumUtil::ToChars<duckdb::LogicalTypeId>(lt->id());
 		SetStringOut(out_name, out_name_length, std::string_view(canonical));
 	});
 }

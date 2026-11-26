@@ -646,7 +646,7 @@ functions:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-08-04" ]
     description: |
-      Returns the value as a TIMESTAMP_SEC.
+      Returns the value as a TIMESTAMP(0).
 
       The payload is seconds since 1970-01-01, the same unit a vector of
       this type exposes.
@@ -676,7 +676,7 @@ functions:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-08-04" ]
     description: |
-      Returns the value as a TIMESTAMP_MS.
+      Returns the value as a TIMESTAMP(3).
 
       The payload is milliseconds since 1970-01-01, the same unit a vector of
       this type exposes.
@@ -706,7 +706,7 @@ functions:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-08-04" ]
     description: |
-      Returns the value as a TIMESTAMP_NS.
+      Returns the value as a TIMESTAMP(9).
 
       The payload is nanoseconds since 1970-01-01, the same unit a vector of
       this type exposes.
@@ -736,7 +736,7 @@ functions:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-08-04" ]
     description: |
-      Returns the value as a TIMESTAMP_TZ.
+      Returns the value as a TIMESTAMP WITH TIME ZONE.
 
       The payload is microseconds since 1970-01-01, in UTC, the same unit a vector of
       this type exposes.
@@ -766,7 +766,7 @@ functions:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-08-04" ]
     description: |
-      Returns the value as a TIMESTAMP_TZ_NS.
+      Returns the value as a TIMESTAMP(9) WITH TIME ZONE.
 
       The payload is nanoseconds since 1970-01-01, in UTC, the same unit a vector of
       this type exposes.
@@ -1596,7 +1596,7 @@ functions:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-08-04" ]
     description: |
-      Creates a TIMESTAMP_SEC value.
+      Creates a TIMESTAMP(0) value.
 
       The payload is seconds since 1970-01-01, the same unit value_get_timestamp_sec reports.
       It is not range-checked here; value_cast is the validating path. The
@@ -1614,7 +1614,7 @@ functions:
         type: value
         indirection: 1
         kind: OUT
-        description: Receives the new TIMESTAMP_SEC value.
+        description: Receives the new TIMESTAMP(0) value.
       err:
         type: error_info
         indirection: 1
@@ -1626,7 +1626,7 @@ functions:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-08-04" ]
     description: |
-      Creates a TIMESTAMP_MS value.
+      Creates a TIMESTAMP(3) value.
 
       The payload is milliseconds since 1970-01-01, the same unit value_get_timestamp_ms reports.
       It is not range-checked here; value_cast is the validating path. The
@@ -1644,7 +1644,7 @@ functions:
         type: value
         indirection: 1
         kind: OUT
-        description: Receives the new TIMESTAMP_MS value.
+        description: Receives the new TIMESTAMP(3) value.
       err:
         type: error_info
         indirection: 1
@@ -1656,7 +1656,7 @@ functions:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-08-04" ]
     description: |
-      Creates a TIMESTAMP_NS value.
+      Creates a TIMESTAMP(9) value.
 
       The payload is nanoseconds since 1970-01-01, the same unit value_get_timestamp_ns reports.
       It is not range-checked here; value_cast is the validating path. The
@@ -1674,7 +1674,7 @@ functions:
         type: value
         indirection: 1
         kind: OUT
-        description: Receives the new TIMESTAMP_NS value.
+        description: Receives the new TIMESTAMP(9) value.
       err:
         type: error_info
         indirection: 1
@@ -1686,7 +1686,7 @@ functions:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-08-04" ]
     description: |
-      Creates a TIMESTAMP_TZ value.
+      Creates a TIMESTAMP WITH TIME ZONE value.
 
       The payload is microseconds since 1970-01-01, in UTC, the same unit
       value_get_timestamp_tz reports.
@@ -1705,7 +1705,7 @@ functions:
         type: value
         indirection: 1
         kind: OUT
-        description: Receives the new TIMESTAMP_TZ value.
+        description: Receives the new TIMESTAMP WITH TIME ZONE value.
       err:
         type: error_info
         indirection: 1
@@ -1717,7 +1717,7 @@ functions:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-08-04" ]
     description: |
-      Creates a TIMESTAMP_TZ_NS value.
+      Creates a TIMESTAMP(9) WITH TIME ZONE value.
 
       The payload is nanoseconds since 1970-01-01, in UTC, the same unit
       value_get_timestamp_tz_ns reports.
@@ -1736,7 +1736,7 @@ functions:
         type: value
         indirection: 1
         kind: OUT
-        description: Receives the new TIMESTAMP_TZ_NS value.
+        description: Receives the new TIMESTAMP(9) WITH TIME ZONE value.
       err:
         type: error_info
         indirection: 1

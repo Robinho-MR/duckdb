@@ -19,18 +19,41 @@ CREATE TABLE ts AS SELECT
 query TTTTTT
 SELECT typeof(s), typeof(ms), typeof(us), typeof(ns), typeof(tz), typeof(tz_ns) FROM ts
 ----
-TIMESTAMP_S	TIMESTAMP_MS	TIMESTAMP	TIMESTAMP_NS	TIMESTAMP WITH TIME ZONE	TIMESTAMPTZ_NS
+TIMESTAMP(0)	TIMESTAMP(3)	TIMESTAMP	TIMESTAMP(9)	TIMESTAMP WITH TIME ZONE	TIMESTAMP(9) WITH TIME ZONE
 
 query TTTTTT
 SELECT * FROM ts
 ----
 2020-01-02 03:04:05	2020-01-02 03:04:05.123	2020-01-02 03:04:05.123457	2020-01-02 03:04:05.123456789	2020-01-02 03:04:05.123457+00	2020-01-02 03:04:05.123456789+00
 
-# the precision modifier selects the scale
+# the precision modifier selects the scale, rounding up to the next supported one
 query TTTTT
 SELECT typeof(s::TIMESTAMP(0)), typeof(s::TIMESTAMP(2)), typeof(s::TIMESTAMP(5)), typeof(s::TIMESTAMP(9)), typeof(s::DATETIME) FROM ts
 ----
-TIMESTAMP_S	TIMESTAMP_MS	TIMESTAMP	TIMESTAMP_NS	TIMESTAMP
+TIMESTAMP(0)	TIMESTAMP(3)	TIMESTAMP	TIMESTAMP(9)	TIMESTAMP
+
+# a timestamp with time zone has at least microsecond precision
+query TTTTT
+SELECT typeof(NULL::TIMESTAMP(9) WITH TIME ZONE), typeof(NULL::TIMESTAMP(3) WITH TIME ZONE), typeof(NULL::TIMESTAMPTZ(7)), typeof(NULL::TIMESTAMPTZ(0)), typeof(NULL::TIMESTAMP(3) WITHOUT TIME ZONE)
+----
+TIMESTAMP(9) WITH TIME ZONE	TIMESTAMP WITH TIME ZONE	TIMESTAMP(9) WITH TIME ZONE	TIMESTAMP WITH TIME ZONE	TIMESTAMP(3)
+
+# the legacy names are still accepted
+query TTTTTT
+SELECT typeof(NULL::TIMESTAMP_S), typeof(NULL::TIMESTAMP_MS), typeof(NULL::TIMESTAMP_US), typeof(NULL::TIMESTAMP_NS), typeof(NULL::TIMESTAMPTZ), typeof(NULL::TIMESTAMPTZ_NS)
+----
+TIMESTAMP(0)	TIMESTAMP(3)	TIMESTAMP	TIMESTAMP(9)	TIMESTAMP WITH TIME ZONE	TIMESTAMP(9) WITH TIME ZONE
+
+# the rendered names parse back to the same type
+query I
+SELECT bool_and(typeof(c::TIMESTAMP(9) WITH TIME ZONE) = 'TIMESTAMP(9) WITH TIME ZONE') FROM (SELECT tz_ns AS c FROM ts)
+----
+true
+
+statement error
+SELECT NULL::TIMESTAMP(11)
+----
+TIMESTAMP only supports until nano-second precision (9)
 
 # different scales / time zones are different types
 query IIIII
@@ -41,23 +64,42 @@ false	false	false	true	true
 query TTT
 SELECT typeof(s + INTERVAL 1 SECOND), typeof(ns - INTERVAL 1 SECOND), typeof(tz + INTERVAL 1 SECOND) FROM ts
 ----
-TIMESTAMP	TIMESTAMP_NS	TIMESTAMP WITH TIME ZONE
+TIMESTAMP	TIMESTAMP(9)	TIMESTAMP WITH TIME ZONE
 
 # combining timestamps of different scales picks the wider one
 query TTT
 SELECT typeof([s, ms]), typeof([ms, ns]), typeof([us, tz]) FROM ts
 ----
-TIMESTAMP_MS[]	TIMESTAMP_NS[]	TIMESTAMP WITH TIME ZONE[]
+TIMESTAMP(3)[]	TIMESTAMP(9)[]	TIMESTAMP WITH TIME ZONE[]
 
 query TT
 SELECT typeof(a), typeof(b) FROM (SELECT s a FROM ts UNION ALL SELECT ms FROM ts), (SELECT ns b FROM ts UNION ALL SELECT us FROM ts) LIMIT 1
 ----
-TIMESTAMP_MS	TIMESTAMP_NS
+TIMESTAMP(3)	TIMESTAMP(9)
 
-statement error
-SELECT [ns, tz_ns] FROM ts
+# a time zone is kept when combining, with at least microsecond precision
+query TTT
+SELECT typeof([ns, tz_ns]), typeof([s, tz]), typeof([ns, tz]) FROM ts
 ----
-Cannot deduce template type
+TIMESTAMP(9) WITH TIME ZONE[]	TIMESTAMP WITH TIME ZONE[]	TIMESTAMP(9) WITH TIME ZONE[]
+
+# like decimals, any scale can be implicitly cast to any other scale
+statement ok
+CREATE MACRO seconds_macro(a TIMESTAMP_S) AS a
+
+statement ok
+CREATE MACRO tz_macro(a TIMESTAMPTZ) AS a
+
+query TTT
+SELECT seconds_macro(ns), tz_macro(tz_ns), tz_macro(ns) FROM ts
+----
+2020-01-02 03:04:05	2020-01-02 03:04:05.123457+00	2020-01-02 03:04:05.123457+00
+
+# dropping the time zone requires an explicit cast
+statement error
+SELECT seconds_macro(tz) FROM ts
+----
+does not support the supplied arguments
 
 # nested and aliased timestamp types
 statement ok
@@ -66,17 +108,28 @@ CREATE TYPE my_ts AS TIMESTAMP_NS
 query TT
 SELECT typeof(NULL::my_ts), typeof({'a': ns, 'b': [tz_ns]}) FROM ts
 ----
-TIMESTAMP_NS	STRUCT(a TIMESTAMP_NS, b TIMESTAMPTZ_NS[])
+TIMESTAMP(9)	STRUCT(a TIMESTAMP(9), b TIMESTAMP(9) WITH TIME ZONE[])
+
+# PostgreSQL has a single timestamp type with and without time zone
+query TTTTTT
+SELECT t.typname, a.attname, format_type(a.atttypid, a.atttypmod), NULL, NULL, NULL FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_type t ON t.oid = a.atttypid WHERE c.relname = 'ts' ORDER BY a.attnum
+----
+timestamp	s	timestamp	NULL	NULL	NULL
+timestamp	ms	timestamp	NULL	NULL	NULL
+timestamp	us	timestamp	NULL	NULL	NULL
+timestamp	ns	timestamp	NULL	NULL	NULL
+timestamptz	tz	timestamptz	NULL	NULL	NULL
+timestamptz	tz_ns	timestamptz	NULL	NULL	NULL
 
 query TT
 SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'ts' ORDER BY ordinal_position
 ----
-s	TIMESTAMP_S
-ms	TIMESTAMP_MS
+s	TIMESTAMP(0)
+ms	TIMESTAMP(3)
 us	TIMESTAMP
-ns	TIMESTAMP_NS
+ns	TIMESTAMP(9)
 tz	TIMESTAMP WITH TIME ZONE
-tz_ns	TIMESTAMPTZ_NS
+tz_ns	TIMESTAMP(9) WITH TIME ZONE
 
 # the types round-trip through storage, both in the legacy format (one type id per variant) and the parameterized one
 foreach storage_version v1.0.0 v2.0.0 v2.1.0
@@ -102,7 +155,7 @@ ATTACH '{TEST_DIR}/timestamp_type_parameters_{storage_version}.db' AS db
 query TTTTTTTTT
 SELECT typeof(s), typeof(ms), typeof(us), typeof(ns), typeof(tz), typeof(tz_ns), typeof(aliased), typeof(nested), typeof(struct_tz) FROM db.ts
 ----
-TIMESTAMP_S	TIMESTAMP_MS	TIMESTAMP	TIMESTAMP_NS	TIMESTAMP WITH TIME ZONE	TIMESTAMPTZ_NS	TIMESTAMP_NS	TIMESTAMP_NS[]	STRUCT(tz TIMESTAMPTZ_NS)
+TIMESTAMP(0)	TIMESTAMP(3)	TIMESTAMP	TIMESTAMP(9)	TIMESTAMP WITH TIME ZONE	TIMESTAMP(9) WITH TIME ZONE	TIMESTAMP(9)	TIMESTAMP(9)[]	STRUCT(tz TIMESTAMP(9) WITH TIME ZONE)
 
 query TTTTTTTTT
 SELECT * FROM db.ts
@@ -112,7 +165,7 @@ SELECT * FROM db.ts
 query TTTT
 SELECT typeof(s), typeof(tz_ns), s, tz_ns FROM db.v
 ----
-TIMESTAMP_S	TIMESTAMPTZ_NS	2020-01-02 03:04:05	2020-01-02 03:04:05.123457+00
+TIMESTAMP(0)	TIMESTAMP(9) WITH TIME ZONE	2020-01-02 03:04:05	2020-01-02 03:04:05.123457+00
 
 statement ok
 DETACH db

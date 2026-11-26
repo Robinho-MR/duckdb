@@ -35,14 +35,15 @@ n	1700	numeric	numeric(10,2)
 tm	1083	time	time
 
 # types without a PostgreSQL oid get one after the oids of PostgreSQL's types, which pg_type does not list
+# like in PostgreSQL, the scale of a timestamp is not part of its oid
 query IIII
 SELECT a.attname, a.atttypid BETWEEN 16384 AND 19999, t.typname, format_type(a.atttypid, a.atttypmod)
 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid LEFT JOIN pg_type t ON t.oid = a.atttypid
 WHERE c.relname = 'typed' AND a.attnum > 5
 ORDER BY a.attnum;
 ----
-ts	true	NULL	timestamp_s
-tn	true	NULL	timestamp_ns
+ts	false	timestamp	timestamp
+tn	false	timestamp	timestamp
 l	true	NULL	list
 
 # the oid of a type defined in the catalog

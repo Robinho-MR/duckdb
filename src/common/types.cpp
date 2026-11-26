@@ -1233,7 +1233,7 @@ static bool TryGetMaxLogicalTypeInternal(LogicalTypeResolver &logical_type_resol
 		return success;
 	}
 	// unequal types fallthrough
-	if (left.id() != right.id() || (left.id() == LogicalTypeId::TIMESTAMP && left != right)) {
+	if (left.id() != right.id()) {
 		// for other types - try to combine through the generic implicit cast rules
 		if (TryCombineViaImplicitCast(logical_type_resolver, left, right, result)) {
 			return true;
@@ -1522,6 +1522,49 @@ bool ApproxEqual(double ldecimal, double rdecimal) {
 	return std::fabs(ldecimal - rdecimal) <= epsilon;
 }
 
+//! The id a TIMESTAMP is stored with in storage formats before the type was parameterized
+static LogicalTypeId GetLegacyTimestampId(const LogicalType &type) {
+	switch (TimestampType::GetScale(type)) {
+	case TimestampType::SECOND_SCALE:
+		return LogicalTypeId::LEGACY_TIMESTAMP_SEC;
+	case TimestampType::MILLISECOND_SCALE:
+		return LogicalTypeId::LEGACY_TIMESTAMP_MS;
+	case TimestampType::MICROSECOND_SCALE:
+		return TimestampType::HasTimeZone(type) ? LogicalTypeId::LEGACY_TIMESTAMP_TZ : LogicalTypeId::TIMESTAMP;
+	case TimestampType::NANOSECOND_SCALE:
+		return TimestampType::HasTimeZone(type) ? LogicalTypeId::LEGACY_TIMESTAMP_TZ_NS
+		                                        : LogicalTypeId::LEGACY_TIMESTAMP_NS;
+	default:
+		throw InternalException("Unsupported TIMESTAMP scale %d", TimestampType::GetScale(type));
+	}
+}
+
+//! Whether the id is a legacy timestamp id - if so, outputs the scale and time zone it stands for
+static bool TryGetLegacyTimestampParameters(LogicalTypeId id, uint8_t &scale, bool &has_time_zone) {
+	has_time_zone = false;
+	switch (id) {
+	case LogicalTypeId::LEGACY_TIMESTAMP_SEC:
+		scale = TimestampType::SECOND_SCALE;
+		return true;
+	case LogicalTypeId::LEGACY_TIMESTAMP_MS:
+		scale = TimestampType::MILLISECOND_SCALE;
+		return true;
+	case LogicalTypeId::LEGACY_TIMESTAMP_NS:
+		scale = TimestampType::NANOSECOND_SCALE;
+		return true;
+	case LogicalTypeId::LEGACY_TIMESTAMP_TZ:
+		scale = TimestampType::MICROSECOND_SCALE;
+		has_time_zone = true;
+		return true;
+	case LogicalTypeId::LEGACY_TIMESTAMP_TZ_NS:
+		scale = TimestampType::NANOSECOND_SCALE;
+		has_time_zone = true;
+		return true;
+	default:
+		return false;
+	}
+}
+
 void LogicalType::Serialize(Serializer &serializer) const {
 	// Serialize geometry as old extension geometry type if required
 	if (id() == LogicalTypeId::GEOMETRY && !serializer.ShouldSerialize(StorageVersion::V1_5_0)) {
@@ -1576,7 +1619,7 @@ void LogicalType::Serialize(Serializer &serializer) const {
 	unique_ptr<LogicalTypeInfo> legacy_timestamp_info;
 	if (id() == LogicalTypeId::TIMESTAMP && type_info_.get().type == LogicalTypeInfoType::TIMESTAMP_TYPE_INFO &&
 	    !serializer.ShouldSerialize(StorageVersion::V2_1_0)) {
-		serialized_id = TimestampType::GetLegacyId(*this);
+		serialized_id = GetLegacyTimestampId(*this);
 		type_info = nullptr;
 		if (!type_info_.get().alias.empty() || type_info_.get().extension_info) {
 			legacy_timestamp_info = make_uniq<LogicalTypeInfo>(LogicalTypeInfoType::GENERIC_TYPE_INFO);
@@ -1615,7 +1658,7 @@ LogicalType LogicalType::Deserialize(Deserializer &deserializer) {
 	// convert the legacy timestamp ids into a TIMESTAMP with the matching parameters
 	uint8_t legacy_scale;
 	bool legacy_has_time_zone;
-	if (TimestampType::TryGetLegacyParameters(id, legacy_scale, legacy_has_time_zone)) {
+	if (TryGetLegacyTimestampParameters(id, legacy_scale, legacy_has_time_zone)) {
 		if (type_info && type_info->type != LogicalTypeInfoType::GENERIC_TYPE_INFO) {
 			throw SerializationException("Failed to deserialize type %s: unexpected type info %s",
 			                             EnumUtil::ToString(id), EnumUtil::ToString(type_info->type));
@@ -1850,58 +1893,15 @@ int64_t TimestampType::UnitsPerSecond(uint8_t scale) {
 }
 
 string TimestampType::GetName(uint8_t scale, bool has_time_zone) {
-	switch (scale) {
-	case SECOND_SCALE:
-		return "TIMESTAMP_S";
-	case MILLISECOND_SCALE:
-		return "TIMESTAMP_MS";
-	case MICROSECOND_SCALE:
-		return has_time_zone ? "TIMESTAMP WITH TIME ZONE" : "TIMESTAMP";
-	case NANOSECOND_SCALE:
-		return has_time_zone ? "TIMESTAMPTZ_NS" : "TIMESTAMP_NS";
-	default:
-		throw InternalException("Unsupported TIMESTAMP scale %d", scale);
+	string result = "TIMESTAMP";
+	if (scale != MICROSECOND_SCALE) {
+		// the default scale is not rendered
+		result += "(" + to_string(scale) + ")";
 	}
-}
-
-LogicalTypeId TimestampType::GetLegacyId(const LogicalType &type) {
-	switch (GetScale(type)) {
-	case SECOND_SCALE:
-		return LogicalTypeId::LEGACY_TIMESTAMP_SEC;
-	case MILLISECOND_SCALE:
-		return LogicalTypeId::LEGACY_TIMESTAMP_MS;
-	case MICROSECOND_SCALE:
-		return HasTimeZone(type) ? LogicalTypeId::LEGACY_TIMESTAMP_TZ : LogicalTypeId::TIMESTAMP;
-	case NANOSECOND_SCALE:
-		return HasTimeZone(type) ? LogicalTypeId::LEGACY_TIMESTAMP_TZ_NS : LogicalTypeId::LEGACY_TIMESTAMP_NS;
-	default:
-		throw InternalException("Unsupported TIMESTAMP scale %d", GetScale(type));
+	if (has_time_zone) {
+		result += " WITH TIME ZONE";
 	}
-}
-
-bool TimestampType::TryGetLegacyParameters(LogicalTypeId id, uint8_t &scale, bool &has_time_zone) {
-	has_time_zone = false;
-	switch (id) {
-	case LogicalTypeId::LEGACY_TIMESTAMP_SEC:
-		scale = SECOND_SCALE;
-		return true;
-	case LogicalTypeId::LEGACY_TIMESTAMP_MS:
-		scale = MILLISECOND_SCALE;
-		return true;
-	case LogicalTypeId::LEGACY_TIMESTAMP_NS:
-		scale = NANOSECOND_SCALE;
-		return true;
-	case LogicalTypeId::LEGACY_TIMESTAMP_TZ:
-		scale = MICROSECOND_SCALE;
-		has_time_zone = true;
-		return true;
-	case LogicalTypeId::LEGACY_TIMESTAMP_TZ_NS:
-		scale = NANOSECOND_SCALE;
-		has_time_zone = true;
-		return true;
-	default:
-		return false;
-	}
+	return result;
 }
 
 LogicalType LogicalType::TIMESTAMP_TYPE(uint8_t scale, bool has_time_zone) { // NOLINT

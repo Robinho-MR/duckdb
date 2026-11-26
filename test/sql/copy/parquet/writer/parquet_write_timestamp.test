@@ -73,7 +73,7 @@ SELECT * FROM '{TEST_DIR}/timestamps.parquet' WHERE d='1992-01-01 12:03:27.12345
 query I
 SELECT typeof(d) FROM '{TEST_DIR}/timestamps.parquet' LIMIT 1
 ----
-TIMESTAMP_NS
+TIMESTAMP(9)
 
 # COPY option write_timestamp_as_int96 writes Spark compatible INT96 timestamp columns
 

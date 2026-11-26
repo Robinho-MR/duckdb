@@ -264,23 +264,12 @@ static int64_t ImplicitCastTimestamp(const LogicalType &from, const LogicalType 
 	if (from_scale == to_scale && from_tz == to_tz) {
 		return 0;
 	}
-	if (from_tz) {
-		// a TIMESTAMPTZ combines with a TIMESTAMPTZ_NS at nanosecond precision
-		return to_tz && to_scale > from_scale ? TargetTypeCost(to) : -1;
-	}
-	switch (from_scale) {
-	case TimestampType::SECOND_SCALE:
-	case TimestampType::MILLISECOND_SCALE:
-		// seconds / milliseconds can be cast to any timestamp with a larger scale
-		return to_scale > from_scale ? TargetTypeCost(to) : -1;
-	case TimestampType::MICROSECOND_SCALE:
-		return to_tz || to_scale == TimestampType::NANOSECOND_SCALE ? TargetTypeCost(to) : -1;
-	case TimestampType::NANOSECOND_SCALE:
-		// we allow casting nanosecond timestamps to the default timestamp
-		return !to_tz && to_scale == TimestampType::MICROSECOND_SCALE ? TargetTypeCost(to) : -1;
-	default:
+	if (from_tz && !to_tz) {
+		// dropping the time zone depends on the session time zone, so it requires an explicit cast
 		return -1;
 	}
+	// like decimals, any scale can be implicitly cast to any other scale
+	return TargetTypeCost(to);
 }
 
 static int64_t ImplicitCastBignum(const LogicalType &to) {
