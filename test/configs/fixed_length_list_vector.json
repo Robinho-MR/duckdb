@@ -1,0 +1,13 @@
+{
+	"description": "Run with verify-vector 'fixed_length_list_vector'.",
+	"on_init": "PRAGMA debug_verify_vector = 'fixed_length_list_vector';",
+	"skip_compiled": "true",
+	"skip_tests": [
+		{
+			"reason": "Reads the profiling output at a fixed operator depth, which the verify vector operator changes",
+			"paths": [
+				"test/sql/types/geo/geometry_parquet_pushdown.test"
+			]
+		}
+	]
+}

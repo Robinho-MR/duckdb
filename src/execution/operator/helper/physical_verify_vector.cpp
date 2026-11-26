@@ -1,5 +1,6 @@
 #include "duckdb/common/vector/constant_vector.hpp"
 #include "duckdb/execution/operator/helper/physical_verify_vector.hpp"
+#include "duckdb/common/vector/fixed_length_list_vector.hpp"
 #include "duckdb/common/types/vector.hpp"
 #include "duckdb/common/types/hugeint.hpp"
 #include "duckdb/common/value_operations/value_operations.hpp"
@@ -274,6 +275,12 @@ OperatorResultType PhysicalVerifyVector::Execute(ExecutionContext &context, Data
 		return VerifyEmitSequenceVector(input, chunk, state);
 	case DebugVectorVerification::NESTED_SHUFFLE:
 		return VerifyEmitNestedShuffleVector(input, chunk, state);
+	case DebugVectorVerification::FIXED_LENGTH_LIST_VECTOR:
+		input.Copy(chunk);
+		for (idx_t c = 0; c < chunk.ColumnCount(); c++) {
+			FixedLengthListVector::DebugTransform(chunk.data[c], chunk.size());
+		}
+		return OperatorResultType::NEED_MORE_INPUT;
 	default:
 		throw InternalException("PhysicalVerifyVector created but no verification code present");
 	}

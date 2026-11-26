@@ -1,6 +1,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/list_vector.hpp"
+#include "duckdb/common/vector/fixed_length_list_vector.hpp"
 #include "duckdb/storage/table/list_column_data.hpp"
 #include "duckdb/storage/statistics/list_stats.hpp"
 #include "duckdb/storage/statistics/array_stats.hpp"
@@ -152,20 +153,34 @@ idx_t ListColumnData::ScanCount(ColumnScanState &state, Vector &result, idx_t co
 	validity->ScanCount(state.child_states[0], result, count);
 
 	auto data = offset_vector.Values<uint64_t>();
-	// shift all offsets so they are 0 at the first entry
-	auto result_data = FlatVector::Writer<list_entry_t>(result, scan_count);
-	auto previous_offset = state.last_offset;
-	idx_t current_offset = 0;
+	auto start_offset = state.last_offset;
+	auto previous_offset = start_offset;
 	auto child_count = child_column->GetMaxEntry();
+	// top-level lists that are all non-NULL and have the same length are emitted as a fixed length list vector
+	bool fixed_length =
+	    !HasParent() && type.id() == LogicalTypeId::LIST && FlatVector::Validity(result).CheckAllValid(scan_count);
+	idx_t first_length = 0;
 	for (idx_t i = 0; i < scan_count; i++) {
 		auto offset = data[i].GetValueUnsafe();
 		auto length = GetListLength(previous_offset, offset, child_count);
-		result_data.WriteValue(list_entry_t(current_offset, length));
-		current_offset += length;
+		if (i == 0) {
+			first_length = length;
+		} else if (length != first_length) {
+			fixed_length = false;
+		}
 		previous_offset = offset;
 	}
-
-	idx_t child_scan_count = current_offset;
+	idx_t child_scan_count = previous_offset - start_offset;
+	if (!fixed_length) {
+		// shift all offsets so they are 0 at the first entry
+		auto result_data = FlatVector::Writer<list_entry_t>(result, scan_count);
+		auto list_start = start_offset;
+		for (idx_t i = 0; i < scan_count; i++) {
+			auto offset = data[i].GetValueUnsafe();
+			result_data.WriteValue(list_entry_t(list_start - start_offset, offset - list_start));
+			list_start = offset;
+		}
+	}
 	ListVector::Reserve(result, child_scan_count);
 
 	if (child_scan_count > 0) {
@@ -180,6 +195,10 @@ idx_t ListColumnData::ScanCount(ColumnScanState &state, Vector &result, idx_t co
 	state.last_offset = previous_offset;
 
 	ListVector::SetListSize(result, child_scan_count);
+	if (fixed_length) {
+		auto &child_entry = ListVector::GetChild(result);
+		FixedLengthListVector::Create(result, child_entry, first_length, scan_count);
+	}
 	return scan_count;
 }
 

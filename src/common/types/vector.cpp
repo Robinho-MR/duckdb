@@ -393,6 +393,8 @@ string VectorTypeToString(VectorType type) {
 		return "CONSTANT";
 	case VectorType::SHREDDED_VECTOR:
 		return "SHREDDED";
+	case VectorType::FIXED_LENGTH_LIST_VECTOR:
+		return "FIXED_LENGTH_LIST";
 	default:
 		return "UNKNOWN";
 	}

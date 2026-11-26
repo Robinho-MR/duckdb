@@ -1,0 +1,172 @@
+# name: test/sql/types/list/fixed_length_list_vector.test
+# description: Test scanning lists that all have the same length as fixed length list vectors
+# group: [list]
+
+# the vector types checked below are those of the scan
+statement ok
+PRAGMA debug_verify_vector = 'none';
+
+statement ok
+CREATE TABLE fixed AS SELECT i AS id, [i, i + 1, i + 2] AS l, [i::VARCHAR, 'x'] AS s FROM range(5000) t(i);
+
+# lists of the same length without NULL lists are scanned as fixed length list vectors
+query I
+SELECT DISTINCT vector_type(l) FROM fixed
+----
+FIXED_LENGTH_LIST_VECTOR
+
+query IIII
+SELECT COUNT(*), SUM(len(l)), SUM(l[3]), MAX(s[1])
+FROM fixed
+----
+5000	15000	12507500	999
+
+query II
+SELECT id, l FROM fixed WHERE id IN (0, 2047, 2048, 4999) ORDER BY id
+----
+0	[0, 1, 2]
+2047	[2047, 2048, 2049]
+2048	[2048, 2049, 2050]
+4999	[4999, 5000, 5001]
+
+query I
+SELECT SUM(u) FROM (SELECT UNNEST(l) AS u FROM fixed)
+----
+37507500
+
+query II
+SELECT l, COUNT(*) FROM fixed GROUP BY l ORDER BY l LIMIT 2
+----
+[0, 1, 2]	1
+[1, 2, 3]	1
+
+query I
+SELECT COUNT(*) FROM fixed f1 JOIN fixed f2 ON f1.l = f2.l
+----
+5000
+
+query I
+SELECT l FROM fixed ORDER BY l DESC LIMIT 1
+----
+[4999, 5000, 5001]
+
+query I
+SELECT list_sum(list_transform(l, lambda x: x * 2)) FROM fixed WHERE id = 10
+----
+66
+
+# casting to an array of the same length casts the child directly
+query II
+SELECT l::INTEGER[3], s::VARCHAR[2] FROM fixed WHERE id = 42
+----
+[42, 43, 44]	[42, x]
+
+query I
+SELECT SUM(array_extract(l::DOUBLE[3], 2)) FROM fixed
+----
+12502500.0
+
+statement error
+SELECT l::INTEGER[2] FROM fixed
+----
+<REGEX>:Conversion Error.*Cannot cast list with length 3 to array with length 2.*
+
+query I
+SELECT COUNT(*) FROM (SELECT TRY_CAST(l AS INTEGER[2]) a FROM fixed) WHERE a IS NULL
+----
+5000
+
+statement error
+SELECT s::INTEGER[2] FROM fixed WHERE id = 1
+----
+<REGEX>:Conversion Error.*
+
+query I
+SELECT TRY_CAST(s AS INTEGER[2]) FROM fixed WHERE id = 1
+----
+[1, NULL]
+
+# NULL lists or lists of different lengths are scanned as regular lists
+statement ok
+CREATE TABLE with_nulls AS SELECT CASE WHEN i % 1000 = 7 THEN NULL ELSE [i, i] END AS l FROM range(5000) t(i);
+
+query I
+SELECT COUNT(DISTINCT vector_type(l)) FROM with_nulls
+----
+2
+
+query III
+SELECT COUNT(l), SUM(l[2]), SUM(len(l)) FROM with_nulls
+----
+4995	12487465	9990
+
+query I
+SELECT COUNT(*) FROM (SELECT l::INTEGER[2] a FROM with_nulls) WHERE a IS NULL
+----
+5
+
+statement ok
+CREATE TABLE mixed AS SELECT range(i % 3) AS l FROM range(5000) t(i);
+
+query I
+SELECT DISTINCT vector_type(l) FROM mixed
+----
+FLAT_VECTOR
+
+# empty lists
+statement ok
+CREATE TABLE empty_lists AS SELECT []::INTEGER[] AS l FROM range(3000);
+
+query II
+SELECT COUNT(*), SUM(len(l)) FROM empty_lists
+----
+3000	0
+
+query I
+SELECT DISTINCT vector_type(l) FROM empty_lists
+----
+FIXED_LENGTH_LIST_VECTOR
+
+# only top-level lists are emitted as fixed length list vectors, maps and lists in structs are not
+statement ok
+CREATE TABLE nested AS SELECT MAP([i], [i]) AS m, [[i, i], [i, i]] AS ll, {'a': [i, i]} AS st FROM range(3000) t(i);
+
+query III
+SELECT DISTINCT vector_type(m), vector_type(ll), vector_type(st.a) FROM nested
+----
+FLAT_VECTOR	FIXED_LENGTH_LIST_VECTOR	FLAT_VECTOR
+
+query III
+SELECT SUM(m[i]), SUM(ll[2][2]), SUM(st.a[1]) FROM nested, (SELECT 1) t(x), LATERAL (SELECT ll[1][1] AS i)
+----
+4498500	4498500	4498500
+
+# every flat list whose lists have the same length is turned into a fixed length list vector
+statement ok
+PRAGMA debug_verify_vector = 'fixed_length_list_vector';
+
+query I
+SELECT [1, 2, 3] || [4]
+----
+[1, 2, 3, 4]
+
+query II
+SELECT list_sort(l, 'DESC'), list_reverse(s) FROM fixed WHERE id = 5
+----
+[7, 6, 5]	[x, 5]
+
+query I
+SELECT SUM(list_sum(l)) FROM (SELECT list_value(id, id) AS l FROM fixed)
+----
+24995000
+
+query I
+SELECT list_value(id, NULL)::BIGINT[2] FROM fixed WHERE id < 2 ORDER BY id
+----
+[0, NULL]
+[1, NULL]
+
+query I
+SELECT COUNT(*) FROM (SELECT CASE WHEN id % 2 = 0 THEN [id, id] END AS l FROM fixed) WHERE l IS NULL
+----
+2500

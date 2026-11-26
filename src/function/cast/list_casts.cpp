@@ -1,3 +1,4 @@
+#include "duckdb/common/vector/fixed_length_list_vector.hpp"
 #include "duckdb/function/cast/nested_to_varchar_cast.hpp"
 #include "duckdb/common/vector/array_vector.hpp"
 #include "duckdb/common/vector/constant_vector.hpp"
@@ -236,6 +237,34 @@ static bool ListToArrayCast(Vector &source, Vector &result, idx_t count, CastPar
 		VectorOperations::Copy(source_cc, payload_vector, ldata.offset + array_size, ldata.offset, 0);
 		return cast_data.child_cast_info.Cast(payload_vector, result_cc, array_size, child_parameters);
 
+	} else if (source.GetVectorType() == VectorType::FIXED_LENGTH_LIST_VECTOR &&
+	           FixedLengthListVector::GetListLength(source) == array_size) {
+		// the lists are laid out like the arrays: cast the child directly
+		result.SetVectorType(VectorType::FLAT_VECTOR);
+		auto &source_validity = FixedLengthListVector::Validity(source);
+		auto &result_validity = FlatVector::ValidityMutable(result);
+		result_validity.Copy(source_validity, count);
+		auto &result_cc = ArrayVector::GetChildMutable(result);
+		auto child_count = array_size * count;
+		CastParameters child_parameters(parameters, cast_data.child_cast_info.GetCastData(), parameters.local_state);
+		Vector payload_vector(result_cc.GetType(), child_count);
+		auto all_ok = cast_data.child_cast_info.Cast(FixedLengthListVector::GetChildMutable(source), payload_vector,
+		                                             child_count, child_parameters);
+		if (!all_ok) {
+			HandleCastError::AssignError(*child_parameters.error_message, parameters);
+		}
+		VectorOperations::Copy(payload_vector, result_cc, child_count, 0, 0);
+		if (!source_validity.CheckAllValid(count)) {
+			for (idx_t i = 0; i < count; i++) {
+				if (source_validity.RowIsValid(i)) {
+					continue;
+				}
+				for (idx_t array_elem = 0; array_elem < array_size; array_elem++) {
+					FlatVector::SetNull(result_cc, i * array_size + array_elem, true);
+				}
+			}
+		}
+		return all_ok;
 	} else {
 		source.Flatten();
 		result.SetVectorType(VectorType::FLAT_VECTOR);

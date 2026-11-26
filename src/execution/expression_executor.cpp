@@ -1,4 +1,5 @@
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/common/vector/fixed_length_list_vector.hpp"
 
 #include "duckdb/common/types/decimal.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -265,6 +266,10 @@ void ExpressionExecutor::Verify(const Expression &expr, Vector &vector, idx_t co
 			VariantColumnData::DebugShred(vector, count);
 			vector.Verify();
 		}
+	}
+	if (debug_vector_verification == DebugVectorVerification::FIXED_LENGTH_LIST_VECTOR) {
+		FixedLengthListVector::DebugTransform(vector, count);
+		vector.Verify();
 	}
 }
 
