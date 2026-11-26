@@ -39,9 +39,14 @@ SELECT * FROM abc; -- error: which table did I mean?
 statement ok
 ALTER TABLE abc ADD COLUMN j INTEGER;
 
+# a column that only differs in case can be added
+statement ok
+ALTER TABLE "ABC" ADD COLUMN "J" INTEGER;
+
 statement error
 ALTER TABLE "ABC" ADD COLUMN "J" INTEGER;
 ----
+already exists
 
 statement ok
 DROP TABLE abc

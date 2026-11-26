@@ -1121,7 +1121,7 @@ BoundStatement Binder::Bind(MatchRecognizeRef &ref) {
 	// earlier one.
 	for (idx_t i = 0; i < ref.config->measures_expression_list.size(); i++) {
 		auto &expr = ref.config->measures_expression_list[i];
-		measures.bind_state.alias_map[expr->GetAlias()] = i;
+		measures.bind_state.alias_map.Set(expr->GetAlias(), i);
 		measures.bind_state.original_expressions.push_back(expr->Copy());
 	}
 

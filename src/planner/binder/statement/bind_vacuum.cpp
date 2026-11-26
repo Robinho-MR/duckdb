@@ -38,18 +38,17 @@ void Binder::BindVacuumTable(LogicalVacuum &vacuum, unique_ptr<LogicalOperator> 
 		}
 	}
 
-	identifier_set_t column_name_set;
+	unordered_set<idx_t> column_index_set;
 	vector<Identifier> non_generated_column_names;
 	for (auto &col_name : columns) {
-		if (column_name_set.count(col_name) > 0) {
-			throw BinderException("cannot vacuum or analyze the same column twice, i.e., there is a duplicate entry in "
-			                      "the list of column names");
-		}
-		column_name_set.insert(col_name);
 		if (!table.ColumnExists(col_name)) {
 			throw BinderException("Column with name %s does not exist", col_name);
 		}
 		auto &col = table.GetColumn(col_name);
+		if (!column_index_set.insert(col.Logical().index).second) {
+			throw BinderException("cannot vacuum or analyze the same column twice, i.e., there is a duplicate entry in "
+			                      "the list of column names");
+		}
 		// ignore generated column
 		if (col.Generated()) {
 			throw BinderException(

@@ -65,6 +65,11 @@ LogicalIndex TableCatalogEntry::GetColumnIndex(Identifier &column_name, bool if_
 		if (if_exists) {
 			return entry;
 		}
+		if (columns.LookupColumn(column_name) == IdentifierMatch::AMBIGUOUS) {
+			throw BinderException("Column name %s is ambiguous: table %s has multiple columns that only differ in "
+			                      "case - use the exact (quoted) column name",
+			                      column_name, name);
+		}
 		vector<string> column_names;
 		for (auto &col : columns.Logical()) {
 			column_names.emplace_back(col.Name());

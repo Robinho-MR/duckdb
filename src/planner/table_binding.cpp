@@ -1,6 +1,7 @@
 #include "duckdb/planner/table_binding.hpp"
 
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
@@ -30,10 +31,9 @@ void Binding::Initialize() {
 	for (idx_t i = 0; i < names.size(); i++) {
 		auto &name = names[i];
 		D_ASSERT(!name.empty());
-		if (name_map.find(name) != name_map.end()) {
+		if (!name_map.Insert(name, i)) {
 			throw BinderException("table %s has duplicate column name %s", alias.GetAlias(), name);
 		}
-		name_map[name] = i;
 	}
 }
 
@@ -100,13 +100,29 @@ bool Binding::HasMatchingBinding(const Identifier &column_name) {
 	return TryGetBindingIndex(column_name, result);
 }
 
+bool Binding::IsAmbiguousColumn(const Identifier &column_name) const {
+	return name_map.Lookup(column_name) == IdentifierMatch::AMBIGUOUS;
+}
+
+ErrorData Binding::AmbiguousColumnError(const Identifier &column_name) const {
+	string candidates;
+	for (auto &candidate : name_map.GetCaseInsensitiveMatches(column_name)) {
+		candidates += candidates.empty() ? "" : ", ";
+		candidates += SQLQuotedIdentifier::ToString(candidate);
+	}
+	return ErrorData(ExceptionType::BINDER,
+	                 StringUtil::Format("Column reference %s is ambiguous: table %s has columns %s that only differ in "
+	                                    "case - use the exact (quoted) column name",
+	                                    column_name, GetAlias(), candidates));
+}
+
 void Binding::AddColumnAlias(const Identifier &column_alias, column_t column_index) {
 	D_ASSERT(column_index < names.size());
-	if (name_map.find(column_alias) != name_map.end()) {
+	if (name_map.ContainsCaseInsensitive(column_alias)) {
 		// a column with this name already exists - the alias is not required
 		return;
 	}
-	name_map[column_alias] = column_index;
+	name_map.Insert(column_alias, column_index);
 }
 
 const Identifier &Binding::GetRegisteredColumnName(const Identifier &column_name) {
@@ -122,6 +138,9 @@ void Binding::SetBoundColumnAlias(ColumnRefExpression &colref) {
 }
 
 ErrorData Binding::ColumnNotFoundError(const Identifier &column_name) const {
+	if (IsAmbiguousColumn(column_name)) {
+		return AmbiguousColumnError(column_name);
+	}
 	return ErrorData(ExceptionType::BINDER,
 	                 StringUtil::Format("Values list %s does not have a column named %s", GetAlias(), column_name));
 }
@@ -194,8 +213,8 @@ TableBinding::TableBinding(const Identifier &alias, vector<LogicalType> types_p,
 			// the row_number column cannot be queried by the user
 			continue;
 		}
-		if (name_map.find(name) == name_map.end()) {
-			name_map[name] = idx;
+		if (!name_map.ContainsCaseInsensitive(name)) {
+			name_map.Insert(name, idx);
 		}
 	}
 }
@@ -325,6 +344,9 @@ optional_ptr<StandardEntry> TableBinding::GetStandardEntry() {
 }
 
 ErrorData TableBinding::ColumnNotFoundError(const Identifier &column_name) const {
+	if (IsAmbiguousColumn(column_name)) {
+		return AmbiguousColumnError(column_name);
+	}
 	auto candidate_message = StringUtil::CandidatesErrorMessage(
 	    IdentifiersToStrings(names), column_name.GetIdentifierName(), "Candidate bindings: ");
 	return ErrorData(ExceptionType::BINDER, StringUtil::Format("Table %s does not have a column named %s\n%s",

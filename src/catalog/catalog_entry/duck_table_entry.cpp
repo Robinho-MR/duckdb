@@ -391,13 +391,36 @@ void DuckTableEntry::UndoAlter(ClientContext &context, AlterInfo &info) {
 	}
 }
 
-static void RenameExpression(ParsedExpression &root_expr, RenameColumnInfo &info, const Identifier &table_name) {
+//! Rewrite a column name to the exact name of the column it resolves to - or to "new_name" if it resolves to the
+//! renamed column. Names that only resolve case-insensitively can become ambiguous once a column that only differs
+//! in case is added; "resolve_all" makes all of them exact.
+static void ResolveColumnName(Identifier &column_name, const ColumnList &columns, LogicalIndex rename_idx,
+                              const Identifier &new_name, bool resolve_all) {
+	auto resolved_name = column_name;
+	auto column_idx = columns.GetColumnIndex(resolved_name);
+	if (!column_idx.IsValid() || column_idx.index == COLUMN_IDENTIFIER_ROW_ID) {
+		return;
+	}
+	if (column_idx == rename_idx) {
+		column_name = new_name;
+	} else if (resolve_all) {
+		column_name = resolved_name;
+	}
+}
+
+static void ResolveExpressionColumnNames(ParsedExpression &root_expr, const ColumnList &columns,
+                                         const Identifier &table_name, LogicalIndex rename_idx,
+                                         const Identifier &new_name, bool resolve_all) {
 	ParsedExpressionIterator::VisitExpressionMutable<ColumnRefExpression>(root_expr, [&](ColumnRefExpression &colref) {
 		auto column_idx = ColumnNameIndex(colref, table_name);
-		if (colref.ColumnNames()[column_idx] == info.old_name) {
-			colref.ColumnNamesMutable()[column_idx] = info.new_name;
-		}
+		ResolveColumnName(colref.ColumnNamesMutable()[column_idx], columns, rename_idx, new_name, resolve_all);
 	});
+}
+
+//! Whether a column name of a constraint refers to the column with the given index
+static bool RefersToColumn(const ColumnList &columns, const Identifier &column_name, LogicalIndex column_idx) {
+	auto resolved_name = column_name;
+	return columns.GetColumnIndex(resolved_name) == column_idx;
 }
 
 //! Remaps the default of a struct column with the mapping and the field defaults of the remap_struct call
@@ -426,13 +449,16 @@ unique_ptr<CatalogEntry> DuckTableEntry::RenameColumn(ClientContext &context, Re
 	create_info->temporary = temporary;
 	create_info->comment = comment;
 	create_info->tags = tags;
+	// if the new name only differs in case from another column, references to other columns must become exact
+	bool resolve_all = columns.LookupColumn(info.new_name) != IdentifierMatch::NOT_FOUND;
 	for (auto &col : columns.Logical()) {
 		auto copy = col.Copy();
 		if (rename_idx == col.Logical()) {
 			copy.SetName(info.new_name);
 		}
-		if (col.Generated() && column_dependency_manager.IsDependencyOf(col.Logical(), rename_idx)) {
-			RenameExpression(copy.GeneratedExpressionMutable(), info, name);
+		if (col.Generated() && (resolve_all || column_dependency_manager.IsDependencyOf(col.Logical(), rename_idx))) {
+			ResolveExpressionColumnNames(copy.GeneratedExpressionMutable(), columns, name, rename_idx, info.new_name,
+			                             resolve_all);
 		}
 		create_info->columns.AddColumn(std::move(copy));
 	}
@@ -445,16 +471,14 @@ unique_ptr<CatalogEntry> DuckTableEntry::RenameColumn(ClientContext &context, Re
 		case ConstraintType::CHECK: {
 			// CHECK constraint: need to rename column references that refer to the renamed column
 			auto &check = copy->Cast<CheckConstraint>();
-			RenameExpression(*check.expression, info, name);
+			ResolveExpressionColumnNames(*check.expression, columns, name, rename_idx, info.new_name, resolve_all);
 			break;
 		}
 		case ConstraintType::UNIQUE: {
 			// UNIQUE constraint: possibly need to rename columns
 			auto &unique = copy->Cast<UniqueConstraint>();
 			for (auto &column_name : unique.GetColumnNamesMutable()) {
-				if (column_name == info.old_name) {
-					column_name = info.new_name;
-				}
+				ResolveColumnName(column_name, columns, rename_idx, info.new_name, resolve_all);
 			}
 			break;
 		}
@@ -470,7 +494,7 @@ unique_ptr<CatalogEntry> DuckTableEntry::RenameColumn(ClientContext &context, Re
 				}
 			}
 			for (idx_t i = 0; i < columns.size(); i++) {
-				if (columns[i] == info.old_name) {
+				if (RefersToColumn(this->columns, columns[i], rename_idx)) {
 					throw CatalogException(
 					    "Cannot rename column %s because this is involved in the foreign key constraint",
 					    info.old_name);
@@ -498,7 +522,7 @@ unique_ptr<CatalogEntry> DuckTableEntry::RenameColumn(ClientContext &context, Re
 	    [&](CatalogEntry &raw_entry) {
 		    auto &trig = raw_entry.Cast<TriggerCatalogEntry>();
 		    for (const auto &col : trig.columns) {
-			    if (col == info.old_name) {
+			    if (RefersToColumn(columns, col, rename_idx)) {
 				    triggers_to_update.push_back(trig.name);
 				    break;
 			    }
@@ -510,7 +534,7 @@ unique_ptr<CatalogEntry> DuckTableEntry::RenameColumn(ClientContext &context, Re
 		    }
 		    auto &trig = concurrent_entry.Cast<TriggerCatalogEntry>();
 		    for (const auto &col : trig.columns) {
-			    if (col == info.old_name) {
+			    if (RefersToColumn(columns, col, rename_idx)) {
 				    throw TransactionException("Catalog write-write conflict on alter with %s: trigger %s "
 				                               "references column %s which is being renamed",
 				                               name, trig.name, info.old_name);
@@ -531,7 +555,7 @@ unique_ptr<CatalogEntry> DuckTableEntry::AddColumn(ClientContext &context, AddCo
 	auto col_name = info.new_column.GetName();
 
 	// We're checking for the opposite condition (ADD COLUMN IF _NOT_ EXISTS ...).
-	if (info.if_column_not_exists && ColumnExists(col_name)) {
+	if (info.if_column_not_exists && columns.ColumnExistsExact(col_name)) {
 		return nullptr;
 	}
 
@@ -540,11 +564,28 @@ unique_ptr<CatalogEntry> DuckTableEntry::AddColumn(ClientContext &context, AddCo
 	create_info->comment = comment;
 	create_info->tags = tags;
 
+	// if the new column only differs in case from an existing column, existing references must become exact
+	bool resolve_all = columns.LookupColumn(col_name) != IdentifierMatch::NOT_FOUND;
+	LogicalIndex no_rename(DConstants::INVALID_INDEX);
 	for (auto &col : columns.Logical()) {
-		create_info->columns.AddColumn(col.Copy());
+		auto copy = col.Copy();
+		if (resolve_all && copy.Generated()) {
+			ResolveExpressionColumnNames(copy.GeneratedExpressionMutable(), columns, name, no_rename, Identifier(),
+			                             true);
+		}
+		create_info->columns.AddColumn(std::move(copy));
 	}
 	for (auto &constraint : constraints) {
-		create_info->constraints.push_back(constraint->Copy());
+		auto copy = constraint->Copy();
+		if (resolve_all && copy->type == ConstraintType::CHECK) {
+			auto &check = copy->Cast<CheckConstraint>();
+			ResolveExpressionColumnNames(*check.expression, columns, name, no_rename, Identifier(), true);
+		} else if (resolve_all && copy->type == ConstraintType::UNIQUE) {
+			for (auto &column_name : copy->Cast<UniqueConstraint>().GetColumnNamesMutable()) {
+				ResolveColumnName(column_name, columns, no_rename, Identifier(), true);
+			}
+		}
+		create_info->constraints.push_back(std::move(copy));
 	}
 
 	auto binder = Binder::CreateBinder(context);
@@ -784,7 +825,7 @@ void DuckTableEntry::UpdateConstraintsOnColumnDrop(const LogicalIndex &removed_i
 			} else {
 				// Multi-column UNIQUE constraint - check if any column matches the one being dropped
 				for (const auto &col_name : unique.GetColumnNames()) {
-					if (col_name == info.removed_column) {
+					if (RefersToColumn(columns, col_name, removed_index)) {
 						string constraint_kind = unique.IsPrimaryKey() ? "primary key" : "unique";
 						throw CatalogException("Cannot drop column %s because it is referenced in %s constraint %s",
 						                       info.removed_column, constraint_kind, unique.ToString());
@@ -806,7 +847,7 @@ void DuckTableEntry::UpdateConstraintsOnColumnDrop(const LogicalIndex &removed_i
 				}
 			}
 			for (idx_t i = 0; i < columns.size(); i++) {
-				if (columns[i] == info.removed_column) {
+				if (RefersToColumn(this->columns, columns[i], removed_index)) {
 					throw CatalogException(
 					    "Cannot drop column %s because there is a FOREIGN KEY constraint that depends on it",
 					    info.removed_column);
@@ -1463,24 +1504,15 @@ void DuckTableEntry::SetAsRoot() {
 
 void DuckTableEntry::CommitAlter(string &column_name, CommitDropState &drop_state) {
 	D_ASSERT(!column_name.empty());
-	optional_idx logical_column_idx;
-	idx_t column_position = 0;
-	for (auto &col : columns.Logical()) {
-		if (col.Name() == column_name) {
-			// No need to alter storage, removed column is generated column
-			if (col.Generated()) {
-				return;
-			}
-			logical_column_idx = column_position;
-			break;
-		}
-		column_position++;
-	}
-
-	if (!logical_column_idx.IsValid()) {
+	Identifier resolved_name(column_name);
+	auto logical_column_index = columns.GetColumnIndex(resolved_name);
+	if (!logical_column_index.IsValid() || logical_column_index.index == COLUMN_IDENTIFIER_ROW_ID) {
 		return;
 	}
-	auto logical_column_index = LogicalIndex(logical_column_idx.GetIndex());
+	if (columns.GetColumn(logical_column_index).Generated()) {
+		// No need to alter storage, removed column is generated column
+		return;
+	}
 	auto column_index = columns.LogicalToPhysical(logical_column_index).index;
 	storage->CommitDropColumn(column_index, drop_state);
 }

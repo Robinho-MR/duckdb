@@ -205,21 +205,23 @@ void QueryResult::DeduplicateColumns(vector<string> &names) {
 }
 
 void QueryResult::DeduplicateColumns(vector<Identifier> &names) {
-	identifier_map_t<idx_t> name_map;
+	// names that only differ in case are distinct columns, only exact duplicates are renamed
+	unordered_map<string, idx_t> name_map;
 	for (auto &column_name : names) {
-		if (name_map.find(column_name) == name_map.end()) {
+		auto &name = column_name.GetIdentifierName();
+		if (name_map.find(name) == name_map.end()) {
 			// Name does not exist yet
-			name_map[column_name]++;
+			name_map[name]++;
 		} else {
 			// Name already exists, we add _x where x is the repetition number
-			Identifier new_column_name(column_name + "_" + std::to_string(name_map[column_name]));
+			string new_column_name = name + "_" + std::to_string(name_map[name]);
 			while (name_map.find(new_column_name) != name_map.end()) {
 				// This name is already here due to a previous definition
-				name_map[column_name]++;
-				new_column_name = Identifier(column_name + "_" + std::to_string(name_map[column_name]));
+				name_map[name]++;
+				new_column_name = name + "_" + std::to_string(name_map[name]);
 			}
-			column_name = new_column_name;
 			name_map[new_column_name]++;
+			column_name = Identifier(std::move(new_column_name));
 		}
 	}
 }

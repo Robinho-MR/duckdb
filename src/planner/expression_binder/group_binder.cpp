@@ -59,7 +59,7 @@ void GroupBinder::ReplaceSelectRef(SelectNode &node, SelectBindState &bind_state
 			return;
 		}
 		select_list_idx = entry->second;
-		bind_state.group_alias_map[alias_name] = group_index;
+		bind_state.group_alias_map.Set(alias_name, group_index);
 		break;
 	}
 	case ExpressionClass::CONSTANT: {
@@ -100,7 +100,7 @@ void GroupBinder::ReplaceSelectRef(SelectNode &node, SelectBindState &bind_state
 	// move the expression that this refers to into the group expression
 	expr_ptr = std::move(node.select_list[select_list_idx]);
 	// now replace the original expression in the select list with a reference to this group
-	bind_state.group_alias_map[Identifier(to_string(select_list_idx))] = group_index;
+	bind_state.group_alias_map.Set(Identifier(to_string(select_list_idx)), group_index);
 	node.select_list[select_list_idx] = make_uniq<ColumnRefExpression>(Identifier(to_string(select_list_idx)));
 	// insert into the set of used aliases
 	used_aliases.insert(select_list_idx);

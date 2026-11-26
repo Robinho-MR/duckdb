@@ -186,6 +186,14 @@ unique_ptr<ParsedExpression> ColumnQualifier::QualifyColumnName(const ParsedExpr
 		return binder.bind_context.CreateColumnReference(table_binding->GetBindingAlias(), column_name);
 	}
 
+	// the name might only match multiple columns of a binding that differ in case
+	for (auto &binding : binder.bind_context.GetBindingsList()) {
+		if (binding->IsAmbiguousColumn(column_name)) {
+			error = binding->ColumnNotFoundError(column_name);
+			error.AddQueryLocation(expr);
+			return nullptr;
+		}
+	}
 	// it's not, find candidates and error
 	auto similar_bindings = binder.bind_context.GetSimilarBindings(column_name);
 	error = ErrorData(BinderException::ColumnNotFound(column_name, similar_bindings));

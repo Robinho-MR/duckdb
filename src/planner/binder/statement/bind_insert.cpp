@@ -293,15 +293,16 @@ void Binder::BindInsertColumnList(TableCatalogEntry &table, vector<Identifier> &
 		// insertion statement specifies column list
 
 		// create a mapping of (list index) -> (column index)
-		identifier_map_t<idx_t> column_name_map;
+		unordered_map<idx_t, idx_t> column_name_map;
 		for (idx_t i = 0; i < columns.size(); i++) {
-			auto entry = column_name_map.insert(make_pair(columns[i], i));
-			if (!entry.second) {
-				throw BinderException("Duplicate column name %s in INSERT", columns[i]);
-			}
+			auto column_name = columns[i];
 			auto column_index = table.GetColumnIndex(columns[i]);
 			if (column_index.index == COLUMN_IDENTIFIER_ROW_ID) {
 				throw BinderException("Cannot explicitly insert values into rowid column");
+			}
+			auto entry = column_name_map.insert(make_pair(column_index.index, i));
+			if (!entry.second) {
+				throw BinderException("Duplicate column name %s in INSERT", column_name);
 			}
 			auto &col = table.GetColumn(column_index);
 			if (col.Generated()) {
@@ -311,7 +312,7 @@ void Binder::BindInsertColumnList(TableCatalogEntry &table, vector<Identifier> &
 			named_column_map.push_back(column_index);
 		}
 		for (auto &col : table.GetColumns().Physical()) {
-			auto entry = column_name_map.find(col.Name());
+			auto entry = column_name_map.find(col.Logical().index);
 			if (entry == column_name_map.end()) {
 				// column not specified, set index to DConstants::INVALID_INDEX
 				column_index_map.push_back(DConstants::INVALID_INDEX);
@@ -443,10 +444,10 @@ unique_ptr<MergeIntoStatement> Binder::GenerateMergeInto(InsertQueryNode &node, 
 	} else {
 		// when on conflict columns are explicitly provided - use them directly
 		// first figure out if there is an index on the columns or not
-		identifier_map_t<idx_t> specified_columns;
+		unordered_set<idx_t> specified_columns;
 		for (idx_t i = 0; i < on_conflict_info.indexed_columns.size(); i++) {
-			specified_columns[on_conflict_info.indexed_columns[i]] = i;
 			auto column_index = table.GetColumnIndex(on_conflict_info.indexed_columns[i]);
+			specified_columns.insert(column_index.index);
 			if (column_index.index == COLUMN_IDENTIFIER_ROW_ID) {
 				throw BinderException("Cannot specify ROWID as ON CONFLICT target");
 			}
@@ -457,7 +458,7 @@ unique_ptr<MergeIntoStatement> Binder::GenerateMergeInto(InsertQueryNode &node, 
 		}
 		unordered_set<column_t> on_conflict_filter;
 		for (auto &col : columns.Physical()) {
-			auto entry = specified_columns.find(col.Name());
+			auto entry = specified_columns.find(col.Logical().index);
 			if (entry != specified_columns.end()) {
 				// column was specified, set to the index
 				on_conflict_filter.insert(col.Physical().index);
@@ -537,15 +538,16 @@ unique_ptr<MergeIntoStatement> Binder::GenerateMergeInto(InsertQueryNode &node, 
 			// now push another subquery that adds the default columns
 			auto select_stmt = make_uniq<SelectStatement>();
 			auto select_node = make_uniq<SelectNode>();
-			identifier_set_t set_columns;
+			// the column list has been resolved to the exact column names of the table
+			unordered_set<string> set_columns;
 			for (auto &set_col : node.columns) {
-				set_columns.insert(set_col);
+				set_columns.insert(set_col.GetIdentifierName());
 			}
 
 			for (auto &column : columns.Physical()) {
 				auto &name = column.Name();
 				unique_ptr<ParsedExpression> expr;
-				if (set_columns.find(name) == set_columns.end()) {
+				if (set_columns.find(name.GetIdentifierName()) == set_columns.end()) {
 					// column is not specified - at the default value
 					if (column.HasDefaultValue()) {
 						expr = column.DefaultValue().Copy();

@@ -391,12 +391,21 @@ unique_ptr<BoundCreateTableInfo> Binder::BindCreateTableCheckpoint(unique_ptr<Cr
 	return result;
 }
 
-static void ExpressionContainsGeneratedColumn(const ParsedExpression &root_expr, const identifier_set_t &gcols,
+static bool IsGeneratedColumn(const ColumnList &columns, const Identifier &column_name) {
+	auto resolved_name = column_name;
+	auto column_index = columns.GetColumnIndex(resolved_name);
+	if (!column_index.IsValid() || column_index.index == COLUMN_IDENTIFIER_ROW_ID) {
+		return false;
+	}
+	return columns.GetColumn(column_index).Generated();
+}
+
+static void ExpressionContainsGeneratedColumn(const ParsedExpression &root_expr, const ColumnList &columns,
                                               bool &contains_gcol) {
 	ParsedExpressionIterator::VisitExpression<ColumnRefExpression>(root_expr,
 	                                                               [&](const ColumnRefExpression &column_ref) {
 		                                                               auto &name = column_ref.GetColumnName();
-		                                                               if (gcols.count(name)) {
+		                                                               if (IsGeneratedColumn(columns, name)) {
 			                                                               contains_gcol = true;
 			                                                               return;
 		                                                               }
@@ -404,14 +413,13 @@ static void ExpressionContainsGeneratedColumn(const ParsedExpression &root_expr,
 }
 
 static bool AnyConstraintReferencesGeneratedColumn(CreateTableInfo &table_info) {
-	identifier_set_t generated_columns;
+	bool has_generated_columns = false;
 	for (auto &col : table_info.columns.Logical()) {
-		if (!col.Generated()) {
-			continue;
+		if (col.Generated()) {
+			has_generated_columns = true;
 		}
-		generated_columns.insert(col.Name());
 	}
-	if (generated_columns.empty()) {
+	if (!has_generated_columns) {
 		return false;
 	}
 
@@ -421,7 +429,7 @@ static bool AnyConstraintReferencesGeneratedColumn(CreateTableInfo &table_info) 
 			auto &constraint = constr->Cast<CheckConstraint>();
 			auto &expr = constraint.expression;
 			bool contains_generated_column = false;
-			ExpressionContainsGeneratedColumn(*expr, generated_columns, contains_generated_column);
+			ExpressionContainsGeneratedColumn(*expr, table_info.columns, contains_generated_column);
 			if (contains_generated_column) {
 				return true;
 			}
@@ -438,7 +446,7 @@ static bool AnyConstraintReferencesGeneratedColumn(CreateTableInfo &table_info) 
 			auto &constraint = constr->Cast<UniqueConstraint>();
 			if (!constraint.HasIndex()) {
 				for (auto &col : constraint.GetColumnNames()) {
-					if (generated_columns.count(col)) {
+					if (IsGeneratedColumn(table_info.columns, col)) {
 						return true;
 					}
 				}
@@ -481,6 +489,23 @@ static void FindForeignKeyIndexes(const ColumnList &columns, const vector<Identi
 static void ThrowDeferredReferencedKey() {
 	throw BinderException(
 	    "Failed to create foreign key: the referenced PRIMARY KEY or UNIQUE constraint cannot be DEFERRED");
+}
+
+//! Whether two lists of column names refer to the same columns of the table
+static bool ColumnNamesReferToSameColumns(const ColumnList &columns, const vector<Identifier> &left,
+                                          const vector<Identifier> &right) {
+	if (left.size() != right.size()) {
+		return false;
+	}
+	for (idx_t i = 0; i < left.size(); i++) {
+		auto left_name = left[i];
+		auto right_name = right[i];
+		auto left_index = columns.GetColumnIndex(left_name);
+		if (!left_index.IsValid() || left_index != columns.GetColumnIndex(right_name)) {
+			return false;
+		}
+	}
+	return true;
 }
 
 static void FindMatchingPrimaryKeyColumns(const ColumnList &columns, const vector<unique_ptr<Constraint>> &constraints,
@@ -526,7 +551,7 @@ static void FindMatchingPrimaryKeyColumns(const ColumnList &columns, const vecto
 			fk.pk_columns = pk_names;
 			return;
 		}
-		if (pk_names != fk.pk_columns) {
+		if (!ColumnNamesReferToSameColumns(columns, pk_names, fk.pk_columns)) {
 			continue;
 		}
 		if (unique.IsDeferred()) {

@@ -1,4 +1,5 @@
 #include "duckdb/planner/expression_binder/index_binder.hpp"
+#include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/error_data.hpp"
 
@@ -441,6 +442,30 @@ unique_ptr<LogicalOperator> IndexBinder::BindCreateIndex(ClientContext &context,
 		// exists (note that blocking alone is the legacy value that is read as non-blocking for indexes)
 		dependencies.AddDependency(entry, DependencyDependentFlags().SetBlocking().SetAlterBlocking());
 	});
+
+	// Store the exact names of the referenced columns, so the stored expressions cannot become ambiguous when a
+	// column that only differs in case is added to the table later on
+	auto &columns = table_entry.GetColumns();
+	auto resolve_column_names = [&](ParsedExpression &parsed_expr) {
+		ParsedExpressionIterator::VisitExpressionMutable<ColumnRefExpression>(
+		    parsed_expr, [&](ColumnRefExpression &colref) {
+			    auto &names = colref.ColumnNamesMutable();
+			    // the column name can be qualified with the table name
+			    idx_t column_idx = names.size() > 1 && names[0] == table_entry.name ? 1 : 0;
+			    auto &column_name = names[column_idx];
+			    auto resolved_name = column_name;
+			    auto column_index = columns.GetColumnIndex(resolved_name);
+			    if (column_index.IsValid() && column_index.index != COLUMN_IDENTIFIER_ROW_ID) {
+				    column_name = resolved_name;
+			    }
+		    });
+	};
+	for (auto &expr : create_index_info->expressions) {
+		resolve_column_names(*expr);
+	}
+	for (auto &expr : create_index_info->parsed_expressions) {
+		resolve_column_names(*expr);
+	}
 
 	// Bind the index expressions.
 	// The expressions are bound again when the index is loaded, so they cannot depend on the session or the query
