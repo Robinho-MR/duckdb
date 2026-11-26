@@ -41,6 +41,15 @@ SimilarCatalogEntry SchemaCatalogEntry::GetSimilarEntry(CatalogTransaction trans
 	return result;
 }
 
+optional_ptr<CatalogEntry> SchemaCatalogEntry::GetExactEntry(CatalogTransaction transaction, CatalogType type,
+                                                             const Identifier &name) {
+	auto entry = GetEntry(transaction, type, name);
+	if (entry && entry->name.GetIdentifierName() != name.GetIdentifierName()) {
+		return nullptr;
+	}
+	return entry;
+}
+
 optional_ptr<CatalogEntry> SchemaCatalogEntry::GetEntry(CatalogTransaction transaction, CatalogType type,
                                                         const Identifier &name) {
 	EntryLookupInfo lookup_info(type, QualifiedName(name));

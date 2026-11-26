@@ -1,0 +1,228 @@
+# name: test/sql/catalog/case_insensitive_unless_ambiguous_entries.test
+# description: Catalog entry names are case-insensitive unless multiple entries only differ in case
+# group: [catalog]
+
+statement ok
+CREATE TABLE tbl(i INTEGER);
+
+statement ok
+INSERT INTO tbl VALUES (1);
+
+# without conflicts, names resolve case-insensitively
+query I
+SELECT * FROM TBL
+----
+1
+
+# an entry whose name only differs in case can be created
+statement ok
+CREATE TABLE "TBL"(i INTEGER);
+
+statement ok
+INSERT INTO "TBL" VALUES (2);
+
+query I
+SELECT * FROM tbl
+----
+1
+
+query I
+SELECT * FROM "TBL"
+----
+2
+
+statement error
+SELECT * FROM Tbl
+----
+<REGEX>:Catalog Error:.*ambiguous.*
+
+# exact duplicates are still rejected
+statement error
+CREATE TABLE "TBL"(i INTEGER);
+----
+already exists
+
+# IF NOT EXISTS / OR REPLACE resolve the name like any other reference
+statement error
+CREATE TABLE IF NOT EXISTS "Tbl"(i INTEGER);
+----
+<REGEX>:Catalog Error:.*ambiguous.*
+
+statement ok
+CREATE TABLE IF NOT EXISTS "TBL"(i INTEGER);
+
+statement ok
+CREATE OR REPLACE TABLE "TBL"(j INTEGER);
+
+query I
+SELECT count(*) FROM "TBL"
+----
+0
+
+query I
+SELECT * FROM tbl
+----
+1
+
+statement ok
+DROP TABLE "TBL";
+
+# without a conflict IF NOT EXISTS / OR REPLACE refer to the existing entry
+statement ok
+CREATE TABLE IF NOT EXISTS "Tbl"(x INTEGER);
+
+query I
+SELECT * FROM "Tbl"
+----
+1
+
+statement ok
+CREATE OR REPLACE TABLE replaced(i INTEGER);
+
+statement ok
+CREATE OR REPLACE TABLE "REPLACED"(j INTEGER);
+
+query I
+SELECT count(*) FROM (SHOW TABLES) WHERE name ILIKE 'replaced'
+----
+1
+
+statement ok
+DROP TABLE replaced
+
+# no more conflict: case-insensitive matching works again
+query I
+SELECT * FROM Tbl
+----
+1
+
+# renaming into a conflict
+statement ok
+CREATE TABLE other(k INTEGER);
+
+statement ok
+ALTER TABLE other RENAME TO "TBL";
+
+query I
+SELECT count(*) FROM "TBL"
+----
+0
+
+statement error
+SELECT * FROM tBL
+----
+<REGEX>:Catalog Error:.*ambiguous.*
+
+# renaming to a name that only differs in case
+statement ok
+ALTER TABLE "TBL" RENAME TO "Other";
+
+query I
+SELECT count(*) FROM other
+----
+0
+
+statement ok
+ALTER TABLE "Other" RENAME TO "OTHER";
+
+query I
+SELECT count(*) FROM "OTHER"
+----
+0
+
+# views and dependencies are kept apart
+statement ok
+CREATE VIEW v AS SELECT * FROM tbl;
+
+statement ok
+CREATE VIEW "V" AS SELECT * FROM "OTHER";
+
+query I
+SELECT * FROM v
+----
+1
+
+query I
+SELECT count(*) FROM "V"
+----
+0
+
+statement ok
+DROP VIEW v;
+
+# dependencies are tracked per entry
+statement ok
+CREATE SEQUENCE seq;
+
+statement ok
+CREATE SEQUENCE "SEQ";
+
+statement ok
+CREATE TABLE uses_seq(x INTEGER DEFAULT nextval('seq'));
+
+statement error
+DROP SEQUENCE seq
+----
+<REGEX>:Dependency Error:.*
+
+statement ok
+DROP SEQUENCE "SEQ"
+
+statement ok
+DROP TABLE uses_seq
+
+statement ok
+DROP SEQUENCE seq
+
+statement ok
+DROP TABLE tbl;
+
+query I
+SELECT count(*) FROM V
+----
+0
+
+# schemas
+statement ok
+CREATE SCHEMA s;
+
+statement ok
+CREATE SCHEMA "S";
+
+statement ok
+CREATE TABLE s.x AS SELECT 1 AS a;
+
+statement ok
+CREATE TABLE "S".x AS SELECT 2 AS a;
+
+query II
+SELECT (SELECT a FROM s.x), (SELECT a FROM "S".x)
+----
+1	2
+
+statement error
+SELECT * FROM "s"."x" JOIN "sS".x USING (a)
+----
+<REGEX>:Catalog Error:.*
+
+# macros
+statement ok
+CREATE MACRO m() AS 1;
+
+statement ok
+CREATE MACRO "M"() AS 2;
+
+# function names in calls are lowercased, so they refer to the lowercase macro
+query II
+SELECT m(), "M"()
+----
+1	1
+
+statement ok
+DROP MACRO m
+
+# without a conflict the other macro is found case-insensitively
+query I
+SELECT m()
+----
+2

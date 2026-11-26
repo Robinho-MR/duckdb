@@ -1,4 +1,5 @@
 #include "duckdb/catalog/catalog_set.hpp"
+#include "duckdb/storage/storage_manager.hpp"
 #include "duckdb/transaction/transaction_data.hpp"
 
 #include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
@@ -28,16 +29,16 @@ namespace duckdb {
 void CatalogEntryMap::AddEntry(unique_ptr<CatalogEntry> entry) {
 	auto name = entry->name;
 
-	if (entries.find(name) != entries.end()) {
+	if (entries.ContainsExact(name)) {
 		throw InternalException("Entry with name %s already exists", name);
 	}
-	entries.insert(make_pair(name, std::move(entry)));
+	entries.emplace(name, std::move(entry));
 }
 
 void CatalogEntryMap::UpdateEntry(unique_ptr<CatalogEntry> catalog_entry) {
 	auto name = catalog_entry->name;
 
-	auto entry = entries.find(name);
+	auto entry = entries.FindExact(name);
 	if (entry == entries.end()) {
 		throw InternalException("Entry with name %s does not exist", name);
 	}
@@ -61,7 +62,7 @@ void CatalogEntryMap::DropEntry(CatalogEntry &entry) {
 	if (!entry.HasParent()) {
 		// This is the top of the chain
 		D_ASSERT(chain.get() == &entry);
-		auto it = entries.find(name);
+		auto it = entries.FindExact(name);
 		D_ASSERT(it != entries.end());
 
 		// Remove the entry
@@ -80,11 +81,41 @@ void CatalogEntryMap::DropEntry(CatalogEntry &entry) {
 }
 
 optional_ptr<CatalogEntry> CatalogEntryMap::GetEntry(const Identifier &name) {
-	auto entry = entries.find(name);
+	auto entry = entries.FindExact(name);
 	if (entry == entries.end()) {
 		return nullptr;
 	}
 	return entry->second.get();
+}
+
+vector<Identifier> CatalogEntryMap::GetCaseInsensitiveMatches(const Identifier &name) const {
+	return entries.GetCaseInsensitiveMatches(name);
+}
+
+optional_ptr<CatalogEntry> CatalogSet::ResolveChain(CatalogTransaction transaction, const Identifier &name) {
+	auto exact = map.GetEntry(name);
+	if (exact_names || (exact && !GetEntryForTransaction(transaction, *exact).deleted)) {
+		return exact;
+	}
+	// no (live) entry with exactly this name - look for the unique live entry whose name only differs in case
+	optional_ptr<CatalogEntry> result;
+	for (auto &match : map.GetCaseInsensitiveMatches(name)) {
+		if (match.GetIdentifierName() == name.GetIdentifierName()) {
+			continue;
+		}
+		auto chain = map.GetEntry(match);
+		D_ASSERT(chain);
+		if (GetEntryForTransaction(transaction, *chain).deleted) {
+			continue;
+		}
+		if (result) {
+			throw CatalogException("Name %s is ambiguous: there are multiple entries whose names only differ in case "
+			                       "- use the exact (quoted) name",
+			                       name);
+		}
+		result = chain;
+	}
+	return result ? result : exact;
 }
 
 CatalogSet::CatalogSet(Catalog &catalog_p, unique_ptr<DefaultGenerator> defaults)
@@ -170,9 +201,36 @@ optional_ptr<CatalogEntry> CatalogSet::CreateCommittedEntry(unique_ptr<CatalogEn
 	return catalog_entry;
 }
 
+void CatalogSet::CheckNameCaseConflict(CatalogTransaction transaction, const Identifier &name,
+                                       optional_ptr<const Identifier> ignored_name) {
+	if (exact_names) {
+		return;
+	}
+	auto &db = catalog.GetAttached();
+	if (!db.HasStorageManager()) {
+		return;
+	}
+	for (auto &match : map.GetCaseInsensitiveMatches(name)) {
+		if (match.GetIdentifierName() == name.GetIdentifierName() ||
+		    (ignored_name && match.GetIdentifierName() == ignored_name->GetIdentifierName())) {
+			continue;
+		}
+		auto chain = map.GetEntry(match);
+		// any version that is not deleted can end up next to the new entry
+		if (!chain->deleted || !GetEntryForTransaction(transaction, *chain).deleted) {
+			db.GetStorageManager().CheckIdentifierCaseConflictIsSupported(
+			    StringUtil::Format("Entries whose names only differ in case (%s and %s)", match.GetIdentifierName(),
+			                       name.GetIdentifierName()));
+		}
+	}
+}
+
 bool CatalogSet::CreateEntryInternal(CatalogTransaction transaction, const Identifier &name,
                                      unique_ptr<CatalogEntry> value, unique_lock<mutex> &read_lock,
                                      bool should_be_empty) {
+	if (value->type != CatalogType::RENAMED_ENTRY && value->type != CatalogType::DELETED_ENTRY) {
+		CheckNameCaseConflict(transaction, name);
+	}
 	auto entry_value = map.GetEntry(name);
 	if (!entry_value) {
 		// Add a dummy node to start the chain
@@ -221,7 +279,7 @@ bool CatalogSet::CreateEntry(ClientContext &context, const Identifier &name, uni
 
 //! This method is used to retrieve an entry for the purpose of making a new version, through an alter/drop/create
 optional_ptr<CatalogEntry> CatalogSet::GetEntryInternal(CatalogTransaction transaction, const Identifier &name) {
-	auto entry_value = map.GetEntry(name);
+	auto entry_value = ResolveChain(transaction, name);
 	if (!entry_value) {
 		return nullptr;
 	}
@@ -275,6 +333,12 @@ bool CatalogSet::RenameEntryInternal(CatalogTransaction transaction, CatalogEntr
 	auto &original_name = old.name;
 
 	auto &context = *transaction.context;
+	try {
+		CheckNameCaseConflict(transaction, new_name, &original_name);
+	} catch (...) {
+		old.UndoAlter(context, alter_info);
+		throw;
+	}
 	auto entry_value = map.GetEntry(new_name);
 	if (entry_value) {
 		auto &existing_entry = GetEntryForTransaction(transaction, *entry_value);
@@ -364,7 +428,7 @@ bool CatalogSet::AlterEntry(CatalogTransaction transaction, const Identifier &na
 	// Preserve the oid across the alter: an altered entry is the same logical object as before
 	value->oid = entry->oid;
 
-	if (value->name != entry->name) {
+	if (value->name.GetIdentifierName() != entry->name.GetIdentifierName()) {
 		if (!RenameEntryInternal(transaction, *entry, value->name, alter_info, read_lock)) {
 			return false;
 		}
@@ -392,7 +456,7 @@ bool CatalogSet::AlterEntry(CatalogTransaction transaction, const Identifier &na
 	}
 
 	// Update shared entry state only after the alter is installed and rollbackable.
-	if (new_entry->name != entry->name) {
+	if (new_entry->name.GetIdentifierName() != entry->name.GetIdentifierName()) {
 		new_entry->SetAsRoot();
 	}
 
@@ -626,7 +690,7 @@ optional_ptr<CatalogEntry> CatalogSet::CreateDefaultEntry(CatalogTransaction tra
 
 CatalogSet::EntryLookup CatalogSet::GetEntryDetailed(CatalogTransaction transaction, const Identifier &name) {
 	unique_lock<mutex> read_lock(catalog_lock);
-	auto entry_value = map.GetEntry(name);
+	auto entry_value = ResolveChain(transaction, name);
 	if (entry_value) {
 		// we found an entry for this name
 		// check the version numbers
@@ -641,7 +705,6 @@ CatalogSet::EntryLookup CatalogSet::GetEntryDetailed(CatalogTransaction transact
 				return EntryLookup {nullptr, EntryLookup::FailureReason::DELETED};
 			}
 		}
-		D_ASSERT(current.name == name);
 		return EntryLookup {&current, EntryLookup::FailureReason::SUCCESS};
 	}
 	auto default_entry = CreateDefaultEntry(transaction, name, read_lock);
@@ -654,6 +717,20 @@ CatalogSet::EntryLookup CatalogSet::GetEntryDetailed(CatalogTransaction transact
 optional_ptr<CatalogEntry> CatalogSet::GetEntry(CatalogTransaction transaction, const Identifier &name) {
 	auto lookup = GetEntryDetailed(transaction, name);
 	return lookup.result;
+}
+
+optional_ptr<CatalogEntry> CatalogSet::GetExactEntry(CatalogTransaction transaction, const Identifier &name) {
+	unique_lock<mutex> read_lock(catalog_lock);
+	auto chain = map.GetEntry(name);
+	if (chain) {
+		auto &current = GetEntryForTransaction(transaction, *chain);
+		return current.deleted ? nullptr : &current;
+	}
+	auto default_entry = CreateDefaultEntry(transaction, name, read_lock);
+	if (default_entry && default_entry->name.GetIdentifierName() != name.GetIdentifierName()) {
+		return nullptr;
+	}
+	return default_entry;
 }
 
 optional_ptr<CatalogEntry> CatalogSet::GetEntry(ClientContext &context, const Identifier &name) {
@@ -787,6 +864,10 @@ void CatalogSet::ScanWithPrefix(CatalogTransaction transaction, const std::funct
 	auto it = entries.lower_bound(prefix);
 	auto end = entries.upper_bound(Identifier(prefix.GetIdentifierName() + char(255)));
 	for (; it != end; it++) {
+		if (!StringUtil::StartsWith(it->first.GetIdentifierName(), prefix.GetIdentifierName())) {
+			// the range contains the names that only match the prefix case-insensitively
+			continue;
+		}
 		auto &entry = *it->second;
 		auto &entry_for_transaction = GetEntryForTransaction(transaction, entry);
 		if (!entry_for_transaction.deleted) {

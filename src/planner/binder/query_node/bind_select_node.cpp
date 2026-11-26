@@ -573,7 +573,7 @@ BoundStatement Binder::BindSelectNode(SelectNode &statement, BoundStatement from
 		result.names.emplace_back(GetExpressionName(*expr));
 		ExpressionBinder::QualifyColumnNames(*this, expr);
 		if (!expr->GetAlias().empty()) {
-			bind_state.alias_map.Set(expr->GetAlias(), i);
+			bind_state.alias_map.SetExact(expr->GetAlias(), i);
 			result.names[i] = expr->GetAlias();
 		}
 		bind_state.projection_map[*expr] = i;

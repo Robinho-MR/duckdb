@@ -2,16 +2,18 @@
 # description: Test union types with ambiguous members
 # group: [union]
 
-# disallow members with same name (case insensitive)
+# disallow members with the same name
 statement error
 CREATE TABLE tbl(a UNION(b INT, b INT));
 ----
 <REGEX>:.*Binder Error.*Duplicate named type parameter.*
 
-statement error
-CREATE TABLE tbl(a UNION(b INT, B INT));
-----
-<REGEX>:.*Binder Error.*Duplicate named type parameter.*
+# members that only differ in case are allowed
+statement ok
+CREATE TABLE case_tbl(a UNION(b INT, B INT));
+
+statement ok
+DROP TABLE case_tbl
 
 # allow members with same type
 statement ok

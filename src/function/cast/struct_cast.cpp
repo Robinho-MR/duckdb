@@ -37,24 +37,37 @@ StructCastFieldMapping StructBoundCastData::GetFieldMapping(const LogicalType &s
 	identifier_map_t<idx_t> target_children_map;
 	for (idx_t i = 0; i < target_children.size(); i++) {
 		auto &name = target_children[i].first;
-		if (target_children_map.find(name) != target_children_map.end()) {
+		if (!target_children_map.emplace(name, i).second) {
 			result.kind = StructCastFieldMapping::MatchKind::DUPLICATE_TARGET_NAME;
 			result.duplicate_name = name;
 			return result;
 		}
-		target_children_map[name] = i;
 	}
 
+	// match the fields by exact name first, then case-insensitively (if the name matches a single field)
 	vector<bool> target_matched(target_children.size(), false);
-	for (idx_t i = 0; i < source_children.size(); i++) {
-		auto target_child = target_children_map.find(source_children[i].first);
-		if (target_child == target_children_map.end() || target_matched[target_child->second]) {
-			// Skip source children without a target, and duplicate source names beyond the first match
-			continue;
+	vector<optional_idx> source_targets(source_children.size());
+	for (idx_t pass = 0; pass < 2; pass++) {
+		for (idx_t i = 0; i < source_children.size(); i++) {
+			if (source_targets[i].IsValid()) {
+				continue;
+			}
+			auto &source_name = source_children[i].first;
+			auto target_child =
+			    pass == 0 ? target_children_map.FindExact(source_name) : target_children_map.find(source_name);
+			if (target_child == target_children_map.end() || target_matched[target_child->second]) {
+				// Skip source children without a target, and duplicate source names beyond the first match
+				continue;
+			}
+			target_matched[target_child->second] = true;
+			source_targets[i] = target_child->second;
 		}
-		target_matched[target_child->second] = true;
-		result.source_indexes.push_back(i);
-		result.target_indexes.push_back(target_child->second);
+	}
+	for (idx_t i = 0; i < source_children.size(); i++) {
+		if (source_targets[i].IsValid()) {
+			result.source_indexes.push_back(i);
+			result.target_indexes.push_back(source_targets[i].GetIndex());
+		}
 	}
 
 	if (result.source_indexes.empty()) {

@@ -148,6 +148,10 @@ public:
 	string GetUnsupportedPriorToVersionReason(const string &what, StorageVersion required) const;
 	//! Throws when a column type cannot be stored at the storage version of this database
 	void CheckTypeIsSupported(const LogicalType &type) const;
+	//! The storage version from which on names that only differ in case (e.g. columns "col" and "COL") can be stored
+	static constexpr StorageVersion IDENTIFIER_CASE_CONFLICTS_VERSION_ADDED = StorageVersion::V2_1_0;
+	//! Throws when names that only differ in case cannot be stored at the storage version of this database
+	void CheckIdentifierCaseConflictIsSupported(const string &what) const;
 	//! Whether a type holds a DECIMAL stored as a BIGNUM blob, the argument types of aggregate states included
 	static bool ContainsWideDecimal(const LogicalType &type);
 	//! Why a type written to the catalog holds a DECIMAL wider than this storage version stores, empty when it does

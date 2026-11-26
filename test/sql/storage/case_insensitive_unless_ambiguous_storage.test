@@ -2,7 +2,14 @@
 # description: Columns that only differ in case survive a restart
 # group: [storage]
 
-load {TEST_DIR}/case_insensitive_unless_ambiguous.db
+load {TEST_DIR}/case_insensitive_unless_ambiguous_main.db
+
+# names that only differ in case need storage version v2.1.0
+statement ok
+ATTACH '{TEST_DIR}/case_insensitive_unless_ambiguous.db' AS db (STORAGE_VERSION 'v2.1.0')
+
+statement ok
+USE db
 
 statement ok
 CREATE TABLE t(col INTEGER, "COL" INTEGER CHECK ("COL" > 0), UNIQUE (col));
@@ -26,7 +33,16 @@ ALTER TABLE idx ADD COLUMN "Val" INTEGER;
 statement ok
 CHECKPOINT
 
+statement ok
+USE case_insensitive_unless_ambiguous_main
+
 restart
+
+statement ok
+ATTACH '{TEST_DIR}/case_insensitive_unless_ambiguous.db' AS db
+
+statement ok
+USE db
 
 query II
 SELECT col, "COL" FROM t ORDER BY col
@@ -59,6 +75,9 @@ SELECT val, "Val" FROM idx WHERE val = 3
 
 # replaying the WAL
 statement ok
+PRAGMA disable_checkpoint_on_shutdown
+
+statement ok
 CREATE TABLE wal(x INTEGER);
 
 statement ok
@@ -67,9 +86,29 @@ ALTER TABLE wal ADD COLUMN "X" INTEGER;
 statement ok
 INSERT INTO wal VALUES (1, 2);
 
+statement ok
+CREATE TABLE "WAL"(y INTEGER);
+
+statement ok
+INSERT INTO "WAL" VALUES (3);
+
+statement ok
+USE case_insensitive_unless_ambiguous_main
+
 restart
+
+statement ok
+ATTACH '{TEST_DIR}/case_insensitive_unless_ambiguous.db' AS db
+
+statement ok
+USE db
 
 query II
 SELECT x, "X" FROM wal
 ----
 1	2
+
+query I
+SELECT y FROM "WAL"
+----
+3

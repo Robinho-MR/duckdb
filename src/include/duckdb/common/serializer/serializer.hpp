@@ -277,6 +277,33 @@ protected:
 		OnListEnd();
 	}
 
+	// Identifier set
+	// Serialized the same way as a list/vector
+	template <class CONTAINER>
+	void WriteValue(const duckdb::IdentifierSet<CONTAINER> &set) {
+		auto count = set.size();
+		OnListBegin(count);
+		for (auto &item : set) {
+			WriteValue(item);
+		}
+		OnListEnd();
+	}
+
+	// Identifier map
+	// serialized as a list of pairs
+	template <class V, class CONTAINER>
+	void WriteValue(const duckdb::IdentifierMap<V, CONTAINER> &map) {
+		auto count = map.size();
+		OnListBegin(count);
+		for (auto &item : map) {
+			OnObjectBegin();
+			WriteProperty(0, "key", item.first);
+			WriteProperty(1, "value", item.second);
+			OnObjectEnd();
+		}
+		OnListEnd();
+	}
+
 	// Set
 	// Serialized the same way as a list/vector
 	template <class T, class HASH, class CMP>

@@ -71,13 +71,14 @@ const vector<TypedKwarg> &TypedKwargs::GetOptions() const {
 }
 
 void TypedKwargs::Verify() const {
+	// options are matched case-insensitively, so their names cannot only differ in case
 	identifier_set_t names;
 	for (auto &option : options) {
-		if (!names.insert(option.name).second) {
+		if (names.ContainsCaseInsensitive(option.name) || !names.insert(option.name).second) {
 			throw InvalidInputException("Duplicate option name: %s", option.name);
 		}
 		for (auto &alias : option.aliases) {
-			if (!names.insert(alias).second) {
+			if (names.ContainsCaseInsensitive(alias) || !names.insert(alias).second) {
 				throw InvalidInputException("Duplicate option name: %s", alias);
 			}
 		}

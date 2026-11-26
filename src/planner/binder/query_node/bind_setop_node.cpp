@@ -51,7 +51,7 @@ void SetOpAliasGatherer::GatherAliases(BoundStatement &stmt, const vector<idx_t>
 
 		if (entry == bind_state.alias_map.end()) {
 			// the alias is not in there yet, just assign it
-			bind_state.alias_map.Insert(name, index);
+			bind_state.alias_map.emplace(name, index);
 		}
 	}
 	// check if the expression matches one of the expressions in the original expression list
@@ -80,9 +80,9 @@ void SetOpAliasGatherer::GatherSetOpAliases(SetOperationType setop_type, const v
 	if (setop_type == SetOperationType::UNION_BY_NAME) {
 		auto &setop_names = stmt_names;
 		// for UNION BY NAME - create a new re-order index
-		IdentifierLookupMap<idx_t> reorder_map;
+		identifier_map_t<idx_t> reorder_map;
 		for (idx_t col_idx = 0; col_idx < setop_names.size(); ++col_idx) {
-			reorder_map.Insert(setop_names[col_idx], reorder_idx[col_idx]);
+			reorder_map.emplace(setop_names[col_idx], reorder_idx[col_idx]);
 		}
 
 		// use new reorder index
@@ -121,13 +121,13 @@ void Binder::BuildUnionByNameInfo(BoundSetOperationNode &result) {
 	// map every column of every child to a column of the result: columns are matched by exact name first, and
 	// otherwise case-insensitively if the name matches exactly one result column
 	vector<vector<idx_t>> child_to_result;
-	IdentifierLookupMap<idx_t> result_map;
+	identifier_map_t<idx_t> result_map;
 	D_ASSERT(result.names.empty());
 	for (auto &child : result.bound_children) {
 		auto &child_names = child.names;
-		IdentifierLookupSet child_name_set;
+		identifier_set_t child_name_set;
 		for (auto &col_name : child_names) {
-			if (!child_name_set.Insert(col_name)) {
+			if (!child_name_set.insert(col_name).second) {
 				throw BinderException(
 				    "UNION (ALL) BY NAME operation doesn't support duplicate names in the SELECT list - "
 				    "the name %s occurs multiple times",
@@ -165,7 +165,7 @@ void Binder::BuildUnionByNameInfo(BoundSetOperationNode &result) {
 			// column is not yet present in the result
 			mapping[i] = result.names.size();
 			used_result_columns.insert(result.names.size());
-			result_map.Insert(col_name, result.names.size());
+			result_map.emplace(col_name, result.names.size());
 			result.names.emplace_back(col_name);
 		}
 		child_to_result.push_back(std::move(mapping));

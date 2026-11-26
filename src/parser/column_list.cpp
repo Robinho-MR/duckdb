@@ -31,7 +31,7 @@ void ColumnList::AddColumn(ColumnDefinition column) {
 void ColumnList::Finalize() {
 	// add the "rowid" alias, if there is no rowid column specified in the table
 	if (!name_map.ContainsCaseInsensitive("rowid")) {
-		name_map.Insert("rowid", COLUMN_IDENTIFIER_ROW_ID);
+		name_map.emplace("rowid", COLUMN_IDENTIFIER_ROW_ID);
 	}
 }
 
@@ -43,7 +43,7 @@ void ColumnList::AddToNameMap(ColumnDefinition &col) {
 			col.SetName(Identifier(base_name + "_" + to_string(index++)));
 		}
 	}
-	if (!name_map.Insert(col.Name(), col.Oid())) {
+	if (!name_map.emplace(col.Name(), col.Oid()).second) {
 		throw CatalogException("Column with name %s already exists!", col.Name());
 	}
 }
@@ -120,6 +120,16 @@ vector<LogicalType> ColumnList::GetColumnTypes() const {
 
 bool ColumnList::ColumnExists(const Identifier &name) const {
 	return name_map.Contains(name);
+}
+
+idx_t ColumnList::GetCaseInsensitiveColumnCount(const Identifier &name) const {
+	idx_t count = 0;
+	for (auto &match : name_map.GetCaseInsensitiveMatches(name)) {
+		if (name_map.FindExact(match)->second != COLUMN_IDENTIFIER_ROW_ID) {
+			count++;
+		}
+	}
+	return count;
 }
 
 bool ColumnList::ColumnExistsExact(const Identifier &name) const {

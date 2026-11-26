@@ -33,9 +33,16 @@ statement error
 SELECT ({'HELLO': 3, 'HELLO': 4}) col;
 ----
 
-statement error
-SELECT ({'HELLO': 3, 'hello': 4}) col;
+# keys that only differ in case are allowed, but then only match exactly
+query III
+SELECT col['HELLO'], col['hello'], col.hello FROM (SELECT ({'HELLO': 3, 'hello': 4}) col);
 ----
+3	4	4
+
+statement error
+SELECT ({'HELLO': 3, 'hello': 4})['Hello'];
+----
+<REGEX>:Binder Error:.*ambiguous.*
 
 statement error
 SELECT col['HELL'] FROM tbl

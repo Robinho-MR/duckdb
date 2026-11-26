@@ -165,7 +165,7 @@ static unique_ptr<FunctionData> ReadSingleCSVFileBind(ClientContext &context, Ta
 			options.columns_set = true;
 			options.sql_types_per_column.clear();
 			for (idx_t i = 0; i < options.name_list.size(); i++) {
-				options.sql_types_per_column[options.name_list[i]] = i;
+				options.sql_types_per_column.SetExact(options.name_list[i], i);
 			}
 			names = options.name_list;
 			return_types = options.sql_type_list;

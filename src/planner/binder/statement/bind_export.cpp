@@ -1,6 +1,7 @@
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/parser/statement/export_statement.hpp"
 #include "duckdb/planner/binder.hpp"
+#include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/planner/operator/logical_export.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
@@ -210,7 +211,8 @@ BoundStatement Binder::Bind(ExportStatement &stmt) {
 
 	auto exported_tables = make_uniq<BoundExportData>();
 
-	unordered_set<string> table_name_index;
+	// file names are deduplicated case-insensitively, as tables can have names that only differ in case
+	case_insensitive_set_t table_name_index;
 	vector<unique_ptr<LogicalOperator>> export_nodes;
 	for (auto &t : tables) {
 		auto &table = t.get().Cast<TableCatalogEntry>();

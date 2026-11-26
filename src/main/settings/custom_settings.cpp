@@ -838,6 +838,18 @@ static LogicalType ParseForceVariantShredding(const string &input, bool allow_un
 				                            "or STRUCT (for OBJECT Variant values), not %s",
 				                            type.ToString());
 			}
+			if (type.id() == LogicalTypeId::STRUCT) {
+				// shredded fields are matched case-insensitively, so they cannot only differ in case
+				identifier_set_t field_names;
+				for (auto &child : StructType::GetChildTypes(type)) {
+					if (field_names.ContainsCaseInsensitive(child.first)) {
+						throw InvalidInputException("Could not parse type string '%s' for 'force_variant_shredding': "
+						                            "shredded fields cannot only differ in case",
+						                            type.ToString());
+					}
+					field_names.insert(child.first);
+				}
+			}
 			return false;
 		}
 		switch (type.id()) {

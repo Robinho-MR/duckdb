@@ -31,7 +31,7 @@ void Binding::Initialize() {
 	for (idx_t i = 0; i < names.size(); i++) {
 		auto &name = names[i];
 		D_ASSERT(!name.empty());
-		if (!name_map.Insert(name, i)) {
+		if (!name_map.emplace(name, i).second) {
 			throw BinderException("table %s has duplicate column name %s", alias.GetAlias(), name);
 		}
 	}
@@ -122,7 +122,7 @@ void Binding::AddColumnAlias(const Identifier &column_alias, column_t column_ind
 		// a column with this name already exists - the alias is not required
 		return;
 	}
-	name_map.Insert(column_alias, column_index);
+	name_map.emplace(column_alias, column_index);
 }
 
 const Identifier &Binding::GetRegisteredColumnName(const Identifier &column_name) {
@@ -214,7 +214,7 @@ TableBinding::TableBinding(const Identifier &alias, vector<LogicalType> types_p,
 			continue;
 		}
 		if (!name_map.ContainsCaseInsensitive(name)) {
-			name_map.Insert(name, idx);
+			name_map.emplace(name, idx);
 		}
 	}
 }

@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "duckdb/common/identifier_lookup_map.hpp"
+#include "duckdb/common/identifier.hpp"
 
 #include "duckdb/common/identifier.hpp"
 #include "duckdb/planner/bound_query_node.hpp"
@@ -22,14 +22,14 @@ namespace duckdb {
 //! Bind state during a SelectNode
 struct SelectBindState {
 	// Mapping of (alias -> index) and a mapping of (Expression -> index) for the SELECT list
-	IdentifierLookupMap<idx_t> alias_map;
+	identifier_map_t<idx_t> alias_map;
 	parsed_expression_map_t<idx_t> projection_map;
 	//! The original unparsed expressions. This is exported after binding, because the binding might change the
 	//! expressions (e.g. when a * clause is present)
 	vector<unique_ptr<ParsedExpression>> original_expressions;
 	vector<unique_ptr<ParsedExpression>> unbound_groups;
 	parsed_expression_map_t<ProjectionIndex> group_map;
-	IdentifierLookupMap<ProjectionIndex> group_alias_map;
+	identifier_map_t<ProjectionIndex> group_alias_map;
 	//! Whether any group is an expression other than a plain column reference
 	bool has_compound_groups = false;
 	unordered_map<ProjectionIndex, ProjectionIndex> collated_groups;

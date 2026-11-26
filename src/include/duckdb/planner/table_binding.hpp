@@ -10,7 +10,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "duckdb/common/identifier_lookup_map.hpp"
+#include "duckdb/common/identifier.hpp"
 #include "duckdb/parser/column_definition.hpp"
 #include "duckdb/parser/parsed_expression.hpp"
 #include "duckdb/planner/expression_binder.hpp"
@@ -105,7 +105,7 @@ protected:
 	//! Column names of the subquery
 	vector<Identifier> names;
 	//! Name -> index for the names (case-insensitive unless ambiguous)
-	IdentifierLookupMap<column_t> name_map;
+	identifier_map_t<column_t> name_map;
 	//! Whether rows of this binding can be NULL-extended by an outer join
 	bool null_extended = false;
 };

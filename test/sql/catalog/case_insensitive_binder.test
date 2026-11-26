@@ -26,9 +26,12 @@ DROP TABLE MyOtherTable;
 statement ok
 CREATE TABLE "ABC"(i integer);
 
-statement error
+# an entry whose name only differs in case can be created (in-memory databases use the latest storage version)
+statement ok
 CREATE TABLE "AbC"(i integer);
-----
+
+statement ok
+DROP TABLE "AbC"
 
 statement ok
 SELECT * FROM "ABC";

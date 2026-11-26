@@ -321,6 +321,18 @@ string StorageManager::GetUnsupportedPriorToVersionReason(const string &what, St
 	return UnsupportedAtStorageVersion(db, GetStorageVersion(), what, required);
 }
 
+//! Whether some of the names only differ in case
+static bool HasCaseConflict(const child_list_t<LogicalType> &children) {
+	identifier_set_t names;
+	for (auto &child : children) {
+		if (names.ContainsCaseInsensitive(child.first)) {
+			return true;
+		}
+		names.insert(child.first);
+	}
+	return false;
+}
+
 string StorageManager::GetUnsupportedTypeReason(const LogicalType &logical_type) const {
 	const auto storage_version = GetStorageVersion();
 	auto unsupported = [&](const string &what, StorageVersion required) {
@@ -346,6 +358,15 @@ string StorageManager::GetUnsupportedTypeReason(const LogicalType &logical_type)
 		case LogicalTypeId::STRUCT:
 			if (storage_version < StorageVersion::V2_0_0 && StructType::GetChildCount(type) == 0) {
 				reason = unsupported("Empty STRUCT columns", StorageVersion::V2_0_0);
+			} else if (storage_version < IDENTIFIER_CASE_CONFLICTS_VERSION_ADDED &&
+			           HasCaseConflict(StructType::GetChildTypes(type))) {
+				reason = unsupported("STRUCT fields that only differ in case", IDENTIFIER_CASE_CONFLICTS_VERSION_ADDED);
+			}
+			break;
+		case LogicalTypeId::UNION:
+			if (storage_version < IDENTIFIER_CASE_CONFLICTS_VERSION_ADDED &&
+			    HasCaseConflict(StructType::GetChildTypes(type))) {
+				reason = unsupported("UNION members that only differ in case", IDENTIFIER_CASE_CONFLICTS_VERSION_ADDED);
 			}
 			break;
 		case LogicalTypeId::TUPLE:
@@ -391,6 +412,13 @@ string StorageManager::GetUnsupportedTypeReason(const LogicalType &logical_type)
 		return !reason.empty();
 	});
 	return reason;
+}
+
+void StorageManager::CheckIdentifierCaseConflictIsSupported(const string &what) const {
+	if (!HasStorageVersion() || GetStorageVersion() >= IDENTIFIER_CASE_CONFLICTS_VERSION_ADDED) {
+		return;
+	}
+	throw InvalidInputException(GetUnsupportedPriorToVersionReason(what, IDENTIFIER_CASE_CONFLICTS_VERSION_ADDED));
 }
 
 void StorageManager::CheckTypeIsSupported(const LogicalType &type) const {

@@ -72,6 +72,8 @@ MangledDependencyName::MangledDependencyName(const MangledEntryName &from, const
 }
 
 DependencyManager::DependencyManager(DuckCatalog &catalog) : catalog(catalog), subjects(catalog), dependents(catalog) {
+	subjects.SetExactNames();
+	dependents.SetExactNames();
 }
 
 vector<Identifier> DependencyManager::GetSchemaPath(const CatalogEntry &entry) {

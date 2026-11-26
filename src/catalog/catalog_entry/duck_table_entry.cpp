@@ -58,6 +58,27 @@ static void CheckTypeIsSupported(const LogicalType &logical_type, AttachedDataba
 	db.GetStorageManager().CheckTypeIsSupported(logical_type);
 }
 
+static void CheckColumnNameCaseConflictSupported(const Identifier &name, AttachedDatabase &db) {
+	if (db.HasStorageManager()) {
+		db.GetStorageManager().CheckIdentifierCaseConflictIsSupported(
+		    StringUtil::Format("Column names that only differ in case (%s)", name.GetIdentifierName()));
+	}
+}
+
+//! Throws if the table has columns whose names only differ in case and the storage version cannot store them
+static void CheckColumnNameCaseConflicts(const ColumnList &columns, AttachedDatabase &db) {
+	if (!db.HasStorageManager()) {
+		return;
+	}
+	for (auto &col : columns.Logical()) {
+		if (columns.LookupColumn(col.Name()) == IdentifierMatch::FOUND &&
+		    columns.GetCaseInsensitiveColumnCount(col.Name()) > 1) {
+			db.GetStorageManager().CheckIdentifierCaseConflictIsSupported(
+			    StringUtil::Format("Column names that only differ in case (%s)", col.Name().GetIdentifierName()));
+		}
+	}
+}
+
 static void SetAlterDependencies(ClientContext &context, BoundCreateTableInfo &info, AlterInfo &alter_info) {
 	// The foreign key dependency on the referenced parent table is registered when the table is created
 	// (DuckSchemaEntry::CreateTable), but it is not part of the stored create info - re-add it here,
@@ -102,6 +123,7 @@ DuckTableEntry::DuckTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, Bou
 		return;
 	}
 
+	CheckColumnNameCaseConflicts(columns, catalog.GetAttached());
 	// the default, generated and check expressions are written to the catalog, as are the generated column types
 	auto &storage_manager = catalog.GetAttached().GetStorageManager();
 	for (auto &col_def : columns.Logical()) {
@@ -451,6 +473,13 @@ unique_ptr<CatalogEntry> DuckTableEntry::RenameColumn(ClientContext &context, Re
 	create_info->tags = tags;
 	// if the new name only differs in case from another column, references to other columns must become exact
 	bool resolve_all = columns.LookupColumn(info.new_name) != IdentifierMatch::NOT_FOUND;
+	if (resolve_all) {
+		for (auto &col : columns.Logical()) {
+			if (col.Logical() != rename_idx && col.Name() == info.new_name) {
+				CheckColumnNameCaseConflictSupported(info.new_name, catalog.GetAttached());
+			}
+		}
+	}
 	for (auto &col : columns.Logical()) {
 		auto copy = col.Copy();
 		if (rename_idx == col.Logical()) {
@@ -555,7 +584,7 @@ unique_ptr<CatalogEntry> DuckTableEntry::AddColumn(ClientContext &context, AddCo
 	auto col_name = info.new_column.GetName();
 
 	// We're checking for the opposite condition (ADD COLUMN IF _NOT_ EXISTS ...).
-	if (info.if_column_not_exists && columns.ColumnExistsExact(col_name)) {
+	if (info.if_column_not_exists && ColumnExists(col_name)) {
 		return nullptr;
 	}
 
@@ -566,6 +595,9 @@ unique_ptr<CatalogEntry> DuckTableEntry::AddColumn(ClientContext &context, AddCo
 
 	// if the new column only differs in case from an existing column, existing references must become exact
 	bool resolve_all = columns.LookupColumn(col_name) != IdentifierMatch::NOT_FOUND;
+	if (resolve_all && !columns.ColumnExistsExact(col_name)) {
+		CheckColumnNameCaseConflictSupported(col_name, catalog.GetAttached());
+	}
 	LogicalIndex no_rename(DConstants::INVALID_INDEX);
 	for (auto &col : columns.Logical()) {
 		auto copy = col.Copy();

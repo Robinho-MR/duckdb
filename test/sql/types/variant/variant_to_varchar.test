@@ -66,10 +66,11 @@ SELECT '{"": 1, "b": 2}'::JSON::VARIANT::VARCHAR
 ----
 {'': 1, 'b': 2}
 
-statement error
+# keys that only differ in case are distinct keys
+query I
 SELECT '{"b": 1, "B": 2}'::JSON::VARIANT::VARCHAR
 ----
-duplicate name "b" in struct
+{'B': 2, 'b': 1}
 
 query I
 SELECT [1::VARIANT, NULL::VARIANT, [2, 3]::VARIANT, {'a': 'b c'}::VARIANT, MAP {'k': 1}::VARIANT]::VARIANT::VARCHAR

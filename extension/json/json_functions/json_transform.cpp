@@ -61,7 +61,8 @@ static LogicalType StructureToTypeObject(yyjson_val *obj, ClientContext &context
 		if (key_str.empty()) {
 			throw BinderException("Empty key in object in JSON structure");
 		}
-		if (!names.insert(Identifier(key_str)).second) {
+		// JSON keys are matched case-insensitively, so keys that only differ in case are duplicates
+		if (names.ContainsCaseInsensitive(Identifier(key_str)) || !names.insert(Identifier(key_str)).second) {
 			JSONCommon::ThrowValFormatError("Duplicate keys in object in JSON structure: %s", val);
 		}
 		child_types.emplace_back(key_str, StructureStringToType(val, context, decimal_width_limit));

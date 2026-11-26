@@ -1,5 +1,5 @@
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
-#include "duckdb/common/identifier_lookup_map.hpp"
+#include "duckdb/common/identifier.hpp"
 
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"

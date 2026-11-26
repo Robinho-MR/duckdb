@@ -22,7 +22,8 @@ namespace duckdb {
 //! An Identifier represents a SQL identifier (e.g. a column name, table name, alias, ...).
 //! Unlike a regular string, identifiers compare case-insensitively (using StringUtil::CIEquals).
 //! Internally the identifier is stored as-is (preserving the original casing), but all comparisons,
-//! hashing and ordering are case-insensitive.
+//! hashing and ordering are case-insensitive. Identifier containers (identifier_map_t, ...) are case-insensitive
+//! unless ambiguous: they can hold names that only differ in case, which then only match exactly.
 class Identifier {
 public:
 	Identifier() = default;
@@ -172,13 +173,11 @@ struct IdentifierCompare {
 	}
 };
 
-template <typename T>
-using identifier_map_t = unordered_map<Identifier, T, IdentifierHashFunction, IdentifierEquality>;
+} // namespace duckdb
 
-using identifier_set_t = unordered_set<Identifier, IdentifierHashFunction, IdentifierEquality>;
+#include "duckdb/common/identifier_container.hpp"
 
-template <typename T>
-using identifier_tree_t = map<Identifier, T, IdentifierCompare>;
+namespace duckdb {
 
 //! Helper to convert a vector of identifiers to a vector of (raw) strings (for interop with string-based APIs)
 inline vector<string> IdentifiersToStrings(const vector<Identifier> &identifiers) {

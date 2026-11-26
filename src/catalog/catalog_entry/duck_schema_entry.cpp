@@ -393,6 +393,11 @@ optional_ptr<CatalogEntry> DuckSchemaEntry::LookupEntry(CatalogTransaction trans
 	return GetCatalogSet(lookup_info.GetCatalogType()).GetEntry(transaction, lookup_info.GetEntryIdentifier());
 }
 
+optional_ptr<CatalogEntry> DuckSchemaEntry::GetExactEntry(CatalogTransaction transaction, CatalogType type,
+                                                          const Identifier &name) {
+	return GetCatalogSet(type).GetExactEntry(transaction, name);
+}
+
 CatalogSet::EntryLookup DuckSchemaEntry::LookupEntryDetailed(CatalogTransaction transaction,
                                                              const EntryLookupInfo &lookup_info) {
 	return GetCatalogSet(lookup_info.GetCatalogType()).GetEntryDetailed(transaction, lookup_info.GetEntryIdentifier());

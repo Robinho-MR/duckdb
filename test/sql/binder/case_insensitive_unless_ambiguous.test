@@ -382,3 +382,25 @@ query II
 SELECT 1 AS a, 2 AS "A" ORDER BY a
 ----
 1	2
+
+# STRUCT fields that only differ in case
+query II
+SELECT s.a, s."A" FROM (SELECT {'a': 1, 'A': 2} AS s)
+----
+1	2
+
+query II
+SELECT s.a, s."A" FROM (SELECT {'A': 2, 'a': 1}::STRUCT(a INTEGER, "A" INTEGER) AS s)
+----
+1	2
+
+# a field without an exact match is cast case-insensitively if it is unique
+query I
+SELECT ({'X': 5}::STRUCT(x INTEGER)).x
+----
+5
+
+statement error
+SELECT s.Aa FROM (SELECT {'aa': 1, 'AA': 2} AS s)
+----
+<REGEX>:Binder Error:.*ambiguous.*

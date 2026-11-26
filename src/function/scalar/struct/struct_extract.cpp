@@ -35,11 +35,21 @@ static idx_t ResolveStructEntryByName(const LogicalType &struct_type, const stri
 		throw BinderException("Key name for struct_extract must not be empty");
 	}
 	auto key = Identifier(key_str);
-	for (idx_t i = 0; i < struct_children.size(); i++) {
-		if (struct_children[i].first == key) {
-			entry_type = struct_children[i].second;
-			return i;
-		}
+	vector<Identifier> names;
+	names.reserve(struct_children.size());
+	for (auto &struct_child : struct_children) {
+		names.push_back(struct_child.first);
+	}
+	idx_t index;
+	auto match = ResolveIdentifier(names, key, index);
+	if (match == IdentifierMatch::FOUND) {
+		entry_type = struct_children[index].second;
+		return index;
+	}
+	if (match == IdentifierMatch::AMBIGUOUS) {
+		throw BinderException("Key %s is ambiguous: the struct has multiple keys that only differ in case - use the "
+		                      "exact key",
+		                      key);
 	}
 	vector<string> candidates;
 	candidates.reserve(struct_children.size());

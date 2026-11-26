@@ -1,5 +1,5 @@
 #include "duckdb/common/identifier.hpp"
-#include "duckdb/common/identifier_lookup_map.hpp"
+#include "duckdb/common/identifier.hpp"
 
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/uuid.hpp"

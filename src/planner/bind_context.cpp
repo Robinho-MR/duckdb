@@ -90,7 +90,7 @@ vector<Identifier> BindContext::GetSimilarBindings(const Identifier &column_name
 }
 
 void BindContext::AddUsingBinding(const Identifier &column_name, UsingColumnSet &set) {
-	using_columns.GetOrInsert(column_name).insert(set);
+	using_columns.GetOrInsertExact(column_name).insert(set);
 }
 
 bool BindContext::RefersToUsingColumn(const UsingColumnSet &set, const Identifier &using_column,
@@ -195,7 +195,7 @@ void BindContext::RemoveUsingBinding(const Identifier &column_name, UsingColumnS
 		bindings.erase(set);
 	}
 	if (bindings.empty()) {
-		using_columns.Erase(Identifier(entry->first));
+		using_columns.EraseExact(Identifier(entry->first));
 	}
 }
 
@@ -849,13 +849,13 @@ void BindContext::AddTableFunction(TableIndex index, const Identifier &alias, co
 	    make_uniq<TableBinding>(alias, types, names, bound_column_ids, entry, index, std::move(virtual_columns)));
 }
 
-static Identifier AddColumnNameToBinding(const Identifier &base_name, IdentifierLookupSet &current_names) {
+static Identifier AddColumnNameToBinding(const Identifier &base_name, identifier_set_t &current_names) {
 	idx_t index = 1;
 	Identifier name = base_name;
 	while (current_names.ContainsExact(name)) {
 		name = Identifier(base_name + "_" + std::to_string(index++));
 	}
-	current_names.Insert(name);
+	current_names.insert(name);
 	return name;
 }
 
@@ -866,7 +866,7 @@ vector<Identifier> BindContext::AliasColumnNames(const Identifier &table_name, c
 		throw BinderException("table %s has %lld columns available but %lld columns specified", table_name,
 		                      names.size(), column_aliases.size());
 	}
-	IdentifierLookupSet current_names;
+	identifier_set_t current_names;
 	// use any provided column aliases first
 	for (idx_t i = 0; i < column_aliases.size(); i++) {
 		result.push_back(AddColumnNameToBinding(column_aliases[i], current_names));
@@ -945,7 +945,7 @@ void BindContext::AddContext(BindContext other) {
 	}
 	for (auto &entry : other.using_columns) {
 		for (auto &alias : entry.second) {
-			using_columns.GetOrInsert(entry.first).insert(alias);
+			using_columns.GetOrInsertExact(entry.first).insert(alias);
 		}
 	}
 }
@@ -975,7 +975,7 @@ void BindContext::RemoveContext(const vector<BindingAlias> &aliases) {
 			}
 		}
 		for (auto &removed_col : removed_using_columns) {
-			using_columns.Erase(removed_col);
+			using_columns.EraseExact(removed_col);
 		}
 
 		// remove the binding from the list of bindings

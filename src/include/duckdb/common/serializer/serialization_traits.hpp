@@ -96,6 +96,12 @@ struct is_unordered_map<typename duckdb::unordered_map<Args...>> : std::true_typ
 	typedef typename std::tuple_element<2, std::tuple<Args...>>::type HASH_TYPE;
 	typedef typename std::tuple_element<3, std::tuple<Args...>>::type EQUAL_TYPE;
 };
+// identifier maps are serialized like unordered maps
+template <typename T, typename CONTAINER>
+struct is_unordered_map<duckdb::IdentifierMap<T, CONTAINER>> : std::true_type {
+	typedef Identifier KEY_TYPE;
+	typedef T VALUE_TYPE;
+};
 
 template <typename T>
 struct is_map : std::false_type {};
@@ -169,6 +175,10 @@ struct is_unordered_set<duckdb::unordered_set<Args...>> : std::true_type {
 	typedef typename std::tuple_element<0, std::tuple<Args...>>::type ELEMENT_TYPE;
 	typedef typename std::tuple_element<1, std::tuple<Args...>>::type HASH_TYPE;
 	typedef typename std::tuple_element<2, std::tuple<Args...>>::type EQUAL_TYPE;
+};
+template <typename CONTAINER>
+struct is_unordered_set<duckdb::IdentifierSet<CONTAINER>> : std::true_type {
+	typedef Identifier ELEMENT_TYPE;
 };
 
 template <typename T>

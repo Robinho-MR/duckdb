@@ -207,12 +207,15 @@ optional<Identifier> LogicalPlanSQLExportContext::ReferenceNamedRelation(TableIn
 }
 
 Identifier LogicalPlanSQLExportContext::NextRelationAlias(const Identifier &preferred) {
-	if (!preferred.empty() && relation_aliases.insert(preferred).second) {
+	// a generated alias must not even only differ in case from a name that is in use, as it could capture it
+	if (!preferred.empty() && !relation_aliases.ContainsCaseInsensitive(preferred)) {
+		relation_aliases.insert(preferred);
 		return preferred;
 	}
 	while (true) {
 		auto name = Identifier("r" + to_string(next_relation_ordinal++));
-		if (relation_aliases.insert(name).second) {
+		if (!relation_aliases.ContainsCaseInsensitive(name)) {
+			relation_aliases.insert(name);
 			return name;
 		}
 	}
