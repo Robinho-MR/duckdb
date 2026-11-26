@@ -28,6 +28,7 @@
 #include "duckdb/transaction/duck_transaction_manager.hpp"
 #include "duckdb/common/storage_compatibility.hpp"
 #include "duckdb/common/type_visitor.hpp"
+#include "duckdb/storage/storage_manager.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/logging/log_type.hpp"
 #include "duckdb/logging/logger.hpp"
@@ -154,10 +155,14 @@ RowGroupCollection::RowGroupCollection(shared_ptr<DataTableInfo> info_p, BlockMa
       owned_row_groups(make_shared_ptr<RowGroupSegmentTree>(*this, row_start)), allocation_size(0),
       row_group_append_mode(RowGroupAppendMode::APPEND_TO_EXISTING) {
 	// If the table contains shredded types (variant / geometry) then we can't append to an existing row group
+	// The same holds for lists from v2.1.0 on, which are checkpointed like arrays if they all have the same length
+	const bool lists_can_be_arrays = StorageManager::TargetAtLeastVersion(
+	    StorageVersion::V2_1_0, info->GetDB().GetStorageManager().GetStorageVersion());
 	for (auto &type : types) {
 		if (TypeVisitor::Contains(type, LogicalTypeId::VARIANT) ||
 		    TypeVisitor::Contains(type, LogicalTypeId::GEOMETRY) ||
-		    TypeVisitor::Contains(type, LogicalTypeId::GEOGRAPHY)) {
+		    TypeVisitor::Contains(type, LogicalTypeId::GEOGRAPHY) ||
+		    (lists_can_be_arrays && TypeVisitor::Contains(type, LogicalTypeId::LIST))) {
 			row_group_append_mode = RowGroupAppendMode::REQUIRE_NEW;
 			can_append_to_checkpointed_row_group = false;
 			break;

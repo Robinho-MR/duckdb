@@ -13,11 +13,14 @@
 
 namespace duckdb {
 
-//! List column data represents a list
+//! Array column data represents an array, or a list whose lists are all non-NULL and have the same length
+//! The row at index i holds the child rows [i * array_size, (i + 1) * array_size)
 class ArrayColumnData : public ColumnData {
 public:
 	ArrayColumnData(BlockManager &block_manager, DataTableInfo &info, idx_t column_index, LogicalType type,
 	                ColumnDataType data_type, optional_ptr<ColumnData> parent);
+	ArrayColumnData(BlockManager &block_manager, DataTableInfo &info, idx_t column_index, LogicalType type,
+	                idx_t array_size, ColumnDataType data_type, optional_ptr<ColumnData> parent);
 
 public:
 	void SetDataType(ColumnDataType data_type) override;
@@ -74,11 +77,30 @@ public:
 
 	const BaseStatistics &GetChildStats(const ColumnData &child) const override;
 
+	idx_t GetArraySize() const {
+		return array_size;
+	}
+	//! Checkpoints the validity and child of a column whose rows all hold array_size child rows like an array
+	static unique_ptr<ColumnCheckpointState> CheckpointFixedSize(ColumnData &column, ColumnData &validity,
+	                                                             ColumnData &child, idx_t array_size,
+	                                                             const RowGroup &row_group,
+	                                                             ColumnCheckpointInfo &checkpoint_info,
+	                                                             const BaseStatistics &old_stats);
+
 protected:
 	//! The child-column of the list
 	shared_ptr<ColumnData> child_column;
 	//! The validity column data of the array
 	shared_ptr<ValidityColumnData> validity;
+	//! The number of child rows of every row
+	idx_t array_size;
+
+private:
+	//! Whether the column is a list whose lists are stored like an array
+	bool IsList() const;
+	void ScanLists(ColumnScanState &state, Vector &result, idx_t count, idx_t scan_count);
+	void FetchLists(ColumnFetchState &state, const idx_t *offsets, const SelectionVector &sel, idx_t fetch_count,
+	                Vector &result, idx_t result_offset);
 };
 
 } // namespace duckdb

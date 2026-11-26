@@ -74,7 +74,7 @@ SELECT l FROM idx WHERE id = 4321;
 ----
 [4321, -4321]
 
-# appending to a row group with implied offsets stores the offsets of the appended lists
+# appending after a checkpoint appends to a new row group, which stores the offsets of the appended lists
 statement ok
 INSERT INTO idx VALUES (10000, [1, 2, 3]), (10001, NULL), (10002, [4, 5]);
 
@@ -111,7 +111,7 @@ CHECKPOINT;
 
 restart
 
-# the lists no longer all have the same length: only the offsets of the appended lists are stored
+# only the row group of the appended lists stores its offsets
 query I
 SELECT SUM(count) FROM pragma_storage_info('idx') WHERE column_name = 'l' AND column_path = '[1]';
 ----
@@ -146,7 +146,7 @@ SELECT SUM(l[2]) FROM idx WHERE id > 5000;
 ----
 -37492493
 
-# appending to a row group with implied and stored offsets
+# appending again after the checkpoint
 statement ok
 INSERT INTO idx VALUES (10005, [6, 6]);
 
@@ -165,7 +165,7 @@ SELECT COUNT(l), SUM(l[1]) FROM idx;
 ----
 10003	49995011
 
-# appending lists of the same length to a row group with implied offsets
+# appending lists of the same length after a checkpoint
 statement ok
 CREATE TABLE same AS SELECT [i, i] AS l FROM range(1000) t(i);
 

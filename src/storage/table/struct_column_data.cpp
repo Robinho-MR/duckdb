@@ -529,7 +529,7 @@ void StructColumnData::InitializeColumn(PersistentColumnData &column_data, BaseS
 	validity->InitializeColumn(column_data.child_columns[0], target_stats);
 	for (idx_t c_idx = 0; c_idx < sub_columns.size(); c_idx++) {
 		auto &child_stats = StructStats::GetChildStats(target_stats, c_idx);
-		sub_columns[c_idx]->InitializeColumn(column_data.child_columns[c_idx + 1], child_stats);
+		InitializeChildColumn(sub_columns[c_idx], column_data.child_columns[c_idx + 1], child_stats);
 	}
 	this->count = validity->count.load();
 }

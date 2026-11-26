@@ -239,6 +239,14 @@ public:
 	                                           const LogicalType &type,
 	                                           ColumnDataType data_type = ColumnDataType::MAIN_TABLE,
 	                                           optional_ptr<ColumnData> parent = nullptr);
+	//! Creates the column data of persistent column data, whose layout can differ from the default layout of its type
+	static shared_ptr<ColumnData> CreateColumn(BlockManager &block_manager, DataTableInfo &info, idx_t column_index,
+	                                           const LogicalType &type, const PersistentColumnData &column_data,
+	                                           ColumnDataType data_type = ColumnDataType::MAIN_TABLE,
+	                                           optional_ptr<ColumnData> parent = nullptr);
+	//! Initializes a child column from persistent column data, replacing the child if the data has another layout
+	static void InitializeChildColumn(shared_ptr<ColumnData> &child, PersistentColumnData &column_data,
+	                                  BaseStatistics &target_stats);
 
 	void MergeStatistics(const BaseStatistics &other);
 	void MergeIntoStatistics(BaseStatistics &other);

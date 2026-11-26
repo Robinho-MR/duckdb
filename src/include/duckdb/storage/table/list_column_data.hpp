@@ -29,14 +29,10 @@ public:
 	static unique_ptr<ExtraPersistentColumnData> Deserialize(Deserializer &deserializer);
 
 	ListStatsData length_data = ListStatsData {false, false, false, 0, 0, 0};
-	//! The length of the lists whose offsets are not stored, if the length statistics do not imply it
-	optional_idx implied_list_length;
 };
 
 //! List column data represents a list
 class ListColumnData : public ColumnData {
-	friend struct ListColumnCheckpointState;
-
 public:
 	ListColumnData(BlockManager &block_manager, DataTableInfo &info, idx_t column_index, LogicalType type,
 	               ColumnDataType data_type, optional_ptr<ColumnData> parent);
@@ -93,7 +89,10 @@ public:
 	void SetChildData(shared_ptr<ColumnData> child_column_p);
 
 	const BaseStatistics &GetChildStats(const ColumnData &child) const override;
-	void Verify(RowGroup &parent) override;
+
+	//! The list length, if the persistent column data stores lists that are all non-NULL and have the same length
+	//! like an array: such lists are loaded as an ArrayColumnData
+	static optional_idx GetFixedSizeListLength(const LogicalType &type, const PersistentColumnData &column_data);
 
 protected:
 	//! The child-column of the list
@@ -101,25 +100,10 @@ protected:
 	//! The validity column data of the list
 	shared_ptr<ValidityColumnData> validity;
 
-	//! The lists in [0, implied_count) are not NULL and all have length implied_list_length, so they are laid out
-	//! like arrays: their offsets are not stored, and the offset segments hold the offsets of the rows from
-	//! implied_count on
-	optional_idx implied_list_length;
-	idx_t implied_count = 0;
-
 private:
 	uint64_t FetchListOffset(idx_t row_idx);
-	//! Whether a scan state is at a row with implied offsets (the offset segments are not scanned yet)
-	bool ScansImpliedOffsets(const ColumnScanState &state) const;
-	//! The row of the list column a scan state is at
-	idx_t ScanRow(const ColumnScanState &state) const;
-	void InitializeImpliedScan(ColumnScanState &state, idx_t row_idx);
-	//! Moves a scan from the rows with implied offsets to the first row with stored offsets
-	void StartStoredScan(ColumnScanState &state);
-	//! The child row the list at row_idx starts at, for row_idx <= implied_count
-	idx_t ImpliedOffset(idx_t row_idx) const;
-	//! The list length if the offsets do not have to be stored when checkpointing
-	optional_idx GetCheckpointListLength(const BaseStatistics &stats);
+	//! The list length if the lists can be checkpointed like an array, which does not store the list offsets
+	optional_idx GetCheckpointListLength(const BaseStatistics &stats) const;
 };
 
 } // namespace duckdb

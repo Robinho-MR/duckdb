@@ -1400,8 +1400,6 @@ PersistentColumnData ColumnData::Serialize() {
 
 shared_ptr<ColumnData> ColumnData::Deserialize(BlockManager &block_manager, DataTableInfo &info, idx_t column_index,
                                                ReadStream &source, const LogicalType &type) {
-	auto entry = ColumnData::CreateColumn(block_manager, info, column_index, type);
-
 	// deserialize the persistent column data
 	BinaryDeserializer deserializer(source);
 	deserializer.Begin();
@@ -1421,7 +1419,8 @@ shared_ptr<ColumnData> ColumnData::Deserialize(BlockManager &block_manager, Data
 	deserializer.Unset<DatabaseInstance>();
 	deserializer.End();
 
-	// initialize the column
+	// create and initialize the column
+	auto entry = ColumnData::CreateColumn(block_manager, info, column_index, type, persistent_column_data);
 	entry->InitializeColumn(persistent_column_data, entry->stats->statistics);
 	return entry;
 }
@@ -1564,6 +1563,27 @@ shared_ptr<ColumnData> ColumnData::CreateColumn(BlockManager &block_manager, Dat
 		return make_shared_ptr<ValidityColumnData>(block_manager, info, column_index, data_type, parent);
 	}
 	return make_shared_ptr<StandardColumnData>(block_manager, info, column_index, type, data_type, parent);
+}
+
+shared_ptr<ColumnData> ColumnData::CreateColumn(BlockManager &block_manager, DataTableInfo &info, idx_t column_index,
+                                                const LogicalType &type, const PersistentColumnData &column_data,
+                                                ColumnDataType data_type, optional_ptr<ColumnData> parent) {
+	auto list_length = ListColumnData::GetFixedSizeListLength(type, column_data);
+	if (list_length.IsValid()) {
+		// lists that are all non-NULL and have the same length are stored like an array
+		return make_shared_ptr<ArrayColumnData>(block_manager, info, column_index, type, list_length.GetIndex(),
+		                                        data_type, parent);
+	}
+	return CreateColumn(block_manager, info, column_index, type, data_type, parent);
+}
+
+void ColumnData::InitializeChildColumn(shared_ptr<ColumnData> &child, PersistentColumnData &column_data,
+                                       BaseStatistics &target_stats) {
+	if (ListColumnData::GetFixedSizeListLength(child->type, column_data).IsValid()) {
+		child = CreateColumn(child->block_manager, child->info, child->column_index, child->type, column_data,
+		                     child->data_type.load(), child->parent);
+	}
+	child->InitializeColumn(column_data, target_stats);
 }
 
 } // namespace duckdb
