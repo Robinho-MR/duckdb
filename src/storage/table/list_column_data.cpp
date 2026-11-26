@@ -12,6 +12,8 @@
 #include "duckdb/storage/table/column_checkpoint_state.hpp"
 #include "duckdb/storage/table/append_state.hpp"
 #include "duckdb/storage/table/scan_state.hpp"
+#include "duckdb/storage/storage_manager.hpp"
+#include "duckdb/storage/block_manager.hpp"
 
 namespace duckdb {
 
@@ -83,8 +85,56 @@ void ListColumnData::InitializePrefetch(PrefetchState &prefetch_state, ColumnSca
 	child_column->InitializePrefetch(prefetch_state, scan_state.child_states[1], child_start, child_end);
 }
 
+bool ListColumnData::HasImpliedOffsets() const {
+	return implied_list_length.IsValid();
+}
+
+bool ListColumnData::ScansImpliedOffsets(const ColumnScanState &state) const {
+	// the scan of implied offsets has no offset segment
+	return HasImpliedOffsets() && !state.current;
+}
+
+void ListColumnData::InitializeImpliedScan(ColumnScanState &state, idx_t row_idx) {
+	D_ASSERT(row_idx <= implied_count);
+	state.current = nullptr;
+	state.segment_tree = &data;
+	state.offset_in_column = row_idx;
+	state.internal_index = row_idx;
+	state.initialized = false;
+	state.scan_state.reset();
+	state.last_offset = 0;
+}
+
+idx_t ListColumnData::CountValidLists(idx_t start_row, idx_t row_count) {
+	if (row_count == 0) {
+		return 0;
+	}
+	if (!implied_can_have_null && start_row + row_count <= implied_count) {
+		return row_count;
+	}
+	ColumnScanState validity_state(nullptr);
+	validity->InitializeScanWithOffset(validity_state, start_row);
+	idx_t valid_count = 0;
+	for (idx_t scanned = 0; scanned < row_count; scanned += STANDARD_VECTOR_SIZE) {
+		auto scan_count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, row_count - scanned);
+		Vector validity_vector(LogicalType::BOOLEAN, scan_count);
+		validity->ScanCount(validity_state, validity_vector, scan_count);
+		valid_count += FlatVector::Validity(validity_vector).CountValid(scan_count);
+	}
+	return valid_count;
+}
+
+idx_t ListColumnData::ImpliedOffset(idx_t row_idx) {
+	D_ASSERT(HasImpliedOffsets() && row_idx <= implied_count);
+	return implied_list_length.GetIndex() * CountValidLists(0, row_idx);
+}
+
 void ListColumnData::InitializeScan(ColumnScanState &state) {
-	ColumnData::InitializeScan(state);
+	if (HasImpliedOffsets()) {
+		InitializeImpliedScan(state, 0);
+	} else {
+		ColumnData::InitializeScan(state);
+	}
 
 	// initialize the validity segment
 	D_ASSERT(state.child_states.size() == 2);
@@ -97,6 +147,11 @@ void ListColumnData::InitializeScan(ColumnScanState &state) {
 uint64_t ListColumnData::FetchListOffset(idx_t row_idx) {
 	if (row_idx >= count) {
 		throw DataCorruptionException("Corrupted database: list offset row ID is out of range");
+	}
+	if (HasImpliedOffsets() && row_idx < implied_count) {
+		auto offset = ImpliedOffset(row_idx + 1);
+		ValidateListOffset(offset, child_column->GetMaxEntry());
+		return offset;
 	}
 	ColumnScanState offset_state(nullptr);
 	ColumnData::InitializeScanWithOffset(offset_state, row_idx);
@@ -114,7 +169,11 @@ void ListColumnData::InitializeScanWithOffset(ColumnScanState &state, idx_t row_
 		InitializeScan(state);
 		return;
 	}
-	ColumnData::InitializeScanWithOffset(state, row_idx);
+	if (HasImpliedOffsets() && (row_idx < implied_count || !data.GetRootSegment())) {
+		InitializeImpliedScan(state, row_idx);
+	} else {
+		ColumnData::InitializeScanWithOffset(state, row_idx);
+	}
 
 	// initialize the validity segment
 	D_ASSERT(state.child_states.size() == 2);
@@ -146,26 +205,55 @@ idx_t ListColumnData::ScanCount(ColumnScanState &state, Vector &result, idx_t co
 	// updates not supported for lists
 	D_ASSERT(!updates);
 
-	Vector offset_vector(LogicalType::UBIGINT, count);
-	idx_t scan_count = ScanVector(state, offset_vector, count, ScanVectorType::SCAN_FLAT_VECTOR);
-	D_ASSERT(scan_count > 0);
-	validity->ScanCount(state.child_states[0], result, count);
-
-	auto data = offset_vector.Values<uint64_t>();
-	// shift all offsets so they are 0 at the first entry
-	auto result_data = FlatVector::Writer<list_entry_t>(result, scan_count);
+	if (ScansImpliedOffsets(state) && state.offset_in_column + count > implied_count && data.GetRootSegment()) {
+		// the rows past the implied offsets were appended later, and their offsets are stored
+		auto last_offset = state.last_offset;
+		ColumnData::InitializeScanWithOffset(state, state.offset_in_column);
+		state.last_offset = last_offset;
+	}
+	idx_t scan_count;
+	idx_t child_scan_count;
 	auto previous_offset = state.last_offset;
-	idx_t current_offset = 0;
 	auto child_count = child_column->GetMaxEntry();
-	for (idx_t i = 0; i < scan_count; i++) {
-		auto offset = data[i].GetValueUnsafe();
-		auto length = GetListLength(previous_offset, offset, child_count);
-		result_data.WriteValue(list_entry_t(current_offset, length));
-		current_offset += length;
-		previous_offset = offset;
+	if (ScansImpliedOffsets(state)) {
+		// every non-NULL list has the same length
+		D_ASSERT(state.offset_in_column + count <= implied_count);
+		scan_count = count;
+		validity->ScanCount(state.child_states[0], result, count);
+		auto &list_validity = FlatVector::Validity(result);
+		auto list_length = implied_list_length.GetIndex();
+		auto result_data = FlatVector::Writer<list_entry_t>(result, scan_count);
+		idx_t current_offset = 0;
+		for (idx_t i = 0; i < scan_count; i++) {
+			auto length = list_validity.RowIsValid(i) ? list_length : 0;
+			result_data.WriteValue(list_entry_t(current_offset, length));
+			current_offset += length;
+		}
+		child_scan_count = current_offset;
+		previous_offset += child_scan_count;
+		ValidateListOffset(previous_offset, child_count);
+		state.offset_in_column += scan_count;
+		state.internal_index = state.offset_in_column;
+	} else {
+		Vector offset_vector(LogicalType::UBIGINT, count);
+		scan_count = ScanVector(state, offset_vector, count, ScanVectorType::SCAN_FLAT_VECTOR);
+		D_ASSERT(scan_count > 0);
+		validity->ScanCount(state.child_states[0], result, count);
+
+		auto data = offset_vector.Values<uint64_t>();
+		// shift all offsets so they are 0 at the first entry
+		auto result_data = FlatVector::Writer<list_entry_t>(result, scan_count);
+		idx_t current_offset = 0;
+		for (idx_t i = 0; i < scan_count; i++) {
+			auto offset = data[i].GetValueUnsafe();
+			auto length = GetListLength(previous_offset, offset, child_count);
+			result_data.WriteValue(list_entry_t(current_offset, length));
+			current_offset += length;
+			previous_offset = offset;
+		}
+		child_scan_count = current_offset;
 	}
 
-	idx_t child_scan_count = current_offset;
 	ListVector::Reserve(result, child_scan_count);
 
 	if (child_scan_count > 0) {
@@ -184,6 +272,26 @@ idx_t ListColumnData::ScanCount(ColumnScanState &state, Vector &result, idx_t co
 }
 
 void ListColumnData::Skip(ColumnScanState &state, idx_t count) {
+	if (ScansImpliedOffsets(state) && state.offset_in_column + count > implied_count && data.GetRootSegment()) {
+		auto last_offset = state.last_offset;
+		ColumnData::InitializeScanWithOffset(state, state.offset_in_column);
+		state.last_offset = last_offset;
+	}
+	if (ScansImpliedOffsets(state)) {
+		D_ASSERT(state.offset_in_column <= implied_count);
+		count = MinValue<idx_t>(count, implied_count - state.offset_in_column);
+		auto child_skip_count = implied_list_length.GetIndex() * CountValidLists(state.offset_in_column, count);
+		validity->Skip(state.child_states[0], count);
+		state.offset_in_column += count;
+		state.internal_index = state.offset_in_column;
+		if (child_skip_count == 0) {
+			return;
+		}
+		state.last_offset += child_skip_count;
+		ValidateListOffset(state.last_offset, child_column->GetMaxEntry());
+		child_column->Skip(state.child_states[1], child_skip_count);
+		return;
+	}
 	// skip inside the validity segment
 	validity->Skip(state.child_states[0], count);
 
@@ -212,7 +320,43 @@ void ListColumnData::Skip(ColumnScanState &state, idx_t count) {
 	child_column->Skip(state.child_states[1], child_scan_count);
 }
 
+void ListColumnData::MaterializeImpliedOffsets(ColumnAppendState &state) {
+	D_ASSERT(HasImpliedOffsets() && count == implied_count);
+	ColumnAppendState offset_state;
+	offset_state.transient = state.transient;
+	ColumnData::InitializeAppend(offset_state);
+
+	ColumnScanState validity_state(nullptr);
+	validity->InitializeScan(validity_state);
+	auto list_length = implied_list_length.GetIndex();
+	auto offsets = unique_ptr<uint64_t[]>(new uint64_t[STANDARD_VECTOR_SIZE]);
+	UnifiedVectorFormat vdata;
+	vdata.sel = FlatVector::IncrementalSelectionVector();
+	vdata.data = data_ptr_cast(offsets.get());
+	vdata.physical_type = PhysicalType::UINT64;
+	idx_t current_offset = 0;
+	auto total_count = implied_count;
+	for (idx_t row_idx = 0; row_idx < total_count; row_idx += STANDARD_VECTOR_SIZE) {
+		auto append_count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, total_count - row_idx);
+		Vector validity_vector(LogicalType::BOOLEAN, append_count);
+		validity->ScanCount(validity_state, validity_vector, append_count);
+		auto &list_validity = FlatVector::Validity(validity_vector);
+		for (idx_t i = 0; i < append_count; i++) {
+			current_offset += list_validity.RowIsValid(i) ? list_length : 0;
+			offsets[i] = current_offset;
+		}
+		ColumnData::AppendData(offset_state, vdata, append_count);
+	}
+	// the rows were already counted
+	count -= total_count;
+	D_ASSERT(count == total_count);
+}
+
 void ListColumnData::InitializeAppend(ColumnAppendState &state) {
+	if (HasImpliedOffsets() && !data.GetRootSegment()) {
+		// the offsets of the new lists are stored after the offsets of the existing lists
+		MaterializeImpliedOffsets(state);
+	}
 	// initialize the list offset append
 	ColumnData::InitializeAppend(state);
 
@@ -309,7 +453,9 @@ void ListColumnData::FinalizeAppend(ColumnDataFinalizeAppendState &finalize_stat
 }
 
 void ListColumnData::RevertAppend(row_t new_count) {
-	ColumnData::RevertAppend(new_count);
+	if (!HasImpliedOffsets() || data.GetRootSegment()) {
+		ColumnData::RevertAppend(new_count);
+	}
 	validity->RevertAppend(new_count);
 	// revert append in the child column, also when no list is left
 	auto column_count = GetMaxEntry();
@@ -343,30 +489,67 @@ void ListColumnData::FetchRows(TransactionData transaction, ColumnFetchState &st
 	validity->FetchRowsAtSegmentLevel(transaction, *state.child_states[0], offsets, sel, fetch_count, result,
 	                                  result_offset);
 
-	// each list ends at its own offset and starts at the offset of the row before it
-	Vector end_offsets(LogicalType::UBIGINT, fetch_count);
-	FetchRowsAtSegmentLevel(transaction, state, offsets, sel, fetch_count, end_offsets, 0);
-	auto previous_rows = make_unsafe_uniq_array<idx_t>(fetch_count);
-	SelectionVector previous_sel(fetch_count);
-	idx_t previous_count = 0;
+	auto start_data = make_unsafe_uniq_array<idx_t>(fetch_count);
+	auto end_data = make_unsafe_uniq_array<idx_t>(fetch_count);
+	idx_t max_row = 0;
 	for (idx_t idx = 0; idx < fetch_count; idx++) {
-		const auto row_id = offsets[sel.get_index(idx)];
-		if (row_id > 0) {
-			previous_rows[idx] = row_id - 1;
-			previous_sel.set_index(previous_count++, idx);
+		max_row = MaxValue<idx_t>(max_row, offsets[sel.get_index(idx)]);
+	}
+	if (HasImpliedOffsets() && max_row < implied_count) {
+		// each list starts at the list length times the number of non-NULL lists before it
+		auto list_length = implied_list_length.GetIndex();
+		ValidityMask list_validity(max_row + 1);
+		if (implied_can_have_null) {
+			ColumnScanState validity_state(nullptr);
+			validity->InitializeScan(validity_state);
+			for (idx_t row_idx = 0; row_idx <= max_row; row_idx += STANDARD_VECTOR_SIZE) {
+				auto scan_count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, max_row + 1 - row_idx);
+				Vector validity_vector(LogicalType::BOOLEAN, scan_count);
+				validity->ScanCount(validity_state, validity_vector, scan_count);
+				auto &scanned_validity = FlatVector::Validity(validity_vector);
+				for (idx_t i = 0; i < scan_count; i++) {
+					if (!scanned_validity.RowIsValid(i)) {
+						list_validity.SetInvalid(row_idx + i);
+					}
+				}
+			}
+		}
+		for (idx_t idx = 0; idx < fetch_count; idx++) {
+			const auto row_id = offsets[sel.get_index(idx)];
+			start_data[idx] = list_length * list_validity.CountValid(row_id);
+			end_data[idx] = start_data[idx] + (list_validity.RowIsValid(row_id) ? list_length : 0);
+		}
+	} else {
+		// each list ends at its own offset and starts at the offset of the row before it
+		Vector end_offsets(LogicalType::UBIGINT, fetch_count);
+		FetchRowsAtSegmentLevel(transaction, state, offsets, sel, fetch_count, end_offsets, 0);
+		auto previous_rows = make_unsafe_uniq_array<idx_t>(fetch_count);
+		SelectionVector previous_sel(fetch_count);
+		idx_t previous_count = 0;
+		for (idx_t idx = 0; idx < fetch_count; idx++) {
+			const auto row_id = offsets[sel.get_index(idx)];
+			if (row_id > 0) {
+				previous_rows[idx] = row_id - 1;
+				previous_sel.set_index(previous_count++, idx);
+			}
+		}
+		Vector start_offsets(LogicalType::UBIGINT, fetch_count);
+		FetchRowsAtSegmentLevel(transaction, state, previous_rows.get(), previous_sel, previous_count, start_offsets,
+		                        0);
+		auto fetched_end = FlatVector::GetData<uint64_t>(end_offsets);
+		auto fetched_start = FlatVector::GetData<uint64_t>(start_offsets);
+		idx_t start_idx = 0;
+		for (idx_t idx = 0; idx < fetch_count; idx++) {
+			const auto row_id = offsets[sel.get_index(idx)];
+			start_data[idx] = row_id == 0 ? 0 : fetched_start[start_idx++];
+			end_data[idx] = fetched_end[idx];
 		}
 	}
-	Vector start_offsets(LogicalType::UBIGINT, fetch_count);
-	FetchRowsAtSegmentLevel(transaction, state, previous_rows.get(), previous_sel, previous_count, start_offsets, 0);
-	auto end_data = FlatVector::GetData<uint64_t>(end_offsets);
-	auto start_data = FlatVector::GetData<uint64_t>(start_offsets);
 
 	auto &validity_mask = FlatVector::ValidityMutable(result);
 	auto list_data = FlatVector::GetDataMutable<list_entry_t>(result);
-	idx_t start_idx = 0;
 	for (idx_t idx = 0; idx < fetch_count; idx++) {
-		const auto row_id = offsets[sel.get_index(idx)];
-		auto start_offset = row_id == 0 ? 0 : start_data[start_idx++];
+		auto start_offset = start_data[idx];
 		auto end_offset = end_data[idx];
 		auto length = GetListLength(start_offset, end_offset, child_column->GetMaxEntry());
 		auto result_idx = result_offset + idx;
@@ -439,6 +622,9 @@ struct ListColumnCheckpointState : public ColumnCheckpointState {
 	unique_ptr<ColumnCheckpointState> child_state;
 	//! The list length statistics of the column
 	ListStatsData length_data = ListStatsData {false, false, false, 0, 0, 0};
+	//! The length of every list, if the list offsets are not written
+	optional_idx implied_list_length;
+	bool implied_can_have_null = true;
 
 public:
 	shared_ptr<ColumnData> CreateEmptyColumnData() override {
@@ -453,6 +639,9 @@ public:
 			auto validity_child = validity_state->GetFinalResult();
 			column_data.SetValidityData(shared_ptr_cast<ColumnData, ValidityColumnData>(std::move(validity_child)));
 			column_data.SetChildData(child_state->GetFinalResult());
+			column_data.implied_list_length = implied_list_length;
+			column_data.implied_count = implied_list_length.IsValid() ? original_column.count.load() : 0;
+			column_data.implied_can_have_null = implied_can_have_null;
 		}
 		return ColumnCheckpointState::GetFinalResult();
 	}
@@ -473,7 +662,9 @@ public:
 
 	PersistentColumnData ToPersistentData() override {
 		auto data = ColumnCheckpointState::ToPersistentData();
-		data.extra_data = make_uniq<ListPersistentColumnData>(length_data);
+		auto extra_data = make_uniq<ListPersistentColumnData>(length_data);
+		extra_data->implied_list_length = implied_list_length;
+		data.extra_data = std::move(extra_data);
 		data.child_columns.push_back(validity_state->ToPersistentData());
 		data.child_columns.push_back(child_state->ToPersistentData());
 		return data;
@@ -485,10 +676,53 @@ unique_ptr<ColumnCheckpointState> ListColumnData::CreateCheckpointState(const Ro
 	return make_uniq<ListColumnCheckpointState>(row_group, *this, context, partial_block_manager);
 }
 
+optional_idx ListColumnData::GetCheckpointListLength(const BaseStatistics &stats) {
+	if (count == 0 ||
+	    !StorageManager::TargetAtLeastVersion(StorageVersion::V2_1_0, GetStorageManager().GetStorageVersion())) {
+		return optional_idx();
+	}
+	auto min_length = ListStats::MinListLength(stats);
+	auto max_length = ListStats::MaxListLength(stats);
+	if (!min_length.IsValid() || !max_length.IsValid() || min_length.GetIndex() != max_length.GetIndex()) {
+		return optional_idx();
+	}
+	return min_length;
+}
+
+struct ListOffsetBlockDropper : public BlockIdVisitor {
+	explicit ListOffsetBlockDropper(BlockManager &manager) : manager(manager) {
+	}
+
+	void Visit(block_id_t block_id) override {
+		manager.MarkBlockAsModified(block_id);
+	}
+
+	BlockManager &manager;
+};
+
 unique_ptr<ColumnCheckpointState> ListColumnData::Checkpoint(const RowGroup &row_group,
                                                              ColumnCheckpointInfo &checkpoint_info,
                                                              const BaseStatistics &old_stats) {
-	auto base_state = ColumnData::Checkpoint(row_group, checkpoint_info, old_stats);
+	auto list_length = GetCheckpointListLength(old_stats);
+	unique_ptr<ColumnCheckpointState> base_state;
+	if (list_length.IsValid() && (!data.GetRootSegment() || ColumnData::HasChanges())) {
+		// all lists have the same length: the offsets are implied by it and are not written
+		base_state =
+		    CreateCheckpointState(row_group, checkpoint_info.GetContext(), checkpoint_info.GetPartialBlockManager());
+		if (data.GetRootSegment()) {
+			// the stored offsets are replaced, so their blocks are no longer required
+			ListOffsetBlockDropper dropper(GetStorageManager().GetBlockManager());
+			for (auto &segment : data.Segments()) {
+				segment.VisitBlockIds(dropper);
+			}
+			base_state->GetResultColumn();
+		}
+		auto &list_state = base_state->Cast<ListColumnCheckpointState>();
+		list_state.implied_list_length = list_length;
+		list_state.implied_can_have_null = old_stats.CanHaveNull();
+	} else {
+		base_state = ColumnData::Checkpoint(row_group, checkpoint_info, old_stats);
+	}
 	auto validity_state = validity->Checkpoint(row_group, checkpoint_info, old_stats);
 	auto child_state = child_column->Checkpoint(row_group, checkpoint_info, ListStats::GetChildStats(old_stats));
 
@@ -555,13 +789,16 @@ void ListPersistentColumnData::SerializeFields(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault(101, "min_list_length", length_data.MinLength());
 	serializer.WritePropertyWithDefault(102, "max_list_length", length_data.MaxLength());
 	serializer.WritePropertyWithDefault(103, "total_list_length", length_data.TotalLength());
+	serializer.WritePropertyWithDefault(104, "implied_list_length", implied_list_length);
 }
 
 unique_ptr<ExtraPersistentColumnData> ListPersistentColumnData::Deserialize(Deserializer &deserializer) {
 	auto min_length = deserializer.ReadPropertyWithDefault<optional_idx>(101, "min_list_length");
 	auto max_length = deserializer.ReadPropertyWithDefault<optional_idx>(102, "max_list_length");
 	auto total_length = deserializer.ReadPropertyWithDefault<optional_idx>(103, "total_list_length");
+	auto implied_length = deserializer.ReadPropertyWithDefault<optional_idx>(104, "implied_list_length");
 	auto result = make_uniq<ListPersistentColumnData>();
+	result->implied_list_length = implied_length;
 	auto &data = result->length_data;
 	data.has_min_list_length = min_length.IsValid();
 	data.min_list_length = min_length.IsValid() ? min_length.GetIndex() : 0;
@@ -573,11 +810,20 @@ unique_ptr<ExtraPersistentColumnData> ListPersistentColumnData::Deserialize(Dese
 }
 
 PersistentColumnData ListColumnData::Serialize() {
-	auto persistent_data = ColumnData::Serialize();
+	const bool implied_offsets = HasImpliedOffsets() && !data.GetRootSegment();
+	auto persistent_data = implied_offsets ? PersistentColumnData(type) : ColumnData::Serialize();
 	auto column_stats = GetColumnStatistics();
+	unique_ptr<ListPersistentColumnData> extra_data;
 	if (column_stats) {
-		persistent_data.extra_data = make_uniq<ListPersistentColumnData>(ListStats::GetLengthData(*column_stats));
+		extra_data = make_uniq<ListPersistentColumnData>(ListStats::GetLengthData(*column_stats));
 	}
+	if (implied_offsets) {
+		if (!extra_data) {
+			extra_data = make_uniq<ListPersistentColumnData>();
+		}
+		extra_data->implied_list_length = implied_list_length;
+	}
+	persistent_data.extra_data = std::move(extra_data);
 	persistent_data.child_columns.push_back(validity->Serialize());
 	persistent_data.child_columns.push_back(child_column->Serialize());
 	return persistent_data;
@@ -585,14 +831,40 @@ PersistentColumnData ListColumnData::Serialize() {
 
 void ListColumnData::InitializeColumn(PersistentColumnData &column_data, BaseStatistics &target_stats) {
 	ColumnData::InitializeColumn(column_data, target_stats);
+	optional_idx list_length;
 	if (column_data.extra_data && column_data.extra_data->GetType() == ExtraPersistentColumnDataType::LIST) {
-		ListStats::SetLengthData(target_stats, column_data.extra_data->Cast<ListPersistentColumnData>().length_data);
+		auto &list_data = column_data.extra_data->Cast<ListPersistentColumnData>();
+		ListStats::SetLengthData(target_stats, list_data.length_data);
+		list_length = list_data.implied_list_length;
 	} else {
 		ListStats::SetLengthBounds(target_stats, optional_idx(), optional_idx());
 	}
 	validity->InitializeColumn(column_data.child_columns[0], target_stats);
 	auto &child_stats = ListStats::GetChildStats(target_stats);
 	child_column->InitializeColumn(column_data.child_columns[1], child_stats);
+	if (!list_length.IsValid()) {
+		return;
+	}
+	// the offsets are implied by the list length: the validity holds the row count
+	if (!column_data.pointers.empty()) {
+		throw DataCorruptionException("Corrupted LIST column: implied list offsets cannot be stored");
+	}
+	auto row_count = validity->count.load();
+	auto child_count = child_column->GetMaxEntry();
+	auto length = list_length.GetIndex();
+	if (length == 0 ? child_count != 0 : (child_count % length != 0 || child_count / length > row_count)) {
+		throw DataCorruptionException("Corrupted LIST column: the child row count does not match the list length");
+	}
+	implied_list_length = list_length;
+	implied_count = row_count;
+	implied_can_have_null = target_stats.CanHaveNull();
+	count = row_count;
+}
+
+void ListColumnData::Verify(RowGroup &parent) {
+	if (!HasImpliedOffsets() || data.GetRootSegment()) {
+		ColumnData::Verify(parent);
+	}
 }
 
 void ListColumnData::GetColumnSegmentInfo(const QueryContext &context, idx_t row_group_index, vector<idx_t> col_path,

@@ -29,10 +29,14 @@ public:
 	static unique_ptr<ExtraPersistentColumnData> Deserialize(Deserializer &deserializer);
 
 	ListStatsData length_data = ListStatsData {false, false, false, 0, 0, 0};
+	//! The length of every list, if the list offsets are implied by it instead of being stored
+	optional_idx implied_list_length;
 };
 
 //! List column data represents a list
 class ListColumnData : public ColumnData {
+	friend struct ListColumnCheckpointState;
+
 public:
 	ListColumnData(BlockManager &block_manager, DataTableInfo &info, idx_t column_index, LogicalType type,
 	               ColumnDataType data_type, optional_ptr<ColumnData> parent);
@@ -89,6 +93,7 @@ public:
 	void SetChildData(shared_ptr<ColumnData> child_column_p);
 
 	const BaseStatistics &GetChildStats(const ColumnData &child) const override;
+	void Verify(RowGroup &parent) override;
 
 protected:
 	//! The child-column of the list
@@ -96,8 +101,27 @@ protected:
 	//! The validity column data of the list
 	shared_ptr<ValidityColumnData> validity;
 
+	//! The length of the lists in [0, implied_count), whose offsets are implied by it instead of being stored
+	optional_idx implied_list_length;
+	idx_t implied_count = 0;
+	//! Whether any of the lists in [0, implied_count) can be NULL
+	bool implied_can_have_null = true;
+
 private:
 	uint64_t FetchListOffset(idx_t row_idx);
+	//! Whether the list offsets are implied by the list length and not stored
+	bool HasImpliedOffsets() const;
+	//! Whether a scan state scans implied list offsets
+	bool ScansImpliedOffsets(const ColumnScanState &state) const;
+	void InitializeImpliedScan(ColumnScanState &state, idx_t row_idx);
+	//! Counts the non-NULL lists in [start_row, start_row + row_count)
+	idx_t CountValidLists(idx_t start_row, idx_t row_count);
+	//! The offset of the end of the list at row_idx - 1, i.e. the child row the list at row_idx starts at
+	idx_t ImpliedOffset(idx_t row_idx);
+	//! Writes the implied list offsets to segments, so that new lists can be appended to them
+	void MaterializeImpliedOffsets(ColumnAppendState &state);
+	//! The list length if the offsets do not have to be stored when checkpointing
+	optional_idx GetCheckpointListLength(const BaseStatistics &stats);
 };
 
 } // namespace duckdb

@@ -1,0 +1,261 @@
+# name: test/sql/storage/list_implied_offsets.test_slow
+# description: Test that the offsets of lists that all have the same length are not stored
+# group: [storage]
+
+load {TEST_DIR}/list_implied_offsets.db readwrite v2.1.0
+
+statement ok
+PRAGMA disable_checkpoint_on_shutdown;
+
+statement ok
+SET checkpoint_threshold='1TB';
+
+# every third list is NULL
+statement ok
+CREATE TABLE t AS
+SELECT i AS id, CASE WHEN i % 3 = 0 THEN NULL ELSE [i, i + 1, i + 2] END AS l
+FROM range(300000) t(i);
+
+statement ok
+CHECKPOINT;
+
+restart
+
+# the list offsets have no segments
+query I
+SELECT COUNT(*) FROM pragma_storage_info('t') WHERE column_name = 'l' AND column_path = '[1]';
+----
+0
+
+query IIII
+SELECT COUNT(*), COUNT(l), SUM(len(l)), SUM(l[3]) FROM t;
+----
+300000	200000	600000	30000400000
+
+# skipping vectors with zonemaps on another column skips the lists
+query II
+SELECT COUNT(l), SUM(l[1]) FROM t WHERE id >= 250000;
+----
+33334	9166833333
+
+query II
+SELECT id, l FROM t WHERE id BETWEEN 199997 AND 200001 ORDER BY id;
+----
+199997	[199997, 199998, 199999]
+199998	NULL
+199999	[199999, 200000, 200001]
+200000	[200000, 200001, 200002]
+200001	NULL
+
+# fetching rows by row id
+query II
+SELECT rowid, l FROM t WHERE rowid IN (0, 1, 2, 122879, 122880, 299999) ORDER BY rowid;
+----
+0	NULL
+1	[1, 2, 3]
+2	[2, 3, 4]
+122879	[122879, 122880, 122881]
+122880	NULL
+299999	[299999, 300000, 300001]
+
+statement ok
+CREATE TABLE idx(id INTEGER PRIMARY KEY, l INTEGER[]);
+
+statement ok
+INSERT INTO idx SELECT i, CASE WHEN i % 5 = 0 THEN NULL ELSE [i, -i] END FROM range(10000) t(i);
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query I
+SELECT COUNT(*) FROM pragma_storage_info('idx') WHERE column_name = 'l' AND column_path = '[1]';
+----
+0
+
+query I
+SELECT l FROM idx WHERE id = 4321;
+----
+[4321, -4321]
+
+query I
+SELECT l FROM idx WHERE id = 4320;
+----
+NULL
+
+# appending to a row group with implied offsets stores the offsets again
+statement ok
+INSERT INTO idx VALUES (10000, [1, 2, 3]), (10001, NULL), (10002, [4, 5]);
+
+query III
+SELECT COUNT(l), SUM(len(l)), SUM(l[1]) FROM idx;
+----
+8002	16005	40000005
+
+query I
+SELECT l FROM idx WHERE id IN (9999, 10000, 10001, 10002) ORDER BY id;
+----
+[9999, -9999]
+[1, 2, 3]
+NULL
+[4, 5]
+
+# rolled back appends
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO idx VALUES (10003, [7, 8, 9]);
+
+statement ok
+ROLLBACK;
+
+statement error
+INSERT INTO idx VALUES (10004, [1]), (1, [2]);
+----
+<REGEX>:Constraint Error.*
+
+statement ok
+CHECKPOINT;
+
+restart
+
+# the lists no longer have the same length, so their offsets are stored
+query I
+SELECT COUNT(*) > 0 FROM pragma_storage_info('idx') WHERE column_name = 'l' AND column_path = '[1]';
+----
+true
+
+query III
+SELECT COUNT(l), SUM(len(l)), SUM(l[1]) FROM idx;
+----
+8002	16005	40000005
+
+query I
+SELECT l FROM idx WHERE id IN (4321, 10000, 10002) ORDER BY id;
+----
+[4321, -4321]
+[1, 2, 3]
+[4, 5]
+
+# appending lists of the same length to a row group with implied offsets
+statement ok
+CREATE TABLE same AS SELECT [i, i] AS l FROM range(1000) t(i);
+
+statement ok
+CHECKPOINT;
+
+restart
+
+statement ok
+INSERT INTO same SELECT [i, i] FROM range(1000, 1500) t(i);
+
+query II
+SELECT COUNT(*), SUM(l[2]) FROM same;
+----
+1500	1124250
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query I
+SELECT COUNT(*) FROM pragma_storage_info('same') WHERE column_name = 'l' AND column_path = '[0]';
+----
+0
+
+query II
+SELECT COUNT(*), SUM(l[2]) FROM same;
+----
+1500	1124250
+
+# deleted rows keep their lists
+statement ok
+DELETE FROM same WHERE l[1] % 2 = 0;
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query II
+SELECT COUNT(*), SUM(l[2]) FROM same;
+----
+750	562500
+
+# empty lists
+statement ok
+CREATE TABLE empty_lists AS SELECT CASE WHEN i % 2 = 0 THEN [] ELSE NULL END::INT[] AS l FROM range(5000) t(i);
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query III
+SELECT COUNT(l), SUM(len(l)), COUNT(*) FROM empty_lists;
+----
+2500	0	5000
+
+# lists nested in structs and lists, and maps
+statement ok
+CREATE TABLE nested AS
+SELECT {'a': [i, i], 'b': i} AS s, [[i], [i + 1]] AS ll, MAP([i], [i * 2]) AS m
+FROM range(5000) t(i);
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query IIII
+SELECT SUM(s.a[2]), SUM(ll[2][1]), SUM(m[i]), COUNT(*) FROM nested, (SELECT 1) t(x), LATERAL (SELECT s.b AS i);
+----
+12497500	12502500	24995000	5000
+
+query III
+SELECT s, ll, m FROM nested WHERE s.b = 4242;
+----
+{'a': [4242, 4242], 'b': 4242}	[[4242], [4243]]	{4242=8484}
+
+# lists that do not all have the same length still store their offsets
+statement ok
+CREATE TABLE mixed AS SELECT range(i % 3) AS l FROM range(5000) t(i);
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query I
+SELECT COUNT(*) > 0 FROM pragma_storage_info('mixed') WHERE column_name = 'l' AND column_path = '[0]';
+----
+true
+
+query II
+SELECT COUNT(*), SUM(len(l)) FROM mixed;
+----
+5000	4999
+
+# filters on the list column skip the lists that do not pass the filter
+statement ok
+CREATE TABLE small(g INTEGER[], x VARCHAR[]);
+
+statement ok
+INSERT INTO small VALUES ([1, 1, 2], ['a', 'b', 'i']);
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query T
+SELECT x FROM small WHERE g > [100]
+----
+
+query T
+SELECT x FROM small WHERE g < [100]
+----
+[a, b, i]
