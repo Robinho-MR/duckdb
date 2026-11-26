@@ -1532,6 +1532,12 @@ void RowGroupCollection::InitializeVacuumState(CollectionCheckpointState &checkp
 	auto options = checkpoint_state.writer.GetCheckpointOptions();
 	// currently we can only vacuum deletes if we are doing a full checkpoint
 	state.can_vacuum_deletes = options.type != CheckpointType::CONCURRENT_CHECKPOINT;
+	for (auto &type : GetTypes()) {
+		if (UnionType::ContainsLegacyLayout(type)) {
+			// columns in the legacy UNION layout are read-only, so their row groups can't be rewritten
+			state.can_vacuum_deletes = false;
+		}
+	}
 	if (!state.can_vacuum_deletes) {
 		return;
 	}

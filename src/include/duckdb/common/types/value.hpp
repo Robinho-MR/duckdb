@@ -292,6 +292,11 @@ public:
 	//! Deserializes a Value from a blob
 	DUCKDB_API static Value Deserialize(Deserializer &deserializer);
 
+private:
+	//! Deserializes the value (after its type) as a value of the given type
+	static Value DeserializeInternal(Deserializer &deserializer, LogicalType type);
+
+public:
 	//===--------------------------------------------------------------------===//
 	// Comparison Operators
 	//===--------------------------------------------------------------------===//
@@ -502,7 +507,9 @@ struct ArrayValue {
 };
 
 struct UnionValue {
-	DUCKDB_API static const Value &GetValue(const Value &value);
+	//! The value of the member (cast to the member type)
+	DUCKDB_API static Value GetValue(const Value &value);
+	//! The member the value belongs to (the first member whose type matches the stored value)
 	DUCKDB_API static uint8_t GetTag(const Value &value);
 	DUCKDB_API static const LogicalType &GetType(const Value &value);
 };

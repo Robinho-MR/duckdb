@@ -18,7 +18,7 @@ namespace duckdb {
 struct UnionExtractFun {
 	static constexpr const char *Name = "union_extract";
 	static constexpr const char *Parameters = "union,tag";
-	static constexpr const char *Description = "Extract the value with the named tags from the union. NULL if the tag is not currently selected";
+	static constexpr const char *Description = "Extract the value of the named member from the union. NULL if the value belongs to another member (the member of a value is the first member whose type matches the value)";
 	static constexpr const char *Example = "union_extract(s, 'k')";
 	static constexpr const char *Categories = "";
 
@@ -28,7 +28,7 @@ struct UnionExtractFun {
 struct UnionTagFun {
 	static constexpr const char *Name = "union_tag";
 	static constexpr const char *Parameters = "union";
-	static constexpr const char *Description = "Retrieve the currently selected tag of the union as an ENUM";
+	static constexpr const char *Description = "Deprecated: retrieve the member of the union value as an ENUM. Tags are not stored, the member is the first member whose type matches the value";
 	static constexpr const char *Example = "union_tag(union_value(k := 'foo'))";
 	static constexpr const char *Categories = "";
 

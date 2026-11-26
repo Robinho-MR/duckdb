@@ -84,7 +84,8 @@ buffer_ptr<VectorBuffer> ShreddedVectorBuffer::Deserialize(Deserializer &deseria
 
 Value ShreddedVectorBuffer::GetValue(const LogicalType &type, idx_t index) const {
 	Vector input(*shredded_data, index, index + 1);
-	Vector result(LogicalType::VARIANT(), 1);
+	// keep the type of the vector (e.g. a UNION, which is a VARIANT with members)
+	Vector result(type, 1);
 	VariantUtils::UnshredVariantData(input, result, 1);
 	return result.GetValue(0);
 }

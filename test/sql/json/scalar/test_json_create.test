@@ -131,26 +131,27 @@ select to_json({n: 42}, {extra: 'argument'})
 ----
 to_json() takes exactly one argument
 
+# a UNION is stored as a VARIANT of the member value, so the member value is converted (without its tag)
 query T
 select to_json(union_value(n := 42))
 ----
-{"n":42}
+42
 
 query T
 SELECT to_json(union_value(a := NULL)::UNION(a INTEGER, b VARCHAR))
 ----
-{"a":null}
+NULL
 
 query T
 SELECT to_json(union_value(b := 'abc')::UNION(a INTEGER, b VARCHAR, c FLOAT))
 ----
-{"b":"abc"}
+"abc"
 
 query I
 select to_json(i::UNION(a varchar, b bool)) from (VALUES (null), ('test')) tbl(i);
 ----
-{"a":null}
-{"a":"test"}
+NULL
+"test"
 
 query I
 select to_json(null::UNION(a varchar, b bool));

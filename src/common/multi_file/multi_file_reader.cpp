@@ -164,12 +164,6 @@ MultiFileColumnDefinition MultiFileColumnDefinition::CreateNested(const Identifi
 		result.children.push_back(std::move(key_value));
 		break;
 	}
-	case LogicalTypeId::UNION:
-		for (idx_t i = 0; i < UnionType::GetMemberCount(type); i++) {
-			result.children.push_back(
-			    CreateNested(UnionType::GetMemberName(type, i), UnionType::GetMemberType(type, i)));
-		}
-		break;
 	default:
 		break;
 	}

@@ -23,6 +23,7 @@
 #include "duckdb/storage/table/standard_column_data.hpp"
 #include "duckdb/storage/table/array_column_data.hpp"
 #include "duckdb/storage/table/geo_column_data.hpp"
+#include "duckdb/storage/table/legacy_union_column_data.hpp"
 #include "duckdb/storage/table/struct_column_data.hpp"
 #include "duckdb/storage/table/variant_column_data.hpp"
 #include "duckdb/storage/table/update_segment.hpp"
@@ -1408,7 +1409,9 @@ shared_ptr<ColumnData> ColumnData::Deserialize(BlockManager &block_manager, Data
 	deserializer.Set<DatabaseInstance &>(info.GetDB().GetDatabase());
 	CompressionInfo compression_info(block_manager);
 	deserializer.Set<const CompressionInfo &>(compression_info);
-	deserializer.Set<const LogicalType &>(type);
+	// columns in the legacy UNION layout are stored as their legacy storage type
+	auto storage_type = UnionType::ContainsLegacyLayout(type) ? UnionType::GetLegacyStorageType(type) : type;
+	deserializer.Set<const LogicalType &>(storage_type);
 
 	auto &catalog = info.GetDB().GetStorageManager().GetAttached().GetCatalog();
 	deserializer.Set<Catalog &>(catalog);
@@ -1545,6 +1548,9 @@ void ColumnData::Verify(RowGroup &parent) {
 shared_ptr<ColumnData> ColumnData::CreateColumn(BlockManager &block_manager, DataTableInfo &info, idx_t column_index,
                                                 const LogicalType &type, ColumnDataType data_type,
                                                 optional_ptr<ColumnData> parent) {
+	if (UnionType::ContainsLegacyLayout(type)) {
+		return make_shared_ptr<LegacyUnionColumnData>(block_manager, info, column_index, type, data_type, parent);
+	}
 	if (type.id() == LogicalTypeId::GEOMETRY || type.id() == LogicalTypeId::GEOGRAPHY) {
 		return make_shared_ptr<GeoColumnData>(block_manager, info, column_index, type, data_type, parent);
 	}

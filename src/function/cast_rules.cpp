@@ -38,7 +38,6 @@ static int64_t TargetTypeCost(const LogicalType &type) {
 	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::MAP:
 	case LogicalTypeId::LIST:
-	case LogicalTypeId::UNION:
 	case LogicalTypeId::ARRAY:
 		return 160;
 	case LogicalTypeId::ANY:
@@ -331,7 +330,6 @@ bool LogicalTypeIsValid(const LogicalType &type) {
 	switch (type.id()) {
 	case LogicalTypeId::STRUCT:
 	case LogicalTypeId::TUPLE:
-	case LogicalTypeId::UNION:
 	case LogicalTypeId::VARIANT:
 	case LogicalTypeId::LIST:
 	case LogicalTypeId::MAP:
@@ -360,7 +358,10 @@ bool LogicalTypeIsValid(const LogicalType &type) {
 		}
 		return true;
 	}
-	case LogicalTypeId::UNION: {
+	case LogicalTypeId::VARIANT: {
+		if (!UnionType::IsUnion(type)) {
+			return true;
+		}
 		auto member_count = UnionType::GetMemberCount(type);
 		for (idx_t i = 0; i < member_count; i++) {
 			if (!LogicalTypeIsValid(UnionType::GetMemberType(type, i))) {
@@ -455,7 +456,7 @@ int64_t CastRules::ImplicitCast(const LogicalType &from, const LogicalType &to) 
 		// if aliases are different, an implicit cast is not possible
 
 		// Special case: Anything can be cast to a union if the source type is a member of the union
-		if (to.id() == LogicalTypeId::UNION) {
+		if (UnionType::IsUnion(to) && from.id() != LogicalTypeId::VARIANT) {
 			return ImplicitCastToUnionMember(from, to);
 		}
 
@@ -501,7 +502,11 @@ int64_t CastRules::ImplicitCast(const LogicalType &from, const LogicalType &to) 
 		// TODO: if we can access the expression we could resolve the size if the list is constant.
 		return ImplicitCast(ListType::GetChildType(from), ArrayType::GetChildType(to));
 	}
-	if (from.id() == LogicalTypeId::UNION && to.id() == LogicalTypeId::UNION) {
+	if (UnionType::IsUnion(to) && from.id() == LogicalTypeId::VARIANT && !UnionType::IsUnion(from)) {
+		// VARIANT -> UNION: the values are checked against the members when cast
+		return ImplicitCastVariant(to);
+	}
+	if (UnionType::IsUnion(from) && UnionType::IsUnion(to)) {
 		// Check that the target union type is fully resolved.
 		if (!to.HasParameters()) {
 			// If not, try anyway and let the actual cast logic handle it.
@@ -609,7 +614,7 @@ int64_t CastRules::ImplicitCast(const LogicalType &from, const LogicalType &to) 
 		return 0;
 	}
 	// Special case: Anything can be cast to a union if the source type is a member of the union
-	if (to.id() == LogicalTypeId::UNION) {
+	if (UnionType::IsUnion(to)) {
 		return ImplicitCastToUnionMember(from, to);
 	}
 

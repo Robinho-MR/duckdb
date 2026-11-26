@@ -230,9 +230,11 @@ static bool InferTemplateType(optional_ptr<ClientContext> context, const Logical
 			}
 		}
 	} break;
-	case LogicalTypeId::UNION: {
-		// TODO: Support union types with template member types.
-		throw NotImplementedException("Union types cannot infer templated member types yet!");
+	case LogicalTypeId::VARIANT: {
+		if (UnionType::IsUnion(source)) {
+			// TODO: Support union types with template member types.
+			throw NotImplementedException("Union types cannot infer templated member types yet!");
+		}
 	} break;
 	case LogicalTypeId::STRUCT:
 	case LogicalTypeId::TUPLE: {

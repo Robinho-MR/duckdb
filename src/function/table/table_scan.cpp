@@ -1316,7 +1316,8 @@ static unique_ptr<FunctionData> TableScanDeserialize(Deserializer &deserializer,
 static bool TableSupportsPushdownExtract(const FunctionData &bind_data_ref, const LogicalIndex &column_idx) {
 	auto &bind_data = bind_data_ref.Cast<TableScanBindData>();
 	auto &column = bind_data.table.GetColumn(column_idx);
-	if (column.Generated()) {
+	if (column.Generated() || column.HasLegacyUnionLayout()) {
+		// columns in the legacy UNION layout are converted when scanned, so fields can't be extracted in storage
 		return false;
 	}
 	auto column_type = column.GetType();

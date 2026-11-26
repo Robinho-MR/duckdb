@@ -115,14 +115,25 @@ BoundCastInfo DefaultCasts::GetDefaultCastFunction(BindCastInput &input, const L
                                                    const LogicalType &target) {
 	D_ASSERT(source != target);
 
+	if (UnionType::IsUnion(target)) {
+		if (source.id() == LogicalTypeId::SQLNULL) {
+			return NullTypeCast;
+		}
+		return ImplicitToUnionCast(input, source, target);
+	}
 	if (target.id() == LogicalTypeId::VARIANT) {
+		if (source.id() == LogicalTypeId::VARIANT) {
+			// UNION -> VARIANT: a UNION is stored as a VARIANT
+			return ReinterpretCast;
+		}
 		return ImplicitToVariantCast(input, source, target);
 	}
 
-	// then check if were casting to a union
-	if (source.id() != LogicalTypeId::UNION && source.id() != LogicalTypeId::SQLNULL &&
-	    source.id() != LogicalTypeId::VARIANT && target.id() == LogicalTypeId::UNION) {
-		return ImplicitToUnionCast(input, source, target);
+	if (UnionType::IsUnion(source)) {
+		// the stored values have the member types, so the cast is as stable as the casts of the members
+		for (auto &member : UnionType::GetMemberTypes(source)) {
+			input.GetCastFunction(member.second, target);
+		}
 	}
 
 	// else, switch on source type
@@ -185,8 +196,6 @@ BoundCastInfo DefaultCasts::GetDefaultCastFunction(BindCastInput &input, const L
 		return TupleCastSwitch(input, source, target);
 	case LogicalTypeId::LIST:
 		return ListCastSwitch(input, source, target);
-	case LogicalTypeId::UNION:
-		return UnionCastSwitch(input, source, target);
 	case LogicalTypeId::VARIANT:
 		return VariantCastSwitch(input, source, target);
 	case LogicalTypeId::ENUM:

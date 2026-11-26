@@ -254,8 +254,6 @@ const char *BuiltinTypeName(LogicalTypeId id) {
 		return "TUPLE";
 	case LogicalTypeId::MAP:
 		return "MAP";
-	case LogicalTypeId::UNION:
-		return "UNION";
 	default:
 		return nullptr;
 	}
@@ -285,7 +283,7 @@ unique_ptr<TypeExpression> TypeExpression::FromLogicalType(const LogicalType &ty
 		return make_uniq<TypeExpression>(Identifier(alias), std::move(children));
 	}
 
-	auto name = BuiltinTypeName(type.id());
+	auto name = UnionType::IsUnion(type) ? "UNION" : BuiltinTypeName(type.id());
 	if (!name) {
 		// only the internal placeholder ids (ANY, UNKNOWN, INVALID, ...) have no name, and none of them is a
 		// type a user can name in the first place
@@ -339,9 +337,11 @@ unique_ptr<TypeExpression> TypeExpression::FromLogicalType(const LogicalType &ty
 		children.push_back(TypeChild(MapType::KeyType(type), Identifier()));
 		children.push_back(TypeChild(MapType::ValueType(type), Identifier()));
 		break;
-	case LogicalTypeId::UNION:
-		for (idx_t i = 0; i < UnionType::GetMemberCount(type); i++) {
-			children.push_back(TypeChild(UnionType::GetMemberType(type, i), UnionType::GetMemberName(type, i)));
+	case LogicalTypeId::VARIANT:
+		if (UnionType::IsUnion(type)) {
+			for (auto &member : UnionType::GetMemberTypes(type)) {
+				children.push_back(TypeChild(member.second, member.first));
+			}
 		}
 		break;
 	default:

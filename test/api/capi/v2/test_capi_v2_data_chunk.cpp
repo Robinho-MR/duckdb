@@ -755,13 +755,12 @@ TEST_CASE("V2: MAP(VARCHAR, INTEGER) via get_child", "[capi_v2][data_chunk]") {
 
 TEST_CASE("V2: UNION(INTEGER, VARCHAR) via get_child", "[capi_v2][data_chunk]") {
 	EnvFixture fx;
-
-	// Set up via a temp table so the UNION type is bound consistently
-	// across both inserted rows.
+	// A UNION is stored as a VARIANT: the vector has no children, members are read with union_extract.
 	ExecSQL(fx.conn, "CREATE TABLE u_t (u UNION(i INTEGER, s VARCHAR))");
 	ExecSQL(fx.conn, "INSERT INTO u_t VALUES (union_value(i := 42)), (union_value(s := 'hello'))");
 	duckdb_v2_result_handle r = nullptr;
-	REQUIRE(Query(fx.conn, "SELECT u FROM u_t", &r, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(Query(fx.conn, "SELECT u, union_extract(u, 'i'), union_extract(u, 's') FROM u_t", &r, nullptr) ==
+	        DUCKDB_V2_ERROR_NONE);
 
 	duckdb_v2_data_chunk_handle chunk = nullptr;
 	chunk = StepChunk(r);
@@ -772,53 +771,26 @@ TEST_CASE("V2: UNION(INTEGER, VARCHAR) via get_child", "[capi_v2][data_chunk]") 
 
 	duckdb_v2_vector_handle uvec = nullptr;
 	duckdb_v2_data_chunk_get_vector(chunk, 0, &uvec, nullptr);
-
-	// UNION exposes member_count + 1 children: tag at [0], members at [1..N].
 	idx_t nch = 0;
 	REQUIRE(duckdb_v2_vector_get_child_count(uvec, &nch, nullptr) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(nch == 3); // tag + 2 members
+	REQUIRE(nch == 0);
+	duckdb_v2_vector_handle child = nullptr;
+	REQUIRE(duckdb_v2_vector_get_child(uvec, 0, &child, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(child == nullptr);
 
-	// Tag at [0].
-	duckdb_v2_vector_handle tag_vec = nullptr;
-	REQUIRE(duckdb_v2_vector_get_child(uvec, 0, &tag_vec, nullptr) == DUCKDB_V2_ERROR_NONE);
-	duckdb_v2_vector_view tag_view {};
-	duckdb_v2_vector_get_view(tag_vec, &tag_view, nullptr);
-	const uint8_t *tags = static_cast<const uint8_t *>(tag_view.data);
-
-	// Members at [1] = INTEGER, [2] = VARCHAR.
 	duckdb_v2_vector_handle m_int = nullptr;
 	duckdb_v2_vector_handle m_str = nullptr;
-	REQUIRE(duckdb_v2_vector_get_child(uvec, 1, &m_int, nullptr) == DUCKDB_V2_ERROR_NONE);
-	REQUIRE(duckdb_v2_vector_get_child(uvec, 2, &m_str, nullptr) == DUCKDB_V2_ERROR_NONE);
-
+	duckdb_v2_data_chunk_get_vector(chunk, 1, &m_int, nullptr);
+	duckdb_v2_data_chunk_get_vector(chunk, 2, &m_str, nullptr);
 	duckdb_v2_vector_view int_view {};
 	duckdb_v2_vector_view str_view {};
 	duckdb_v2_vector_get_view(m_int, &int_view, nullptr);
 	duckdb_v2_vector_get_view(m_str, &str_view, nullptr);
 
-	// Row 0: tag = 0, int member = 42.
-	REQUIRE(tags[SelAt(tag_view.sel, 0)] == 0);
 	const int32_t *idata = static_cast<const int32_t *>(int_view.data);
 	REQUIRE(idata[SelAt(int_view.sel, 0)] == 42);
-
-	// Row 1: tag = 1, str member = "hello".
-	REQUIRE(tags[SelAt(tag_view.sel, 1)] == 1);
 	const duckdb_v2_varchar_t *sarr = static_cast<const duckdb_v2_varchar_t *>(str_view.data);
 	REQUIRE(Convert(sarr[SelAt(str_view.sel, 1)]) == "hello");
-
-	// Out-of-range member index (3 is past the last member at child-index 2).
-	duckdb_v2_vector_handle oor = nullptr;
-	REQUIRE(duckdb_v2_vector_get_child(uvec, 3, &oor, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
-	REQUIRE(oor == nullptr);
-
-	// view.data on a UNION is unspecified per the contract (typically
-	// NULL — UNION has no per-row parent leaf data; the per-row
-	// content lives in the tag + member children). Pin "NULL today"
-	// here so any future bridge change that started leaking a non-null
-	// pointer would be caught.
-	duckdb_v2_vector_view uview {};
-	duckdb_v2_vector_get_view(uvec, &uview, nullptr);
-	REQUIRE(uview.data == nullptr);
 
 	duckdb_v2_data_chunk_destroy(&chunk);
 	duckdb_v2_result_destroy(&r);

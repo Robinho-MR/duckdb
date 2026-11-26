@@ -115,6 +115,8 @@ struct VariantPathSelection {
 };
 
 struct VariantUtils {
+	//! Converts a UNION in the legacy layout STRUCT(tag, member_1, ..., member_n) into a VARIANT of the selected member
+	DUCKDB_API static void LegacyUnionToVariant(Vector &source, Vector &result, idx_t count);
 	//! Throws a DataCorruptionException unless 'size' bytes are available in a blob of 'blob_size' starting at
 	//! 'offset'; shared by every call site that decodes a byte_offset/varint-length pair out of a VARIANT blob
 	DUCKDB_API static void Available(idx_t blob_size, idx_t offset, idx_t size);

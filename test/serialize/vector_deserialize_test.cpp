@@ -177,30 +177,4 @@ TEST_CASE("Deserialize STRUCT vectors with too many children", "[serialization]"
 	                    Catch::Contains("Failed to deserialize vector: expected 1 entries but got 0"));
 }
 
-TEST_CASE("GetValue on a UNION vector with an out-of-range stored tag", "[serialization]") {
-	auto type = LogicalType::UNION({{"a", LogicalType::INTEGER}, {"b", LogicalType::INTEGER}});
-	auto write_union = [&](uint8_t tag) {
-		return [=](Serializer &s) {
-			WriteFlatHeader(s);
-			s.WriteList(103, "children", 3, [&](Serializer::List &list, idx_t i) {
-				list.WriteObject([&](Serializer &obj) {
-					WriteFlatHeader(obj);
-					if (i == 0) {
-						obj.WriteProperty(102, "data", const_data_ptr_cast(&tag), sizeof(uint8_t));
-					} else {
-						int32_t value = 42;
-						obj.WriteProperty(102, "data", const_data_ptr_cast(&value), sizeof(int32_t));
-					}
-				});
-			});
-		};
-	};
-	// a valid tag (0 or 1, since there are 2 members) materializes without issue
-	auto valid = DeserializeVectorReturn(type, 1, write_union(0));
-	REQUIRE_NOTHROW(valid->GetValue(0));
-	// a stored tag beyond the member count must be rejected, not index past the children array
-	auto invalid = DeserializeVectorReturn(type, 1, write_union(5));
-	REQUIRE_THROWS_WITH(invalid->GetValue(0), Catch::Contains("Union tag (5) is out of bounds"));
-}
-
 } // namespace duckdb

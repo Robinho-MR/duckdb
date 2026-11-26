@@ -38,6 +38,12 @@ public:
 	DUCKDB_API const LogicalType &Type() const;
 	LogicalType &TypeMutable();
 	void SetType(const LogicalType &type);
+	//! The type used by the storage - marks UNIONs stored in the legacy (pre-VARIANT) layout
+	LogicalType StorageType() const;
+	//! The type that is serialized - columns in the legacy UNION layout keep the legacy UNION type
+	LogicalType SerializedType() const;
+	//! Whether the column contains UNIONs stored in the legacy (pre-VARIANT) layout, which is read-only
+	bool HasLegacyUnionLayout() const;
 
 	//! name
 	DUCKDB_API const Identifier &Name() const;
@@ -98,6 +104,8 @@ private:
 	Identifier name;
 	//! The type of the column
 	LogicalType type;
+	//! Whether the column was written by an older version that stored UNIONs as STRUCT(tag, member_1, ...)
+	bool legacy_union_layout = false;
 	//! Compression Type used for this column
 	duckdb::CompressionType compression_type = duckdb::CompressionType::COMPRESSION_AUTO;
 	//! The index of the column in the storage of the table

@@ -226,6 +226,20 @@ static unique_ptr<ParsedExpression> NestedValueExpression(const LogicalType &typ
 		result->ElseMutable() = empty_list ? ListValueExpression({}) : ConstantExpression::Null();
 		return std::move(result);
 	}
+	if (UnionType::IsUnion(type) && UnionType::GetMemberCount(type) == 1) {
+		// a single-member UNION is constructed by union_value(member := value)
+		auto &member_type = UnionType::GetMemberType(type, 0);
+		Value member_value;
+		if (value) {
+			member_value = UnionValue::GetValue(*value);
+		}
+		auto child = NestedValueExpression(member_type, value ? &member_value : nullptr);
+		vector<FunctionArgument> arguments;
+		arguments.emplace_back(UnionType::GetMemberName(type, 0), std::move(child));
+		unique_ptr<ParsedExpression> result =
+		    make_uniq<FunctionExpression>(QualifiedName("system", "main", "union_value"), std::move(arguments));
+		return type.HasAlias() ? CastTo(type, std::move(result)) : std::move(result);
+	}
 	if (type.id() == LogicalTypeId::MAP) {
 		vector<Value> keys, values;
 		if (value) {
@@ -239,15 +253,6 @@ static unique_ptr<ParsedExpression> NestedValueExpression(const LogicalType &typ
 		arguments.push_back(ConstantExpression::FromValue(Value::LIST(MapType::KeyType(type), std::move(keys))));
 		arguments.push_back(ConstantExpression::FromValue(Value::LIST(MapType::ValueType(type), std::move(values))));
 		auto result = ValueFunction("map", std::move(arguments));
-		return type.HasAlias() ? CastTo(type, std::move(result)) : std::move(result);
-	}
-	if (type.id() == LogicalTypeId::UNION && UnionType::GetMemberCount(type) == 1) {
-		auto &member_type = UnionType::GetMemberType(type, 0);
-		auto child = NestedValueExpression(member_type, value ? &UnionValue::GetValue(*value) : nullptr);
-		vector<FunctionArgument> arguments;
-		arguments.emplace_back(UnionType::GetMemberName(type, 0), std::move(child));
-		unique_ptr<ParsedExpression> result =
-		    make_uniq<FunctionExpression>(QualifiedName("system", "main", "union_value"), std::move(arguments));
 		return type.HasAlias() ? CastTo(type, std::move(result)) : std::move(result);
 	}
 	vector<FunctionArgument> arguments;
@@ -327,6 +332,13 @@ unique_ptr<ParsedExpression> ConstantExpression::FromValue(const Value &value) {
 		    return child.id() == LogicalTypeId::ENUM && EnumType::GetSize(child) == 0;
 	    })) {
 		throw NotImplementedException("The nested value type has no SQL constructor");
+	}
+	if (UnionType::IsUnion(type)) {
+		if (value.IsNull()) {
+			return CastTo(type, Null());
+		}
+		auto member = UnionValue::GetValue(value);
+		return CastTo(type, CastTo(member.type(), FromValue(member)));
 	}
 	if (RequiresTypeWitness(type) || type.id() == LogicalTypeId::TUPLE) {
 		return NestedValueExpression(type, value);
@@ -420,11 +432,6 @@ unique_ptr<ParsedExpression> ConstantExpression::FromValue(const Value &value) {
 		return MapExpression(value);
 	case LogicalTypeId::POINTER:
 		return FromLiteral(Literal::Pointer(value.GetPointer()));
-	case LogicalTypeId::UNION: {
-		auto tag = UnionValue::GetTag(value);
-		auto &name = UnionType::GetMemberName(type, tag);
-		return CastTo(type, NamedArgument(name, UnionValue::GetValue(value), "union_value"));
-	}
 	default:
 		return StringCast(value);
 	}

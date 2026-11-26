@@ -323,7 +323,7 @@ static bool EqualMatchesUnion(const LogicalType &left, const LogicalType &right)
 		// rule only applies to equal types
 		return false;
 	}
-	return left.id() == LogicalTypeId::UNION;
+	return UnionType::IsUnion(left) && UnionType::IsUnion(right);
 }
 
 // ===========================================

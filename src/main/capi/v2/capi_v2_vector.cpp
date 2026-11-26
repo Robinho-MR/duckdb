@@ -9,7 +9,6 @@
 #include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/vector/map_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
-#include "duckdb/common/vector/union_vector.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 
 // Out-param zeroing on failure:
@@ -295,7 +294,7 @@ DUCKDB_V2_ERROR duckdb_v2_vector_constant_set_valid(duckdb_v2_vector_handle vect
 //   MAP     → 1 child  ([0] = entries, a STRUCT(key, value))
 //   ARRAY   → 1 child  ([0] = elements)
 //   STRUCT  → N children ([i] = field i)
-//   UNION   → N+1 children ([0] = tag, [1..N] = members)
+//   UNION   → 0 (a UNION is stored as a VARIANT)
 //   others  → 0
 // ---------------------------------------------------------------------------
 
@@ -314,9 +313,6 @@ DUCKDB_V2_ERROR duckdb_v2_vector_get_child_count(duckdb_v2_vector_handle vector,
 		case duckdb::LogicalTypeId::STRUCT:
 		case duckdb::LogicalTypeId::TUPLE:
 			*out_count = duckdb::StructType::GetChildCount(vec->GetType());
-			return;
-		case duckdb::LogicalTypeId::UNION:
-			*out_count = duckdb::UnionType::GetMemberCount(vec->GetType()) + 1;
 			return;
 		default:
 			*out_count = 0;
@@ -365,26 +361,6 @@ DUCKDB_V2_ERROR duckdb_v2_vector_get_child(duckdb_v2_vector_handle vector, idx_t
 				throw duckdb::InvalidInputException("duckdb_v2_vector_get_child: field index out of range");
 			}
 			*out_child = Convert(&entries[index]);
-			return;
-		}
-		case duckdb::LogicalTypeId::UNION: {
-			// Child [0] is the tag vector; children [1..N] are the
-			// member vectors.
-			if (index == 0) {
-				auto &tags = duckdb::UnionVector::GetTags(*vec);
-				*out_child = Convert(&tags);
-				return;
-			}
-			// Compute the member-space index first; bounds-check that
-			// directly against GetMemberCount. Mixing the child-space
-			// index with the member-space count is too easy to get
-			// off-by-one wrong on later edits.
-			idx_t member_idx = index - 1;
-			if (member_idx >= duckdb::UnionType::GetMemberCount(vec->GetType())) {
-				throw duckdb::InvalidInputException("duckdb_v2_vector_get_child: UNION member index out of range");
-			}
-			auto &member = duckdb::UnionVector::GetMember(*vec, member_idx);
-			*out_child = Convert(&member);
 			return;
 		}
 		default:

@@ -16,7 +16,7 @@ GROUP BY g
 ORDER BY g;
 ----
 1	[1]	1,1
-2	[2, x]	x,2
+2	[2, x]	2,x
 
 query III
 SELECT g, STRING_AGG(DISTINCT u, ',' ORDER BY u), list_sort(string_split(STRING_AGG(DISTINCT u, ','), ','))
@@ -25,13 +25,13 @@ GROUP BY g
 ORDER BY g;
 ----
 1	1,1	[1]
-2	x,2	[2, x]
+2	2,x	[2, x]
 
 query III
 SELECT STRING_AGG(DISTINCT u, ',' ORDER BY u), list_sort(string_split(STRING_AGG(DISTINCT u, ','), ',')), count(DISTINCT u)
 FROM tu;
 ----
-1,x,1,2	[1, 2, x]	4
+1,2,1,x	[1, 2, x]	4
 
 query III
 SELECT g, list_sort(string_split(STRING_AGG(DISTINCT u, ',') FILTER (WHERE g > 0), ',')),
@@ -41,7 +41,7 @@ GROUP BY g
 ORDER BY g;
 ----
 1	[1]	1,1
-2	[2, x]	x,2
+2	[2, x]	2,x
 
 # ordered aggregates with the same ORDER BY key can still share a branch
 query IIII
@@ -52,7 +52,7 @@ GROUP BY g
 ORDER BY g;
 ----
 1	[1]	1,1	1,1
-2	[2, x]	x,2	2,x
+2	[2, x]	2,x	x,2
 
 statement ok
 CREATE TABLE tv(g INT, v VARIANT);

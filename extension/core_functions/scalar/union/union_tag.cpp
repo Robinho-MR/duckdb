@@ -20,7 +20,7 @@ void UnionTagResolveTypes(ResolveScalarFunctionTypesInput &input) {
 		throw ParameterNotResolvedException();
 	}
 
-	if (LogicalTypeId::UNION != arguments[0]->GetReturnType().id()) {
+	if (!UnionType::IsUnion(arguments[0]->GetReturnType())) {
 		throw BinderException("First argument to union_tag function must be a union type.");
 	}
 
@@ -48,7 +48,10 @@ void UnionTagResolveTypes(ResolveScalarFunctionTypesInput &input) {
 
 void UnionTagFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	D_ASSERT(result.GetType().id() == LogicalTypeId::ENUM);
-	result.Reinterpret(UnionVector::GetTags(args.data[0]));
+	// the tag is not stored - it is the first member whose type matches the stored value
+	Vector tags(LogicalType::UTINYINT, args.size());
+	UnionVector::GetTags(args.data[0], tags, args.size());
+	result.Reinterpret(tags);
 }
 
 } // namespace
@@ -56,7 +59,7 @@ void UnionTagFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 ScalarFunction UnionTagFun::GetFunction() {
 	// TODO: Statistics?
 	ScalarFunction fun({}, LogicalTypeId::ANY, UnionTagFunction, nullptr, nullptr, nullptr);
-	fun.GetSignature().AddParameter("union", LogicalTypeId::UNION);
+	fun.GetSignature().AddParameter("union", LogicalType::ANY);
 	fun.SetResolveTypesCallback(UnionTagResolveTypes);
 	return fun;
 }

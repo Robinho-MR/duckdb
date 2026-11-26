@@ -69,7 +69,8 @@ TEST_CASE("Test INVALID, ANY and SQLNULL", "[capi]") {
 	duckdb::vector<duckdb_logical_type> types = {any_type, invalid_type};
 	auto union_type = duckdb_create_union_type(types.data(), member_names.data(), member_names.size());
 	result_type_id = duckdb_get_type_id(union_type);
-	REQUIRE(result_type_id == DUCKDB_TYPE_UNION);
+	// a UNION is a VARIANT that is constrained to its members
+	REQUIRE(result_type_id == DUCKDB_TYPE_VARIANT);
 	duckdb_destroy_logical_type(&union_type);
 
 	// Clean-up.

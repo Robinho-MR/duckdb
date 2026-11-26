@@ -2,7 +2,6 @@
 
 #include "duckdb/common/types/variant_iterator.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
-#include "duckdb/common/vector/union_vector.hpp"
 #include "duckdb/common/vector/vector_iterator.hpp"
 #include "duckdb/common/vector/vector_writer.hpp"
 #include "duckdb/function/cast/vector_cast_helpers.hpp"
@@ -69,28 +68,10 @@ unique_ptr<FunctionLocalState> InitQuotedChildLocalState(CastLocalStateParameter
 	return cast_data.child_cast.InitLocalState(child_parameters);
 }
 
-//! Marks the rows that are written as they are: NULL values, and nested values (a nested UNION member, or a VARIANT
-//! OBJECT or ARRAY)
+//! Marks the rows that are written as they are: NULL values, and nested values (a VARIANT OBJECT or ARRAY)
 void GetUnquotedRows(const Vector &source, idx_t count, vector<bool> &is_unquoted) {
 	is_unquoted.assign(count, true);
 	auto &type = source.GetType();
-	if (type.id() == LogicalTypeId::UNION) {
-		vector<unique_ptr<VectorValidityIterator>> member_validity;
-		for (idx_t member_idx = 0; member_idx < UnionType::GetMemberCount(type); member_idx++) {
-			member_validity.push_back(make_uniq<VectorValidityIterator>(UnionVector::GetMember(source, member_idx)));
-		}
-		auto tags = UnionVector::GetTags(source).Values<union_tag_t>();
-		for (idx_t i = 0; i < count; i++) {
-			auto tag = tags[i];
-			if (!tag.IsValid()) {
-				continue;
-			}
-			auto member_idx = tag.GetValue();
-			is_unquoted[i] =
-			    UnionType::GetMemberType(type, member_idx).IsNested() || !member_validity[member_idx]->IsValid(i);
-		}
-		return;
-	}
 	D_ASSERT(type.id() == LogicalTypeId::VARIANT);
 	VectorIterator<VectorVariantType> variants(source);
 	for (idx_t i = 0; i < count; i++) {
@@ -140,7 +121,7 @@ bool QuotedChildCast(Vector &source, Vector &result, idx_t count, CastParameters
 } // namespace
 
 void NestedToVarcharCast::WrapChildCast(BoundCastInfo &child_cast, const LogicalType &child_type) {
-	if (child_type.id() != LogicalTypeId::UNION && child_type.id() != LogicalTypeId::VARIANT) {
+	if (child_type.id() != LogicalTypeId::VARIANT) {
 		return;
 	}
 	auto stability = child_cast.GetStability();

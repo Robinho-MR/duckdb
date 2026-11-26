@@ -418,8 +418,8 @@ const vector<LogicalType> LogicalType::AllTypes() {
 	    LogicalTypeId::BIGNUM,    LogicalTypeId::UHUGEINT,      LogicalTypeId::HUGEINT,
 	    LogicalTypeId::UUID,      LogicalTypeId::GEOMETRY,      LogicalTypeId::GEOGRAPHY,
 	    LogicalTypeId::STRUCT,    LogicalTypeId::TUPLE,         LogicalTypeId::LIST,
-	    LogicalTypeId::MAP,       LogicalTypeId::ENUM,          LogicalTypeId::UNION,
-	    LogicalTypeId::ARRAY,     LogicalTypeId::VARIANT,
+	    LogicalTypeId::MAP,       LogicalTypeId::ENUM,          LogicalTypeId::ARRAY,
+	    LogicalTypeId::VARIANT,
 	};
 	return types;
 }
@@ -643,16 +643,16 @@ string LogicalType::ToString() const {
 			push_text("MAP(");
 			break;
 		}
-		case LogicalTypeId::UNION: {
-			if (!type.HasParameters()) {
-				result += "UNION";
+		case LogicalTypeId::VARIANT: {
+			if (!UnionType::IsUnion(type)) {
+				result += "VARIANT";
 				break;
 			}
-			auto count = UnionType::GetMemberCount(type);
+			auto &members = UnionType::GetMemberTypes(type);
 			push_text(")");
-			for (idx_t i = count; i > 0; i--) {
-				push_type(UnionType::GetMemberType(type, i - 1));
-				push_text(SQLIdentifier(UnionType::GetMemberName(type, i - 1)) + " ");
+			for (idx_t i = members.size(); i > 0; i--) {
+				push_type(members[i - 1].second);
+				push_text(SQLIdentifier(members[i - 1].first) + " ");
 				if (i > 1) {
 					push_text(", ");
 				}
@@ -900,6 +900,9 @@ bool LogicalType::IsComplete() const {
 			// UNION/VARIANT (which also use STRUCT_TYPE_INFO) cannot be empty
 			if (type.id() == LogicalTypeId::STRUCT || type.id() == LogicalTypeId::TUPLE) {
 				return false;
+			}
+			if (UnionType::IsUnion(type)) {
+				return UnionType::GetMemberCount(type) == 0;
 			}
 			return type.GetTypeInfo().Cast<StructTypeInfo>().child_types.empty();
 		case LogicalTypeInfoType::DECIMAL_TYPE_INFO: {
@@ -1620,6 +1623,31 @@ LogicalType LogicalType::Deserialize(Deserializer &deserializer) {
 		id = LogicalTypeId::TUPLE;
 	}
 
+	if (id == LogicalTypeId::VARIANT) {
+		type_info = UnionTypeInfo::TryConvertDeserialized(std::move(type_info));
+	}
+	if (id == LogicalTypeId::UNION) {
+		// legacy UNION: a struct with children (tag, member_1, ..., member_n) - convert to the VARIANT-backed UNION
+		if (!type_info || type_info->type != LogicalTypeInfoType::STRUCT_TYPE_INFO) {
+			throw SerializationException("Failed to deserialize type UNION: missing type info");
+		}
+		auto &child_types = type_info->Cast<StructTypeInfo>().child_types;
+		if (child_types.size() < 2 || child_types.size() > UnionType::MAX_UNION_MEMBERS + 1) {
+			throw SerializationException("Failed to deserialize type UNION: invalid member count");
+		}
+		child_list_t<LogicalType> members(child_types.begin() + 1, child_types.end());
+		auto union_info =
+		    make_uniq<UnionTypeInfo>(StructType::GetChildTypes(LogicalType::VARIANT()), std::move(members));
+		auto legacy_state = deserializer.GetSerializationData().TryGetCustom<LegacyUnionDeserializationState>();
+		if (legacy_state) {
+			legacy_state->found_legacy_union = true;
+		}
+		union_info->alias = std::move(type_info->alias);
+		union_info->extension_info = std::move(type_info->extension_info);
+		type_info = std::move(union_info);
+		id = LogicalTypeId::VARIANT;
+	}
+
 	auto info_type = type_info ? type_info->type : LogicalTypeInfoType::INVALID_TYPE_INFO;
 	if (info_type == LogicalTypeInfoType::DECIMAL_TYPE_INFO) {
 		auto &decimal_info = type_info->Cast<DecimalTypeInfo>();
@@ -1971,34 +1999,119 @@ const LogicalType &MapType::ValueType(const LogicalType &type) {
 LogicalType LogicalType::UNION(child_list_t<LogicalType> members) {
 	D_ASSERT(!members.empty());
 	D_ASSERT(members.size() <= UnionType::MAX_UNION_MEMBERS);
-	// union types always have a hidden "tag" field in front
-	members.insert(members.begin(), {"", LogicalType::UTINYINT});
-	auto info = make_uniq<StructTypeInfo>(std::move(members));
-	return LogicalType(LogicalTypeId::UNION, std::move(info));
+	auto info = make_uniq<UnionTypeInfo>(StructType::GetChildTypes(LogicalType::VARIANT()), std::move(members));
+	return LogicalType(LogicalTypeId::VARIANT, std::move(info));
+}
+
+static const UnionTypeInfo &GetUnionInfo(const LogicalType &type) {
+	if (!UnionType::IsUnion(type)) {
+		throw InternalException("UnionType accessor called on a non-UNION type: %s", type.ToString());
+	}
+	return type.GetTypeInfo().Cast<UnionTypeInfo>();
+}
+
+bool UnionType::IsUnion(const LogicalType &type) {
+	if (type.id() != LogicalTypeId::VARIANT) {
+		return false;
+	}
+	auto &info = type.GetTypeInfo();
+	return info.type == LogicalTypeInfoType::STRUCT_TYPE_INFO && info.Cast<StructTypeInfo>().GetUnionMembers();
 }
 
 const LogicalType &UnionType::GetMemberType(const LogicalType &type, idx_t index) {
-	auto &child_types = StructType::GetChildTypes(type);
-	D_ASSERT(index < child_types.size());
-	// skip the "tag" field
-	return child_types[index + 1].second;
+	auto &members = GetUnionInfo(type).members;
+	D_ASSERT(index < members.size());
+	return members[index].second;
 }
 
 const Identifier &UnionType::GetMemberName(const LogicalType &type, idx_t index) {
-	auto &child_types = StructType::GetChildTypes(type);
-	D_ASSERT(index < child_types.size());
-	// skip the "tag" field
-	return child_types[index + 1].first;
+	auto &members = GetUnionInfo(type).members;
+	D_ASSERT(index < members.size());
+	return members[index].first;
 }
 
 idx_t UnionType::GetMemberCount(const LogicalType &type) {
-	// don't count the "tag" field
-	return StructType::GetChildTypes(type).size() - 1;
+	return GetUnionInfo(type).members.size();
 }
+
 const child_list_t<LogicalType> UnionType::CopyMemberTypes(const LogicalType &type) {
-	auto child_types = StructType::GetChildTypes(type);
-	child_types.erase(child_types.begin());
-	return child_types;
+	return GetUnionInfo(type).members;
+}
+
+const child_list_t<LogicalType> &UnionType::GetMemberTypes(const LogicalType &type) {
+	return GetUnionInfo(type).members;
+}
+
+LogicalType UnionType::GetMemberStructType(const LogicalType &type) {
+	child_list_t<LogicalType> children;
+	children.emplace_back("", LogicalType::UTINYINT);
+	for (auto &member : GetUnionInfo(type).members) {
+		children.push_back(member);
+	}
+	return LogicalType::STRUCT(std::move(children));
+}
+
+LogicalType UnionType::ReplaceMembers(const LogicalType &type, child_list_t<LogicalType> members) {
+	auto &original = GetUnionInfo(type);
+	auto info = make_uniq<UnionTypeInfo>(original.child_types, std::move(members));
+	original.CopyBaseInfo(*info);
+	info->legacy_layout = original.legacy_layout;
+	return LogicalType(LogicalTypeId::VARIANT, std::move(info));
+}
+
+bool UnionType::ContainsLegacyLayout(const LogicalType &type) {
+	return TypeVisitor::Contains(
+	    type, [](const LogicalType &child) { return IsUnion(child) && GetUnionInfo(child).legacy_layout; });
+}
+
+LogicalType UnionType::SetLegacyLayout(const LogicalType &type, bool legacy_layout) {
+	auto needs_change = TypeVisitor::Contains(type, [&](const LogicalType &child) {
+		return IsUnion(child) && GetUnionInfo(child).legacy_layout != legacy_layout;
+	});
+	if (!needs_change) {
+		return type;
+	}
+	return TypeVisitor::VisitReplace(type, [&](const LogicalType &child) {
+		if (!IsUnion(child) || GetUnionInfo(child).legacy_layout == legacy_layout) {
+			return child;
+		}
+		auto &original = GetUnionInfo(child);
+		auto info = make_uniq<UnionTypeInfo>(original.child_types, original.members);
+		original.CopyBaseInfo(*info);
+		info->legacy_layout = legacy_layout;
+		return LogicalType(LogicalTypeId::VARIANT, std::move(info));
+	});
+}
+
+LogicalType UnionType::GetLegacySerializedType(const LogicalType &type) {
+	return TypeVisitor::VisitReplace(type, [&](const LogicalType &child) {
+		if (!IsUnion(child)) {
+			return child;
+		}
+		auto &original = GetUnionInfo(child);
+		child_list_t<LogicalType> children;
+		children.emplace_back("", LogicalType::UTINYINT);
+		for (auto &member : original.members) {
+			children.push_back(member);
+		}
+		auto info = make_uniq<StructTypeInfo>(std::move(children));
+		original.CopyBaseInfo(*info);
+		return LogicalType(LogicalTypeId::UNION, std::move(info));
+	});
+}
+
+LogicalType UnionType::GetLegacyStorageType(const LogicalType &type) {
+	return TypeVisitor::VisitReplace(type, [&](const LogicalType &child) {
+		if (!IsUnion(child)) {
+			return child;
+		}
+		child_list_t<LogicalType> children;
+		children.emplace_back("", LogicalType::UTINYINT);
+		for (auto &member : GetUnionInfo(child).members) {
+			children.push_back(member);
+		}
+		return LogicalType::STRUCT(std::move(children));
+	});
 }
 
 //===--------------------------------------------------------------------===//
@@ -2116,12 +2229,15 @@ LogicalType ArrayType::ConvertToList(const LogicalType &type) {
 		auto value_type = ConvertToList(MapType::ValueType(type));
 		return LogicalType::MAP(key_type, value_type);
 	}
-	case LogicalTypeId::UNION: {
+	case LogicalTypeId::VARIANT: {
+		if (!UnionType::IsUnion(type)) {
+			return type;
+		}
 		auto children = UnionType::CopyMemberTypes(type);
 		for (auto &child : children) {
 			child.second = ConvertToList(child.second);
 		}
-		return LogicalType::UNION(children);
+		return UnionType::ReplaceMembers(type, std::move(children));
 	}
 	default:
 		return type;

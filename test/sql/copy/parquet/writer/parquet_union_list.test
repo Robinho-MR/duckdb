@@ -48,11 +48,11 @@ SELECT ufield
 FROM read_parquet('{TEMP_DIR}/u.parquet')
 ORDER BY id
 ----
-{'element1': 0, 'val': [a, b], 'omitted': NULL}
-{'element1': 0, 'val': [], 'omitted': NULL}
-{'element1': 0, 'val': [NULL, x], 'omitted': NULL}
-{'element1': 1, 'val': NULL, 'omitted': true}
-{'element1': 1, 'val': NULL, 'omitted': false}
+[a, b]
+[]
+[NULL, x]
+true
+false
 NULL
 
 # UNION of INT[]
@@ -109,16 +109,11 @@ INSERT INTO origin_list_union VALUES
 (2, []::UNION(str VARCHAR, num INT)[]),
 (3, NULL);
 
-statement ok
+# UNIONs are written as Parquet VARIANT, which is only supported for top-level columns
+statement error
 COPY origin_list_union TO '{TEMP_DIR}/list_union.parquet' (FORMAT PARQUET);
-
-query I
-SELECT items FROM read_parquet('{TEMP_DIR}/list_union.parquet')
-ORDER BY id
 ----
-[{'element1': 1, 'str': NULL, 'num': 1}, {'element1': 0, 'str': one, 'num': NULL}]
-[]
-NULL
+is not a root column
 
 # UNION nested in LIST nested in STRUCT (issue #20037 nesting shape)
 statement ok
@@ -135,15 +130,10 @@ INSERT INTO origin_nested VALUES
 }),
 (2, {'items': []::UNION(val VARCHAR[], flag BOOLEAN)[], 'n': 2});
 
-statement ok
+statement error
 COPY origin_nested TO '{TEMP_DIR}/nested_union_list.parquet' (FORMAT PARQUET);
-
-query I
-SELECT s FROM read_parquet('{TEMP_DIR}/nested_union_list.parquet')
-ORDER BY id
 ----
-{'items': [{'element1': 0, 'val': [a], 'flag': NULL}, {'element1': 1, 'val': NULL, 'flag': true}], 'n': 1}
-{'items': [], 'n': 2}
+is not a root column
 
 # Single-member UNION with list
 statement ok

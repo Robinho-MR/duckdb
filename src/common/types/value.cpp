@@ -2,6 +2,8 @@
 #include "duckdb/common/vector/map_vector.hpp"
 #include "duckdb/common/vector/variant_vector.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "duckdb/common/vector/union_vector.hpp"
+#include "duckdb/common/logical_type_info.hpp"
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/limits.hpp"
@@ -899,24 +901,14 @@ Value Value::UNION(child_list_t<LogicalType> members, uint8_t tag, Value value) 
 	D_ASSERT(!members.empty());
 	D_ASSERT(members.size() <= UnionType::MAX_UNION_MEMBERS);
 	D_ASSERT(members.size() > tag);
-
-	D_ASSERT(value.type() == members[tag].second);
-
-	Value result;
-	result.is_null = false;
-	// add the tag to the front of the struct
-	vector<Value> union_values;
-	union_values.emplace_back(Value::UTINYINT(tag));
-	for (idx_t i = 0; i < members.size(); i++) {
-		if (i != tag) {
-			union_values.emplace_back(members[i].second);
-		} else {
-			union_values.emplace_back(nullptr);
-		}
+	auto union_type = LogicalType::UNION(std::move(members));
+	auto &member_type = UnionType::GetMemberType(union_type, tag);
+	if (value.type() != member_type) {
+		value = value.DefaultCastAs(member_type);
 	}
-	union_values[tag + 1] = std::move(value);
-	result.value_info_ = make_shared_ptr<NestedValueInfo>(std::move(union_values));
-	result.type_ = LogicalType::UNION(std::move(members));
+	// a UNION only stores the value of the member, as a VARIANT
+	auto result = value.DefaultCastAs(LogicalType::VARIANT());
+	result.type_ = std::move(union_type);
 	return result;
 }
 
@@ -1778,6 +1770,11 @@ string Value::ToSQLString() const {
 		return "'" + StringUtil::Replace(ToString(), "'", "''") + "'";
 	}
 	case LogicalTypeId::VARIANT: {
+		if (UnionType::IsUnion(type_)) {
+			auto member = UnionValue::GetValue(*this);
+			return "CAST(CAST(" + member.ToSQLString() + " AS " + member.type().ToString() + ") AS " +
+			       type_.ToString() + ")";
+		}
 		Vector tmp(*this, count_t(1));
 		RecursiveUnifiedVectorFormat format;
 		Vector::RecursiveToUnifiedFormat(tmp, format);
@@ -1805,7 +1802,6 @@ string Value::ToSQLString() const {
 	case LogicalTypeId::LIST:
 	case LogicalTypeId::ARRAY:
 	case LogicalTypeId::MAP:
-	case LogicalTypeId::UNION:
 		return NestedToSQLString(*this, [](const Value &child) { return child.ToSQLString(); });
 	case LogicalTypeId::DECIMAL:
 		// a bare literal would be reparsed as DOUBLE or BIGNUM and lose precision, so emit an explicit cast
@@ -1889,15 +1885,6 @@ string Value::NestedToSQLString(const Value &value, const std::function<string(c
 			ret += child_to_sql(kv[1]);
 		}
 		ret += "}::" + type.ToString();
-		return ret;
-	}
-	case LogicalTypeId::UNION: {
-		string ret = "union_value(";
-		auto union_tag = UnionValue::GetTag(value);
-		auto &tag_name = UnionType::GetMemberName(type, union_tag);
-		ret += SQLIdentifier(tag_name) + " := ";
-		ret += child_to_sql(UnionValue::GetValue(value));
-		ret += ")::" + type.ToString();
 		return ret;
 	}
 	default:
@@ -2055,20 +2042,26 @@ const vector<Value> &ArrayValue::GetChildren(const Value &value) {
 	return value.value_info_->Get<NestedValueInfo>().GetValues();
 }
 
-const Value &UnionValue::GetValue(const Value &value) {
-	D_ASSERT(value.type().id() == LogicalTypeId::UNION);
-	auto &children = StructValue::GetChildren(value);
-	auto tag = children[0].GetValueUnsafe<union_tag_t>();
-	D_ASSERT(tag < children.size() - 1);
-	return children[tag + 1];
+Value UnionValue::GetValue(const Value &value) {
+	D_ASSERT(UnionType::IsUnion(value.type()) && !value.IsNull());
+	auto tag = UnionValue::GetTag(value);
+	Vector source(value, count_t(1));
+	Vector result(UnionType::GetMemberType(value.type(), tag), 1);
+	UnionVector::GetMember(source, tag, result, 1);
+	return result.GetValue(0);
 }
 
 union_tag_t UnionValue::GetTag(const Value &value) {
-	D_ASSERT(value.type().id() == LogicalTypeId::UNION);
-	auto children = StructValue::GetChildren(value);
-	auto tag = children[0].GetValueUnsafe<union_tag_t>();
-	D_ASSERT(tag < children.size() - 1);
-	return tag;
+	D_ASSERT(UnionType::IsUnion(value.type()) && !value.IsNull());
+	Vector tmp(value, count_t(1));
+	Vector tags(LogicalType::UTINYINT, 1);
+	UnionVector::GetTags(tmp, tags, 1);
+	auto tag = tags.GetValue(0);
+	if (tag.IsNull()) {
+		throw ConversionException("Value of type %s does not match any member of %s",
+		                          VariantValue::GetValue(value).type().ToString(), value.type().ToString());
+	}
+	return tag.GetValue<union_tag_t>();
 }
 
 const LogicalType &UnionValue::GetType(const Value &value) {
@@ -2453,20 +2446,6 @@ static bool ValueIsValidShallow(const Value &value) {
 		const auto padding_mask = static_cast<uint8_t>(0xFF << (8 - padding));
 		return padding == 0 || (static_cast<uint8_t>(bits[1]) & padding_mask) == padding_mask;
 	}
-	case LogicalTypeId::UNION: {
-		auto &children = StructValue::GetChildren(value);
-		if (children.size() != UnionType::GetMemberCount(type) + 1 ||
-		    children[0].type().id() != LogicalTypeId::UTINYINT || children[0].IsNull() ||
-		    children[0].GetValueUnsafe<union_tag_t>() >= UnionType::GetMemberCount(type)) {
-			return false;
-		}
-		for (idx_t member_idx = 0; member_idx < UnionType::GetMemberCount(type); member_idx++) {
-			if (!ChildTypeMatches(children[member_idx + 1], UnionType::GetMemberType(type, member_idx))) {
-				return false;
-			}
-		}
-		return true;
-	}
 	case LogicalTypeId::STRUCT: {
 		auto &children = StructValue::GetChildren(value);
 		if (children.size() != StructType::GetChildCount(type)) {
@@ -2531,7 +2510,18 @@ bool Value::IsValid() const {
 }
 
 Value Value::Deserialize(Deserializer &deserializer) {
-	auto type = deserializer.ReadPropertyWithExplicitDefault<LogicalType>(100, "type", LogicalTypeId::INVALID);
+	// record whether the type is a legacy UNION type - then the value was written in the legacy UNION layout
+	LegacyUnionDeserializationState legacy_state;
+	auto &serialization_data = deserializer.GetSerializationData();
+	serialization_data.SetCustom(legacy_state);
+	LogicalType type;
+	try {
+		type = deserializer.ReadPropertyWithExplicitDefault<LogicalType>(100, "type", LogicalTypeId::INVALID);
+	} catch (...) {
+		serialization_data.UnsetCustom<LegacyUnionDeserializationState>();
+		throw;
+	}
+	serialization_data.UnsetCustom<LegacyUnionDeserializationState>();
 	if (type.InternalType() == PhysicalType::INVALID) {
 		if (type.id() != LogicalTypeId::INVALID) {
 			throw SerializationException("Failed to deserialize value: type %s is missing its type info",
@@ -2539,6 +2529,18 @@ Value Value::Deserialize(Deserializer &deserializer) {
 		}
 		type = deserializer.Get<const LogicalType &>();
 	}
+	if (!legacy_state.found_legacy_union) {
+		return DeserializeInternal(deserializer, std::move(type));
+	}
+	// the UNIONs are stored as STRUCT(tag, member_1, ..., member_n) - convert them to the VARIANT-backed UNION
+	auto legacy_value = DeserializeInternal(deserializer, UnionType::GetLegacyStorageType(type));
+	Vector legacy(legacy_value, count_t(1));
+	Vector result(type, 1);
+	UnionVector::FromLegacyStorage(legacy, result, 1);
+	return result.GetValue(0);
+}
+
+Value Value::DeserializeInternal(Deserializer &deserializer, LogicalType type) {
 	auto is_null = deserializer.ReadProperty<bool>(101, "is_null");
 	Value new_value = Value(type);
 	if (is_null) {

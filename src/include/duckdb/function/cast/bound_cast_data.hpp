@@ -159,13 +159,4 @@ public:
 	vector<unique_ptr<FunctionLocalState>> value_states;
 };
 
-struct StructToUnionCast {
-public:
-	static bool AllowImplicitCastFromStruct(const LogicalType &source, const LogicalType &target);
-	static bool Cast(Vector &source, Vector &result, idx_t count, CastParameters &parameters);
-	static unique_ptr<BoundCastData> BindData(BindCastInput &input, const LogicalType &source,
-	                                          const LogicalType &target);
-	static BoundCastInfo Bind(BindCastInput &input, const LogicalType &source, const LogicalType &target);
-};
-
 } // namespace duckdb

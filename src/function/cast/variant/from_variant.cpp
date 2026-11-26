@@ -1074,13 +1074,6 @@ static bool CastVariant(FromVariantConversionData &conversion_data, Vector &resu
 			}
 			break;
 		}
-		case LogicalTypeId::UNION: {
-			error = "Can't convert VARIANT";
-			for (idx_t i = 0; i < count; i++) {
-				FlatVector::SetNull(result, offset + i, true);
-			}
-			return false;
-		}
 		default: {
 			error = StringUtil::Format("Nested type: '%s' not handled, can't convert VARIANT", target_type.ToString());
 			for (idx_t i = 0; i < count; i++) {
@@ -1378,7 +1371,6 @@ BoundCastInfo DefaultCasts::VariantCastSwitch(BindCastInput &input, const Logica
 	case LogicalTypeId::TIMESTAMP_TZ:
 	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::MAP:
-	case LogicalTypeId::UNION:
 	case LogicalTypeId::UUID:
 	case LogicalTypeId::ARRAY:
 		return BoundCastInfo(CastFromVARIANT, std::move(cast_data));

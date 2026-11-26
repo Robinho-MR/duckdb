@@ -387,13 +387,9 @@ MatchFunction RowMatcher::GetStructMatchFunction(const LogicalType &type, const 
 	ExpressionType child_predicate = predicate;
 	switch (predicate) {
 	case ExpressionType::COMPARE_EQUAL:
-		if (type.id() == LogicalTypeId::UNION) {
-			result.function = GenericNestedMatch<NO_MATCH_SEL, Equals>;
-		} else {
-			//	STRUCT equality always uses DISTINCT semantics for the internal columns
-			child_predicate = ExpressionType::COMPARE_NOT_DISTINCT_FROM;
-			result.function = StructMatchEquality<NO_MATCH_SEL, Equals>;
-		}
+		//	STRUCT equality always uses DISTINCT semantics for the internal columns
+		child_predicate = ExpressionType::COMPARE_NOT_DISTINCT_FROM;
+		result.function = StructMatchEquality<NO_MATCH_SEL, Equals>;
 		break;
 	case ExpressionType::COMPARE_NOTEQUAL:
 		result.function = GenericNestedMatch<NO_MATCH_SEL, NotEquals>;
@@ -402,11 +398,7 @@ MatchFunction RowMatcher::GetStructMatchFunction(const LogicalType &type, const 
 		result.function = GenericNestedMatch<NO_MATCH_SEL, DistinctFrom>;
 		return result;
 	case ExpressionType::COMPARE_NOT_DISTINCT_FROM:
-		if (type.id() == LogicalTypeId::UNION) {
-			result.function = GenericNestedMatch<NO_MATCH_SEL, NotDistinctFrom>;
-		} else {
-			result.function = StructMatchEquality<NO_MATCH_SEL, NotDistinctFrom>;
-		}
+		result.function = StructMatchEquality<NO_MATCH_SEL, NotDistinctFrom>;
 		break;
 	case ExpressionType::COMPARE_GREATERTHAN:
 		result.function = GenericNestedMatch<NO_MATCH_SEL, GreaterThan>;

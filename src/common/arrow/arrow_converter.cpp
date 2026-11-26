@@ -127,7 +127,7 @@ void SetArrowFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, co
 			}
 		}
 	}
-	switch (type.id()) {
+	switch (UnionType::IsUnion(type) ? LogicalTypeId::UNION : type.id()) {
 	case LogicalTypeId::BOOLEAN:
 		if (options.arrow_lossless_conversion) {
 			SetArrowExtension(root_holder, child, type, context);

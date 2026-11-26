@@ -16,7 +16,7 @@ SELECT union_tag(u),union_extract(u,'v'),union_extract(u,'v')='a',u IS NULL FROM
 ----
 v	A	true	false
 
-# constant tagged null
+# constant NULL member - a UNION only stores the value, so this is a NULL union
 query TT
 EXPLAIN (SQL) SELECT union_tag(u),union_extract(u,'v'),u IS NULL FROM (SELECT union_value(v := NULL::VARCHAR COLLATE NOCASE) u);
 ----
@@ -25,7 +25,7 @@ sql	<REGEX>:.*SELECT.*
 query TTT
 SELECT union_tag(u),union_extract(u,'v'),u IS NULL FROM (SELECT union_value(v := NULL::VARCHAR COLLATE NOCASE) u);
 ----
-v	NULL	false
+NULL	NULL	true
 
 # constant whole null
 query TT
@@ -48,7 +48,7 @@ query TTTT
 SELECT i,union_tag(u),union_extract(u,'v'),u IS NULL FROM (SELECT i, CASE WHEN i=2 THEN NULL ELSE union_value(v := CASE WHEN i=1 THEN NULL ELSE 'A' COLLATE NOCASE END) END u FROM range(3)t(i)) ORDER BY i;
 ----
 0	v	A	false
-1	v	NULL	false
+1	NULL	NULL	true
 2	NULL	NULL	true
 
 # list member

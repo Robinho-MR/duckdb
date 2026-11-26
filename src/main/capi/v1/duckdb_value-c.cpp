@@ -489,7 +489,7 @@ duckdb_value duckdb_create_union_value(duckdb_logical_type union_type, idx_t tag
 		return nullptr;
 	}
 	const auto &union_logical_type = UnwrapType(union_type);
-	if (union_logical_type.id() != duckdb::LogicalTypeId::UNION) {
+	if (!duckdb::UnionType::IsUnion(union_logical_type)) {
 		return nullptr;
 	}
 	idx_t member_count = duckdb::UnionType::GetMemberCount(union_logical_type);

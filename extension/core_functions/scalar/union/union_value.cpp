@@ -1,4 +1,5 @@
-#include "duckdb/common/vector/union_vector.hpp"
+#include "duckdb/common/type_visitor.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "core_functions/scalar/union_functions.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/execution/expression_executor.hpp"
@@ -11,27 +12,9 @@ namespace duckdb {
 
 namespace {
 
-struct UnionValueBindData : public FunctionData {
-	UnionValueBindData() {
-	}
-
-public:
-	unique_ptr<FunctionData> Copy() const override {
-		return make_uniq<UnionValueBindData>();
-	}
-	bool Equals(const FunctionData &other_p) const override {
-		return true;
-	}
-};
-
 void UnionValueFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	// Assign the new entries to the result vector
-	UnionVector::GetMember(result, 0).Reference(args.data[0]);
-
-	// Set the result tag vector to a constant value
-	auto &tag_vector = UnionVector::GetTags(result);
-	tag_vector.SetVectorType(VectorType::CONSTANT_VECTOR);
-	ConstantVector::GetData<union_tag_t>(tag_vector)[0] = 0;
+	// a single-member UNION stores the argument as a VARIANT
+	VectorOperations::DefaultCast(args.data[0], result, args.size());
 }
 
 unique_ptr<FunctionData> UnionValueBind(BindScalarFunctionInput &input) {
@@ -39,6 +22,9 @@ unique_ptr<FunctionData> UnionValueBind(BindScalarFunctionInput &input) {
 	auto &arguments = input.GetArguments();
 	if (arguments.size() != 1) {
 		throw BinderException("union_value takes exactly one argument");
+	}
+	if (TypeVisitor::Contains(arguments[0]->GetReturnType(), LogicalTypeId::TYPE)) {
+		throw BinderException("union_value cannot take a value of type %s", arguments[0]->GetReturnType());
 	}
 	child_list_t<LogicalType> union_members;
 	union_members.emplace_back(make_pair(input.GetArgumentName(0), arguments[0]->GetReturnType()));
@@ -60,7 +46,7 @@ unique_ptr<ParsedExpression> UnionValueUnbind(FunctionUnbindInput &input) {
 } // namespace
 
 ScalarFunction UnionValueFun::GetFunction() {
-	ScalarFunction fun("union_value", {}, LogicalTypeId::UNION, UnionValueFunction, UnionValueBind, nullptr, nullptr);
+	ScalarFunction fun("union_value", {}, LogicalType::VARIANT(), UnionValueFunction, UnionValueBind, nullptr, nullptr);
 	fun.GetSignature().AddKwargs("kwargs", LogicalType::ANY);
 	fun.GetProperties().SetRequiresExpressionNames(true);
 	fun.SetNullHandling(FunctionNullHandling::SPECIAL_HANDLING);

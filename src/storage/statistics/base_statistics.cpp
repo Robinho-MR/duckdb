@@ -411,6 +411,13 @@ void BaseStatistics::SetDistinctCount(idx_t count) {
 }
 
 void BaseStatistics::Serialize(Serializer &serializer) const {
+	if (UnionType::ContainsLegacyLayout(type)) {
+		// columns in the legacy UNION layout keep (unknown) statistics of the legacy layout
+		auto legacy_stats = BaseStatistics::CreateUnknown(UnionType::GetLegacyStorageType(type));
+		legacy_stats.CopyValidity(*this);
+		legacy_stats.Serialize(serializer);
+		return;
+	}
 	serializer.WriteProperty(100, "has_null", has_null);
 	serializer.WriteProperty(101, "has_no_null", has_no_null);
 	serializer.WriteProperty(102, "distinct_count", distinct_count);
@@ -447,6 +454,17 @@ void BaseStatistics::Serialize(Serializer &serializer) const {
 }
 
 BaseStatistics BaseStatistics::Deserialize(Deserializer &deserializer) {
+	auto &column_type = deserializer.Get<const LogicalType &>();
+	if (UnionType::ContainsLegacyLayout(column_type)) {
+		// the statistics of the legacy UNION layout don't apply to the VARIANT-backed UNION
+		auto result = BaseStatistics::CreateUnknown(column_type);
+		auto storage_type = UnionType::GetLegacyStorageType(column_type);
+		deserializer.Set<const LogicalType &>(storage_type);
+		auto legacy_stats = BaseStatistics::Deserialize(deserializer);
+		deserializer.Unset<LogicalType>();
+		result.CopyValidity(legacy_stats);
+		return result;
+	}
 	auto has_null = deserializer.ReadProperty<bool>(100, "has_null");
 	auto has_no_null = deserializer.ReadProperty<bool>(101, "has_no_null");
 	auto distinct_count = deserializer.ReadProperty<idx_t>(102, "distinct_count");

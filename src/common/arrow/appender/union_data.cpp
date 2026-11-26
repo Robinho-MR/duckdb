@@ -1,6 +1,9 @@
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/common/arrow/arrow_appender.hpp"
 #include "duckdb/common/arrow/appender/union_data.hpp"
+#include "duckdb/common/vector/struct_vector.hpp"
+#include "duckdb/common/vector/union_vector.hpp"
+#include "duckdb/common/vector/vector_iterator.hpp"
 
 namespace duckdb {
 
@@ -17,39 +20,21 @@ void ArrowUnionData::Initialize(ArrowAppendData &result, const LogicalType &type
 }
 
 void ArrowUnionData::Append(ArrowAppendData &append_data, const Vector &input, idx_t from, idx_t to, idx_t input_size) {
-	UnifiedVectorFormat format;
-	input.ToUnifiedFormat(format);
 	idx_t size = to - from;
-
 	auto &types_buffer = append_data.GetMainBuffer();
 
-	duckdb::vector<Vector> child_vectors;
-	for (const auto &child : UnionType::CopyMemberTypes(input.GetType())) {
-		child_vectors.emplace_back(child.second, size);
+	// split the union into one vector per member
+	Vector slice(input, from, to);
+	Vector members(UnionType::GetMemberStructType(input.GetType()), size);
+	UnionVector::ToLegacyLayout(slice, members, size);
+	auto &entries = StructVector::GetEntries(members);
+
+	auto tags = entries[0].Values<union_tag_t>();
+	for (auto tag : tags) {
+		types_buffer.push_back<data_t>(tag.IsValid() ? NumericCast<data_t>(tag.GetValue()) : 0);
 	}
-
-	for (idx_t i = 0; i < size; i++) {
-		auto input_idx = from + i;
-		const auto &val = input.GetValue(input_idx);
-
-		idx_t tag = 0;
-		Value resolved_value(nullptr);
-		if (!val.IsNull()) {
-			tag = UnionValue::GetTag(val);
-
-			resolved_value = UnionValue::GetValue(val);
-		}
-
-		for (idx_t child_idx = 0; child_idx < child_vectors.size(); child_idx++) {
-			child_vectors[child_idx].SetValue(i, child_idx == tag ? resolved_value : Value(nullptr));
-		}
-		types_buffer.push_back<data_t>(NumericCast<data_t>(tag));
-	}
-
-	for (idx_t child_idx = 0; child_idx < child_vectors.size(); child_idx++) {
-		auto &child_buffer = append_data.child_data[child_idx];
-		auto &child = child_vectors[child_idx];
-		child_buffer->AppendChild(child, 0, size, size);
+	for (idx_t child_idx = 0; child_idx + 1 < entries.size(); child_idx++) {
+		append_data.child_data[child_idx]->AppendChild(entries[child_idx + 1], 0, size, size);
 	}
 	append_data.row_count += size;
 }

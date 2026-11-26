@@ -26,7 +26,7 @@ MarkJoinSimplifier::MarkJoinSimplifier(Optimizer &optimizer) : optimizer(optimiz
 
 static bool ComparisonInputIsNotNull(NotNullExpressionAnalyzer &analyzer, LogicalOperator &op, const Expression &expr) {
 	// These comparisons can produce NULL from nested members.
-	if (expr.GetReturnType().id() == LogicalTypeId::TUPLE || expr.GetReturnType().id() == LogicalTypeId::UNION) {
+	if (expr.GetReturnType().id() == LogicalTypeId::TUPLE) {
 		return false;
 	}
 	return analyzer.IsNotNull(op, expr);
@@ -136,10 +136,6 @@ static MarkerPredicate AnalyzeMarkerPredicate(ClientContext &context, const Expr
 static void SimplifyNullSafeSemiJoinConditions(NotNullExpressionAnalyzer &analyzer, LogicalComparisonJoin &join) {
 	for (auto &condition : join.conditions) {
 		if (!condition.IsComparison() || condition.GetComparisonType() != ExpressionType::COMPARE_NOT_DISTINCT_FROM) {
-			continue;
-		}
-		// A UNION's active member may be NULL even when the UNION itself is not.
-		if (condition.GetLHS().GetReturnType().id() == LogicalTypeId::UNION) {
 			continue;
 		}
 		if (analyzer.IsNotNull(*join.children[0], condition.GetLHS()) ||

@@ -119,7 +119,6 @@ LogicalType VariantColumnWriter::TransformTypedValueRecursive(const LogicalType 
 		}
 		return LogicalType::LIST(LogicalType::STRUCT(replaced_types));
 	}
-	case LogicalTypeId::UNION:
 	case LogicalTypeId::MAP:
 	case LogicalTypeId::VARIANT:
 	case LogicalTypeId::ARRAY:

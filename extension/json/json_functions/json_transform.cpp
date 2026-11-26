@@ -1095,9 +1095,45 @@ static bool TransformValueIntoUnion(yyjson_val **vals, yyjson_alc *alc, Vector &
 			continue;
 		}
 
-		if (!unsafe_yyjson_is_obj(obj)) {
-			set_error(i,
-			          StringUtil::Format("Expected an object representing a union, got %s", yyjson_get_type_desc(obj)));
+		// an object with a single member name as key holds the value of that member: {"member": value}
+		bool is_tagged_object = false;
+		if (unsafe_yyjson_is_obj(obj) && unsafe_yyjson_get_len(obj) == 1) {
+			auto first_key = unsafe_yyjson_get_first(obj);
+			is_tagged_object = std::find(names.begin(), names.end(), unsafe_yyjson_get_str(first_key)) != names.end();
+		}
+		if (!is_tagged_object) {
+			// otherwise the value is the value of the first member it can be read as - VARCHAR members accept any
+			// value, so they are only considered first for JSON strings
+			bool found = false;
+			bool is_string = unsafe_yyjson_is_str(obj);
+			for (idx_t pass = 0; pass < 2 && !found; pass++) {
+				for (idx_t member_idx = 0; member_idx < fields.size() && !found; member_idx++) {
+					bool is_varchar_member = fields[member_idx].second.id() == LogicalTypeId::VARCHAR;
+					if (!is_string && is_varchar_member != (pass == 1)) {
+						continue;
+					}
+					if (is_string && pass == 1) {
+						break;
+					}
+					Vector single(fields[member_idx].second, 1);
+					JSONTransformOptions member_options = options;
+					member_options.strict_cast = true;
+					member_options.delay_error = false;
+					try {
+						if (JSONTransform::Transform(vals + i, alc, single, 1, member_options, nullptr)) {
+							result.SetValue(i,
+							                Value::UNION(fields, NumericCast<uint8_t>(member_idx), single.GetValue(0)));
+							found = true;
+						}
+					} catch (std::exception &) {
+						// not a value of this member
+					}
+				}
+			}
+			if (!found) {
+				set_error(i, StringUtil::Format("Could not read %s as a value of %s", yyjson_get_type_desc(obj),
+				                                type.ToString()));
+			}
 			continue;
 		}
 
@@ -1146,7 +1182,7 @@ bool JSONTransform::Transform(yyjson_val *vals[], yyjson_alc *alc, Vector &resul
 		return TransformToJSON(vals, alc, result, count, options);
 	}
 
-	switch (result_type.id()) {
+	switch (UnionType::IsUnion(result_type) ? LogicalTypeId::UNION : result_type.id()) {
 	case LogicalTypeId::SQLNULL:
 		FlatVector::ValidityMutable(result).SetAllInvalid(count);
 		return true;
@@ -1338,9 +1374,6 @@ void JSONFunctions::RegisterJSONTransformCastFunctions(ExtensionLoader &loader) 
 			break;
 		case LogicalTypeId::MAP:
 			target_type = LogicalType::MAP(LogicalType::ANY, LogicalType::ANY);
-			break;
-		case LogicalTypeId::UNION:
-			target_type = LogicalType::UNION({{"any", LogicalType::ANY}});
 			break;
 		case LogicalTypeId::ARRAY:
 			target_type = LogicalType::ARRAY(LogicalType::ANY, optional_idx());

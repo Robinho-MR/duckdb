@@ -101,7 +101,7 @@ sad	curious
 query TTTTT
 SELECT a, b, union_tag(c), c.b, d FROM tbl4, tbl5
 ----
-[happy, sad]	{curious=happy}	b	sad	type alias
+[happy, sad]	{curious=happy}	a	NULL	type alias
 
 query TTTT
 SELECT enum_range(NULL::mood), enum_range(NULL::doom), enum_range(a[1]), enum_range(c.b) FROM tbl4, tbl5

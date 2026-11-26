@@ -37,8 +37,7 @@ void UnionExtractFunction(DataChunk &args, ExpressionState &state, Vector &resul
 	vec.Verify();
 
 	D_ASSERT(info.index < UnionType::GetMemberCount(vec.GetType()));
-	auto &member = UnionVector::GetMember(vec, info.index);
-	result.Reference(member);
+	UnionVector::GetMember(vec, info.index, result, args.size());
 	result.Verify();
 }
 
@@ -50,7 +49,7 @@ void UnionExtractResolveTypes(ResolveScalarFunctionTypesInput &input) {
 	if (union_type.id() == LogicalTypeId::UNKNOWN) {
 		throw ParameterNotResolvedException();
 	}
-	if (union_type.id() != LogicalTypeId::UNION) {
+	if (!UnionType::IsUnion(union_type)) {
 		throw BinderException("union_extract can only take a union parameter");
 	}
 	if (UnionType::GetMemberCount(union_type) == 0) {
@@ -108,7 +107,7 @@ unique_ptr<FunctionData> UnionExtractBind(BindScalarFunctionInput &input) {
 ScalarFunction UnionExtractFun::GetFunction() {
 	// the arguments and return types are actually set in the binder function
 	ScalarFunction fun({}, LogicalType::ANY, UnionExtractFunction, UnionExtractBind, nullptr, nullptr);
-	fun.GetSignature().AddParameter("union", LogicalTypeId::UNION).AddParameter("tag", LogicalType::VARCHAR);
+	fun.GetSignature().AddParameter("union", LogicalType::ANY).AddParameter("tag", LogicalType::VARCHAR);
 	fun.SetResolveTypesCallback(UnionExtractResolveTypes);
 	return fun;
 }

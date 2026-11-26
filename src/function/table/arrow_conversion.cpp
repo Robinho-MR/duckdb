@@ -4,6 +4,8 @@
 #include "duckdb/common/vector/map_vector.hpp"
 #include "duckdb/common/vector/string_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
+#include "duckdb/common/vector/union_vector.hpp"
+#include "duckdb/common/vector/constant_vector.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 
 #include "duckdb/common/exception/conversion_exception.hpp"
@@ -958,7 +960,7 @@ void ArrowToDuckDBConversion::ColumnArrowToDuckDB(Vector &vector, ArrowArray &ar
 		}
 	}
 
-	switch (vector.GetType().id()) {
+	switch (UnionType::IsUnion(vector.GetType()) ? LogicalTypeId::UNION : vector.GetType().id()) {
 	case LogicalTypeId::SQLNULL:
 		ConstantVector::SetNull(vector, count_t(size));
 		break;
@@ -1386,15 +1388,27 @@ void ArrowToDuckDBConversion::ColumnArrowToDuckDB(Vector &vector, ArrowArray &ar
 
 		for (idx_t row_idx = 0; row_idx < size; row_idx++) {
 			auto tag = NumericCast<uint8_t>(type_ids[row_idx]);
-
-			auto out_of_range = tag >= array.n_children;
-			if (out_of_range) {
+			if (tag >= array.n_children) {
 				throw InvalidInputException("Arrow union tag out of range: %d", tag);
 			}
-
-			const Value &value = children[tag].GetValue(row_idx);
-			vector.SetValue(row_idx, value.IsNull() ? Value() : Value::UNION(members, tag, value));
 		}
+		// only keep the value of the selected member, and store it as a VARIANT
+		Vector legacy(UnionType::GetMemberStructType(vector.GetType()), size);
+		auto &legacy_entries = StructVector::GetEntries(legacy);
+		legacy_entries[0].SetVectorType(VectorType::CONSTANT_VECTOR);
+		ConstantVector::SetNull(legacy_entries[0], count_t(size));
+		for (idx_t child_idx = 0; child_idx < children.size(); child_idx++) {
+			auto &child = children[child_idx];
+			child.Flatten();
+			for (idx_t row_idx = 0; row_idx < size; row_idx++) {
+				if (NumericCast<idx_t>(type_ids[row_idx]) != child_idx) {
+					FlatVector::SetNull(child, row_idx, true);
+				}
+			}
+			legacy_entries[child_idx + 1].Reference(child);
+		}
+		FlatVector::SetSize(legacy, size);
+		UnionVector::FromLegacyLayout(legacy, vector, size);
 
 		break;
 	}

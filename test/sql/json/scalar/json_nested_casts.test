@@ -93,7 +93,7 @@ SELECT ['42']::UNION(u JSON)[]
 query I
 SELECT '42'::UNION(u VARCHAR)::JSON
 ----
-{"u":"42"}
+"42"
 
 # try_cast works too
 query I

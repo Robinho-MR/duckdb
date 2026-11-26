@@ -1,4 +1,7 @@
 #include "duckdb/parser/column_definition.hpp"
+#include "duckdb/common/logical_type_info.hpp"
+#include "duckdb/common/serializer/serializer.hpp"
+#include "duckdb/common/serializer/deserializer.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
@@ -10,12 +13,51 @@
 namespace duckdb {
 
 ColumnDefinition::ColumnDefinition(Identifier name_p, LogicalType type_p)
-    : name(std::move(name_p)), type(std::move(type_p)) {
+    : name(std::move(name_p)), type(UnionType::SetLegacyLayout(type_p, false)) {
 }
 
 ColumnDefinition::ColumnDefinition(Identifier name_p, LogicalType type_p, unique_ptr<ParsedExpression> expression,
                                    TableColumnType category)
-    : name(std::move(name_p)), type(std::move(type_p)), category(category), expression(std::move(expression)) {
+    : name(std::move(name_p)), type(UnionType::SetLegacyLayout(type_p, false)), category(category),
+      expression(std::move(expression)) {
+}
+
+void ColumnDefinition::Serialize(Serializer &serializer) const {
+	serializer.WritePropertyWithDefault<Identifier>(100, "name", name);
+	serializer.WriteProperty<LogicalType>(101, "type", SerializedType());
+	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(102, "expression", expression);
+	serializer.WriteProperty<TableColumnType>(103, "category", category);
+	serializer.WriteProperty<duckdb::CompressionType>(104, "compression_type", compression_type);
+	serializer.WritePropertyWithDefault<Value>(105, "comment", comment, Value());
+	serializer.WritePropertyWithDefault<InsertionOrderPreservingMap<string>>(106, "tags", tags,
+	                                                                         InsertionOrderPreservingMap<string>());
+}
+
+ColumnDefinition ColumnDefinition::Deserialize(Deserializer &deserializer) {
+	auto name = deserializer.ReadPropertyWithDefault<Identifier>(100, "name");
+	// a column whose type is a legacy UNION was written by an older version - its data uses the legacy layout
+	LegacyUnionDeserializationState legacy_state;
+	deserializer.GetSerializationData().SetCustom(legacy_state);
+	LogicalType type;
+	try {
+		type = deserializer.ReadProperty<LogicalType>(101, "type");
+	} catch (...) {
+		deserializer.GetSerializationData().UnsetCustom<LegacyUnionDeserializationState>();
+		throw;
+	}
+	deserializer.GetSerializationData().UnsetCustom<LegacyUnionDeserializationState>();
+	auto expression = deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(102, "expression");
+	auto category = deserializer.ReadProperty<TableColumnType>(103, "category");
+	ColumnDefinition result(std::move(name), std::move(type), std::move(expression), category);
+	result.legacy_union_layout = legacy_state.found_legacy_union;
+	deserializer.ReadProperty<duckdb::CompressionType>(104, "compression_type", result.compression_type);
+	deserializer.ReadPropertyWithExplicitDefault<Value>(105, "comment", result.comment, Value());
+	deserializer.ReadPropertyWithExplicitDefault<InsertionOrderPreservingMap<string>>(
+	    106, "tags", result.tags, InsertionOrderPreservingMap<string>());
+	if (result.Generated() && !result.HasGeneratedExpression()) {
+		throw SerializationException("Failed to deserialize: generated column has no expression");
+	}
+	return result;
 }
 
 ColumnDefinition ColumnDefinition::Copy() const {
@@ -27,6 +69,7 @@ ColumnDefinition ColumnDefinition::Copy() const {
 	copy.category = category;
 	copy.comment = comment;
 	copy.tags = tags;
+	copy.legacy_union_layout = legacy_union_layout;
 	return copy;
 }
 
@@ -63,7 +106,21 @@ LogicalType &ColumnDefinition::TypeMutable() {
 }
 
 void ColumnDefinition::SetType(const LogicalType &type) {
-	this->type = type;
+	// the column is rewritten with the new type
+	this->type = UnionType::SetLegacyLayout(type, false);
+	legacy_union_layout = false;
+}
+
+LogicalType ColumnDefinition::StorageType() const {
+	return legacy_union_layout ? UnionType::SetLegacyLayout(type, true) : type;
+}
+
+LogicalType ColumnDefinition::SerializedType() const {
+	return legacy_union_layout ? UnionType::GetLegacySerializedType(type) : type;
+}
+
+bool ColumnDefinition::HasLegacyUnionLayout() const {
+	return legacy_union_layout;
 }
 
 const Identifier &ColumnDefinition::Name() const {

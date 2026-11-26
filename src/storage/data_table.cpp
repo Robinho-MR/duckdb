@@ -244,7 +244,7 @@ DataTable::DataTable(ClientContext &context, DataTable &parent, idx_t changed_id
 vector<LogicalType> DataTable::GetTypes() {
 	vector<LogicalType> types;
 	for (auto &it : column_definitions) {
-		types.push_back(it.Type());
+		types.push_back(it.StorageType());
 	}
 	return types;
 }

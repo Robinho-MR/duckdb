@@ -266,7 +266,6 @@ private:
 	                                           const LogicalType &target);
 	static BoundCastInfo TimestampSecCastSwitch(BindCastInput &input, const LogicalType &source,
 	                                            const LogicalType &target);
-	static BoundCastInfo UnionCastSwitch(BindCastInput &input, const LogicalType &source, const LogicalType &target);
 	static BoundCastInfo VariantCastSwitch(BindCastInput &input, const LogicalType &source, const LogicalType &target);
 	static BoundCastInfo UUIDCastSwitch(BindCastInput &input, const LogicalType &source, const LogicalType &target);
 	static BoundCastInfo GeoCastSwitch(BindCastInput &input, const LogicalType &source, const LogicalType &target);

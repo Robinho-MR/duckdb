@@ -99,10 +99,11 @@ SELECT CAST(v.enum_value AS ENUM('foo', 'bar')) FROM {SOURCE};
 ----
 Unimplemented type for cast (VARIANT -> ENUM('foo', 'bar'))
 
-statement error
+# a UNION is a VARIANT constrained to its members
+query I
 SELECT CAST(v.union_value AS UNION(a INTEGER)) FROM {SOURCE};
 ----
-Can't convert VARIANT to 'UNION(a INTEGER)'
+42
 
 # Casts that give the same result for the shredded value and for the VARIANT
 query I

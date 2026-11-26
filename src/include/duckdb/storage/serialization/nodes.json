@@ -581,6 +581,7 @@
   },
   {
     "class": "ColumnDefinition",
+    "custom_implementation": true,
     "includes": [
       "duckdb/parser/column_definition.hpp"
     ],

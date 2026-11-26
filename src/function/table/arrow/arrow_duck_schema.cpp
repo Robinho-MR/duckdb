@@ -352,7 +352,7 @@ LogicalType ArrowType::GetDuckType(bool use_dictionary) const {
 	}
 	// Dictionaries can exist in arbitrarily nested schemas
 	// have to reconstruct the type
-	auto id = type.id();
+	auto id = UnionType::IsUnion(type) ? LogicalTypeId::UNION : type.id();
 	switch (id) {
 	case LogicalTypeId::STRUCT:
 	case LogicalTypeId::TUPLE: {

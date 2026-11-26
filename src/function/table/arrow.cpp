@@ -220,7 +220,7 @@ static bool CanPushdown(const ArrowType &type) {
 		return CanPushdown(type.GetDictionary());
 	}
 	auto duck_type = type.GetDuckType();
-	switch (duck_type.id()) {
+	switch (UnionType::IsUnion(duck_type) ? LogicalTypeId::UNION : duck_type.id()) {
 	case LogicalTypeId::BOOLEAN:
 	case LogicalTypeId::TINYINT:
 	case LogicalTypeId::SMALLINT:
@@ -280,7 +280,7 @@ static bool HasUnfilterableType(const ArrowType &type) {
 		return true;
 	}
 	auto duck_type = type.GetDuckType();
-	switch (duck_type.id()) {
+	switch (UnionType::IsUnion(duck_type) ? LogicalTypeId::UNION : duck_type.id()) {
 	case LogicalTypeId::VARCHAR:
 	case LogicalTypeId::BLOB:
 		return type.GetTypeInfo<ArrowStringInfo>().GetSizeType() == ArrowVariableSizeType::VIEW;

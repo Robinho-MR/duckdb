@@ -526,8 +526,7 @@ static optional_ptr<const BaseStatistics> ResolveColumnStatistics(const ColumnDa
 	case LogicalTypeId::ARRAY:
 		return ArrayStats::GetChildStats(*parent_stats);
 	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE:
-	case LogicalTypeId::UNION: {
+	case LogicalTypeId::TUPLE: {
 		auto &struct_data = parent.Cast<StructColumnData>();
 		auto child_count = StructType::GetChildCount(parent.GetType());
 		for (idx_t i = 0; i < child_count; i++) {

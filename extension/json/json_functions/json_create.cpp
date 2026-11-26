@@ -2,7 +2,6 @@
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/vector/map_vector.hpp"
-#include "duckdb/common/vector/union_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/cast/cast_function_set.hpp"
@@ -285,16 +284,6 @@ static LogicalType GetJSONType(StructNames &const_struct_names, const LogicalTyp
 	}
 	case LogicalTypeId::MAP: {
 		return LogicalType::MAP(MapType::KeyType(type), GetJSONType(const_struct_names, MapType::ValueType(type)));
-	}
-	case LogicalTypeId::UNION: {
-		child_list_t<LogicalType> member_types;
-		for (idx_t member_idx = 0; member_idx < UnionType::GetMemberCount(type); member_idx++) {
-			auto &member_name = UnionType::GetMemberName(type, member_idx);
-			auto &member_type = UnionType::GetMemberType(type, member_idx);
-			const_struct_names.Insert(member_name.GetIdentifierName());
-			member_types.emplace_back(member_name, GetJSONType(const_struct_names, member_type));
-		}
-		return LogicalType::UNION(member_types);
 	}
 	// All other types (e.g. date) are cast to VARCHAR
 	default:
@@ -733,75 +722,6 @@ static void CreateValuesMap(const StructNames &names, yyjson_mut_doc *doc, yyjso
 	}
 }
 
-static void CreateValuesUnion(const StructNames &names, yyjson_mut_doc *doc, yyjson_mut_val *vals[], Vector &value_v,
-                              idx_t count, const JSONCopyFormatOptions &options) {
-	// Structs become values, therefore we initialize vals to JSON values
-	UnifiedVectorFormat value_data;
-	value_v.ToUnifiedFormat(value_data);
-	if (value_data.validity.CannotHaveNull()) {
-		for (idx_t i = 0; i < count; i++) {
-			vals[i] = yyjson_mut_obj(doc);
-		}
-	} else {
-		for (idx_t i = 0; i < count; i++) {
-			auto index = value_data.sel->get_index(i);
-			if (!value_data.validity.RowIsValid(index)) {
-				// Make the entry NULL if the Union value is NULL
-				vals[i] = yyjson_mut_null(doc);
-			} else {
-				vals[i] = yyjson_mut_obj(doc);
-			}
-		}
-	}
-
-	// Initialize re-usable array for the nested values
-	auto nested_vals = JSONCommon::AllocateArray<yyjson_mut_val *>(doc, count);
-
-	auto &tag_v = UnionVector::GetTags(value_v);
-	UnifiedVectorFormat tag_data;
-	tag_v.ToUnifiedFormat(tag_data);
-
-	// Add the key/value pairs to the values
-	for (idx_t member_idx = 0; member_idx < UnionType::GetMemberCount(value_v.GetType()); member_idx++) {
-		auto &member_val_v = UnionVector::GetMember(value_v, member_idx);
-		Vector member_key_v(Value(UnionType::GetMemberName(value_v.GetType(), member_idx).GetIdentifierName()),
-		                    count_t(count));
-
-		// This implementation is not optimal since we convert the entire member vector,
-		// and then skip the rows not matching the tag afterwards.
-
-		CreateValues(names, doc, nested_vals, member_val_v, count, options);
-
-		// This is a inlined copy of AddKeyValuePairs but we also skip null tags
-		// and the rows where the member is not matching the tag
-		UnifiedVectorFormat key_data;
-		member_key_v.ToUnifiedFormat(key_data);
-		auto keys = UnifiedVectorFormat::GetData<string_t>(key_data);
-
-		for (idx_t i = 0; i < count; i++) {
-			auto value_index = value_data.sel->get_index(i);
-			if (!value_data.validity.RowIsValid(value_index)) {
-				// This entry is just NULL in it's entirety
-				continue;
-			}
-			auto tag_idx = tag_data.sel->get_index(i);
-			if (!tag_data.validity.RowIsValid(tag_idx)) {
-				continue;
-			}
-			auto tag = (UnifiedVectorFormat::GetData<uint8_t>(tag_data))[tag_idx];
-			if (tag != member_idx) {
-				continue;
-			}
-			auto key_idx = key_data.sel->get_index(i);
-			if (!key_data.validity.RowIsValid(key_idx)) {
-				continue;
-			}
-			auto key = CreateJSONValue<string_t, string_t>::Operation(doc, keys[key_idx]);
-			yyjson_mut_obj_add(vals[i], key, nested_vals[i]);
-		}
-	}
-}
-
 static void CreateValuesList(const StructNames &names, yyjson_mut_doc *doc, yyjson_mut_val *vals[], Vector &value_v,
                              idx_t count, const JSONCopyFormatOptions &options) {
 	// Initialize array for the nested values
@@ -1029,9 +949,6 @@ static void CreateValues(const StructNames &names, yyjson_mut_doc *doc, yyjson_m
 		break;
 	case LogicalTypeId::LIST:
 		CreateValuesList(names, doc, vals, value_v, count, options);
-		break;
-	case LogicalTypeId::UNION:
-		CreateValuesUnion(names, doc, vals, value_v, count, options);
 		break;
 	case LogicalTypeId::ARRAY:
 		CreateValuesArray(names, doc, vals, value_v, count, options);
@@ -1656,9 +1573,6 @@ void JSONFunctions::RegisterJSONCreateCastFunctions(ExtensionLoader &loader) {
 			break;
 		case LogicalTypeId::MAP:
 			source_type = LogicalType::MAP(LogicalType::ANY, LogicalType::ANY);
-			break;
-		case LogicalTypeId::UNION:
-			source_type = LogicalType::UNION({{"any", LogicalType::ANY}});
 			break;
 		case LogicalTypeId::ARRAY:
 			source_type = LogicalType::ARRAY(LogicalType::ANY, optional_idx());

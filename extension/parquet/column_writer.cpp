@@ -391,7 +391,7 @@ unique_ptr<ColumnWriter> ColumnWriter::CreateWriterRecursive(ClientContext &cont
 		                                      std::move(child_writers), !shredding_type);
 	}
 
-	if (StructType::IsStruct(type.id()) || type.id() == LogicalTypeId::UNION) {
+	if (StructType::IsStruct(type.id())) {
 		if (StructType::IsStruct(type.id()) && StructType::GetChildTypes(type).empty()) {
 			throw InvalidInputException("Empty STRUCT columns are not supported in the Parquet format");
 		}

@@ -684,12 +684,31 @@ struct MapType {
 	DUCKDB_API static const LogicalType &ValueType(const LogicalType &type);
 };
 
+//! A UNION is a VARIANT whose values are constrained to the types of its members. Only the value is stored: the
+//! member of a value is the first member whose type matches the type of the stored value.
 struct UnionType {
 	DUCKDB_API static const idx_t MAX_UNION_MEMBERS = 255;
+	//! Whether the type is a UNION (a VARIANT with members)
+	DUCKDB_API static bool IsUnion(const LogicalType &type);
 	DUCKDB_API static idx_t GetMemberCount(const LogicalType &type);
 	DUCKDB_API static const LogicalType &GetMemberType(const LogicalType &type, idx_t index);
 	DUCKDB_API static const Identifier &GetMemberName(const LogicalType &type, idx_t index);
 	DUCKDB_API static const child_list_t<LogicalType> CopyMemberTypes(const LogicalType &type);
+	DUCKDB_API static const child_list_t<LogicalType> &GetMemberTypes(const LogicalType &type);
+	//! STRUCT(tag UTINYINT, member_1, ..., member_n) - the layout of UnionVector::ToLegacyLayout
+	DUCKDB_API static LogicalType GetMemberStructType(const LogicalType &type);
+	//! Returns a copy of the UNION with different members (keeping alias and legacy layout)
+	DUCKDB_API static LogicalType ReplaceMembers(const LogicalType &type, child_list_t<LogicalType> members);
+
+	//! Whether the type contains a UNION that was deserialized from the legacy (pre-VARIANT) layout
+	DUCKDB_API static bool ContainsLegacyLayout(const LogicalType &type);
+	//! Marks every UNION in the type as having the legacy layout
+	DUCKDB_API static LogicalType SetLegacyLayout(const LogicalType &type, bool legacy_layout);
+	//! The type in the legacy serialized form, where UNIONs are a LogicalTypeId::UNION with struct children
+	//! (tag, member_1, ..., member_n)
+	DUCKDB_API static LogicalType GetLegacySerializedType(const LogicalType &type);
+	//! The legacy physical layout, where UNIONs are a STRUCT(tag UTINYINT, member_1, ..., member_n)
+	DUCKDB_API static LogicalType GetLegacyStorageType(const LogicalType &type);
 };
 
 struct ArrayType {

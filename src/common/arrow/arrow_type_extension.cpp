@@ -237,6 +237,10 @@ ArrowTypeExtension DBConfig::GetArrowExtension(const LogicalType &type) const {
 }
 
 bool DBConfig::HasArrowExtension(const LogicalType &type) const {
+	if (UnionType::IsUnion(type)) {
+		// a UNION is exchanged as an Arrow union, not with the extension of VARIANT
+		return false;
+	}
 	lock_guard<mutex> l(arrow_extensions->lock);
 	TypeInfo type_info(type);
 	if (!arrow_extensions->type_to_info[type_info].empty()) {

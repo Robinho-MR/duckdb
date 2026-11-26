@@ -149,41 +149,47 @@ CREATE TABLE tbl4 (u UNION(i INT, b BLOB));
 statement ok
 INSERT INTO tbl4 VALUES (1), ('010203'::BLOB), (3), ('070809'::BLOB);
 
-# fails since b is missing
-statement error
-SELECT u::UNION(i SMALLINT, v VARCHAR) FROM tbl4;
+# casts between unions match the values against the member types: the BLOB values match no member, so they are
+# cast to the first member that accepts them
+query II
+SELECT u::UNION(i SMALLINT, v VARCHAR) AS c, union_tag(c) FROM tbl4 ORDER BY ALL;
 ----
+1	i
+3	i
+010203	v
+070809	v
 
-# succeeds since b is present
-query I
-SELECT u::UNION(i SMALLINT, b VARCHAR) FROM tbl4 ORDER BY ALL;;
+query II
+SELECT u::UNION(i SMALLINT, b VARCHAR) AS c, union_tag(c) FROM tbl4 ORDER BY ALL;
 ----
-1
-3
-010203
-070809
+1	i
+3	i
+010203	b
+070809	b
 
-# fails since b is not compatible
+# the members are matched by name, and the BLOB values can't be converted to INT
 statement error
 SELECT u::UNION(i SMALLINT, b INT) FROM tbl4;
 ----
+<REGEX>:.*BLOB -> INTEGER.*
 
 statement ok
 DELETE FROM tbl4 WHERE union_tag(u) == 'b';
 
+# NULL values are NULL unions
 statement ok
 INSERT INTO tbl4 VALUES (union_value(b := NULL::BLOB)), (union_value(b := NULL)), (NULL), (NULL::BLOB);
 
-# succeeds since all members of b is null, therefore TryNullCast allows to cast blob -> int.
+# the INTEGER values match the INTEGER member b exactly
 query III
-SELECT union_tag(u), union_tag(u::UNION(i SMALLINT, b INT)), u::UNION(i SMALLINT, b INT) FROM tbl4 ORDER BY ALL;;
+SELECT union_tag(u), union_tag(u::UNION(i SMALLINT, b INT)), u::UNION(i SMALLINT, b INT) FROM tbl4 ORDER BY ALL;
 ----
 NULL	NULL	NULL
-i		i		1
-i		i		3
-b		b		NULL
-b		b		NULL
-b		b		NULL
+NULL	NULL	NULL
+NULL	NULL	NULL
+NULL	NULL	NULL
+i	i	1
+i	i	3
 
 # DuckDB internal issue #477
 query I

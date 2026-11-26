@@ -85,6 +85,25 @@ struct SerializationData {
 	}
 
 	template <typename T>
+	typename std::enable_if<std::is_base_of<CustomData, T>::value, optional_ptr<T>>::type TryGetCustom() const {
+		auto iter = customs.find(T::GetType());
+		if (iter == customs.end() || iter->second.empty()) {
+			return nullptr;
+		}
+		// the stack is keyed on T::GetType(), so it can only hold a T
+		return &static_cast<T &>(iter->second.top().get());
+	}
+
+	template <typename T>
+	typename std::enable_if<std::is_base_of<CustomData, T>::value, void>::type UnsetCustom() {
+		auto iter = customs.find(T::GetType());
+		if (iter == customs.end() || iter->second.empty()) {
+			throw duckdb::InternalException("SerializationData - unexpected empty stack for %s", T::GetType());
+		}
+		iter->second.pop();
+	}
+
+	template <typename T>
 	typename std::enable_if<std::is_base_of<CustomData, T>::value, void>::type SetCustom(T &data) {
 		std::string type = T::GetType();
 		auto iter = customs.find(type);

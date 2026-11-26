@@ -123,7 +123,6 @@
 #include "duckdb/common/types/variant_comparison.hpp"
 #include "duckdb/common/types/vector_buffer.hpp"
 #include "duckdb/common/vector/map_vector.hpp"
-#include "duckdb/common/vector/union_vector.hpp"
 #include "duckdb/execution/adaptive_filter.hpp"
 #include "duckdb/execution/index/art/art.hpp"
 #include "duckdb/execution/index/art/art_scanner.hpp"
@@ -7603,28 +7602,6 @@ const char* EnumUtil::ToChars<UndoFlags>(UndoFlags value) {
 template<>
 UndoFlags EnumUtil::FromString<UndoFlags>(const char *value) {
 	return static_cast<UndoFlags>(StringUtil::StringToEnum(GetUndoFlagsValues(), 8, "UndoFlags", value));
-}
-
-const StringUtil::EnumStringLiteral *GetUnionInvalidReasonValues() {
-	static constexpr StringUtil::EnumStringLiteral values[] {
-		{ static_cast<uint32_t>(UnionInvalidReason::VALID), "VALID" },
-		{ static_cast<uint32_t>(UnionInvalidReason::TAG_OUT_OF_RANGE), "TAG_OUT_OF_RANGE" },
-		{ static_cast<uint32_t>(UnionInvalidReason::NO_MEMBERS), "NO_MEMBERS" },
-		{ static_cast<uint32_t>(UnionInvalidReason::VALIDITY_OVERLAP), "VALIDITY_OVERLAP" },
-		{ static_cast<uint32_t>(UnionInvalidReason::TAG_MISMATCH), "TAG_MISMATCH" },
-		{ static_cast<uint32_t>(UnionInvalidReason::NULL_TAG), "NULL_TAG" }
-	};
-	return values;
-}
-
-template<>
-const char* EnumUtil::ToChars<UnionInvalidReason>(UnionInvalidReason value) {
-	return StringUtil::EnumToString(GetUnionInvalidReasonValues(), 6, "UnionInvalidReason", static_cast<uint32_t>(value));
-}
-
-template<>
-UnionInvalidReason EnumUtil::FromString<UnionInvalidReason>(const char *value) {
-	return static_cast<UnionInvalidReason>(StringUtil::StringToEnum(GetUnionInvalidReasonValues(), 6, "UnionInvalidReason", value));
 }
 
 const StringUtil::EnumStringLiteral *GetVacuumIndexStrategyValues() {

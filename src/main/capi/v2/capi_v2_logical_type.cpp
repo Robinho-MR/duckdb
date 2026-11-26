@@ -165,8 +165,8 @@ idx_t TypeParamCount(const LogicalType &type) {
 	case LogicalTypeId::STRUCT:
 	case LogicalTypeId::TUPLE:
 		return StructType::GetChildCount(type);
-	case LogicalTypeId::UNION:
-		return UnionType::GetMemberCount(type);
+	case LogicalTypeId::VARIANT:
+		return UnionType::IsUnion(type) ? UnionType::GetMemberCount(type) : 0;
 	case LogicalTypeId::ENUM:
 		return EnumType::GetSize(type);
 	case LogicalTypeId::VARCHAR:
@@ -201,7 +201,7 @@ Value TypeParamValue(const LogicalType &type, idx_t index, std::string_view &out
 			out_name = std::string_view(child_name.c_str(), child_name.size());
 		}
 		return Value::TYPE(StructType::GetChildType(type, index));
-	case LogicalTypeId::UNION: {
+	case LogicalTypeId::VARIANT: {
 		auto &member_name = UnionType::GetMemberName(type, index);
 		out_name = std::string_view(member_name.c_str(), member_name.size());
 		return Value::TYPE(UnionType::GetMemberType(type, index));
@@ -428,7 +428,12 @@ DUCKDB_V2_ERROR duckdb_v2_logical_type_get_id(duckdb_v2_logical_type_handle type
                                               duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(type);
 	DUCKDB_CHECK_ARG(out_id);
-	return WithErrorHandler(err, [&]() { *out_id = static_cast<DUCKDB_V2_LOGICAL_TYPE_ID>(Convert(type)->id()); });
+	return WithErrorHandler(err, [&]() {
+		auto lt = Convert(type);
+		// a UNION is a VARIANT constrained to its members, but keeps its own kind
+		auto id = duckdb::UnionType::IsUnion(*lt) ? duckdb::LogicalTypeId::UNION : lt->id();
+		*out_id = static_cast<DUCKDB_V2_LOGICAL_TYPE_ID>(id);
+	});
 }
 
 DUCKDB_V2_ERROR duckdb_v2_logical_type_get_name(duckdb_v2_logical_type_handle type, const char **out_name,
@@ -445,7 +450,8 @@ DUCKDB_V2_ERROR duckdb_v2_logical_type_get_name(duckdb_v2_logical_type_handle ty
 		}
 		// Canonical fixed name of the id: static storage, so the borrowed
 		// view outlives even the handle.
-		const char *canonical = duckdb::EnumUtil::ToChars<duckdb::LogicalTypeId>(lt->id());
+		auto id = duckdb::UnionType::IsUnion(*lt) ? duckdb::LogicalTypeId::UNION : lt->id();
+		const char *canonical = duckdb::EnumUtil::ToChars<duckdb::LogicalTypeId>(id);
 		SetStringOut(out_name, out_name_length, std::string_view(canonical));
 	});
 }

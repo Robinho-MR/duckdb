@@ -162,8 +162,12 @@ struct MapCastNode {
 };
 
 template <class MAP>
-static auto RelaxedTypeMatch(MAP &map, const LogicalType &type) -> decltype(map.find(type)) {
+static auto RelaxedTypeMatch(MAP &map, const LogicalType &type, bool is_source) -> decltype(map.find(type)) {
 	D_ASSERT(map.find(type) == map.end()); // we shouldn't be here
+	if (UnionType::IsUnion(type)) {
+		// a UNION is a VARIANT: casts from VARIANT apply to it, but casts to VARIANT don't check the members
+		return is_source ? map.find(LogicalType::VARIANT()) : map.end();
+	}
 	switch (type.id()) {
 	case LogicalTypeId::LIST:
 		return map.find(LogicalType::LIST(LogicalType::ANY));
@@ -185,8 +189,6 @@ static auto RelaxedTypeMatch(MAP &map, const LogicalType &type) -> decltype(map.
 			}
 		}
 		return map.end();
-	case LogicalTypeId::UNION:
-		return map.find(LogicalType::UNION({{"any", LogicalType::ANY}}));
 	case LogicalTypeId::ARRAY:
 		return map.find(LogicalType::ARRAY(LogicalType::ANY, optional_idx()));
 	case LogicalTypeId::DECIMAL:
@@ -228,7 +230,7 @@ public:
 		auto &source_type_entries = source_type_id_entry->second;
 		auto source_type_entry = source_type_entries.find(source);
 		if (source_type_entry == source_type_entries.end()) {
-			source_type_entry = RelaxedTypeMatch(source_type_entries, source);
+			source_type_entry = RelaxedTypeMatch(source_type_entries, source, true);
 			if (source_type_entry == source_type_entries.end()) {
 				return nullptr;
 			}
@@ -246,7 +248,7 @@ public:
 		auto &target_type_entries = target_type_id_entry->second;
 		auto target_type_entry = target_type_entries.find(target);
 		if (target_type_entry == target_type_entries.end()) {
-			target_type_entry = RelaxedTypeMatch(target_type_entries, target);
+			target_type_entry = RelaxedTypeMatch(target_type_entries, target, false);
 			if (target_type_entry == target_type_entries.end()) {
 				return nullptr;
 			}

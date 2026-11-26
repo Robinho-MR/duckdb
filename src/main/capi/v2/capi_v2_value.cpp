@@ -46,8 +46,8 @@ idx_t CompositeChildCount(const Value &v) {
 		return StructValue::GetChildren(v).size();
 	case LogicalTypeId::MAP:
 		return MapValue::GetChildren(v).size() * 2;
-	case LogicalTypeId::UNION:
-		return 2;
+	case LogicalTypeId::VARIANT:
+		return UnionType::IsUnion(v.type()) && !v.IsNull() ? 2 : 0;
 	default:
 		return 0;
 	}
@@ -948,7 +948,7 @@ DUCKDB_V2_ERROR duckdb_v2_value_get_child(duckdb_v2_value_handle value, idx_t in
 			child = duckdb::StructValue::GetChildren(entry)[index % 2];
 			break;
 		}
-		case duckdb::LogicalTypeId::UNION:
+		case duckdb::LogicalTypeId::VARIANT:
 			child =
 			    index == 0 ? duckdb::Value::UTINYINT(duckdb::UnionValue::GetTag(v)) : duckdb::UnionValue::GetValue(v);
 			break;

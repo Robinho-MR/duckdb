@@ -2,14 +2,14 @@
     {
         "name": "union_extract",
         "parameters": "union,tag",
-        "description": "Extract the value with the named tags from the union. NULL if the tag is not currently selected",
+        "description": "Extract the value of the named member from the union. NULL if the value belongs to another member (the member of a value is the first member whose type matches the value)",
         "example": "union_extract(s, 'k')",
         "type": "scalar_function"
     },
     {
         "name": "union_tag",
         "parameters": "union",
-        "description": "Retrieve the currently selected tag of the union as an ENUM",
+        "description": "Deprecated: retrieve the member of the union value as an ENUM. Tags are not stored, the member is the first member whose type matches the value",
         "example": "union_tag(union_value(k := 'foo'))",
         "type": "scalar_function"
     },

@@ -251,7 +251,7 @@ void TableStatistics::Deserialize(Deserializer &deserializer, ColumnList &column
 		auto &col = *iter;
 		iter.operator++();
 
-		auto type = col.GetType();
+		auto type = col.StorageType();
 		deserializer.Set<LogicalType &>(type);
 
 		column_stats.push_back(list.ReadElement<shared_ptr<ColumnStatistics>>());

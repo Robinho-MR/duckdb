@@ -45,8 +45,11 @@ static bool TypeContainsDecimal(const LogicalType &type) {
 	}
 	case LogicalTypeId::MAP:
 		return TypeContainsDecimal(MapType::KeyType(type)) || TypeContainsDecimal(MapType::ValueType(type));
-	case LogicalTypeId::UNION: {
-		for (const auto &child : UnionType::CopyMemberTypes(type)) {
+	case LogicalTypeId::VARIANT: {
+		if (!UnionType::IsUnion(type)) {
+			return false;
+		}
+		for (const auto &child : UnionType::GetMemberTypes(type)) {
 			if (TypeContainsDecimal(child.second)) {
 				return true;
 			}

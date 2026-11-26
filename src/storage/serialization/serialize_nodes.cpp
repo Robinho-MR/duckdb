@@ -231,31 +231,6 @@ ColumnBinding ColumnBinding::Deserialize(Deserializer &deserializer) {
 	return result;
 }
 
-void ColumnDefinition::Serialize(Serializer &serializer) const {
-	serializer.WritePropertyWithDefault<Identifier>(100, "name", name);
-	serializer.WriteProperty<LogicalType>(101, "type", type);
-	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(102, "expression", expression);
-	serializer.WriteProperty<TableColumnType>(103, "category", category);
-	serializer.WriteProperty<duckdb::CompressionType>(104, "compression_type", compression_type);
-	serializer.WritePropertyWithDefault<Value>(105, "comment", comment, Value());
-	serializer.WritePropertyWithDefault<InsertionOrderPreservingMap<string>>(106, "tags", tags, InsertionOrderPreservingMap<string>());
-}
-
-ColumnDefinition ColumnDefinition::Deserialize(Deserializer &deserializer) {
-	auto name = deserializer.ReadPropertyWithDefault<Identifier>(100, "name");
-	auto type = deserializer.ReadProperty<LogicalType>(101, "type");
-	auto expression = deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(102, "expression");
-	auto category = deserializer.ReadProperty<TableColumnType>(103, "category");
-	ColumnDefinition result(std::move(name), std::move(type), std::move(expression), category);
-	deserializer.ReadProperty<duckdb::CompressionType>(104, "compression_type", result.compression_type);
-	deserializer.ReadPropertyWithExplicitDefault<Value>(105, "comment", result.comment, Value());
-	deserializer.ReadPropertyWithExplicitDefault<InsertionOrderPreservingMap<string>>(106, "tags", result.tags, InsertionOrderPreservingMap<string>());
-	if (result.Generated() && !result.HasGeneratedExpression()) {
-		throw SerializationException("Failed to deserialize: generated column has no expression");
-	}
-	return result;
-}
-
 void ColumnIndex::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<idx_t>(1, "index", index);
 	serializer.WritePropertyWithDefault<vector<ColumnIndex>>(2, "child_indexes", child_indexes);

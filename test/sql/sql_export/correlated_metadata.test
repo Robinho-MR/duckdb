@@ -163,10 +163,9 @@ INSERT INTO union_l VALUES (1,union_value(i:=NULL));
 statement ok
 INSERT INTO union_r VALUES (1,union_value(i:=NULL));
 
-statement error
+# a UNION is a VARIANT, so its equality has no NULL-member semantics that would need a conjunction
+statement ok
 EXPLAIN (SQL) SELECT x=ANY(SELECT y FROM union_r r WHERE r.g=l.g) FROM union_l l;
-----
-<REGEX>:.*EXPLAIN \(SQL\) cannot render this query: The MARK condition requires conjunction execution semantics.*
 
 statement ok
 CREATE TABLE list_l(g INTEGER,x INTEGER[]);

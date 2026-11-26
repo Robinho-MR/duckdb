@@ -1,4 +1,3 @@
-add_subdirectory(union)
 add_subdirectory(variant)
 
 add_library_unity(

@@ -4,6 +4,10 @@
 #include "duckdb/common/enum_util.hpp"
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/common/serializer/serializer.hpp"
+#include "duckdb/common/serializer/binary_serializer.hpp"
+#include "duckdb/common/serializer/binary_deserializer.hpp"
+#include "duckdb/common/serializer/memory_stream.hpp"
+#include "duckdb/common/extension_type_info.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/common/string_map_set.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
@@ -201,11 +205,93 @@ StructTypeInfo::StructTypeInfo(child_list_t<LogicalType> child_types_p)
 
 bool StructTypeInfo::EqualsInternal(const LogicalTypeInfo *other_p) const {
 	auto &other = other_p->Cast<StructTypeInfo>();
-	return child_types == other.child_types;
+	if (child_types != other.child_types) {
+		return false;
+	}
+	auto members = GetUnionMembers();
+	auto other_members = other.GetUnionMembers();
+	if (!members || !other_members) {
+		return !members && !other_members;
+	}
+	return *members == *other_members;
 }
 
 unique_ptr<LogicalTypeInfo> StructTypeInfo::Copy() const {
 	return make_uniq<StructTypeInfo>(*this);
+}
+
+optional_ptr<const child_list_t<LogicalType>> StructTypeInfo::GetUnionMembers() const {
+	return nullptr;
+}
+
+//===--------------------------------------------------------------------===//
+// Union Type Info
+//===--------------------------------------------------------------------===//
+UnionTypeInfo::UnionTypeInfo(child_list_t<LogicalType> variant_children, child_list_t<LogicalType> members_p)
+    : StructTypeInfo(std::move(variant_children)), members(std::move(members_p)) {
+}
+
+unique_ptr<LogicalTypeInfo> UnionTypeInfo::Copy() const {
+	return make_uniq<UnionTypeInfo>(*this);
+}
+
+optional_ptr<const child_list_t<LogicalType>> UnionTypeInfo::GetUnionMembers() const {
+	return &members;
+}
+
+void UnionTypeInfo::Serialize(Serializer &serializer) const {
+	// written as a regular VARIANT, with the members stored as an extension property
+	vector<Value> member_values;
+	for (auto &member : members) {
+		MemoryStream stream;
+		BinarySerializer::Serialize(member.second, stream, serializer.GetOptions());
+		auto blob = Value::BLOB(const_data_ptr_cast(stream.GetData()), stream.GetPosition());
+		member_values.push_back(
+		    Value::STRUCT({{"name", Value(member.first.GetIdentifierName())}, {"type", std::move(blob)}}));
+	}
+	auto member_type = LogicalType::STRUCT({{"name", LogicalType::VARCHAR}, {"type", LogicalType::BLOB}});
+	auto ext_info = extension_info ? make_uniq<ExtensionTypeInfo>(*extension_info) : make_uniq<ExtensionTypeInfo>();
+	ext_info->properties[MEMBERS_PROPERTY] = Value::LIST(member_type, std::move(member_values));
+
+	serializer.WriteProperty<LogicalTypeInfoType>(100, "type", type);
+	serializer.WritePropertyWithDefault<string>(101, "alias", alias);
+	serializer.WritePropertyWithDefault<unique_ptr<ExtensionTypeInfo>>(103, "extension_info", ext_info);
+	serializer.WritePropertyWithDefault<child_list_t<LogicalType>>(200, "child_types", child_types);
+}
+
+unique_ptr<LogicalTypeInfo> UnionTypeInfo::TryConvertDeserialized(unique_ptr<LogicalTypeInfo> info) {
+	if (!info || info->type != LogicalTypeInfoType::STRUCT_TYPE_INFO || !info->extension_info) {
+		return info;
+	}
+	auto &properties = info->extension_info->properties;
+	auto entry = properties.find(MEMBERS_PROPERTY);
+	if (entry == properties.end()) {
+		return info;
+	}
+	if (entry->second.IsNull() || entry->second.type().id() != LogicalTypeId::LIST) {
+		throw SerializationException("Failed to deserialize UNION: invalid member list");
+	}
+	child_list_t<LogicalType> members;
+	for (auto &member_value : ListValue::GetChildren(entry->second)) {
+		auto &children = StructValue::GetChildren(member_value);
+		if (children.size() != 2 || children[0].IsNull() || children[1].IsNull()) {
+			throw SerializationException("Failed to deserialize UNION: invalid member");
+		}
+		auto type_blob = StringValue::Get(children[1]);
+		MemoryStream stream(data_ptr_cast(&type_blob[0]), type_blob.size());
+		BinaryDeserializer deserializer(stream);
+		members.emplace_back(StringValue::Get(children[0]), LogicalType::Deserialize(deserializer));
+	}
+	if (members.empty() || members.size() > UnionType::MAX_UNION_MEMBERS) {
+		throw SerializationException("Failed to deserialize UNION: invalid member count");
+	}
+	properties.erase(entry);
+	auto result = make_uniq<UnionTypeInfo>(std::move(info->Cast<StructTypeInfo>().child_types), std::move(members));
+	result->alias = std::move(info->alias);
+	if (!info->extension_info->properties.empty() || !info->extension_info->modifiers.empty()) {
+		result->extension_info = std::move(info->extension_info);
+	}
+	return std::move(result);
 }
 
 //===--------------------------------------------------------------------===//

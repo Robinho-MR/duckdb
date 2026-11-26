@@ -182,7 +182,7 @@ bool UnionMembersMatchByName(const LogicalType &source, const LogicalType &targe
 //! members all have a name in the target pairs the members by name, any other source is promoted into the member it
 //! casts to implicitly (union_casts.cpp)
 bool UnionCastsBetweenBignumAndDecimal(ClientContext &context, const LogicalType &source, const LogicalType &target) {
-	if (source.id() == LogicalTypeId::UNION && UnionMembersMatchByName(source, target)) {
+	if (UnionType::IsUnion(source) && UnionMembersMatchByName(source, target)) {
 		for (idx_t i = 0; i < UnionType::GetMemberCount(source); i++) {
 			auto &name = UnionType::GetMemberName(source, i);
 			for (idx_t j = 0; j < UnionType::GetMemberCount(target); j++) {
@@ -223,7 +223,7 @@ bool CastsBetweenBignumAndDecimal(ClientContext &context, const LogicalType &sou
 		}
 		return false;
 	}
-	if (target.id() == LogicalTypeId::UNION) {
+	if (UnionType::IsUnion(target)) {
 		return UnionCastsBetweenBignumAndDecimal(context, source, target);
 	}
 	if (!IsStructOrTuple(source) || !IsStructOrTuple(target)) {

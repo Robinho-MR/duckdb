@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include "duckdb/common/serializer/serialization_data.hpp"
+
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/types/vector.hpp"
 #include "duckdb/common/extension_type_info.hpp"
@@ -78,12 +80,42 @@ public:
 	void Serialize(Serializer &serializer) const override;
 	static unique_ptr<LogicalTypeInfo> Deserialize(Deserializer &deserializer);
 	unique_ptr<LogicalTypeInfo> Copy() const override;
+	//! The members of a UNION (a VARIANT constrained to a set of member types), or nullptr
+	virtual optional_ptr<const child_list_t<LogicalType>> GetUnionMembers() const;
 
 protected:
 	bool EqualsInternal(const LogicalTypeInfo *other_p) const override;
 
 private:
 	StructTypeInfo();
+};
+
+//! Set while deserializing a column definition: records whether its type used the legacy UNION layout
+struct LegacyUnionDeserializationState : public SerializationData::CustomData {
+	bool found_legacy_union = false;
+
+	static string GetType() {
+		return "legacy_union_deserialization_state";
+	}
+};
+
+//! A UNION is a VARIANT whose values are constrained to one of the members
+struct UnionTypeInfo : public StructTypeInfo {
+	UnionTypeInfo(child_list_t<LogicalType> variant_children, child_list_t<LogicalType> members_p);
+
+	child_list_t<LogicalType> members;
+	//! Whether the UNION was deserialized from the legacy (pre-VARIANT) layout - only used by storage
+	bool legacy_layout = false;
+
+public:
+	//! The extension property that stores the members when serialized as a VARIANT
+	static constexpr const char *MEMBERS_PROPERTY = "duckdb_union_members";
+
+	void Serialize(Serializer &serializer) const override;
+	unique_ptr<LogicalTypeInfo> Copy() const override;
+	optional_ptr<const child_list_t<LogicalType>> GetUnionMembers() const override;
+	//! Converts the serialized members property (if any) of a deserialized VARIANT type info into a UnionTypeInfo
+	static unique_ptr<LogicalTypeInfo> TryConvertDeserialized(unique_ptr<LogicalTypeInfo> info);
 };
 
 struct LegacyAggregateStateTypeInfo : public LogicalTypeInfo {

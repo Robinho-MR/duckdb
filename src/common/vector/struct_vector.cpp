@@ -225,30 +225,14 @@ Value VectorStructBuffer::GetValue(const LogicalType &type, idx_t index) const {
 		return Value(type);
 	}
 	switch (type.id()) {
-	case LogicalTypeId::UNION: {
-		// tag is the first child
-		auto &tag_vector = children[0];
-		auto tag_val = tag_vector.GetValue(index);
-		if (tag_val.IsNull()) {
-			return Value(type);
-		}
-		auto tag = tag_val.GetValue<union_tag_t>();
-		// member is at tag + 1 (tag is child 0)
-		if (static_cast<idx_t>(tag) + 1 >= children.size()) {
-			throw DataCorruptionException("Union tag (%d) is out of bounds for a union with %d members", tag,
-			                              children.size() - 1);
-		}
-		auto value = children[tag + 1].GetValue(index);
-		auto members = UnionType::CopyMemberTypes(type);
-		return Value::UNION(members, tag, std::move(value));
-	}
 	case LogicalTypeId::VARIANT: {
 		duckdb::vector<Value> child_values;
 		child_values.emplace_back(children[0].GetValue(index));
 		child_values.emplace_back(children[1].GetValue(index));
 		child_values.emplace_back(children[2].GetValue(index));
 		child_values.emplace_back(children[3].GetValue(index));
-		return Value::VARIANT(child_values);
+		// keep the type: a UNION is a VARIANT with members
+		return Value::STRUCT(type, std::move(child_values));
 	}
 	default: {
 		duckdb::vector<Value> child_values;
@@ -308,7 +292,7 @@ buffer_ptr<VectorBuffer> VectorStructBuffer::FlattenSliceInternal(const LogicalT
 
 vector<Vector> &StructVector::GetEntries(Vector &vector) {
 	D_ASSERT(vector.GetType().id() == LogicalTypeId::STRUCT || vector.GetType().id() == LogicalTypeId::TUPLE ||
-	         vector.GetType().id() == LogicalTypeId::UNION || vector.GetType().id() == LogicalTypeId::VARIANT);
+	         vector.GetType().id() == LogicalTypeId::VARIANT);
 
 	if (vector.GetVectorType() == VectorType::DICTIONARY_VECTOR) {
 		throw InternalException("Struct vectors cannot be dictionary vectors");

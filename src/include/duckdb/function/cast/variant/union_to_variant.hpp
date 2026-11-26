@@ -8,9 +8,10 @@ namespace duckdb {
 namespace variant {
 
 template <bool WRITE_DATA, bool IGNORE_NULLS>
-bool ConvertUnionToVariant(ToVariantSourceData &source, ToVariantGlobalResultData &result, idx_t count,
-                           optional_ptr<const SelectionVector> selvec,
-                           optional_ptr<const SelectionVector> values_index_selvec, const bool is_root) {
+//! Converts the legacy UNION layout STRUCT(tag, member_1, ..., member_n) (where only the selected member is valid)
+bool ConvertLegacyUnionToVariant(ToVariantSourceData &source, ToVariantGlobalResultData &result, idx_t count,
+                                 optional_ptr<const SelectionVector> selvec,
+                                 optional_ptr<const SelectionVector> values_index_selvec, const bool is_root) {
 	auto &children = StructVector::GetEntries(source.vec);
 
 	vector<ToVariantSourceData> member_data;

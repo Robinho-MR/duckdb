@@ -1,173 +1,330 @@
 #include "duckdb/common/vector/union_vector.hpp"
-#include "duckdb/common/vector/dictionary_vector.hpp"
-#include "duckdb/common/vector/flat_vector.hpp"
+#include "duckdb/common/type_visitor.hpp"
+#include "duckdb/common/string_util.hpp"
+#include "duckdb/common/types/variant.hpp"
+#include "duckdb/common/vector/array_vector.hpp"
+#include "duckdb/common/vector/constant_vector.hpp"
+#include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
+#include "duckdb/common/vector/vector_iterator.hpp"
+#include "duckdb/common/vector/vector_writer.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
+#include "duckdb/function/scalar/variant_utils.hpp"
 
 namespace duckdb {
 
-const Vector &UnionVector::GetMember(const Vector &vector, idx_t member_index) {
-	D_ASSERT(member_index < UnionType::GetMemberCount(vector.GetType()));
-	auto &entries = StructVector::GetEntries(vector);
-	return entries[member_index + 1]; // skip the "tag" entry
-}
-
-Vector &UnionVector::GetMember(Vector &vector, idx_t member_index) {
-	D_ASSERT(member_index < UnionType::GetMemberCount(vector.GetType()));
-	auto &entries = StructVector::GetEntries(vector);
-	return entries[member_index + 1]; // skip the "tag" entry
-}
-
-const Vector &UnionVector::GetTags(const Vector &vector) {
-	// the tag vector is always the first struct child.
-	return StructVector::GetEntries(vector)[0];
-}
-
-Vector &UnionVector::GetTags(Vector &vector) {
-	// the tag vector is always the first struct child.
-	return StructVector::GetEntries(vector)[0];
-}
-
-void UnionVector::SetToMember(Vector &union_vector, union_tag_t tag, Vector &member_vector, idx_t count,
-                              bool keep_tags_for_null) {
-	D_ASSERT(union_vector.GetType().id() == LogicalTypeId::UNION);
-	D_ASSERT(tag < UnionType::GetMemberCount(union_vector.GetType()));
-
-	// Set the union member to the specified vector
-	UnionVector::GetMember(union_vector, tag).Reference(member_vector);
-	auto &tag_vector = UnionVector::GetTags(union_vector);
-
-	if (member_vector.GetVectorType() == VectorType::CONSTANT_VECTOR) {
-		// if the member vector is constant, we can set the union to constant as well
-		union_vector.SetVectorType(VectorType::CONSTANT_VECTOR);
-		ConstantVector::GetData<union_tag_t>(tag_vector)[0] = tag;
-		if (keep_tags_for_null) {
-			ConstantVector::SetNull(union_vector, false);
-			ConstantVector::SetNull(tag_vector, false);
-		} else {
-			ConstantVector::SetNull(union_vector, ConstantVector::IsNull(member_vector));
-			ConstantVector::SetNull(tag_vector, ConstantVector::IsNull(member_vector));
-		}
-
-	} else {
-		// otherwise flatten and set to flatvector
-		member_vector.Flatten();
-		union_vector.SetVectorType(VectorType::FLAT_VECTOR);
-
-		if (FlatVector::ValidityMutable(member_vector).CannotHaveNull()) {
-			// if the member vector is all valid, we can set the tag to constant
-			tag_vector.SetVectorType(VectorType::CONSTANT_VECTOR);
-			auto tag_data = ConstantVector::GetData<union_tag_t>(tag_vector);
-			*tag_data = tag;
-		} else {
-			tag_vector.SetVectorType(VectorType::FLAT_VECTOR);
-			if (keep_tags_for_null) {
-				FlatVector::ValidityMutable(tag_vector).SetAllValid(count);
-				FlatVector::ValidityMutable(union_vector).SetAllValid(count);
-			} else {
-				// ensure the tags have the same validity as the member
-				FlatVector::ValidityMutable(union_vector) = FlatVector::Validity(member_vector);
-				FlatVector::ValidityMutable(tag_vector) = FlatVector::Validity(member_vector);
+static bool MemberAcceptsValue(const LogicalType &member_type, VariantLogicalType value_type) {
+	if (UnionType::IsUnion(member_type)) {
+		for (auto &member : UnionType::GetMemberTypes(member_type)) {
+			if (MemberAcceptsValue(member.second, value_type)) {
+				return true;
 			}
-
-			auto tag_data = FlatVector::GetDataMutable<union_tag_t>(tag_vector);
-			memset(tag_data, tag, count);
 		}
-	}
-
-	// Set the non-selected members to constant null vectors
-	for (idx_t i = 0; i < UnionType::GetMemberCount(union_vector.GetType()); i++) {
-		if (i != tag) {
-			auto &member = UnionVector::GetMember(union_vector, i);
-			member.SetVectorType(VectorType::CONSTANT_VECTOR);
-			ConstantVector::SetNull(member, true);
-		}
-	}
-	FlatVector::SetSize(union_vector, count_t(count));
-}
-
-bool UnionVector::TryGetTag(const Vector &vector, idx_t index, union_tag_t &result) {
-	// the tag vector is always the first struct child.
-	auto &tag_vector = StructVector::GetEntries(vector)[0];
-	if (tag_vector.GetVectorType() == VectorType::DICTIONARY_VECTOR) {
-		auto &child = DictionaryVector::Child(tag_vector);
-		auto &dict_sel = DictionaryVector::SelVector(tag_vector);
-		auto mapped_idx = dict_sel.get_index(index);
-		if (FlatVector::IsNull(child, mapped_idx)) {
-			return false;
-		} else {
-			result = FlatVector::GetData<union_tag_t>(child)[mapped_idx];
-			return true;
-		}
-	}
-	if (tag_vector.GetVectorType() == VectorType::CONSTANT_VECTOR) {
-		if (ConstantVector::IsNull(tag_vector)) {
-			return false;
-		} else {
-			result = ConstantVector::GetData<union_tag_t>(tag_vector)[0];
-			return true;
-		}
-	}
-	if (FlatVector::IsNull(tag_vector, index)) {
 		return false;
-	} else {
-		result = FlatVector::GetData<union_tag_t>(tag_vector)[index];
+	}
+	if (member_type.id() == LogicalTypeId::VARIANT || member_type.IsJSONType()) {
+		// a VARIANT or JSON member can hold a value of any type
 		return true;
 	}
+	switch (member_type.id()) {
+	case LogicalTypeId::BOOLEAN:
+		return value_type == VariantLogicalType::BOOL_TRUE || value_type == VariantLogicalType::BOOL_FALSE;
+	case LogicalTypeId::ENUM:
+		return value_type == VariantLogicalType::VARCHAR;
+	case LogicalTypeId::LIST:
+	case LogicalTypeId::MAP:
+	case LogicalTypeId::ARRAY:
+	case LogicalTypeId::TUPLE:
+		return value_type == VariantLogicalType::ARRAY;
+	default: {
+		VariantLogicalType expected;
+		if (!TryVariantTypeFromLogicalTypeId(member_type.id(), expected)) {
+			return false;
+		}
+		return expected == value_type;
+	}
+	}
 }
 
-//! Raw selection vector passed in (not merged with any other selection vectors)
-UnionInvalidReason UnionVector::CheckUnionValidity(Vector &vector, idx_t count, const SelectionVector &sel) {
-	D_ASSERT(vector.GetType().id() == LogicalTypeId::UNION);
-
-	auto member_count = UnionType::GetMemberCount(vector.GetType());
-	if (member_count == 0) {
-		return UnionInvalidReason::NO_MEMBERS;
+//! Whether a (nested) VARIANT value can be a value of the member type: the value has the type of the member, and the
+//! elements of a LIST or the fields of a STRUCT recursively match the child types
+static bool MemberMatchesValue(const LogicalType &member_type, const UnifiedVariantVectorData &variant, idx_t row,
+                               uint32_t value_index) {
+	auto value_type = variant.GetTypeId(row, value_index);
+	if (UnionType::IsUnion(member_type)) {
+		for (auto &member : UnionType::GetMemberTypes(member_type)) {
+			if (MemberMatchesValue(member.second, variant, row, value_index)) {
+				return true;
+			}
+		}
+		return false;
 	}
-
-	auto vector_validity = vector.Validity();
-
-	auto &entries = StructVector::GetEntries(vector);
-	duckdb::vector<VectorValidityIterator> child_validity;
-	for (idx_t entry_idx = 1; entry_idx < entries.size(); entry_idx++) {
-		auto &child = entries[entry_idx];
-		child_validity.push_back(child.Validity());
+	if (value_type == VariantLogicalType::VARIANT_NULL) {
+		// a NULL child can be a value of any type
+		return true;
 	}
-	auto tag_data = entries[0].Values<union_tag_t>();
+	switch (member_type.id()) {
+	case LogicalTypeId::LIST:
+	case LogicalTypeId::ARRAY: {
+		if (value_type != VariantLogicalType::ARRAY) {
+			return false;
+		}
+		auto &child_type = member_type.id() == LogicalTypeId::LIST ? ListType::GetChildType(member_type)
+		                                                           : ArrayType::GetChildType(member_type);
+		auto nested = VariantUtils::DecodeNestedData(variant, row, value_index);
+		for (idx_t i = 0; i < nested.child_count; i++) {
+			auto child_index = variant.GetValuesIndex(row, nested.children_idx + i);
+			if (!MemberMatchesValue(child_type, variant, row, child_index)) {
+				return false;
+			}
+		}
+		return true;
+	}
+	case LogicalTypeId::STRUCT: {
+		if (value_type != VariantLogicalType::OBJECT) {
+			return false;
+		}
+		auto &fields = StructType::GetChildTypes(member_type);
+		auto nested = VariantUtils::DecodeNestedData(variant, row, value_index);
+		for (idx_t i = 0; i < nested.child_count; i++) {
+			auto &key = variant.GetKey(row, variant.GetKeysIndex(row, nested.children_idx + i));
+			auto key_str = key.GetString();
+			optional_idx field_idx;
+			for (idx_t f = 0; f < fields.size(); f++) {
+				if (StringUtil::CIEquals(fields[f].first.GetIdentifierName(), key_str)) {
+					field_idx = f;
+					break;
+				}
+			}
+			if (!field_idx.IsValid()) {
+				return false;
+			}
+			auto child_index = variant.GetValuesIndex(row, nested.children_idx + i);
+			if (!MemberMatchesValue(fields[field_idx.GetIndex()].second, variant, row, child_index)) {
+				return false;
+			}
+		}
+		return true;
+	}
+	case LogicalTypeId::ENUM:
+		if (value_type != VariantLogicalType::VARCHAR) {
+			return false;
+		}
+		return EnumType::GetPos(member_type, VariantUtils::DecodeStringData(variant, row, value_index)) >= 0;
+	default:
+		return MemberAcceptsValue(member_type, value_type);
+	}
+}
 
-	for (idx_t row_idx = 0; row_idx < count; row_idx++) {
-		auto mapped_idx = sel.get_index(row_idx);
+static optional_idx FindMemberOfValue(const LogicalType &union_type, const UnifiedVariantVectorData &variant,
+                                      idx_t row) {
+	if (variant.GetTypeId(row, 0) == VariantLogicalType::VARIANT_NULL) {
+		return optional_idx();
+	}
+	auto &members = UnionType::GetMemberTypes(union_type);
+	for (idx_t member_idx = 0; member_idx < members.size(); member_idx++) {
+		if (MemberMatchesValue(members[member_idx].second, variant, row, 0)) {
+			return member_idx;
+		}
+	}
+	return optional_idx();
+}
 
-		if (!vector_validity.IsValid(mapped_idx)) {
+optional_idx UnionVector::FindMember(const LogicalType &union_type, VariantLogicalType value_type) {
+	auto &members = UnionType::GetMemberTypes(union_type);
+	for (idx_t member_idx = 0; member_idx < members.size(); member_idx++) {
+		if (MemberAcceptsValue(members[member_idx].second, value_type)) {
+			return member_idx;
+		}
+	}
+	return optional_idx();
+}
+
+void UnionVector::GetTags(const Vector &union_vector, Vector &result, idx_t count) {
+	GetTags(union_vector, union_vector.GetType(), result, count);
+}
+
+void UnionVector::GetTags(const Vector &union_vector, const LogicalType &union_type, Vector &result, idx_t count) {
+	D_ASSERT(union_vector.GetType().id() == LogicalTypeId::VARIANT);
+	D_ASSERT(UnionType::IsUnion(union_type));
+	D_ASSERT(result.GetType().id() == LogicalTypeId::UTINYINT);
+
+	RecursiveUnifiedVectorFormat format;
+	Vector::RecursiveToUnifiedFormat(union_vector, format);
+	UnifiedVariantVectorData variant(format);
+
+	auto writer = FlatVector::Writer<union_tag_t>(result, count);
+	for (idx_t i = 0; i < count; i++) {
+		if (!variant.RowIsValid(i)) {
+			writer.WriteNull();
 			continue;
 		}
-
-		auto tag_entry = tag_data[mapped_idx];
-		if (!tag_entry.IsValid()) {
-			// we can't have NULL tags!
-			return UnionInvalidReason::NULL_TAG;
+		auto member = FindMemberOfValue(union_type, variant, i);
+		if (!member.IsValid()) {
+			writer.WriteNull();
+			continue;
 		}
-		auto tag = tag_entry.GetValue();
-		if (tag >= member_count) {
-			return UnionInvalidReason::TAG_OUT_OF_RANGE;
-		}
+		writer.WriteValue(UnsafeNumericCast<union_tag_t>(member.GetIndex()));
+	}
+}
 
-		bool found_valid = false;
-		for (idx_t i = 0; i < member_count; i++) {
-			auto &member_vdata = child_validity[i];
-			if (!member_vdata.IsValid(mapped_idx)) {
-				continue;
-			}
-			if (found_valid) {
-				return UnionInvalidReason::VALIDITY_OVERLAP;
-			}
-			found_valid = true;
-			if (tag != static_cast<union_tag_t>(i)) {
-				return UnionInvalidReason::TAG_MISMATCH;
-			}
+//! Casts VARIANT values to the member type - ENUMs are stored as VARCHAR in a VARIANT, so they are cast through VARCHAR
+static void CastToMember(Vector &source, Vector &result, idx_t count) {
+	auto &member_type = result.GetType();
+	if (!TypeVisitor::Contains(member_type, LogicalTypeId::ENUM)) {
+		VectorOperations::DefaultCast(source, result, count);
+		return;
+	}
+	auto varchar_type = TypeVisitor::VisitReplace(member_type, [](const LogicalType &type) {
+		return type.id() == LogicalTypeId::ENUM ? LogicalType(LogicalType::VARCHAR) : type;
+	});
+	Vector intermediate(varchar_type, count);
+	VectorOperations::DefaultCast(source, intermediate, count);
+	VectorOperations::DefaultCast(intermediate, result, count);
+}
+
+static void ExtractMember(const Vector &union_vector, const Vector &tags, idx_t member_index, Vector &result,
+                          idx_t count) {
+	auto tag_values = tags.Values<union_tag_t>();
+	idx_t match_count = 0;
+	for (auto entry : tag_values) {
+		if (entry.IsValid() && entry.GetValue() == member_index) {
+			match_count++;
 		}
 	}
+	if (match_count == 0) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+		ConstantVector::SetNull(result, count_t(count));
+		return;
+	}
+	if (match_count == count) {
+		auto source = Vector::Ref(union_vector);
+		CastToMember(source, result, count);
+		return;
+	}
+	// NULL out the rows that hold another member, then cast the remaining values to the member type
+	Vector masked(union_vector.GetType(), count);
+	VectorOperations::Copy(union_vector, masked, count, 0, 0);
+	for (auto entry : tag_values) {
+		if (!entry.IsValid() || entry.GetValue() != member_index) {
+			FlatVector::SetNull(masked, entry.GetIndex(), true);
+		}
+	}
+	CastToMember(masked, result, count);
+}
 
-	return UnionInvalidReason::VALID;
+void UnionVector::GetMember(const Vector &union_vector, idx_t member_index, Vector &result, idx_t count) {
+	D_ASSERT(member_index < UnionType::GetMemberCount(union_vector.GetType()));
+	D_ASSERT(result.GetType() == UnionType::GetMemberType(union_vector.GetType(), member_index));
+	Vector tags(LogicalType::UTINYINT, count);
+	GetTags(union_vector, tags, count);
+	ExtractMember(union_vector, tags, member_index, result, count);
+}
+
+void UnionVector::ToLegacyLayout(const Vector &union_vector, Vector &result, idx_t count) {
+	auto &union_type = union_vector.GetType();
+	D_ASSERT(UnionType::IsUnion(union_type));
+	D_ASSERT(result.GetType().id() == LogicalTypeId::STRUCT);
+	auto &entries = StructVector::GetEntries(result);
+	D_ASSERT(entries.size() == UnionType::GetMemberCount(union_type) + 1);
+
+	auto &tags = entries[0];
+	GetTags(union_vector, tags, count);
+	for (idx_t member_idx = 0; member_idx < UnionType::GetMemberCount(union_type); member_idx++) {
+		ExtractMember(union_vector, tags, member_idx, entries[member_idx + 1], count);
+	}
+	auto &result_validity = FlatVector::ValidityMutable(result);
+	auto union_validity = union_vector.Validity();
+	for (idx_t i = 0; i < count; i++) {
+		if (!union_validity.IsValid(i)) {
+			result_validity.SetInvalid(i);
+		}
+	}
+	FlatVector::SetSize(result, count);
+}
+
+void UnionVector::FromLegacyLayout(Vector &legacy, Vector &result, idx_t count) {
+	D_ASSERT(UnionType::IsUnion(result.GetType()));
+	auto member_count = UnionType::GetMemberCount(result.GetType());
+	auto tags = StructVector::GetEntries(legacy)[0].Values<union_tag_t>();
+	for (auto tag : tags) {
+		if (tag.IsValid() && tag.GetValue() >= member_count) {
+			throw InvalidInputException("UNION tag %d is out of range for %s", tag.GetValue(),
+			                            result.GetType().ToString());
+		}
+	}
+	VariantUtils::LegacyUnionToVariant(legacy, result, count);
+}
+
+static bool ContainsUnion(const LogicalType &type) {
+	return TypeVisitor::Contains(type, [](const LogicalType &child) { return UnionType::IsUnion(child); });
+}
+
+void UnionVector::FromLegacyStorage(Vector &source, Vector &result, idx_t count) {
+	auto &type = result.GetType();
+	if (!ContainsUnion(type)) {
+		result.Reference(source);
+		return;
+	}
+	if (UnionType::IsUnion(type)) {
+		auto &members = UnionType::GetMemberTypes(type);
+		bool nested = false;
+		for (auto &member : members) {
+			nested = nested || ContainsUnion(member.second);
+		}
+		if (!nested) {
+			FromLegacyLayout(source, result, count);
+			return;
+		}
+		// convert the members first
+		Vector legacy(UnionType::GetMemberStructType(type), count);
+		source.Flatten();
+		auto &source_entries = StructVector::GetEntries(source);
+		auto &legacy_entries = StructVector::GetEntries(legacy);
+		legacy_entries[0].Reference(source_entries[0]);
+		for (idx_t member_idx = 0; member_idx < members.size(); member_idx++) {
+			FromLegacyStorage(source_entries[member_idx + 1], legacy_entries[member_idx + 1], count);
+		}
+		FlatVector::SetValidity(legacy, FlatVector::Validity(source));
+		FlatVector::SetSize(legacy, count);
+		FromLegacyLayout(legacy, result, count);
+		return;
+	}
+	source.Flatten();
+	switch (type.InternalType()) {
+	case PhysicalType::STRUCT: {
+		auto &source_entries = StructVector::GetEntries(source);
+		auto &result_entries = StructVector::GetEntries(result);
+		for (idx_t child_idx = 0; child_idx < result_entries.size(); child_idx++) {
+			FromLegacyStorage(source_entries[child_idx], result_entries[child_idx], count);
+		}
+		break;
+	}
+	case PhysicalType::LIST: {
+		auto source_data = FlatVector::GetData<list_entry_t>(source);
+		auto result_data = FlatVector::GetDataMutable<list_entry_t>(result);
+		for (idx_t i = 0; i < count; i++) {
+			result_data[i] = source_data[i];
+		}
+		auto child_count = ListVector::GetListSize(source);
+		ListVector::Reserve(result, child_count);
+		auto &source_child = ListVector::GetChild(source);
+		Vector source_child_ref = Vector::Ref(source_child);
+		FromLegacyStorage(source_child_ref, ListVector::GetChildMutable(result), child_count);
+		ListVector::SetListSize(result, child_count);
+		break;
+	}
+	case PhysicalType::ARRAY: {
+		auto child_count = count * ArrayType::GetSize(type);
+		Vector source_child_ref = Vector::Ref(ArrayVector::GetChild(source));
+		FromLegacyStorage(source_child_ref, ArrayVector::GetChildMutable(result), child_count);
+		break;
+	}
+	default:
+		throw InternalException("Unexpected type in UnionVector::FromLegacyStorage: %s", type.ToString());
+	}
+	FlatVector::SetValidity(result, FlatVector::Validity(source));
+	FlatVector::SetSize(result, count);
 }
 
 } // namespace duckdb

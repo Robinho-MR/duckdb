@@ -18,9 +18,9 @@ TEST_CASE("TypeVisitor preserves child order and visits replaced children before
 		                                              LogicalTypeId::LIST, LogicalTypeId::BOOLEAN, type.id()};
 		REQUIRE(visited == expected);
 		const auto &result_children =
-		    type.id() == LogicalTypeId::UNION ? UnionType::CopyMemberTypes(result) : StructType::GetChildTypes(result);
+		    UnionType::IsUnion(type) ? UnionType::CopyMemberTypes(result) : StructType::GetChildTypes(result);
 		const auto &original_children =
-		    type.id() == LogicalTypeId::UNION ? UnionType::CopyMemberTypes(type) : StructType::GetChildTypes(type);
+		    UnionType::IsUnion(type) ? UnionType::CopyMemberTypes(type) : StructType::GetChildTypes(type);
 		REQUIRE(result_children.size() == children.size());
 		for (idx_t i = 0; i < children.size(); i++) {
 			REQUIRE(result_children[i].first == original_children[i].first);

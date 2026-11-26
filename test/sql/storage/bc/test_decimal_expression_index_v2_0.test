@@ -566,13 +566,16 @@ CREATE UNIQUE INDEX ux ON old.t ((coalesce(union_extract(union_extract(try_cast(
 ----
 <REGEX>:.*Index key expressions with a cast between BIGNUM and DECIMAL are not supported in storage versions prior to v2\.1\.0.*
 
-statement ok
+# the UNION column was written in the legacy (pre-VARIANT) layout, which is read-only
+statement error
 INSERT INTO old.t VALUES (union_value(a := '1'::BIGNUM))
+----
+read-only
 
 query I
 SELECT count(*) FROM old.t
 ----
-2
+1
 
 statement ok
 DETACH old

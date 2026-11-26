@@ -49,9 +49,12 @@ inline idx_t TypeVisitor::PushChildren(const LogicalType &type, vector<reference
 			worklist.push_back(child.second);
 		}
 		break;
-	case LogicalTypeId::UNION:
-		for (idx_t i = 0; i < UnionType::GetMemberCount(type); i++) {
-			worklist.push_back(UnionType::GetMemberType(type, i));
+	case LogicalTypeId::VARIANT:
+		// the child types of a plain VARIANT are its storage layout - only the members of a UNION are visited
+		if (UnionType::IsUnion(type)) {
+			for (auto &member : UnionType::GetMemberTypes(type)) {
+				worklist.push_back(member.second);
+			}
 		}
 		break;
 	case LogicalTypeId::MAP:
@@ -83,9 +86,10 @@ inline LogicalType TypeVisitor::RebuildType(const VisitorFrame &frame, vector<Lo
 	switch (type.id()) {
 	case LogicalTypeId::STRUCT:
 	case LogicalTypeId::TUPLE:
-	case LogicalTypeId::UNION: {
+	case LogicalTypeId::VARIANT: {
+		D_ASSERT(type.id() != LogicalTypeId::VARIANT || UnionType::IsUnion(type));
 		auto children =
-		    type.id() == LogicalTypeId::UNION ? UnionType::CopyMemberTypes(type) : StructType::GetChildTypes(type);
+		    type.id() == LogicalTypeId::VARIANT ? UnionType::CopyMemberTypes(type) : StructType::GetChildTypes(type);
 		for (idx_t i = children.size(); i > 0; i--) {
 			children[i - 1].second = PopType(result_stack);
 		}
@@ -95,7 +99,7 @@ inline LogicalType TypeVisitor::RebuildType(const VisitorFrame &frame, vector<Lo
 		if (type.id() == LogicalTypeId::TUPLE) {
 			return LogicalType::TUPLE(std::move(children));
 		}
-		return LogicalType::UNION(std::move(children));
+		return UnionType::ReplaceMembers(type, std::move(children));
 	}
 	case LogicalTypeId::MAP: {
 		auto value_type = PopType(result_stack);

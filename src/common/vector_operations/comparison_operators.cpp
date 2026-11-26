@@ -293,7 +293,6 @@ static void StructComparator(const Vector &left, const Vector &right, int8_t *re
                              const SelectionVector &lhs_sel, const SelectionVector &rhs_sel, idx_t sel_count,
                              const ExpressionType comp, optional_ptr<ValidityMask> result_validity = nullptr) {
 	//	STRUCT comparisons use ordering semantics, so the result is never NULL
-	D_ASSERT(left.GetType().id() != LogicalTypeId::UNION);
 	if (sel_count == 0) {
 		return;
 	}
@@ -338,106 +337,6 @@ static void StructComparator(const Vector &left, const Vector &right, int8_t *re
 			break;
 		default:
 			throw InternalException("Invalid STRUCT Comparison");
-		}
-	}
-}
-
-static idx_t UnionScatter(const Vector &key, const idx_t child_idx, const int8_t *child_result, int8_t *result_data,
-                          const idx_t remaining_count, SelectionVector &remaining_lhs_sel,
-                          SelectionVector &remaining_rhs_sel, SelectionVector &remaining_result_sel,
-                          const ValidityMask &child_validity, ValidityMask &result_validity) {
-	//	For SQL-equality comparisons of UNION types,
-	//	we don't know if the NULL means NULL or a different column
-	//	So we have to further restrict the comparison by column index
-	idx_t new_remaining_count = 0;
-	UnifiedVectorFormat key_format;
-	key.ToUnifiedFormat(key_format);
-	const uint8_t *key_data = UnifiedVectorFormat::GetData<uint8_t>(key_format);
-	for (idx_t i = 0; i < remaining_count; i++) {
-		const auto remaining_idx = remaining_result_sel.get_index(i);
-		const idx_t key_idx = key_format.sel->get_index(remaining_lhs_sel.get_index(i));
-		//	Keep if not the current column
-		if (key_data[key_idx] != child_idx - 1) {
-			remaining_lhs_sel.set_index(new_remaining_count, remaining_lhs_sel.get_index(i));
-			remaining_rhs_sel.set_index(new_remaining_count, remaining_rhs_sel.get_index(i));
-			remaining_result_sel.set_index(new_remaining_count, remaining_idx);
-			new_remaining_count++;
-		} else if (!child_validity.RowIsValidUnsafe(i)) {
-			result_validity.SetInvalid(remaining_idx);
-		} else if (child_result[i] != Comparator::VALUES_ARE_EQUAL) {
-			// not equal at this position - we found the final result for this row
-			result_data[remaining_idx] = child_result[i];
-		} else {
-			// still equal at this position - need to check the next entry
-			remaining_lhs_sel.set_index(new_remaining_count, remaining_lhs_sel.get_index(i));
-			remaining_rhs_sel.set_index(new_remaining_count, remaining_rhs_sel.get_index(i));
-			remaining_result_sel.set_index(new_remaining_count, remaining_idx);
-			new_remaining_count++;
-		}
-	}
-
-	return new_remaining_count;
-}
-
-static void UnionComparator(const Vector &left, const Vector &right, int8_t *result_data,
-                            const SelectionVector &lhs_sel, const SelectionVector &rhs_sel, idx_t sel_count,
-                            const ExpressionType comp, optional_ptr<ValidityMask> result_validity = nullptr) {
-	//	UNION data columns are independent, so we can just treat them as disjoint single columns
-	D_ASSERT(left.GetType().id() == LogicalTypeId::UNION);
-	if (sel_count == 0) {
-		return;
-	}
-	auto &lchildren = StructVector::GetEntries(left);
-	auto &rchildren = StructVector::GetEntries(right);
-	D_ASSERT(lchildren.size() == rchildren.size());
-
-	// step 1: handle struct-level validity and initialize results
-	auto left_validity = left.Validity();
-	auto right_validity = right.Validity();
-
-	// remaining tracks which rows still need child comparison
-	// along with their corresponding lhs/rhs selection indices
-	SelectionVector remaining_lhs_sel(sel_count);
-	SelectionVector remaining_rhs_sel(sel_count);
-	SelectionVector remaining_result_sel(sel_count);
-	idx_t remaining_count = NestedValidity(left_validity, right_validity, result_data, lhs_sel, rhs_sel, sel_count,
-	                                       remaining_lhs_sel, remaining_rhs_sel, remaining_result_sel, result_validity);
-
-	// step 2: compare child vectors one by one
-	// child results are written densely, then scattered back to the correct output positions
-	auto child_result = make_unsafe_uniq_array<int8_t>(remaining_count);
-	ValidityMask child_validity(remaining_count);
-	for (idx_t child_idx = 0; child_idx < lchildren.size() && remaining_count > 0; child_idx++) {
-		switch (comp) {
-		case ExpressionType::COMPARE_DISTINCT_FROM:
-		case ExpressionType::COMPARE_NOT_DISTINCT_FROM:
-			D_ASSERT(!result_validity);
-			DistinctComparatorTypeSwitch(lchildren[child_idx], rchildren[child_idx], child_result.get(),
-			                             remaining_lhs_sel, remaining_rhs_sel, remaining_count);
-			break;
-		case ExpressionType::COMPARE_EQUAL:
-		case ExpressionType::COMPARE_NOTEQUAL:
-		case ExpressionType::COMPARE_LESSTHAN:
-		case ExpressionType::COMPARE_GREATERTHAN:
-		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-			child_validity.SetAllValid(remaining_count);
-			ComparatorTypeSwitch(lchildren[child_idx], rchildren[child_idx], child_result.get(), remaining_lhs_sel,
-			                     remaining_rhs_sel, remaining_count, comp, child_validity);
-			break;
-		default:
-			throw InternalException("Invalid UNION Comparison");
-		}
-
-		//	Scatter back
-		if (child_idx && result_validity) {
-			remaining_count = UnionScatter(lchildren[0], child_idx, child_result.get(), result_data, remaining_count,
-			                               remaining_lhs_sel, remaining_rhs_sel, remaining_result_sel, child_validity,
-			                               *result_validity);
-		} else {
-			remaining_count = NestedScatter(child_result.get(), result_data, remaining_count, remaining_lhs_sel,
-			                                remaining_rhs_sel, remaining_result_sel, child_validity, result_validity,
-			                                [](int8_t c, bool n) { return c != Comparator::VALUES_ARE_EQUAL || n; });
 		}
 	}
 }
@@ -652,11 +551,7 @@ static void DistinctComparatorTypeSwitch(const Vector &left, const Vector &right
 		DistinctComparatorExecute::Execute<string_t>(left, right, result_data, lhs_sel, rhs_sel, sel_count);
 		break;
 	case PhysicalType::STRUCT:
-		if (left.GetType().id() == LogicalTypeId::UNION) {
-			UnionComparator(left, right, result_data, lhs_sel, rhs_sel, sel_count, comp);
-		} else {
-			StructComparator(left, right, result_data, lhs_sel, rhs_sel, sel_count, comp);
-		}
+		StructComparator(left, right, result_data, lhs_sel, rhs_sel, sel_count, comp);
 		break;
 	case PhysicalType::LIST:
 		ListComparator(left, right, result_data, lhs_sel, rhs_sel, sel_count, comp);
@@ -718,11 +613,7 @@ static void ComparatorTypeSwitch(const Vector &left, const Vector &right, int8_t
 		StandardComparatorExecute::Execute<string_t>(left, right, result_data, lhs_sel, rhs_sel, sel_count, validity);
 		break;
 	case PhysicalType::STRUCT:
-		if (left.GetType().id() == LogicalTypeId::UNION) {
-			UnionComparator(left, right, result_data, lhs_sel, rhs_sel, sel_count, comp, validity);
-		} else {
-			StructComparator(left, right, result_data, lhs_sel, rhs_sel, sel_count, comp, validity);
-		}
+		StructComparator(left, right, result_data, lhs_sel, rhs_sel, sel_count, comp, validity);
 		break;
 	case PhysicalType::LIST:
 		ListComparator(left, right, result_data, lhs_sel, rhs_sel, sel_count, comp, validity);

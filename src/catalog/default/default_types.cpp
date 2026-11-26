@@ -1,3 +1,4 @@
+#include "duckdb/common/type_visitor.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/string_vector.hpp"
 #include "duckdb/catalog/default/default_types.hpp"
@@ -308,7 +309,11 @@ LogicalType BindUnionType(BindLogicalTypeInput &input) {
 
 	child_list_t<LogicalType> children;
 	for (auto &arg : arguments) {
-		children.emplace_back(arg.GetName(), TypeValue::GetType(arg.GetValue()));
+		auto member_type = TypeValue::GetType(arg.GetValue());
+		if (TypeVisitor::Contains(member_type, LogicalTypeId::TYPE)) {
+			throw BinderException(input.query_location, "UNION members cannot be of type %s", member_type);
+		}
+		children.emplace_back(arg.GetName(), std::move(member_type));
 	}
 
 	return LogicalType::UNION(std::move(children));

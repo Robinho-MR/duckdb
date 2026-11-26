@@ -96,15 +96,23 @@ static void InitializeVariants(DataChunk &offsets, Vector &result, SelectionVect
 	selvec_size = keys_offset;
 }
 
-static bool GatherOffsetsAndSizes(ToVariantSourceData &source, ToVariantGlobalResultData &result, idx_t count) {
+static bool GatherOffsetsAndSizes(ToVariantSourceData &source, ToVariantGlobalResultData &result, idx_t count,
+                                  bool legacy_union) {
 	InitializeOffsets(result.offsets, count);
 	//! First pass - collect sizes/offsets
+	if (legacy_union) {
+		return ConvertLegacyUnionToVariant<false, false>(source, result, count, nullptr, nullptr, true);
+	}
 	return ConvertToVariant<false>(source, result, count, nullptr, nullptr, true);
 }
 
-static bool WriteVariantResultData(ToVariantSourceData &source, ToVariantGlobalResultData &result, idx_t count) {
+static bool WriteVariantResultData(ToVariantSourceData &source, ToVariantGlobalResultData &result, idx_t count,
+                                   bool legacy_union) {
 	InitializeOffsets(result.offsets, count);
 	//! Second pass - actually construct the variants
+	if (legacy_union) {
+		return ConvertLegacyUnionToVariant<true, false>(source, result, count, nullptr, nullptr, true);
+	}
 	return ConvertToVariant<true>(source, result, count, nullptr, nullptr, true);
 }
 
@@ -217,14 +225,8 @@ static bool TryToShreddedCast(Vector &source, Vector &result, idx_t count, CastP
 	return true;
 }
 
-static bool CastToVARIANT(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
-	if (!count) {
-		return true;
-	}
-	if (TryToShreddedCast(source, result, count, parameters)) {
-		return true;
-	}
-	auto &local_data = parameters.local_state->Cast<VariantLocalData>();
+static bool ConvertToVariantInternal(Vector &source, Vector &result, idx_t count, Allocator &allocator,
+                                     bool legacy_union) {
 	DataChunk offsets;
 	offsets.Initialize(Allocator::DefaultAllocator(),
 	                   {LogicalType::UINTEGER, LogicalType::UINTEGER, LogicalType::UINTEGER, LogicalType::UINTEGER},
@@ -241,9 +243,8 @@ static bool CastToVARIANT(Vector &source, Vector &result, idx_t count, CastParam
 
 	{
 		VariantVectorData variant_data(result);
-		ToVariantGlobalResultData result_data(variant_data, offsets, dictionary, keys_arena, keys_selvec,
-		                                      local_data.allocator);
-		if (!GatherOffsetsAndSizes(source_data, result_data, count)) {
+		ToVariantGlobalResultData result_data(variant_data, offsets, dictionary, keys_arena, keys_selvec, allocator);
+		if (!GatherOffsetsAndSizes(source_data, result_data, count, legacy_union)) {
 			return false;
 		}
 	}
@@ -254,9 +255,8 @@ static bool CastToVARIANT(Vector &source, Vector &result, idx_t count, CastParam
 
 	{
 		VariantVectorData variant_data(result);
-		ToVariantGlobalResultData result_data(variant_data, offsets, dictionary, keys_arena, keys_selvec,
-		                                      local_data.allocator);
-		if (!WriteVariantResultData(source_data, result_data, count)) {
+		ToVariantGlobalResultData result_data(variant_data, offsets, dictionary, keys_arena, keys_selvec, allocator);
+		if (!WriteVariantResultData(source_data, result_data, count, legacy_union)) {
 			return false;
 		}
 	}
@@ -276,7 +276,29 @@ static bool CastToVARIANT(Vector &source, Vector &result, idx_t count, CastParam
 	return true;
 }
 
+static bool CastToVARIANT(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	if (!count) {
+		return true;
+	}
+	if (TryToShreddedCast(source, result, count, parameters)) {
+		return true;
+	}
+	auto &local_data = parameters.local_state->Cast<VariantLocalData>();
+	return ConvertToVariantInternal(source, result, count, local_data.allocator, false);
+}
+
 } // namespace variant
+
+void VariantUtils::LegacyUnionToVariant(Vector &source, Vector &result, idx_t count) {
+	D_ASSERT(source.GetType().id() == LogicalTypeId::STRUCT);
+	D_ASSERT(result.GetType().id() == LogicalTypeId::VARIANT);
+	if (!count) {
+		return;
+	}
+	if (!variant::ConvertToVariantInternal(source, result, count, Allocator::DefaultAllocator(), true)) {
+		throw InternalException("Failed to convert a legacy UNION to VARIANT");
+	}
+}
 
 BoundCastInfo DefaultCasts::ImplicitToVariantCast(BindCastInput &input, const LogicalType &source,
                                                   const LogicalType &target) {

@@ -43,10 +43,6 @@ bool ConvertToVariant(ToVariantSourceData &source, ToVariantGlobalResultData &re
 		case LogicalTypeId::TUPLE:
 			return ConvertTupleToVariant<WRITE_DATA, IGNORE_NULLS>(source, result, count, selvec, values_index_selvec,
 			                                                       is_root);
-		case LogicalTypeId::UNION:
-			return ConvertUnionToVariant<WRITE_DATA, IGNORE_NULLS>(source, result, count, selvec,
-
-			                                                       values_index_selvec, is_root);
 		case LogicalTypeId::VARIANT:
 			return ConvertVariantToVariant<WRITE_DATA, IGNORE_NULLS>(source, result, count, selvec, values_index_selvec,
 			                                                         is_root);

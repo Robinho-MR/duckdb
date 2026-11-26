@@ -82,6 +82,7 @@ INSERT INTO tbl3 VALUES
     (union_value(strs:=NULL)), 
     (union_value(strs:=[1]))
 
+# the member is derived from the value: a NULL value is a NULL union, and [1] is an INTEGER list
 query II
 SELECT union_tag(union_with_lists), union_with_lists FROM tbl3
 ----
@@ -93,7 +94,7 @@ strs	[five]
 nums	[5]
 strs	[six]
 nums	[NULL, 6]
-strs	NULL
+NULL	NULL
 strs	[1]
 
 query ITT

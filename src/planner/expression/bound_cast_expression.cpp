@@ -359,8 +359,8 @@ static const LogicalType &ListOrArrayChildType(const LogicalType &type) {
 //! Nested casts are executed on the child types, so they throw if any of the child casts throws, or if the
 //! structure of the source does not fit into the structure of the target
 static bool NestedCastCanThrow(const LogicalType &source_type, const LogicalType &target_type) {
-	// Casts to and from UNION validate the union tags, which can throw
-	if (source_type.id() == LogicalTypeId::UNION || target_type.id() == LogicalTypeId::UNION) {
+	// Casts to a UNION check that the values belong to a member, which can throw
+	if (UnionType::IsUnion(target_type)) {
 		return true;
 	}
 	switch (source_type.id()) {

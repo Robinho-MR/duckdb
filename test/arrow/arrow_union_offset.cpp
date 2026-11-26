@@ -167,8 +167,9 @@ TEST_CASE("Arrow scan of a dictionary of unions with a NULL index", "[arrow]") {
 	// a NULL union has no tag and no member value
 	REQUIRE(arrow_union_offset_test::ScanMatches(
 	    schema, array,
-	    "SELECT * FROM (VALUES ('101', 'i', NULL, 101), ('10', 'd', 10, NULL), (NULL, NULL, NULL, NULL), "
-	    "('30', 'd', 30, NULL), ('101', 'i', NULL, 101)) t(v, tag, d, i)",
+	    // both members are INTEGER, so every value belongs to the first member
+	    "SELECT * FROM (VALUES ('101', 'd', 101, NULL::INTEGER), ('10', 'd', 10, NULL), (NULL, NULL, NULL, NULL), "
+	    "('30', 'd', 30, NULL), ('101', 'd', 101, NULL)) t(v, tag, d, i)",
 	    "u::VARCHAR AS v, union_tag(u)::VARCHAR AS tag, union_extract(u, 'd') AS d, union_extract(u, 'i') AS i"));
 }
 

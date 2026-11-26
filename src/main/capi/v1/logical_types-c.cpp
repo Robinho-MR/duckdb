@@ -26,6 +26,13 @@ static bool AssertLogicalTypeId(duckdb_logical_type type, duckdb::LogicalTypeId 
 	return true;
 }
 
+static bool AssertIsUnion(duckdb_logical_type type) {
+	if (!type) {
+		return false;
+	}
+	return duckdb::UnionType::IsUnion(*(reinterpret_cast<duckdb::LogicalType *>(type)));
+}
+
 static bool AssertInternalType(duckdb_logical_type type, duckdb::PhysicalType physical_type) {
 	if (!type) {
 		return false;
@@ -340,21 +347,15 @@ idx_t duckdb_struct_type_child_count(duckdb_logical_type type) {
 }
 
 idx_t duckdb_union_type_member_count(duckdb_logical_type type) {
-	if (!AssertLogicalTypeId(type, duckdb::LogicalTypeId::UNION)) {
+	if (!AssertIsUnion(type)) {
 		return 0;
 	}
-	idx_t member_count = duckdb_struct_type_child_count(type);
-	if (member_count != 0) {
-		member_count--;
-	}
-	return member_count;
+	auto &logical_type = *(reinterpret_cast<duckdb::LogicalType *>(type));
+	return duckdb::UnionType::GetMemberCount(logical_type);
 }
 
 char *duckdb_union_type_member_name(duckdb_logical_type type, idx_t index) {
-	if (!AssertInternalType(type, duckdb::PhysicalType::STRUCT)) {
-		return nullptr;
-	}
-	if (!AssertLogicalTypeId(type, duckdb::LogicalTypeId::UNION)) {
+	if (!AssertIsUnion(type)) {
 		return nullptr;
 	}
 	auto &logical_type = *(reinterpret_cast<duckdb::LogicalType *>(type));
@@ -362,10 +363,7 @@ char *duckdb_union_type_member_name(duckdb_logical_type type, idx_t index) {
 }
 
 duckdb_logical_type duckdb_union_type_member_type(duckdb_logical_type type, idx_t index) {
-	if (!AssertInternalType(type, duckdb::PhysicalType::STRUCT)) {
-		return nullptr;
-	}
-	if (!AssertLogicalTypeId(type, duckdb::LogicalTypeId::UNION)) {
+	if (!AssertIsUnion(type)) {
 		return nullptr;
 	}
 	auto &logical_type = *(reinterpret_cast<duckdb::LogicalType *>(type));

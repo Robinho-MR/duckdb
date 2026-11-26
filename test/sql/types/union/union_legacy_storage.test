@@ -1,0 +1,140 @@
+# name: test/sql/types/union/union_legacy_storage.test
+# description: UNION columns written in the legacy STRUCT(tag, members...) layout can be read, but not written
+# group: [union]
+
+require vector_size 2048
+
+unzip data/storage/union_legacy_v2_1.db.gz {TEST_DIR}/union_legacy_v2_1.db
+
+statement ok
+ATTACH '{TEST_DIR}/union_legacy_v2_1.db' AS old
+
+query III
+SELECT id, u, typeof(u) FROM old.unions ORDER BY id
+----
+1	42	UNION(i INTEGER, s VARCHAR, l INTEGER[])
+2	hello	UNION(i INTEGER, s VARCHAR, l INTEGER[])
+3	[1, 2, 3]	UNION(i INTEGER, s VARCHAR, l INTEGER[])
+4	NULL	UNION(i INTEGER, s VARCHAR, l INTEGER[])
+5	NULL	UNION(i INTEGER, s VARCHAR, l INTEGER[])
+
+query IIII
+SELECT id, u.i, u.s, u.l FROM old.unions ORDER BY id
+----
+1	42	NULL	NULL
+2	NULL	hello	NULL
+3	NULL	NULL	[1, 2, 3]
+4	NULL	NULL	NULL
+5	NULL	NULL	NULL
+
+query II
+SELECT id, union_tag(u) FROM old.unions ORDER BY id
+----
+1	i
+2	s
+3	l
+4	NULL
+5	NULL
+
+# nested unions
+query III
+SELECT id, lu, su FROM old.nested ORDER BY id
+----
+1	[1.0, 2.5, NULL]	{'x': 1, 'y': 7}
+2	NULL	{'x': 2, 'y': seven}
+3	[]	NULL
+
+query II
+SELECT id, su.y.t FROM old.nested ORDER BY id
+----
+1	NULL
+2	seven
+3	NULL
+
+query III
+SELECT count(*), count(u.num), count(u.str) FROM old.big
+----
+5000	2500	2500
+
+query II
+SELECT id, u FROM old.big WHERE id IN (10, 11) ORDER BY id
+----
+10	10
+11	v11
+
+# filters and fetches by row id
+query I
+SELECT count(*) FROM old.big WHERE u.num > 4000
+----
+499
+
+query II
+SELECT id, u FROM old.big WHERE rowid = 4999
+----
+4999	v4999
+
+# the legacy columns are read-only
+statement error
+INSERT INTO old.unions VALUES (6, 7::INTEGER)
+----
+<REGEX>:.*read-only.*
+
+statement error
+UPDATE old.unions SET u = 7::INTEGER WHERE id = 1
+----
+<REGEX>:.*read-only.*
+
+# other columns of the table can still be updated
+statement ok
+UPDATE old.unions SET id = id + 10 WHERE id = 1
+
+# a copy of the table uses the VARIANT layout, and can be written
+statement ok
+CREATE TABLE old.unions_copy AS SELECT * FROM old.unions
+
+statement ok
+INSERT INTO old.unions_copy VALUES (6, 7::INTEGER)
+
+query II
+SELECT id, union_tag(u) FROM old.unions_copy ORDER BY id
+----
+2	s
+3	l
+4	NULL
+5	NULL
+6	i
+11	i
+
+# the legacy layout survives a checkpoint and a restart
+statement ok
+CHECKPOINT old
+
+statement ok
+DETACH old
+
+statement ok
+ATTACH '{TEST_DIR}/union_legacy_v2_1.db' AS old
+
+query II
+SELECT id, u FROM old.unions ORDER BY id
+----
+2	hello
+3	[1, 2, 3]
+4	NULL
+5	NULL
+11	42
+
+query II
+SELECT id, u FROM old.unions_copy ORDER BY id
+----
+2	hello
+3	[1, 2, 3]
+4	NULL
+5	NULL
+6	7
+11	42
+
+statement error
+INSERT INTO old.unions VALUES (6, 7::INTEGER)
+----
+<REGEX>:.*read-only.*

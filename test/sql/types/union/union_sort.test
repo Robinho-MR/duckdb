@@ -6,12 +6,12 @@ statement ok
 SET default_null_order='nulls_first';
 
 statement ok
-CREATE TABLE tbl (a UNION(a INT, b INT));
+CREATE TABLE tbl (a UNION(a INT, b VARCHAR));
 
 statement ok
-INSERT INTO tbl VALUES (union_value(b := 1)), (union_value(a := 4)), (union_value(a := 1)), (union_value(b := 2)), (union_value(a := 3)), (NULL);
+INSERT INTO tbl VALUES (union_value(b := 'y')), (union_value(a := 4)), (union_value(a := 1)), (union_value(b := 'x')), (union_value(a := 3)), (NULL);
 
-# unions sort first by tag, then by value
+# unions are stored as VARIANT, and sort like a VARIANT
 query II
 SELECT union_tag(a), a FROM tbl ORDER BY a ASC;
 ----
@@ -19,16 +19,15 @@ NULL	NULL
 a	1
 a	3
 a	4
-b	1
-b	2
-
+b	x
+b	y
 
 query II
 SELECT union_tag(a), a FROM tbl ORDER BY a DESC;
 ----
 NULL	NULL
-b	2
-b	1
+b	y
+b	x
 a	4
 a	3
 a	1
@@ -48,6 +47,7 @@ INSERT INTO tbl2 VALUES (union_value(lft := 1));
 statement ok
 INSERT INTO tbl2 VALUES (NULL);
 
+# the INTEGER value matches the first (outer) INTEGER member
 statement ok
 INSERT INTO tbl2 VALUES (union_value(u := union_value(rght := 2)));
 
@@ -62,6 +62,6 @@ SELECT u, union_tag(u), union_tag(u.u) FROM tbl2 ORDER BY u;
 ----
 NULL	NULL	NULL
 1	lft	NULL
+2	lft	NULL
 3	u	lft
 4	u	lft
-2	u	rght

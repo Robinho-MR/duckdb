@@ -17,10 +17,13 @@ statement error
 INSERT INTO tbl VALUES (union_value(num := 1, other := 2))
 ----
 
-# unions can only be cast to eachother if their member sets overlap
-statement error
+# casts between unions match the values against the member types - the member names don't matter
+statement ok
 INSERT INTO tbl VALUES (union_value(key := 1))
-----
+
+# values that don't match a member type are cast to the first member that accepts them
+statement ok
+INSERT INTO tbl VALUES (union_value(key := 1.5::DOUBLE))
 
 statement ok
 INSERT INTO tbl VALUES (union_value(num := 1)), (1), (union_value(str := 'hello')), (2), ('world');
@@ -37,6 +40,8 @@ SELECT CASE WHEN union_tag(u) = 'num' THEN u ELSE NULL END AS num FROM tbl;
 ----
 1
 1
+2
+1
 1
 NULL
 2
@@ -44,7 +49,7 @@ NULL
 1
 NULL
 
-# Test that null inserts dont erase the key
+# a union only stores the value, so a NULL value is a NULL union
 statement ok
 CREATE TABLE tbl3 (u UNION(num INTEGER, str STRING));
 
@@ -62,17 +67,17 @@ SELECT u from tbl3 where u = NULL
 query I
 SELECT union_value(str := NULL) IS NULL;
 ----
-false
+true
 
 query I
 SELECT union_tag(union_value(str := NULL))
 ----
-str
+NULL
 
 query II
 SELECT union_tag(u), u FROM tbl3;
 ----
 num	1
-num	NULL
+NULL	NULL
 str	3
-str	NULL
+NULL	NULL

@@ -256,7 +256,7 @@ TEST_CASE("Union type construction") {
 
 	auto res = duckdb_create_union_type(member_types.data(), member_names.data(), member_names.size());
 
-	REQUIRE(duckdb_struct_type_child_count(res) == 3);
+	REQUIRE(duckdb_union_type_member_count(res) == 2);
 
 	auto get_id = [&](idx_t index) {
 		auto typ = duckdb_union_type_member_type(res, index);
@@ -1042,8 +1042,13 @@ TEST_CASE("Union value construction (happy path)", "[capi]") {
 	auto union_value = duckdb_create_union_value(union_type, tag_index, int32_value);
 	REQUIRE(union_value);
 
+	// a UNION is a VARIANT that is constrained to its members
+	REQUIRE(duckdb_get_type_id(union_type) == duckdb_type::DUCKDB_TYPE_VARIANT);
+	REQUIRE(duckdb_union_type_member_count(union_type) == member_count);
+
 	duckdb_prepared_statement prepared;
-	REQUIRE(duckdb_prepare(tester.connection, "select ?", &prepared) == DuckDBSuccess);
+	REQUIRE(duckdb_prepare(tester.connection, "select union_extract($1, 'int'), union_extract($1, 'str')", &prepared) ==
+	        DuckDBSuccess);
 
 	duckdb_bind_value(prepared, 1, union_value);
 
@@ -1055,23 +1060,13 @@ TEST_CASE("Union value construction (happy path)", "[capi]") {
 	REQUIRE(chunk);
 	auto row_count = duckdb_data_chunk_get_size(chunk);
 	REQUIRE(row_count == 1);
-	auto vector = duckdb_data_chunk_get_vector(chunk, 0);
-	REQUIRE(vector);
-	auto logical_type = duckdb_vector_get_column_type(vector);
-	REQUIRE(logical_type);
-	REQUIRE(duckdb_get_type_id(logical_type) == duckdb_type::DUCKDB_TYPE_UNION);
-	duckdb_destroy_logical_type(&logical_type);
-
-	auto tags_vector = duckdb_struct_vector_get_child(vector, 0);
-	REQUIRE(tags_vector);
-	auto tags_data = (uint8_t *)duckdb_vector_get_data(tags_vector);
-	REQUIRE(tags_data);
-	REQUIRE(tags_data[0] == tag_index);
-	auto value_vector = duckdb_struct_vector_get_child(vector, tag_index + 1);
+	auto value_vector = duckdb_data_chunk_get_vector(chunk, 0);
 	REQUIRE(value_vector);
 	auto value_data = (int32_t *)duckdb_vector_get_data(value_vector);
 	REQUIRE(value_data);
 	REQUIRE(value_data[0] == int32);
+	auto str_vector = duckdb_data_chunk_get_vector(chunk, 1);
+	REQUIRE(!duckdb_validity_row_is_valid(duckdb_vector_get_validity(str_vector), 0));
 
 	duckdb_destroy_prepare(&prepared);
 	duckdb_destroy_value(&union_value);

@@ -49,9 +49,9 @@ Invalid type Error: Invalid Type [UNION("int" INTEGER, list INTEGER[], bool BOOL
 query IIII
 SELECT * FROM tbl ORDER BY ALL;
 ----
-hello	world	42	[1, 2, 3]
 false	wazzup	0	[1]
 true	NULL	44	45
+hello	world	42	[1, 2, 3]
 NULL	NULL	NULL	NULL
 
 restart
@@ -88,10 +88,10 @@ restart
 query IIII
 SELECT * FROM tbl ORDER BY ALL;
 ----
-hello	world	42	[1, 2, 3]
-helloo	worldd	43	[1, 2, 3, 4]
 false	wazzup	0	[1]
 true	NULL	44	45
+hello	world	42	[1, 2, 3]
+helloo	worldd	43	[1, 2, 3, 4]
 NULL	NULL	NULL	NULL
 
 restart
@@ -154,11 +154,11 @@ restart
 query IIII
 SELECT * FROM tbl ORDER BY ALL;
 ----
+false	wazzup	0	[1]
+true	NULL	44	45
 hello	world	42	[1, 2, 3]
 helloo	worldd	43	[1, 2, 3, 4]
 sunshine	love	85	true
-false	wazzup	0	[1]
-true	NULL	44	45
 NULL	NULL	NULL	NULL
 
 query I
@@ -171,11 +171,11 @@ restart
 query IIII
 SELECT * FROM tbl ORDER BY ALL;
 ----
+false	wazzup	0	[1]
+true	NULL	44	45
 hello	world	42	[1, 2, 3]
 helloo	worldd	43	[1, 2, 3, 4]
 sunshine	love	85	true
-false	wazzup	0	[1]
-true	NULL	44	45
 NULL	NULL	NULL	NULL
 
 query I

@@ -303,11 +303,11 @@ SELECT histogram(get_type(1), ['INTEGER'::ENUM('INTEGER')])
 ----
 <REGEX>:Binder Error.*Cannot deduce template type 'T'.*
 
-# member-typed bins for a union argument no longer bind - the member does not unify with the union
-statement error
+# member-typed bins for a union argument bind - the bins are cast to the union
+query I
 SELECT histogram(union_value(e := 'a'::small_enum)::UNION(e small_enum, n INTEGER), ['a'::small_enum])
 ----
-<REGEX>:Binder Error.*Cannot deduce template type 'T'.*
+{a=1}
 
 # union bins unify with a union argument by merging the members
 query I
@@ -328,17 +328,18 @@ SELECT list_aggregate(map_values(histogram(union_value(wrapped := s)::UNION(a IN
 ----
 1
 
-query I
+# the members of s have the same type, so its value belongs to a - which can't be cast to the a INTEGER[] member
+statement error
 WITH v AS (SELECT union_value(b := 1)::UNION(a INTEGER, b INTEGER) AS s)
 SELECT list_aggregate(map_values(histogram(union_value(b := 1)::UNION(a INTEGER[], b INTEGER), [s])), 'sum') FROM v
 ----
-1
+INTEGER -> INTEGER[]
 
-# a union-to-union cast with no executable member keeps failing at runtime
+# a union-to-union cast of a value that matches no member keeps failing at runtime
 statement error
 SELECT histogram(union_value(a := [1])::UNION(a INTEGER[], b DATE), b) FROM (VALUES ([union_value(a := 1)::UNION(a INTEGER, b INTEGER)])) t(b)
 ----
-<REGEX>:.*Conversion Error.*Unimplemented type for cast.*
+<REGEX>:.*Conversion Error.*INTEGER -> INTEGER\[\].*
 
 # the union-to-union bins cast converts inactive members as all-NULL vectors - a member with
 # mismatched array sizes still raises its runtime error for them
@@ -347,11 +348,11 @@ SELECT list_aggregate(map_values(histogram(union_value(b := 1)::UNION(a INTEGER[
 ----
 <REGEX>:.*Cannot cast array of size 2 to array of size 3.*
 
-# the struct representation of a union does not unify with the union argument
+# the legacy struct representation of a union can't be cast to the union
 statement error
 SELECT histogram(union_value(a := 1), [{'tag': 0::UTINYINT, 'a': 1}])
 ----
-<REGEX>:Binder Error.*Cannot deduce template type 'T'.*
+<REGEX>:Conversion Error.*can't be cast as UNION.*
 
 # an integer argument unifies with VARIANT bins
 query I

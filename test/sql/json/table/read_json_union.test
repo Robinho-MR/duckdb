@@ -11,22 +11,23 @@ Frank
 5
 false
 
-statement error
-SELECT * FROM read_ndjson('{DATA_DIR}/json/malformed/union/bad_key.ndjson', columns={data: 'UNION(name VARCHAR, age INT, veteran BOOL)'})
+# values that are not an object {"member": value} are read as the first member that accepts them
+query II
+SELECT data, union_tag(data) FROM read_ndjson('{DATA_DIR}/json/malformed/union/bad_key.ndjson', columns={data: 'UNION(name VARCHAR, age INT, veteran BOOL)'})
 ----
-Found object containing unknown key, instead of union
+{"level":0}	name
 
-statement error
-SELECT * FROM read_ndjson('{DATA_DIR}/json/malformed/union/empty_object.ndjson', columns={data: 'UNION(name VARCHAR, age INT, veteran BOOL)'})
+query II
+SELECT data, union_tag(data) FROM read_ndjson('{DATA_DIR}/json/malformed/union/empty_object.ndjson', columns={data: 'UNION(name VARCHAR, age INT, veteran BOOL)'})
 ----
-Found empty object, instead of union
+{}	name
 
-statement error
-SELECT * FROM read_ndjson('{DATA_DIR}/json/malformed/union/non_object.ndjson', columns={data: 'UNION(name VARCHAR, age INT, veteran BOOL)'})
+query II
+SELECT data, union_tag(data) FROM read_ndjson('{DATA_DIR}/json/malformed/union/non_object.ndjson', columns={data: 'UNION(name VARCHAR, age INT, veteran BOOL)'})
 ----
-Expected an object representing a union, got uint
+0	age
 
-statement error
-SELECT * FROM read_ndjson('{DATA_DIR}/json/malformed/union/too_many_keys.ndjson', columns={data: 'UNION(name VARCHAR, age INT, veteran BOOL)'})
+query II
+SELECT data, union_tag(data) FROM read_ndjson('{DATA_DIR}/json/malformed/union/too_many_keys.ndjson', columns={data: 'UNION(name VARCHAR, age INT, veteran BOOL)'})
 ----
-Found object containing more than one key, instead of union
+{"id":1,"name":"O Brother, Where Art Thou?"}	name

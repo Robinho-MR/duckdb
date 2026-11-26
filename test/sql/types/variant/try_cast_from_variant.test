@@ -80,7 +80,7 @@ select try_cast(a as UNION(a integer, b decimal)) from cte;
 ----
 NULL
 NULL
-NULL
+42
 
 require json
 

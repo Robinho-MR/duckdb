@@ -179,7 +179,7 @@ static void InitializeAppenderForType(ArrowAppendData &append_data) {
 
 static void InitializeFunctionPointers(ArrowAppendData &append_data, const LogicalType &type) {
 	// handle special logical types
-	switch (type.id()) {
+	switch (UnionType::IsUnion(type) ? LogicalTypeId::UNION : type.id()) {
 	case LogicalTypeId::SQLNULL:
 		InitializeAppenderForType<ArrowNullData>(append_data);
 		break;

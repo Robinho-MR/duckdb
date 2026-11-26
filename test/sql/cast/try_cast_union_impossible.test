@@ -2,8 +2,14 @@
 # description: TRY_CAST into a UNION without a possible member mapping returns NULL
 # group: [cast]
 
+# casts between unions match the values against the member types, the member names don't matter
 query I
 SELECT TRY_CAST(u AS UNION(b INT)) FROM (SELECT union_value(a:=1) u);
+----
+1
+
+query I
+SELECT TRY_CAST(u AS UNION(b INT)) FROM (SELECT union_value(a:='x') u);
 ----
 NULL
 
@@ -13,7 +19,7 @@ SELECT TRY_CAST(1 AS UNION(b VARCHAR));
 NULL
 
 query I
-SELECT TRY(CAST(union_value(a:=1) AS UNION(b INT)));
+SELECT TRY(CAST(union_value(a:='x') AS UNION(b INT)));
 ----
 NULL
 
@@ -23,9 +29,9 @@ SELECT TRY_CAST(NULL::INT AS UNION(b VARCHAR));
 NULL
 
 statement error
-SELECT CAST(union_value(a:=1) AS UNION(b INT));
+SELECT CAST(union_value(a:='x') AS UNION(b INT));
 ----
-<REGEX>:Conversion Error.*not present in target union.*
+<REGEX>:Conversion Error.*does not match any of the member types.*
 
 statement error
 SELECT CAST(1 AS UNION(b VARCHAR));

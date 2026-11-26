@@ -52,45 +52,16 @@ NULL
 NULL
 NULL
 
-# the UNION member-to-member cast also casts members no row selects - an unselected TYPE member is all-NULL
-query I
-SELECT CAST(union_value(i := 42)::UNION(i INTEGER, t TYPE) AS UNION(i BIGINT, t VARIANT))
-----
-42
-
-# a selected TYPE member holding NULL casts to NULL
-query I
-SELECT CAST(union_value(t := NULL::TYPE)::UNION(i INTEGER, t TYPE) AS UNION(i BIGINT, t VARIANT))
-----
-NULL
-
-# a selected TYPE member holding a value errors
+# TYPE has no VARIANT representation, so it can't be a UNION member
 statement error
-SELECT CAST(union_value(t := make_type('INTEGER'))::UNION(i INTEGER, t TYPE) AS UNION(i BIGINT, t VARIANT))
+SELECT CAST(42::UNION(i INTEGER, t TYPE) AS UNION(i BIGINT, t VARIANT))
 ----
-Conversion Error: Unimplemented type for cast (TYPE -> VARIANT)
+UNION members cannot be of type TYPE
 
-query I
-SELECT TRY_CAST(union_value(t := make_type('INTEGER'))::UNION(i INTEGER, t TYPE) AS UNION(i BIGINT, t VARIANT)) FROM range(2)
+statement error
+SELECT union_value(t := make_type('INTEGER'))
 ----
-NULL
-NULL
-
-# member tags survive the member-to-member cast, only the failing row becomes a NULL union
-query III
-WITH input(id, u) AS (
-    VALUES
-      (1, union_value(i := 42)::UNION(i INTEGER, t TYPE)),
-      (2, union_value(t := NULL::TYPE)::UNION(i INTEGER, t TYPE)),
-      (3, union_value(t := make_type('INTEGER'))::UNION(i INTEGER, t TYPE))
-), converted AS (
-    SELECT id, TRY_CAST(u AS UNION(i BIGINT, t VARIANT)) AS v FROM input
-)
-SELECT id, v IS NULL, union_tag(v)::VARCHAR FROM converted ORDER BY id
-----
-1	false	i
-2	false	t
-3	true	NULL
+union_value cannot take a value of type TYPE
 
 # types composed over TYPE have no VARIANT representation either
 query I
@@ -114,7 +85,7 @@ Conversion Error: Unimplemented type for cast (TYPE[] -> VARIANT)
 statement error
 SELECT CAST(v AS VARIANT) FROM (VALUES (union_value(t := NULL::TYPE)::UNION(i INTEGER, t TYPE))) t(v)
 ----
-Conversion Error: Unimplemented type for cast (UNION(i INTEGER, t TYPE) -> VARIANT)
+<REGEX>:.*(UNION members|union_value) cannot.*TYPE.*
 
 # nested targets cast the TYPE elements directly, so NULL elements convert
 query I
@@ -126,13 +97,6 @@ query I
 SELECT CAST(row(NULL::TYPE) AS STRUCT(a VARIANT))
 ----
 {'a': NULL}
-
-# the member-to-member cast stays executable inside aggregates like histogram
-query I
-SELECT histogram(x::UNION(i BIGINT, t VARIANT), [union_value(i := 10)::UNION(i BIGINT, t VARIANT)])
-FROM (VALUES (union_value(i := 5)::UNION(i INTEGER, t TYPE)), (union_value(i := 42)::UNION(i INTEGER, t TYPE))) t(x)
-----
-{10=1}
 
 # representable types still take the real conversion
 query III

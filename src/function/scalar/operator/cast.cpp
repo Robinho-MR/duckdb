@@ -20,16 +20,6 @@ static BoundCastInfo BindCastScalarFunction(ClientContext &context, const Logica
 	return cast_functions.GetCastFunction(source, target, input);
 }
 
-//! Casts to UNION types must run even for constant NULL inputs (the union member tag is set even for NULL values),
-//! so we disable the executor's constant-NULL short-circuit for those. For all other targets casts propagate NULLs
-//! normally, and using default NULL handling keeps Expression::PropagatesNullValues() accurate for the optimizer.
-template <class FUNC>
-static void SetCastNullHandling(FUNC &function, const LogicalType &target_type) {
-	if (target_type.id() == LogicalTypeId::UNION) {
-		function.SetNullHandling(FunctionNullHandling::SPECIAL_HANDLING);
-	}
-}
-
 //! Whether the cast can throw a runtime error - either because the types allow for it, or because no cast exists
 //! between the types at all, in which case the cast throws for every non-NULL value
 static bool BoundCastCanThrow(const BoundCastInfo &bound_cast, const LogicalType &source_type,
@@ -139,7 +129,6 @@ static unique_ptr<FunctionData> CastFunctionDeserialize(Deserializer &deserializ
 		function.SetErrorMode(FunctionErrors::CAN_THROW_RUNTIME_ERROR);
 	}
 	function.SetStability(bound_cast.GetStability());
-	SetCastNullHandling(function, target_type);
 	return make_uniq<CastFunctionData>(source_type, target_type, std::move(bound_cast), try_cast);
 }
 
@@ -177,7 +166,6 @@ unique_ptr<Expression> BoundCastExpression::Create(unique_ptr<Expression> child,
 		scalar_function.SetErrorMode(FunctionErrors::CAN_THROW_RUNTIME_ERROR);
 	}
 	scalar_function.SetStability(stability);
-	SetCastNullHandling(scalar_function, target_type);
 
 	BoundScalarFunction bound_function(scalar_function);
 	bound_function.GetArguments() = {source_type};

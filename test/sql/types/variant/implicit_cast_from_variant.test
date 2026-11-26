@@ -236,7 +236,8 @@ NULL
 test
 NULL
 
-statement error
+# a VARIANT can be cast to a UNION: values that match no other member are held by the VARIANT member
+query I
 select [
 	42::UNION(a INTEGER, b BOOLEAN, c VARIANT)::VARIANT,
 	{'a': 21, 'b': false}::VARIANT::UNION(a INTEGER, b BOOLEAN, c VARIANT)::VARIANT,
@@ -244,7 +245,7 @@ select [
 	'test'::VARIANT::UNION(a INTEGER, b BOOLEAN, c VARIANT)::VARIANT,
 ]::VARIANT
 ----
-Conversion Error: Can't convert VARIANT to 'UNION(a INTEGER, b BOOLEAN, c VARIANT)'
+[42, {'a': 21, 'b': false}, {'hello': world}, test]
 
 
 statement error
