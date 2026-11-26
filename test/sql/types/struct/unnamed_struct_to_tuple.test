@@ -8,17 +8,17 @@ require json
 
 load {TEST_DIR}/unnamed_struct_to_tuple.db
 
-# a parquet group whose only field has an empty name is read as a TUPLE
+# a parquet group whose only field has an empty name is read as a STRUCT
 query IIII
 SELECT s, m, typeof(s), typeof(m) FROM 'data/parquet-testing/empty_field_names.parquet' ORDER BY ALL
 ----
-(1,)	{'': 1, 'x': a}	TUPLE(INTEGER)	STRUCT("" INTEGER, x VARCHAR)
-(2,)	{'': 2, 'x': b}	TUPLE(INTEGER)	STRUCT("" INTEGER, x VARCHAR)
-(3,)	{'': 3, 'x': c}	TUPLE(INTEGER)	STRUCT("" INTEGER, x VARCHAR)
+{'': 1}	{'': 1, 'x': a}	STRUCT("" INTEGER)	STRUCT("" INTEGER, x VARCHAR)
+{'': 2}	{'': 2, 'x': b}	STRUCT("" INTEGER)	STRUCT("" INTEGER, x VARCHAR)
+{'': 3}	{'': 3, 'x': c}	STRUCT("" INTEGER)	STRUCT("" INTEGER, x VARCHAR)
 
 # filters, extracts and casts on both
 query II
-SELECT s[1], m."x" FROM 'data/parquet-testing/empty_field_names.parquet' WHERE s[1] >= 2 ORDER BY ALL
+SELECT struct_extract(s, ''), m."x" FROM 'data/parquet-testing/empty_field_names.parquet' WHERE struct_extract(s, '') >= 2 ORDER BY ALL
 ----
 2	b
 3	c
@@ -26,9 +26,9 @@ SELECT s[1], m."x" FROM 'data/parquet-testing/empty_field_names.parquet' WHERE s
 query II
 SELECT s::JSON, m::JSON FROM 'data/parquet-testing/empty_field_names.parquet' ORDER BY ALL
 ----
-[1]	{"":1,"x":"a"}
-[2]	{"":2,"x":"b"}
-[3]	{"":3,"x":"c"}
+{"":1}	{"":1,"x":"a"}
+{"":2}	{"":2,"x":"b"}
+{"":3}	{"":3,"x":"c"}
 
 # a STRUCT with a leading empty member name is still a named STRUCT (cast by name, not positionally)
 query I
@@ -57,12 +57,12 @@ restart
 query II
 SELECT typeof(s), typeof(m) FROM tbl LIMIT 1
 ----
-TUPLE(INTEGER)	STRUCT("" INTEGER, x VARCHAR)
+STRUCT("" INTEGER)	STRUCT("" INTEGER, x VARCHAR)
 
 query II
 SELECT s::JSON, m::JSON FROM tbl ORDER BY ALL LIMIT 1
 ----
-[1]	{"":1,"x":"a"}
+{"":1}	{"":1,"x":"a"}
 
 # json_transform rejects empty keys in the structure
 statement error

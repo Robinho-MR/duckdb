@@ -1143,7 +1143,7 @@ TEST_CASE("Union value construction (invalid value type)", "[capi]") {
 	duckdb_destroy_logical_type(&varchar_type);
 }
 
-TEST_CASE("C API unnamed struct cannot bypass tuple storage version gate", "[capi]") {
+TEST_CASE("C API struct with empty member names cannot bypass the storage version gate", "[capi]") {
 	CAPITester tester;
 	REQUIRE(tester.OpenDatabase(nullptr));
 
@@ -1176,8 +1176,9 @@ TEST_CASE("C API unnamed struct cannot bypass tuple storage version gate", "[cap
 
 	duckdb_result result;
 	REQUIRE(duckdb_execute_prepared(stmt, &result) == DuckDBError);
-	REQUIRE(StringUtil::Contains(string(duckdb_result_error(&result)),
-	                             "TUPLE columns are not supported in storage versions prior to v2.0.0"));
+	REQUIRE(StringUtil::Contains(
+	    string(duckdb_result_error(&result)),
+	    "STRUCT columns with only empty member names are not supported in storage versions prior to v2.0.0"));
 
 	duckdb_destroy_result(&result);
 	duckdb_destroy_prepare(&stmt);

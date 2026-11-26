@@ -666,6 +666,8 @@ struct StructType {
 	//! Whether the type is backed by StructTypeInfo and laid out as a struct (STRUCT or TUPLE)
 	DUCKDB_API static bool IsStruct(const LogicalType &type);
 	DUCKDB_API static bool IsStruct(LogicalTypeId id);
+	//! The argument name struct_pack uses for a member with an empty name - an empty argument name means no name
+	static constexpr const char *EMPTY_NAME_ARGUMENT = "\x01";
 };
 
 //! Helpers for the unnamed-struct TUPLE type. A TUPLE has no member names; when a name is required (e.g. when

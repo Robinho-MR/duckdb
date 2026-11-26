@@ -872,11 +872,7 @@ static auto GetOptionValue(INFO &args, idx_t index, const char *function) -> duc
 	if (values.size() == 1) {
 		return Convert(new Value(values[0]));
 	}
-	child_list_t<Value> elements;
-	for (auto &value : values) {
-		elements.emplace_back(string(), value);
-	}
-	return Convert(new Value(Value::STRUCT(std::move(elements))));
+	return Convert(new Value(Value::TUPLE(values)));
 }
 
 } // namespace duckdb::capiv2

@@ -52,7 +52,9 @@ static unique_ptr<FunctionData> StructPackBind(BindScalarFunctionInput &input) {
 	if (IS_STRUCT_PACK) {
 		child_list_t<LogicalType> fields;
 		for (idx_t i = 0; i < args.size(); i++) {
-			fields.emplace_back(input.GetArgumentName(i), args[i]->GetReturnType());
+			auto &name = input.GetArgumentName(i);
+			fields.emplace_back(name == StructType::EMPTY_NAME_ARGUMENT ? Identifier() : name,
+			                    args[i]->GetReturnType());
 		}
 		bound_function.SetReturnType(LogicalType::STRUCT(std::move(fields)));
 	} else {
@@ -82,6 +84,9 @@ static unique_ptr<ParsedExpression> StructPackUnbind(FunctionUnbindInput &input)
 	vector<FunctionArgument> arguments;
 	for (idx_t i = 0; i < input.children.size(); i++) {
 		auto name = IS_STRUCT_PACK ? StructType::GetChildName(expression.GetReturnType(), i) : Identifier();
+		if (IS_STRUCT_PACK && name.empty()) {
+			name = Identifier(StructType::EMPTY_NAME_ARGUMENT);
+		}
 		arguments.emplace_back(std::move(name), std::move(input.children[i]));
 	}
 	return make_uniq<FunctionExpression>(expression.Function().GetDefinition()->GetQualifiedName(),

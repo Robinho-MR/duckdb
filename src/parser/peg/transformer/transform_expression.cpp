@@ -606,7 +606,10 @@ FunctionArgument PEGTransformerFactory::TransformStructField(PEGTransformer &tra
                                                              unique_ptr<ParsedExpression> expression) {
 	auto alias = col_id_or_string.GetIdentifierName();
 	expression->SetAlias(Identifier(alias));
-
+	if (alias.empty()) {
+		// a struct member with an empty name, not an unnamed argument
+		alias = StructType::EMPTY_NAME_ARGUMENT;
+	}
 	return FunctionArgument(Identifier(std::move(alias)), std::move(expression));
 }
 

@@ -1588,6 +1588,9 @@ void LogicalType::Serialize(Serializer &serializer) const {
 		type_info = type_info_.get();
 	}
 	serializer.WritePropertyWithDefault<optional_ptr<const LogicalTypeInfo>>(101, "type_info", type_info);
+	// a STRUCT whose member names are all empty is read back as a TUPLE, unless it says it is not one
+	const bool is_tuple = id() != LogicalTypeId::STRUCT || !StructType::AllUnnamed(StructType::GetChildTypes(*this));
+	serializer.WritePropertyWithDefault<bool>(102, "is_tuple", is_tuple, true);
 }
 
 //! Whether a type cannot be used without its type info (the info holds the child types / members)
@@ -1614,8 +1617,10 @@ LogicalType LogicalType::Deserialize(Deserializer &deserializer) {
 		return LogicalType::BLOB;
 	}
 
-	// Convert unnamed (non-empty) STRUCTs back to TUPLE
-	if (id == LogicalTypeId::STRUCT && type_info && type_info->type == LogicalTypeInfoType::STRUCT_TYPE_INFO &&
+	const auto is_tuple = deserializer.ReadPropertyWithExplicitDefault<bool>(102, "is_tuple", true);
+	// Convert STRUCTs with only empty member names back to TUPLE (older versions store a TUPLE as such a STRUCT)
+	if (id == LogicalTypeId::STRUCT && is_tuple && type_info &&
+	    type_info->type == LogicalTypeInfoType::STRUCT_TYPE_INFO &&
 	    StructType::AllUnnamed(type_info->Cast<StructTypeInfo>().child_types)) {
 		id = LogicalTypeId::TUPLE;
 	}
@@ -1841,10 +1846,6 @@ bool StructType::AllUnnamed(const child_list_t<LogicalType> &children) {
 }
 
 LogicalType LogicalType::STRUCT(child_list_t<LogicalType> children) {
-	if (StructType::AllUnnamed(children)) {
-		// a struct without any member names is a TUPLE
-		return LogicalType::TUPLE(std::move(children));
-	}
 	auto info = make_uniq<StructTypeInfo>(std::move(children));
 	return LogicalType(LogicalTypeId::STRUCT, std::move(info));
 }

@@ -1,0 +1,70 @@
+# name: test/sql/types/struct/struct_empty_key.test
+# description: A STRUCT with an empty member name is a STRUCT, not a TUPLE
+# group: [struct]
+
+require json
+
+load {TEST_DIR}/struct_empty_key.db
+
+query IIII
+SELECT typeof({'': 42}), typeof((42,)), typeof(row(42)), typeof({'': 1, 'a': 2});
+----
+STRUCT("" INTEGER)	TUPLE(INTEGER)	TUPLE(INTEGER)	STRUCT("" INTEGER, a INTEGER)
+
+query II
+SELECT {'': 42}, (42,);
+----
+{'': 42}	(42,)
+
+# they are different types: they compare through their names, not by position
+query I
+SELECT {'': 42} = {'': 42};
+----
+true
+
+query I
+SELECT struct_extract({'': 42}, '');
+----
+42
+
+statement error
+SELECT struct_extract((42,), '');
+----
+<REGEX>:.*Binder Error.*cannot be used on an unnamed struct.*
+
+statement error
+SELECT {'': 42}[1];
+----
+<REGEX>:.*Binder Error.*can only be used on unnamed structs.*
+
+query I
+SELECT {'': 42}::JSON;
+----
+{"":42}
+
+query I
+SELECT (42,)::JSON;
+----
+[42]
+
+# nested and with a list
+query I
+SELECT [{'': 1}, {'': 2}];
+----
+[{'': 1}, {'': 2}]
+
+query I
+SELECT {'': {'': 12}};
+----
+{'': {'': 12}}
+
+# the types survive storage
+statement ok
+CREATE TABLE tbl AS SELECT {'': 42} AS s, (42,) AS t;
+
+restart
+
+query IIII
+SELECT typeof(s), typeof(t), s, t FROM tbl;
+----
+STRUCT("" INTEGER)	TUPLE(INTEGER)	{'': 42}	(42,)
