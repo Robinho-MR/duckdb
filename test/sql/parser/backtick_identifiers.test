@@ -198,11 +198,16 @@ SELECT `upper`('abc');
 ----
 ABC
 
-# zero-length and unterminated identifiers are errors
+# a zero-length identifier is a regular (empty) column name, an unterminated identifier is an error
 statement error
 SELECT ``;
 ----
-Parser Error: zero-length delimited identifier
+Binder Error: Referenced column "" was not found
+
+query I
+SELECT `` FROM (SELECT 1 AS ``);
+----
+1
 
 statement error
 SELECT `x FROM (SELECT 1 x);

@@ -15,7 +15,7 @@ Identifier BaseExpression::GetName() const {
 		return Identifier(ToString());
 	}
 #endif
-	return !alias.empty() ? alias : Identifier(ToString());
+	return HasAlias() ? alias : Identifier(ToString());
 }
 
 bool BaseExpression::Equals(const BaseExpression &other) const {

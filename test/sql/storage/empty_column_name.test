@@ -1,0 +1,65 @@
+# name: test/sql/storage/empty_column_name.test
+# description: Empty column names survive a restart and can be altered like any other column
+# group: [storage]
+
+load {TEST_DIR}/empty_column_name.db
+
+statement ok
+CREATE TABLE t("" INTEGER, a VARCHAR, s STRUCT("" INTEGER, b INTEGER));
+
+statement ok
+INSERT INTO t VALUES (1, 'x', {'': 10, 'b': 20});
+
+statement ok
+CREATE VIEW v AS SELECT "" AS "", s."" AS f FROM t;
+
+restart
+
+query IIII
+SELECT "", a, s."", s.b FROM t;
+----
+1	x	10	20
+
+query II
+SELECT "", f FROM v;
+----
+1	10
+
+query T
+SELECT column_name FROM (DESCRIBE t) ORDER BY ALL;
+----
+(empty)
+a
+s
+
+statement ok
+ALTER TABLE t RENAME COLUMN "" TO renamed;
+
+query I
+SELECT renamed FROM t;
+----
+1
+
+statement ok
+ALTER TABLE t RENAME COLUMN a TO "";
+
+query I
+SELECT "" FROM t;
+----
+x
+
+statement error
+ALTER TABLE t ADD COLUMN "" INTEGER;
+----
+<REGEX>:.*already exists.*
+
+statement ok
+ALTER TABLE t DROP COLUMN "";
+
+restart
+
+query T
+SELECT column_name FROM (DESCRIBE t) ORDER BY ALL;
+----
+renamed
+s

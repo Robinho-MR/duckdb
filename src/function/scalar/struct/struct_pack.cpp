@@ -54,6 +54,10 @@ static unique_ptr<FunctionData> StructPackBind(BindScalarFunctionInput &input) {
 		for (idx_t i = 0; i < args.size(); i++) {
 			fields.emplace_back(input.GetArgumentName(i), args[i]->GetReturnType());
 		}
+		if (!fields.empty() && StructType::AllUnnamed(fields)) {
+			// a STRUCT without any non-empty field name is indistinguishable from a TUPLE
+			throw BinderException("A STRUCT needs at least one non-empty field name - use row() for unnamed fields");
+		}
 		bound_function.SetReturnType(LogicalType::STRUCT(std::move(fields)));
 	} else {
 		vector<LogicalType> fields;

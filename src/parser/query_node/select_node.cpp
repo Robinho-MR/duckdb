@@ -39,7 +39,7 @@ string SelectNode::ToString() const {
 			result += ", ";
 		}
 		result += select_list[i]->ToString();
-		if (!select_list[i]->GetAlias().empty()) {
+		if (select_list[i]->HasAlias()) {
 			result += StringUtil::Format(" AS %s", SQLIdentifier(select_list[i]->GetAlias()));
 		}
 	}

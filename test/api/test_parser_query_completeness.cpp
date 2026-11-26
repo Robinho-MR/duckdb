@@ -42,9 +42,9 @@ TEST_CASE("Parser::IsQueryComplete follows the default grammar", "[api]") {
 	REQUIRE(QueryIsComplete(con, "CREATE FUNCTION f(n INTEGER) RETURNS INTEGER AS BEGIN SELECT 1;"));
 	// invalid UTF-8 is submitted as well
 	REQUIRE(QueryIsComplete(con, "SELECT '\xff\xff';"));
-	// a zero-length delimited identifier is a fatal lexical error - no continuation can repair it
-	REQUIRE(QueryIsComplete(con, "SELECT \"\";"));
-	REQUIRE(QueryIsComplete(con, "SELECT \"\""));
+	// a zero-length delimited identifier is a regular (empty) identifier
+	REQUIRE(QueryIsComplete(con, "SELECT 1 AS \"\";"));
+	REQUIRE_FALSE(QueryIsComplete(con, "SELECT 1 AS \"\""));
 	// a malformed numeric literal makes the matcher throw - contained and classified as complete
 	REQUIRE(QueryIsComplete(con, "SELECT 1e2e3;"));
 
@@ -112,8 +112,8 @@ TEST_CASE("Parser::IsQueryComplete follows grammar extensions", "[api]") {
 	REQUIRE(QueryIsComplete(con, "BEGIN_TEST_BLOCK SELECT 1; END_TEST_BLOCK;"));
 	REQUIRE(QueryIsComplete(con, "BEGIN_TEST_BLOCK END_TEST_BLOCK;"));
 
-	// a fatal lexical error inside an open block still submits - closing the block cannot repair it
-	REQUIRE(QueryIsComplete(con, "BEGIN_TEST_BLOCK SELECT \"\";"));
+	// an empty quoted identifier is a regular identifier, so the block stays open
+	REQUIRE_FALSE(QueryIsComplete(con, "BEGIN_TEST_BLOCK SELECT \"\";"));
 
 	// the completeness check matches without transforming
 	REQUIRE(completeness_block_transform_count == 0);

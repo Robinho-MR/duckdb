@@ -22,12 +22,19 @@ class ClientContext;
 //! A single argument passed to a type constructor - an optionally named constant value
 class TypeArgument {
 public:
-	TypeArgument(string name_p, Value value_p) : name(std::move(name_p)), value(std::move(value_p)) {
+	TypeArgument(string name_p, Value value_p)
+	    : name(std::move(name_p)), has_name(!name.empty()), value(std::move(value_p)) {
 	}
 	//! Arguments that come from source text carry their location, so errors about them can point at it. Arguments
 	//! synthesized elsewhere - the C API, the catalog-free default bind - leave it invalid.
 	TypeArgument(string name_p, Value value_p, QueryLocation query_location_p)
-	    : name(std::move(name_p)), value(std::move(value_p)), query_location(query_location_p) {
+	    : name(std::move(name_p)), has_name(!name.empty()), value(std::move(value_p)),
+	      query_location(query_location_p) {
+	}
+	//! An unset name makes the argument positional; a set (possibly empty) name makes it named
+	TypeArgument(const Identifier &name_p, Value value_p, QueryLocation query_location_p = QueryLocation())
+	    : name(name_p.IsSet() ? name_p.GetIdentifierName() : string()), has_name(name_p.IsSet()),
+	      value(std::move(value_p)), query_location(query_location_p) {
 	}
 	QueryLocation GetQueryLocation() const {
 		return query_location;
@@ -39,7 +46,7 @@ public:
 		return value;
 	}
 	bool HasName() const {
-		return !name.empty();
+		return has_name;
 	}
 	bool IsNamed(const char *name_to_check) const {
 		return StringUtil::CIEquals(name, name_to_check);
@@ -53,6 +60,7 @@ public:
 
 private:
 	string name;
+	bool has_name;
 	Value value;
 	QueryLocation query_location;
 };

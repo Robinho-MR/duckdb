@@ -115,7 +115,7 @@ const Identifier &Binding::GetRegisteredColumnName(const Identifier &column_name
 }
 
 void Binding::SetBoundColumnAlias(ColumnRefExpression &colref) {
-	if (!colref.GetAlias().empty()) {
+	if (colref.HasAlias()) {
 		return;
 	}
 	colref.SetAlias(GetRegisteredColumnName(colref.GetColumnName()));

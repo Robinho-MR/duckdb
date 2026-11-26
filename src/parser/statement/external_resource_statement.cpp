@@ -29,7 +29,7 @@ string ExternalResourceStatement::ToString() const {
 	switch (operation) {
 	case ExternalResourceOperation::CREATE:
 		result = "CREATE EXTERNAL RESOURCE " + SQLString(type);
-		if (!name.GetIdentifierName().empty()) {
+		if (!name.empty()) {
 			result += " AS " + SQLIdentifier(name);
 		}
 		if (!options.empty()) {
@@ -43,7 +43,7 @@ string ExternalResourceStatement::ToString() const {
 		break;
 	case ExternalResourceOperation::REGISTER:
 		result = "REGISTER EXTERNAL RESOURCE " + SQLString(type);
-		if (!name.GetIdentifierName().empty()) {
+		if (!name.empty()) {
 			result += " AS " + SQLIdentifier(name);
 		}
 		result += " FROM " + (handle ? handle->ToString() : string());

@@ -169,7 +169,7 @@ private:
 	//! are actually present precede it, and the schema part can be a nested chain ([catalog, s1, s2, ..., name]).
 	vector<Identifier> path;
 	//! Always-empty identifier, returned by the accessors when a catalog/schema/name component is absent
-	Identifier empty;
+	Identifier empty = Identifier("");
 };
 
 struct QualifiedColumnName {

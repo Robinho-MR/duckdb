@@ -274,7 +274,7 @@ BindResult UnnestBinder::Bind(FunctionExpression &function, idx_t depth, bool ro
 
 		auto result = make_uniq<BoundUnnestExpression>(return_type);
 		result->ChildMutable() = std::move(unnest_expr);
-		Identifier alias = function.GetAlias().empty() ? Identifier(result->ToString()) : function.GetAlias();
+		Identifier alias = !function.HasAlias() ? Identifier(result->ToString()) : function.GetAlias();
 
 		auto current_level = outer_unnest_level + list_unnests - current_depth - 1;
 		TableIndex unnest_table_index;
@@ -306,7 +306,8 @@ BindResult UnnestBinder::Bind(FunctionExpression &function, idx_t depth, bool ro
 							vector<string> current_key_path;
 							// During recursive expansion, not all expressions are BoundFunctionExpression
 							if (keep_parent_names && expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-								current_key_path.emplace_back(expr->GetAlias());
+								current_key_path.emplace_back(expr->HasAlias() ? expr->GetAlias().GetIdentifierName()
+								                                               : string());
 							}
 							current_key_path.emplace_back(entry.first);
 							new_expressions.push_back(CreateBoundStructExtract(context, expr->Copy(), entry.second,

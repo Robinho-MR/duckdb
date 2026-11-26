@@ -348,7 +348,7 @@ struct SerializationDefaultValue {
 
 	template <typename T = void>
 	static inline bool IsDefault(const typename std::enable_if<std::is_same<T, Identifier>::value, T>::type &value) {
-		return value.empty();
+		return !value.IsSet();
 	}
 
 	template <typename T = void>

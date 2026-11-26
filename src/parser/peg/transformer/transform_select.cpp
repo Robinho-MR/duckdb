@@ -356,16 +356,19 @@ unique_ptr<BaseTableRef> PEGTransformerFactory::TransformUnqualifiedBaseTableNam
 
 Identifier PEGTransformerFactory::TransformSchemaQualification(PEGTransformer &transformer,
                                                                const Identifier &schema_name) {
+	VerifyNonEmptyName(schema_name, "schema");
 	return schema_name;
 }
 
 Identifier PEGTransformerFactory::TransformReservedSchemaQualification(PEGTransformer &transformer,
                                                                        const Identifier &reserved_schema_name) {
+	VerifyNonEmptyName(reserved_schema_name, "schema");
 	return reserved_schema_name;
 }
 
 Identifier PEGTransformerFactory::TransformCatalogQualification(PEGTransformer &transformer,
                                                                 const Identifier &catalog_name) {
+	VerifyNonEmptyName(catalog_name, "catalog");
 	return catalog_name;
 }
 
@@ -1638,9 +1641,6 @@ JoinQualifier PEGTransformerFactory::TransformUsingClause(PEGTransformer &transf
                                                           const vector<Identifier> &column_name) {
 	JoinQualifier result;
 	for (auto &col_identifier : column_name) {
-		if (col_identifier.empty()) {
-			throw ParserException("Column identifier cannot be empty");
-		}
 		result.using_columns.push_back(col_identifier);
 	}
 	return result;

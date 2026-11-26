@@ -938,7 +938,7 @@ CatalogPushdownResult RemotePushdownOptimizer::RewriteTableFunctionOnly(TableFun
 CatalogPushdownResult RemotePushdownOptimizer::RewriteTableFunctionArgument(unique_ptr<ParsedExpression> &arg) {
 	// folding names the constant after the expression it replaces, but the binder reads an alias on a
 	// table function argument as a named parameter - so only an alias the user wrote may survive
-	const bool user_aliased = !arg->GetAlias().empty();
+	const bool user_aliased = arg->HasAlias();
 	auto result = Rewrite(arg);
 	if (!user_aliased) {
 		arg->SetAlias(Identifier());
@@ -1208,7 +1208,7 @@ RemotePushdownOptimizer::TryConstantFold(unique_ptr<ParsedExpression> &expr) {
 	}
 	auto folded = ConstantExpression::FromValue(fold_result);
 	// preserve the name DuckDB would generate for the original expression
-	folded->SetAlias(expr->GetAlias().empty() ? Identifier(expr->ToString()) : expr->GetAlias());
+	folded->SetAlias(!expr->HasAlias() ? Identifier(expr->ToString()) : expr->GetAlias());
 	folded->SetQueryLocation(expr->GetQueryLocation());
 	expr = std::move(folded);
 	return ConstantFoldResult::FOLDED;

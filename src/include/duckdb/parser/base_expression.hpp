@@ -63,9 +63,9 @@ public:
 		return query_location.IsValid();
 	}
 
-	//! Returns true if the expression has a non-empty alias
+	//! Returns true if the expression has an alias (which can be the empty identifier)
 	bool HasAlias() const {
-		return !alias.empty();
+		return alias.IsSet();
 	}
 
 	//! Returns the alias of the expression
@@ -83,6 +83,18 @@ public:
 		alias.clear();
 	}
 
+	//! Whether the alias is set to the empty identifier (serialized separately, as an empty alias otherwise means none)
+	bool HasEmptyAlias() const {
+		return alias.IsSet() && alias.empty();
+	}
+
+	//! A deserialized empty alias is only an alias if it was serialized as one
+	void FinalizeDeserializedAlias(bool has_empty_alias) {
+		if (alias.empty() && !has_empty_alias) {
+			alias.clear();
+		}
+	}
+
 protected:
 	//! Type of the expression
 	ExpressionType type;
@@ -90,7 +102,7 @@ protected:
 	//! The expression class of the node
 	ExpressionClass expression_class;
 
-	//! The alias of the expression,
+	//! The alias of the expression (unset if the expression has no alias)
 	Identifier alias;
 
 	//! The source location in the query (if any)

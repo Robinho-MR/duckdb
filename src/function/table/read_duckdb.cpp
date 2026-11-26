@@ -148,11 +148,11 @@ string DuckDBFileReaderOptions::GetCandidates(const vector<reference<TableCatalo
 			candidate_list.push_back(table.name.GetIdentifierName());
 		}
 	}
-	string search_term = schema_name.GetIdentifierName();
+	string search_term = schema_name.IsSet() ? schema_name.GetIdentifierName() : string();
 	if (!search_term.empty()) {
 		search_term += ".";
 	}
-	search_term += table_name;
+	search_term += table_name.IsSet() ? table_name.GetIdentifierName() : string();
 	return StringUtil::CandidatesErrorMessage(candidate_list, search_term, "Candidates");
 }
 

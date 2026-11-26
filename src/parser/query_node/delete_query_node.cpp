@@ -31,7 +31,7 @@ string DeleteQueryNode::ToString() const {
 				result += ", ";
 			}
 			auto col = returning_list[i]->ToString();
-			if (!returning_list[i]->GetAlias().empty()) {
+			if (returning_list[i]->HasAlias()) {
 				col += StringUtil::Format(" AS %s", SQLIdentifier(returning_list[i]->GetAlias()));
 			}
 			result += col;

@@ -544,7 +544,7 @@ private:
 			break;
 		case ConversionType::RESTORE_ORIGINAL: {
 			auto &info = expression_info[info_idx++];
-			alias = Identifier(std::move(info.first));
+			alias = std::move(info.first);
 			query_location = info.second;
 			break;
 		}
@@ -600,7 +600,7 @@ private:
 	vector<ColumnIndex> column_ids;
 	vector<column_t> chunk_column_ids;
 	vector<ProjectionIndex> projection_ids;
-	vector<pair<string, optional_idx>> expression_info;
+	vector<pair<Identifier, optional_idx>> expression_info;
 	vector<unique_ptr<LogicalOperator>> children;
 };
 

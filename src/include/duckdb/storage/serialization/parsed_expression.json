@@ -6,6 +6,7 @@
       "type"
     ],
     "finalize_deserialization": [
+      "result->FinalizeDeserializedAlias(has_empty_alias);",
       "result->VerifyDeserialized();"
     ],
     "includes": [
@@ -49,6 +50,17 @@
         "property": "query_location.length",
         "default": "0",
         "version": "v2.0.0",
+        "equals_skip": true,
+        "hash_skip": true
+      },
+      {
+        "id": 105,
+        "name": "has_empty_alias",
+        "type": "bool",
+        "serialize_property": "HasEmptyAlias()",
+        "default": "false",
+        "version": "v2.1.0",
+        "deserialize_skip_assign": true,
         "equals_skip": true,
         "hash_skip": true
       }

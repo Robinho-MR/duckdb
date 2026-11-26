@@ -1,11 +1,16 @@
 #include "duckdb/common/identifier.hpp"
 
+#include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/uuid.hpp"
 
 #include <ostream>
 
 namespace duckdb {
+
+void Identifier::ThrowUnsetIdentifier() {
+	throw InternalException("Attempted to get the name of an unset Identifier");
+}
 
 Identifier GenerateInternalName(const char *prefix) {
 	return Identifier(prefix + UUID::ToString(UUID::GenerateRandomUUID()));
@@ -24,27 +29,27 @@ hash_t Identifier::Hash() const {
 }
 
 bool operator==(const Identifier &a, const Identifier &b) {
-	return StringUtil::CIEquals(a.GetIdentifierName(), b.GetIdentifierName());
+	return StringUtil::CIEquals(a.value, b.value);
 }
 bool operator==(const Identifier &a, const string &b) {
-	return StringUtil::CIEquals(a.GetIdentifierName(), b);
+	return StringUtil::CIEquals(a.value, b);
 }
 bool operator==(const string &a, const Identifier &b) {
-	return StringUtil::CIEquals(a, b.GetIdentifierName());
+	return StringUtil::CIEquals(a, b.value);
 }
 bool operator==(const Identifier &a, const char *b) {
-	return StringUtil::CIEquals(a.GetIdentifierName(), b);
+	return StringUtil::CIEquals(a.value, b);
 }
 bool operator==(const char *a, const Identifier &b) {
-	return StringUtil::CIEquals(a, b.GetIdentifierName());
+	return StringUtil::CIEquals(a, b.value);
 }
 
 bool operator<(const Identifier &a, const Identifier &b) {
-	return StringUtil::CILessThan(a.GetIdentifierName(), b.GetIdentifierName());
+	return StringUtil::CILessThan(a.value, b.value);
 }
 
 std::ostream &operator<<(std::ostream &os, const Identifier &id) {
-	return os << id.GetIdentifierName();
+	return os << id.value;
 }
 
 } // namespace duckdb

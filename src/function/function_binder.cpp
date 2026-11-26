@@ -42,11 +42,11 @@ static bool TrySplitArguments(vector<pair<Identifier, unique_ptr<Expression>>> &
                               vector<unique_ptr<Expression>> &positional,
                               vector<pair<Identifier, unique_ptr<Expression>>> &named) {
 	idx_t positional_count = 0;
-	while (positional_count < arguments.size() && arguments[positional_count].first.empty()) {
+	while (positional_count < arguments.size() && !arguments[positional_count].first.IsSet()) {
 		positional_count++;
 	}
 	for (idx_t i = positional_count; i < arguments.size(); i++) {
-		if (arguments[i].first.empty()) {
+		if (!arguments[i].first.IsSet()) {
 			return false;
 		}
 	}
@@ -62,7 +62,7 @@ static bool TrySplitArguments(vector<pair<Identifier, unique_ptr<Expression>>> &
 }
 
 void FunctionCallArguments::AddArgument(FunctionCallArgument argument) {
-	if (argument.name.empty()) {
+	if (!argument.name.IsSet()) {
 		if (positional_count != arguments.size()) {
 			throw InternalException("FunctionCallArguments: a positional argument cannot follow a named one");
 		}
@@ -609,7 +609,7 @@ static bool AnyOverloadSupportsImplicitArgumentNames(const BaseFunctionSet &func
 static ErrorData PositionalAfterNamedArgumentError(const vector<pair<Identifier, unique_ptr<Expression>>> &arguments) {
 	bool seen_named = false;
 	for (const auto &[name, expr] : arguments) {
-		if (!name.empty()) {
+		if (name.IsSet()) {
 			seen_named = true;
 			continue;
 		}
@@ -658,7 +658,7 @@ FunctionBinder::SelectFunctionFromArguments(const BaseFunctionSet &functions,
 	if (implicit_names) {
 		// Attempt to salvage the call by implicitly naming the positional arguments and retrying again
 		for (auto &[name, expr] : arguments) {
-			if (name.empty()) {
+			if (!name.IsSet()) {
 				name = expr->GetAlias();
 			}
 		}
@@ -1094,7 +1094,7 @@ unique_ptr<Expression> FunctionBinder::BindScalarFunction(const ScalarFunctionCa
 	vector<pair<Identifier, unique_ptr<Expression>>> arguments;
 	arguments.reserve(children.size());
 	for (auto &child : children) {
-		arguments.emplace_back(string(), std::move(child));
+		arguments.emplace_back(Identifier(), std::move(child));
 	}
 	return BindScalarFunction(func, std::move(arguments), error, is_operator, binder, std::move(alias), query_location);
 }

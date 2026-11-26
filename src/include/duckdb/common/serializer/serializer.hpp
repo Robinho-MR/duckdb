@@ -391,7 +391,7 @@ protected:
 	virtual void WriteDataPtr(const_data_ptr_t ptr, idx_t count) = 0;
 	//! Identifiers are serialized identically to a plain string (preserving the original casing)
 	void WriteValue(const Identifier &value) {
-		WriteValue(value.GetIdentifierName());
+		WriteValue(value.IsSet() ? value.GetIdentifierName() : string());
 	}
 	void WriteValue(LogicalIndex value) {
 		WriteValue(value.index);

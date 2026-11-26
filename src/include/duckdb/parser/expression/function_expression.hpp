@@ -34,7 +34,19 @@ public:
 	}
 
 	bool HasName() const {
-		return !name.empty();
+		return name.IsSet();
+	}
+
+	//! Whether the argument is named with the empty identifier
+	bool HasEmptyName() const {
+		return name.IsSet() && name.empty();
+	}
+
+	//! A deserialized empty name only names the argument if it was serialized as one
+	void FinalizeDeserializedName(bool has_empty_name) {
+		if (name.empty() && !has_empty_name) {
+			name.clear();
+		}
 	}
 
 	unique_ptr<ParsedExpression> &GetExpressionMutable() {
@@ -61,7 +73,7 @@ public:
 	hash_t Hash() const;
 
 	string ToString() const {
-		if (name.empty()) {
+		if (!name.IsSet()) {
 			return expression->ToString();
 		}
 		return StringUtil::Format("%s := %s", SQLIdentifier(name), expression->ToString());

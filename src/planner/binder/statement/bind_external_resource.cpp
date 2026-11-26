@@ -34,7 +34,7 @@ BoundStatement Binder::Bind(ExternalResourceStatement &stmt) {
 
 	BoundExternalResource data;
 	data.operation = stmt.operation;
-	data.name = stmt.name.GetIdentifierName();
+	data.name = stmt.name.IsSet() ? stmt.name.GetIdentifierName() : string();
 
 	// A durable resource is registered under its name, so every verb needs one.
 	if (data.name.empty()) {

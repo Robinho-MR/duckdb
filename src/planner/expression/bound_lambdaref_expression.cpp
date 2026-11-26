@@ -38,7 +38,7 @@ bool BoundLambdaRefExpression::Equals(const BaseExpression &other_p) const {
 }
 
 string BoundLambdaRefExpression::ToString() const {
-	if (!alias.empty()) {
+	if (HasAlias()) {
 		return alias.GetIdentifierName();
 	}
 	return "#[" + to_string(binding.table_index.index) + "." + to_string(binding.column_index) + "." +

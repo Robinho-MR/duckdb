@@ -57,7 +57,7 @@ const Identifier &ColumnRefExpression::GetColumnName() const {
 }
 
 Identifier ColumnRefExpression::GetName() const {
-	return !alias.empty() ? alias : column_names.back();
+	return HasAlias() ? alias : column_names.back();
 }
 
 string ColumnRefExpression::ToString() const {

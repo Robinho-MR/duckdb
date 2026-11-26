@@ -3,13 +3,6 @@
 
 namespace duckdb {
 
-bool ParserTokenizerBehavior::IsEmptyQuotedIdentifier(const string &sql, idx_t start, idx_t end, TokenType type) {
-	if (type != TokenType::IDENTIFIER || end != start + 2) {
-		return false;
-	}
-	return (sql[start] == '"' && sql[start + 1] == '"') || (sql[start] == '`' && sql[start + 1] == '`');
-}
-
 ParserTokenizerBehavior::ParserTokenizerBehavior(const string &sql) : TokenizerBehavior(sql) {
 }
 
@@ -18,9 +11,6 @@ void ParserTokenizerBehavior::PushToken(idx_t start, idx_t end, TokenType type, 
 		auto comment = sql.substr(start, end - start);
 		throw ParserException::SyntaxError(sql, "unterminated /* comment at or near \"" + comment + "\"",
 		                                   optional_idx(start));
-	}
-	if (IsEmptyQuotedIdentifier(sql, start, end, type)) {
-		throw ParserException::SyntaxError(sql, "zero-length delimited identifier", optional_idx(start));
 	}
 	TokenizerBehavior::PushToken(start, end, type, unterminated);
 }

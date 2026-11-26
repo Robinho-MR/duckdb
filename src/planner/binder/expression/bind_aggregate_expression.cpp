@@ -241,9 +241,9 @@ BindResult BaseSelectBinder::BindAggregate(FunctionExpression &aggr, AggregateFu
 		if (aggr.GetArguments().size() < ordered_set_agg) {
 			for (auto &bound_order : bound_orders) {
 				if (order_sensitive) {
-					arguments.emplace_back(string(), bound_order->Copy());
+					arguments.emplace_back(Identifier(), bound_order->Copy());
 				} else {
-					arguments.emplace_back(string(), std::move(bound_order));
+					arguments.emplace_back(Identifier(), std::move(bound_order));
 				}
 			}
 		}
@@ -256,7 +256,7 @@ BindResult BaseSelectBinder::BindAggregate(FunctionExpression &aggr, AggregateFu
 		auto &arg = aggr.GetArgumentsMutable()[arg_idx];
 		auto bound_arg = std::move(bound_arguments[arg_idx]);
 		if (aggr.IsLegacyFunctionCall()) {
-			arguments.emplace_back(string(), std::move(bound_arg));
+			arguments.emplace_back(Identifier(), std::move(bound_arg));
 		} else {
 			arguments.emplace_back(arg.GetName(), std::move(bound_arg));
 		}
@@ -345,7 +345,7 @@ BindResult BaseSelectBinder::BindAggregate(FunctionExpression &aggr, AggregateFu
 
 	// now create a column reference referring to the aggregate
 	auto colref = make_uniq<BoundColumnRefExpression>(
-	    aggr.GetAlias().empty() ? Identifier(bound_aggr.ToString()) : aggr.GetAlias(), bound_aggr.GetReturnType(),
+	    !aggr.HasAlias() ? Identifier(bound_aggr.ToString()) : aggr.GetAlias(), bound_aggr.GetReturnType(),
 	    ColumnBinding(node.aggregate_index, aggr_index), depth);
 	// move the aggregate expression into the set of bound aggregates
 	return BindResult(std::move(colref));
