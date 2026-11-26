@@ -808,3 +808,87 @@ TEST_CASE("Stable C++API: table function to string callback with user data, prof
 	REQUIRE_THROWS_WITH(conn.Execute("SELECT i FROM cpp_describe_fails(2)").Drain(),
 	                    Catch::Contains("cannot describe the scan"));
 }
+
+namespace {
+
+// cpp_yield(count, yields, yield_with_rows): one row per call, and `yields` calls that yield without rows between
+// them. With yield_with_rows the calls that produce a row yield as well.
+struct YieldBind {
+	int64_t count;
+	int64_t yields;
+	bool yield_with_rows;
+};
+struct YieldGlobal {
+	int64_t next = 0;
+	int64_t pending_yields = 0;
+};
+
+std::atomic<int64_t> yield_exec_calls {0};
+
+void YieldBindFunction(TableFunction::BindInput &input) {
+	auto &factory = input.GetContext().GetFactory();
+	input.AddResultColumn("v", factory.ParseType("BIGINT"));
+	input.SetBindData<YieldBind>(YieldBind {input.GetConstantArgument(0).Get<int64_t>(),
+	                                        input.GetConstantArgument(1).Get<int64_t>(),
+	                                        input.GetConstantArgument(2).Get<bool>()});
+}
+
+void YieldInitGlobal(TableFunction::InitGlobalInput &input) {
+	input.SetGlobalState<YieldGlobal>();
+}
+
+void YieldExec(TableFunction::ExecInput &input) {
+	const auto &bind = input.GetBindData<YieldBind>();
+	auto &global = input.GetGlobalState<YieldGlobal>();
+	yield_exec_calls++;
+	auto vec = input.GetOutputChunk().GetVector(0);
+	if (global.pending_yields > 0) {
+		global.pending_yields--;
+		vec.SetSize(0);
+		input.Yield();
+		return;
+	}
+	if (global.next >= bind.count) {
+		vec.SetSize(0);
+		return;
+	}
+	vec.GetDataMutable<int64_t>()[0] = global.next++;
+	vec.SetSize(1);
+	global.pending_yields = bind.yields;
+	if (bind.yield_with_rows) {
+		input.Yield();
+	}
+}
+
+} // namespace
+
+TEST_CASE("Stable C++API: table function yields without ending the scan", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	auto &factory = conn.GetFactory();
+	const auto bigint = factory.ParseType("BIGINT");
+
+	auto function = TableFunction::Create(factory);
+	function.SetName("cpp_yield").WithSignature([&](FunctionSignature &sig) {
+		sig.AddParameter("count", bigint);
+		sig.AddParameter("yields", bigint);
+		sig.AddParameter("yield_with_rows", factory.ParseType("BOOLEAN"));
+	});
+	function.SetBindCallback(YieldBindFunction).SetInitGlobalCallback(YieldInitGlobal).SetExecCallback(YieldExec);
+	conn.Register(function);
+
+	for (auto strategy : {"DEFAULT", "SYNCHRONOUS"}) {
+		INFO(strategy);
+		conn.Execute(std::string("SET debug_physical_table_scan_execution_strategy=") + strategy).Drain();
+
+		// an empty batch after a yield does not end the scan: the rows after it are still produced
+		yield_exec_calls = 0;
+		REQUIRE(CollectBigints(conn.Execute("SELECT * FROM cpp_yield(3, 2, false)")) == std::vector<int64_t> {0, 1, 2});
+		// three rows, two yields after each, and the call ending the scan
+		REQUIRE(yield_exec_calls == 10);
+
+		// yielding with rows returns them
+		REQUIRE(CollectBigints(conn.Execute("SELECT * FROM cpp_yield(3, 0, true)")) == std::vector<int64_t> {0, 1, 2});
+		REQUIRE(CollectBigints(conn.Execute("SELECT * FROM cpp_yield(0, 0, false)")).empty());
+	}
+}

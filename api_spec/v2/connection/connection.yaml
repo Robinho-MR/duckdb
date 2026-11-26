@@ -42,7 +42,8 @@ functions:
       changes and the context's temporary objects, and what it changes is
       part of that transaction. A statement of the connection that fails
       invalidates the transaction as a failure of the context's own statement
-      would.
+      would. It starts with the search path and default database of the
+      context, so unqualified names resolve as they do in the callback.
 
       The connection cannot start, commit or roll back a transaction: those
       statements fail with ERROR_DATABASE_TRANSACTION, and like any failing

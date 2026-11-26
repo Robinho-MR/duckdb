@@ -9,6 +9,7 @@
 #include "duckdb/execution/partition_info.hpp"
 #include "duckdb/function/partition_stats.hpp"
 #include "duckdb/main/profiler/metrics.hpp"
+#include "duckdb/parallel/async_result.hpp"
 #include "duckdb/parallel/pipeline.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
@@ -58,6 +59,10 @@ public:
 		const auto &other_data = other.Cast<CV2TableFunctionData>();
 		return handle && other_data.handle && handle->Equals(*other_data.handle);
 	}
+	//! A function of the C API is bound from its call only: its arguments and the context
+	auto IsIdentifiedByCall() const -> bool override {
+		return true;
+	}
 };
 
 class CV2TableGlobalState final : public GlobalTableFunctionState {
@@ -80,6 +85,8 @@ public:
 	bool claimed_externally = false;
 	//! Whether this thread has claimed a batch it has not exhausted yet
 	bool batch_claimed = false;
+	//! Whether the last exec callback yielded: an empty batch then does not end the scan
+	bool yielded = false;
 	//! Written into by the exec callback when the scan requests no columns, as the function produces its rows through
 	//! its first column
 	unique_ptr<DataChunk> row_chunk;
@@ -213,6 +220,7 @@ public:
 	const vector<column_t> *in_scan_columns = nullptr;
 
 	DataChunk *output = nullptr;
+	bool out_yield = false;
 };
 
 static auto Convert(duckdb_v2_table_function_exec_info_handle info) -> CV2TableExecInfo * {
@@ -881,7 +889,35 @@ static auto CV2TableClaimBatch(ClientContext &context, TableFunctionInput &input
 
 static auto CV2TableExecBatch(ClientContext &context, TableFunctionInput &input, DataChunk &output) -> void;
 
+static auto CV2TableExecClaimed(ClientContext &context, TableFunctionInput &input, DataChunk &output) -> void;
+
+//! A task that does nothing: scheduling it hands the thread back to the scheduler, and the scan resumes after it
+class CV2TableYieldTask : public AsyncTask {
+public:
+	void Execute() override {
+	}
+};
+
 static auto CV2TableExec(ClientContext &context, TableFunctionInput &input, DataChunk &output) -> void {
+	auto &local_state = input.local_state->Cast<CV2TableLocalState>();
+	while (true) {
+		local_state.yielded = false;
+		CV2TableExecClaimed(context, input, output);
+		if (!local_state.yielded || output.size() > 0) {
+			return;
+		}
+		if (input.results_execution_mode == AsyncResultsExecutionMode::TASK_EXECUTOR) {
+			vector<unique_ptr<AsyncTask>> tasks;
+			tasks.push_back(make_uniq<CV2TableYieldTask>());
+			input.async_result = AsyncResult(std::move(tasks));
+			return;
+		}
+		// a synchronous scan cannot hand the thread back, it calls the function again
+		context.FastInterruptCheck();
+	}
+}
+
+static auto CV2TableExecClaimed(ClientContext &context, TableFunctionInput &input, DataChunk &output) -> void {
 	const auto &info = *input.bind_data->Cast<CV2TableFunctionData>().info;
 	if (!info.claim_batch_cb) {
 		CV2TableExecBatch(context, input, output);
@@ -899,7 +935,7 @@ static auto CV2TableExec(ClientContext &context, TableFunctionInput &input, Data
 			return;
 		}
 		CV2TableExecBatch(context, input, output);
-		if (output.size() > 0) {
+		if (output.size() > 0 || local_state.yielded) {
 			return;
 		}
 		local_state.batch_claimed = false;
@@ -980,6 +1016,7 @@ static auto CV2TableExecBatchOnce(ClientContext &context, TableFunctionInput &in
 	if (err.HasError()) {
 		err.ThrowAsException();
 	}
+	local_state.yielded = args.out_yield;
 
 	// The vector write API sizes per vector, while the engine reads the chunk's cardinality. Callers typically size
 	// only the first vector and write the rest through direct buffer writes, so take the first vector's size as the
@@ -1443,6 +1480,14 @@ DUCKDB_V2_ERROR duckdb_v2_table_function_get_signature(duckdb_v2_table_function_
 	return WithErrorHandler(err, [&]() { *sig = Convert(&Convert(function)->signature); });
 }
 
+DUCKDB_V2_ERROR duckdb_v2_table_function_set_property(duckdb_v2_table_function_handle function,
+                                                      DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
+                                                      DUCKDB_V2_FUNCTION_PROPERTY_VALUE value,
+                                                      duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() { SetTableFunctionProperty(Convert(function)->stability, key, value); });
+}
+
 DUCKDB_V2_ERROR duckdb_v2_table_function_set_user_data(duckdb_v2_table_function_handle function, duckdb_v2_opaque *data,
                                                        duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(function);
@@ -1736,6 +1781,12 @@ DUCKDB_V2_ERROR duckdb_v2_table_function_exec_get_output_chunk(duckdb_v2_table_f
 	DUCKDB_CHECK_ARG(info);
 	DUCKDB_CHECK_ARG(chunk);
 	return WithErrorHandler(err, [&]() { *chunk = Convert(Convert(info)->output); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_exec_yield(duckdb_v2_table_function_exec_info_handle info,
+                                                    duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	return WithErrorHandler(err, [&]() { Convert(info)->out_yield = true; });
 }
 
 DUCKDB_V2_ERROR duckdb_v2_table_function_exec_get_column_count(duckdb_v2_table_function_exec_info_handle info,

@@ -516,6 +516,9 @@ void SetScalarFunctionProperty(FunctionProperties &props, DUCKDB_V2_FUNCTION_PRO
                                DUCKDB_V2_FUNCTION_PROPERTY_VALUE value);
 void SetAggregateFunctionProperty(AggregateFunctionProperties &props, DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
                                   DUCKDB_V2_FUNCTION_PROPERTY_VALUE value);
+//! Table functions take the stability only
+void SetTableFunctionProperty(FunctionStability &stability, DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
+                              DUCKDB_V2_FUNCTION_PROPERTY_VALUE value);
 //! Set / get a generic, named function property; shared by the scalar and aggregate entry points
 void SetGenericFunctionProperty(FunctionProperties &props, const char *name, idx_t name_length, const Value &value);
 //! Returns an owned copy of the property value, or nullptr if the property is not set
