@@ -62,6 +62,13 @@ public:
 	//! The current transaction if it was shared under the given identifier, otherwise null.
 	//! Safe to call from other connections.
 	shared_ptr<MetaTransaction> GetSharedTransaction(const string &share_id);
+	//! Continues in the transaction active on `source` (only outside of a transaction). The connection then cannot
+	//! end the transaction: it stays in it until it is closed, and the transaction cannot commit while it is open.
+	void InheritTransaction(ClientContext &source);
+	//! Whether the connection inherited its transaction (see InheritTransaction)
+	bool IsInherited() const {
+		return inherited;
+	}
 
 	idx_t GetActiveQuery();
 	void ResetActiveQuery();
@@ -83,6 +90,8 @@ private:
 	bool auto_commit;
 	TransactionInvalidationPolicy invalidation_policy = TransactionInvalidationPolicy::STANDARD_POLICY;
 	bool auto_rollback = false;
+	//! Whether the current transaction was inherited from another connection
+	bool inherited = false;
 
 	//! Guards replacing current_transaction against reads from other connections (GetSharedTransaction)
 	mutex current_transaction_lock;
@@ -91,10 +100,9 @@ private:
 	atomic<transaction_t> active_query_id = MAXIMUM_QUERY_ID;
 	ErrorData autocheckpoint_error;
 
-	//! Leaves the transaction. Returns true if the caller is the last participant and has to end it
-	bool LeaveTransaction(MetaTransaction &transaction, bool commit, bool &commit_result);
 	void SetCurrentTransaction(shared_ptr<MetaTransaction> transaction);
 	shared_ptr<MetaTransaction> TakeCurrentTransaction();
+	shared_ptr<MetaTransaction> GetCurrentTransaction();
 	void RollbackTransaction(const shared_ptr<MetaTransaction> &transaction, optional_ptr<ErrorData> error);
 
 	TransactionContext(const TransactionContext &) = delete;
