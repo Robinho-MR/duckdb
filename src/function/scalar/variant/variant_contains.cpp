@@ -252,6 +252,18 @@ private:
 	optional<VariantObjectMatch> objects;
 };
 
+//! Values of aliased types only match values of the same type
+bool AliasesMatch(const VariantNode &haystack, const VariantNode &needle) {
+	if (haystack.HasAlias() != needle.HasAlias()) {
+		return false;
+	}
+	if (!haystack.HasAlias()) {
+		return true;
+	}
+	// the same type as the comparator: the name of the type, including its modifiers
+	return haystack.GetType().ToString() == needle.GetType().ToString();
+}
+
 bool IsArrayOrObject(VariantComparisonType category) {
 	return category == VariantComparisonType::ARRAY || category == VariantComparisonType::OBJECT;
 }
@@ -282,7 +294,7 @@ bool ChildrenMatch(const VariantNode &haystack, const VariantNode &needle, Varia
 		const auto haystack_child_type = haystack_child.GetTypeId();
 		const auto child_category = GetVariantComparisonType(haystack_child_type);
 
-		if (child_category != needle_child.category) {
+		if (child_category != needle_child.category || !AliasesMatch(haystack_child, needle_child_node)) {
 			frame.PairCompared(false);
 			continue;
 		}
@@ -300,7 +312,7 @@ bool ChildrenMatch(const VariantNode &haystack, const VariantNode &needle, Varia
 bool MatchesNeedle(const VariantNode &haystack, LogicalTypeId haystack_type, VariantNeedle &needle,
                    vector<VariantMatchFrame> &frames) {
 	const auto category = GetVariantComparisonType(haystack_type);
-	if (category != needle.category) {
+	if (category != needle.category || !AliasesMatch(haystack, needle.node)) {
 		return false;
 	}
 	if (IsArrayOrObject(category)) {

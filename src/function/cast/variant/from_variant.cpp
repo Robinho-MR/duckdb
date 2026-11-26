@@ -20,6 +20,8 @@
 #include "duckdb/common/types/decimal.hpp"
 #include "duckdb/common/types/string_heap.hpp"
 #include "duckdb/common/types/uuid.hpp"
+#include "duckdb/common/types/type_manager.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/function/cast/vector_cast_helpers.hpp"
 #include "yyjson.hpp"
 
@@ -33,10 +35,16 @@ namespace duckdb {
 
 namespace {
 
+//! The types the ALIASED type names resolve to, kept across the chunks a thread casts
+struct FromVariantLocalState : public FunctionLocalState {
+	case_insensitive_map_t<LogicalType> resolved_types;
+};
+
 struct FromVariantConversionData {
 public:
-	FromVariantConversionData(RecursiveUnifiedVectorFormat &variant_format, optional_ptr<ClientContext> client)
-	    : variant(variant_format), client(client) {
+	FromVariantConversionData(RecursiveUnifiedVectorFormat &variant_format, optional_ptr<ClientContext> client,
+	                          case_insensitive_map_t<LogicalType> &resolved_types)
+	    : variant(variant_format), client(client), resolved_types(resolved_types) {
 	}
 
 	optional<Value> TryCastAs(const Value &value, const LogicalType &target_type, string *error_message = nullptr) {
@@ -44,6 +52,20 @@ public:
 			return value.TryCastAs(*client, target_type, error_message);
 		}
 		return value.DefaultTryCastAs(target_type, error_message);
+	}
+
+	//! Resolves the type of an ALIASED value (e.g. "INET") through the catalog. Without a client the type can't be
+	//! resolved, and INVALID is returned.
+	const LogicalType &ResolveAliasedType(const string &type_name) {
+		auto entry = resolved_types.find(type_name);
+		if (entry != resolved_types.end()) {
+			return entry->second;
+		}
+		LogicalType result(LogicalTypeId::INVALID);
+		if (client && client->transaction.HasActiveTransaction()) {
+			result = TypeManager::Get(*client).ParseLogicalType(type_name, *client);
+		}
+		return resolved_types.emplace(type_name, std::move(result)).first->second;
 	}
 
 public:
@@ -55,6 +77,8 @@ public:
 	optional<bool> varchar_cast_override;
 	//! If unsuccessful - the error of the conversion
 	string error;
+	//! The resolved types of the ALIASED type names
+	case_insensitive_map_t<LogicalType> &resolved_types;
 };
 
 struct EmptyConversionPayloadFromVariant {};
@@ -200,17 +224,133 @@ struct VariantDecimalConversion {
 	}
 };
 
+static bool CastVariant(FromVariantConversionData &conversion_data, Vector &result, const SelectionVector &sel,
+                        idx_t offset, idx_t count, optional_idx row);
+
+//! The name of the type of an ALIASED value, including its modifiers (e.g. "INET" or "BOUNDED(10)")
+static string GetAliasedTypeName(const VariantAliasedData &aliased_data) {
+	return VariantUtils::ApplyAlias(LogicalType::ANY, aliased_data.alias, aliased_data.extension_info).ToString();
+}
+
+//! Whether the value is or contains an ALIASED value
+static bool ContainsAliased(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_index, idx_t depth) {
+	if (depth >= Variant::MAX_NESTING_DEPTH) {
+		throw InvalidInputException("VARIANT exceeds maximum recursion depth of %d", Variant::MAX_NESTING_DEPTH);
+	}
+	auto type_id = variant.GetTypeId(row, values_index);
+	if (type_id == VariantLogicalType::ALIASED) {
+		return true;
+	}
+	if (type_id != VariantLogicalType::OBJECT && type_id != VariantLogicalType::ARRAY) {
+		return false;
+	}
+	auto nested_data = VariantUtils::DecodeNestedData(variant, row, values_index);
+	for (idx_t i = 0; i < nested_data.child_count; i++) {
+		if (ContainsAliased(variant, row, variant.GetValuesIndex(row, nested_data.children_idx + i), depth + 1)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static Value ConvertVariantToResolvedValue(FromVariantConversionData &conversion_data, idx_t row, uint32_t values_index,
+                                           idx_t depth);
+
+//! Converts an ALIASED value to a Value of its (resolved) named type, or of its underlying type if it can't be resolved
+static Value ConvertAliasedToValue(FromVariantConversionData &conversion_data, idx_t row, uint32_t values_index,
+                                   idx_t depth, optional_ptr<const LogicalType> target_type = nullptr) {
+	auto &variant = conversion_data.variant;
+	auto aliased_data = VariantUtils::DecodeAliasedData(variant, row, values_index);
+	auto child_index = variant.GetValuesIndex(row, aliased_data.children_idx);
+
+	auto type_name = GetAliasedTypeName(aliased_data);
+	LogicalType type(LogicalTypeId::INVALID);
+	if (target_type && StringUtil::CIEquals(target_type->ToString(), type_name)) {
+		type = *target_type;
+	} else {
+		type = conversion_data.ResolveAliasedType(type_name);
+	}
+	if (type.id() != LogicalTypeId::INVALID && type.id() != LogicalTypeId::VARIANT) {
+		Vector converted(type, 1);
+		SelectionVector child_sel(1);
+		child_sel.set_index(0, child_index);
+		auto error = conversion_data.error;
+		if (CastVariant(conversion_data, converted, child_sel, 0, 1, optional_idx(row))) {
+			return converted.GetValue(0);
+		}
+		// the value does not convert to the type it was stored as - use the underlying value instead
+		conversion_data.error = std::move(error);
+	}
+	return ConvertVariantToResolvedValue(conversion_data, row, child_index, depth + 1);
+}
+
+//! Converts a VARIANT value to a Value, ALIASED values are converted to their named type (when it can be resolved)
+static Value ConvertVariantToResolvedValue(FromVariantConversionData &conversion_data, idx_t row, uint32_t values_index,
+                                           idx_t depth) {
+	auto &variant = conversion_data.variant;
+	if (!variant.RowIsValid(row) || !ContainsAliased(variant, row, values_index, depth)) {
+		return VariantUtils::ConvertVariantToValue(variant, row, values_index);
+	}
+	auto type_id = variant.GetTypeId(row, values_index);
+	if (type_id == VariantLogicalType::ALIASED) {
+		return ConvertAliasedToValue(conversion_data, row, values_index, depth);
+	}
+	auto nested_data = VariantUtils::DecodeNestedData(variant, row, values_index);
+	if (type_id == VariantLogicalType::ARRAY) {
+		// mirrors ValueConverter::VisitArray
+		vector<Value> items;
+		for (idx_t i = 0; i < nested_data.child_count; i++) {
+			auto child_index = variant.GetValuesIndex(row, nested_data.children_idx + i);
+			items.push_back(ConvertVariantToResolvedValue(conversion_data, row, child_index, depth + 1));
+		}
+		for (idx_t i = 1; i < items.size(); i++) {
+			if (items[0].type() != items[i].type()) {
+				return Value::LIST(LogicalType::VARIANT(), std::move(items));
+			}
+		}
+		auto child_type = items[0].type();
+		return Value::LIST(child_type, std::move(items));
+	}
+	// mirrors ValueConverter::VisitObject
+	D_ASSERT(type_id == VariantLogicalType::OBJECT);
+	child_list_t<Value> children;
+	for (idx_t i = 0; i < nested_data.child_count; i++) {
+		auto child_index = variant.GetValuesIndex(row, nested_data.children_idx + i);
+		auto &key = variant.GetKey(row, variant.GetKeysIndex(row, nested_data.children_idx + i));
+		children.emplace_back(key.GetString(),
+		                      ConvertVariantToResolvedValue(conversion_data, row, child_index, depth + 1));
+	}
+	std::stable_sort(children.begin(), children.end(),
+	                 [](const std::pair<Identifier, Value> &lhs, const std::pair<Identifier, Value> &rhs) {
+		                 return lhs.first.GetIdentifierName() < rhs.first.GetIdentifierName();
+	                 });
+	if (children.size() == 1 && children[0].first.empty()) {
+		auto &child = children[0].second;
+		return Value::MAP(LogicalType::VARCHAR, child.type(), {Value("")}, {child});
+	}
+	return Value::STRUCT(std::move(children));
+}
+
 //! Casts a single value by converting it to a Value first
 static bool CastVariantValue(FromVariantConversionData &conversion_data, Vector &result, idx_t result_index,
                              idx_t row_index, uint32_t values_index) {
 	auto &target_type = result.GetType();
-	auto value = VariantUtils::ConvertVariantToValue(conversion_data.variant, row_index, values_index);
-	auto cast_value = conversion_data.TryCastAs(value, target_type);
+	Value value;
+	if (conversion_data.variant.GetTypeId(row_index, values_index) == VariantLogicalType::ALIASED) {
+		value = ConvertAliasedToValue(conversion_data, row_index, values_index, 0, target_type);
+	} else {
+		value = ConvertVariantToResolvedValue(conversion_data, row_index, values_index, 0);
+	}
+	auto cast_value =
+	    value.type() == target_type ? optional<Value>(value) : conversion_data.TryCastAs(value, target_type);
 	const bool success = cast_value.has_value();
 	if (!success) {
 		auto type_id = conversion_data.variant.GetTypeId(row_index, values_index);
-		conversion_data.error =
-		    StringUtil::Format("Can't convert VARIANT(%s) value '%s'", EnumUtil::ToString(type_id), value.ToString());
+		auto type_name =
+		    type_id == VariantLogicalType::ALIASED
+		        ? GetAliasedTypeName(VariantUtils::DecodeAliasedData(conversion_data.variant, row_index, values_index))
+		        : string(EnumUtil::ToString(type_id));
+		conversion_data.error = StringUtil::Format("Can't convert VARIANT(%s) value '%s'", type_name, value.ToString());
 		cast_value = Value(target_type);
 	}
 	result.SetValue(result_index, *cast_value);
@@ -247,9 +387,21 @@ static bool CastVariantToPrimitive(FromVariantConversionData &conversion_data, V
                                    PAYLOAD_CLASS payload) {
 	auto &variant = conversion_data.variant;
 	auto result_data = FlatVector::GetDataMutable<T>(result);
+	auto &target_type = result.GetType();
+	const auto target_name = VariantUtils::IsAliasedType(target_type) ? target_type.ToString() : string();
 	auto convert = [&](idx_t row_index, uint32_t values_index, idx_t result_index) {
 		auto type_id = variant.GetTypeId(row_index, values_index);
-		if (type_id == VariantLogicalType::OBJECT || type_id == VariantLogicalType::ARRAY) {
+		if (type_id == VariantLogicalType::ALIASED && !target_name.empty()) {
+			auto aliased_data = VariantUtils::DecodeAliasedData(variant, row_index, values_index);
+			if (!StringUtil::CIEquals(GetAliasedTypeName(aliased_data), target_name)) {
+				return false;
+			}
+			// a value of the target type - convert its underlying value directly
+			values_index = variant.GetValuesIndex(row_index, aliased_data.children_idx);
+			type_id = variant.GetTypeId(row_index, values_index);
+		}
+		if (type_id == VariantLogicalType::OBJECT || type_id == VariantLogicalType::ARRAY ||
+		    type_id == VariantLogicalType::ALIASED) {
 			return false;
 		}
 		auto byte_offset = variant.GetByteOffset(row_index, values_index);
@@ -526,6 +678,11 @@ public:
 		return false;
 	}
 	static bool VisitBitstring(const string_t &, VariantVarcharSerializer &, bool) {
+		return false;
+	}
+	//! ALIASED values are converted to their named type, which has its own VARCHAR cast
+	static bool VisitAliased(const UnifiedVariantVectorData &, idx_t, uint32_t, const VariantAliasedData &, idx_t,
+	                         VariantVarcharSerializer &, bool) {
 		return false;
 	}
 	static bool VisitDefault(const LogicalType &, const_data_ptr_t, VariantVarcharSerializer &, bool) {
@@ -1099,7 +1256,7 @@ static bool CastVariant(FromVariantConversionData &conversion_data, Vector &resu
 
 			//! Get the index into 'values'
 			uint32_t value_index = sel[i];
-			auto value = VariantUtils::ConvertVariantToValue(conversion_data.variant, row_index, value_index);
+			auto value = ConvertVariantToResolvedValue(conversion_data, row_index, value_index, 0);
 			try {
 				auto cast_value = target_type.id() == LogicalTypeId::MAP
 				                      ? TryCastVariantValueToMap(conversion_data, value, target_type)
@@ -1130,6 +1287,10 @@ static bool CastVariant(FromVariantConversionData &conversion_data, Vector &resu
 	} else {
 		EmptyConversionPayloadFromVariant empty_payload;
 		switch (target_type.id()) {
+		case LogicalTypeId::ENUM:
+			//! Convert to a Value first, which is then cast to the ENUM
+			return CastVariantRows(conversion_data, result, sel, offset, count, row,
+			                       [](idx_t, uint32_t, idx_t) { return false; });
 		case LogicalTypeId::BOOLEAN:
 			return CastVariantToPrimitive<VariantBooleanConversion>(conversion_data, result, sel, offset, count, row,
 			                                                        empty_payload);
@@ -1319,7 +1480,10 @@ static bool CastFromVARIANT(Vector &variant_vec, Vector &result, idx_t count, Ca
 	if (parameters.cast_data) {
 		client = parameters.cast_data->Cast<ToVariantCastData>().client;
 	}
-	FromVariantConversionData conversion_data(variant_format, client);
+	case_insensitive_map_t<LogicalType> resolved_types;
+	auto &type_cache =
+	    parameters.local_state ? parameters.local_state->Cast<FromVariantLocalState>().resolved_types : resolved_types;
+	FromVariantConversionData conversion_data(variant_format, client, type_cache);
 
 	reference<const SelectionVector> sel(*ConstantVector::ZeroSelectionVector());
 	SelectionVector zero_sel;
@@ -1339,6 +1503,10 @@ static bool CastFromVARIANT(Vector &variant_vec, Vector &result, idx_t count, Ca
 		return FinalizeErrorMessage(conversion_data, result, parameters);
 	}
 	return true;
+}
+
+static unique_ptr<FunctionLocalState> InitFromVariantLocalState(CastLocalStateParameters &parameters) {
+	return make_uniq<FromVariantLocalState>();
 }
 
 BoundCastInfo DefaultCasts::VariantCastSwitch(BindCastInput &input, const LogicalType &source,
@@ -1379,14 +1547,15 @@ BoundCastInfo DefaultCasts::VariantCastSwitch(BindCastInput &input, const Logica
 	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::MAP:
 	case LogicalTypeId::UNION:
+	case LogicalTypeId::ENUM:
 	case LogicalTypeId::UUID:
 	case LogicalTypeId::ARRAY:
-		return BoundCastInfo(CastFromVARIANT, std::move(cast_data));
+		return BoundCastInfo(CastFromVARIANT, std::move(cast_data), InitFromVariantLocalState);
 	case LogicalTypeId::GEOMETRY:
 	case LogicalTypeId::GEOGRAPHY:
-		return BoundCastInfo(CastFromVARIANT, std::move(cast_data));
+		return BoundCastInfo(CastFromVARIANT, std::move(cast_data), InitFromVariantLocalState);
 	case LogicalTypeId::VARCHAR: {
-		return BoundCastInfo(CastFromVARIANT, std::move(cast_data));
+		return BoundCastInfo(CastFromVARIANT, std::move(cast_data), InitFromVariantLocalState);
 	}
 	default:
 		return TryVectorNullCast;

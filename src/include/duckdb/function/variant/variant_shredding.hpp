@@ -28,6 +28,12 @@ public:
 	uint32_t decimal_width;
 	uint32_t decimal_scale;
 	bool decimal_consistent = false;
+	//! The number of values of an aliased type, with the alias and extension info of the first one
+	idx_t aliased_count = 0;
+	string alias;
+	string extension_info;
+	//! Whether all values of an aliased type have the same alias and extension info
+	bool alias_consistent = false;
 
 	idx_t total_count = 0;
 	//! indices into the top-level 'columns' vector where the stats for the field/element live
@@ -116,7 +122,8 @@ public:
 	}
 
 public:
-	bool ValueIsShredded(UnifiedVariantVectorData &variant, idx_t row, uint32_t values_index);
+	//! Whether the value is shredded on the type. For an ALIASED value 'values_index' is set to the underlying value.
+	bool ValueIsShredded(UnifiedVariantVectorData &variant, idx_t row, uint32_t &values_index);
 	void SetShredded(uint32_t row, uint32_t values_index, uint32_t result_idx);
 	//! The field names of the STRUCT type - the keys point into 'type'
 	const string_set_t &ObjectFields() const;
@@ -125,6 +132,9 @@ public:
 public:
 	//! The type the field is shredded on
 	const LogicalType &type;
+	//! The alias and serialized extension info of the type, if it is an aliased type
+	string alias;
+	string extension_info;
 	string_set_t object_fields;
 	//! row that is shredded
 	SelectionVector shredded_sel;

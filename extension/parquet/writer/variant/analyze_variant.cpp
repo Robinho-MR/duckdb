@@ -45,6 +45,8 @@ static void AnalyzeSchemaInternal(VariantAnalyzeData &state, UnifiedVariantVecto
 		return;
 	}
 
+	//! Parquet has no named types, ALIASED values are written as their underlying value
+	values_index = VariantUtils::ResolveAliased(variant, row, values_index);
 	auto type_id = variant.GetTypeId(row, values_index);
 	state.type_map[static_cast<uint8_t>(type_id)]++;
 

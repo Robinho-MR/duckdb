@@ -30,6 +30,10 @@ struct VariantStatsVisitor {
 	}
 
 	static void VisitMetadata(VariantLogicalType type_id, VariantShreddingStats &stats, idx_t stats_column_index) {
+		if (type_id == VariantLogicalType::ALIASED) {
+			//! Counted as the type of the underlying value
+			return;
+		}
 		auto &column_stats = stats.GetColumnStats(stats_column_index);
 		column_stats.SetType(type_id);
 	}
@@ -144,6 +148,23 @@ struct VariantStatsVisitor {
 			auto values_index = variant.GetValuesIndex(row, source_children_idx);
 			VariantVisitor<VariantStatsVisitor>::Visit(variant, row, values_index, depth + 1, stats, index);
 		}
+	}
+
+	//! Records the alias, the underlying value is visited as the value of this column
+	static void VisitAliased(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx,
+	                         const VariantAliasedData &aliased_data, idx_t depth, VariantShreddingStats &stats,
+	                         idx_t stats_column_index) {
+		auto &column_stats = stats.GetColumnStats(stats_column_index);
+		if (!column_stats.aliased_count++) {
+			column_stats.alias = aliased_data.alias.GetString();
+			column_stats.extension_info = aliased_data.extension_info.GetString();
+			column_stats.alias_consistent = true;
+		} else if (aliased_data.alias != string_t(column_stats.alias) ||
+		           aliased_data.extension_info != string_t(column_stats.extension_info)) {
+			column_stats.alias_consistent = false;
+		}
+		auto child_index = variant.GetValuesIndex(row, aliased_data.children_idx);
+		VariantVisitor<VariantStatsVisitor>::Visit(variant, row, child_index, depth + 1, stats, stats_column_index);
 	}
 
 	static void VisitDefault(const LogicalType &type, const_data_ptr_t, VariantShreddingStats &stats,
@@ -370,6 +391,14 @@ bool VariantShreddingStats::GetShreddedTypeInternal(const VariantColumnStatsData
 		return true;
 	}
 
+	if (column.aliased_count && (!column.alias_consistent || column.aliased_count != column.total_count - null_count)) {
+		//! Values with different aliases, or with and without one, can't share a shredded type
+		return false;
+	}
+	auto apply_alias = [&](const LogicalType &type) {
+		return column.aliased_count ? VariantUtils::ApplyAlias(type, column.alias, column.extension_info) : type;
+	};
+
 	idx_t max_count = 0;
 	uint8_t type_index = 0;
 	//! Skip the 'VARIANT_NULL' type, we can't shred on NULL
@@ -414,7 +443,7 @@ bool VariantShreddingStats::GetShreddedTypeInternal(const VariantColumnStatsData
 		}
 		// always set objects as not being fully consistent
 		fully_consistent = false;
-		auto shredded_type = LogicalType::STRUCT(child_types);
+		auto shredded_type = apply_alias(LogicalType::STRUCT(child_types));
 		out_type = SetShreddedType(shredded_type, fully_consistent);
 		return true;
 	}
@@ -425,18 +454,18 @@ bool VariantShreddingStats::GetShreddedTypeInternal(const VariantColumnStatsData
 		if (!GetShreddedTypeInternal(element_column, element_type, optional_idx(), force_partial)) {
 			return false;
 		}
-		auto shredded_type = LogicalType::LIST(element_type);
+		auto shredded_type = apply_alias(LogicalType::LIST(element_type));
 		out_type = SetShreddedType(shredded_type, fully_consistent);
 		return true;
 	}
 	if (type_index == static_cast<uint8_t>(VariantLogicalType::DECIMAL)) {
-		auto shredded_type = LogicalType::DECIMAL(column.decimal_width, column.decimal_scale);
+		auto shredded_type = apply_alias(LogicalType::DECIMAL(column.decimal_width, column.decimal_scale));
 		out_type = SetShreddedType(shredded_type, fully_consistent);
 		return true;
 	}
 	auto type_id = static_cast<VariantLogicalType>(type_index);
 
-	auto shredded_type = ProduceShreddedType(type_id);
+	auto shredded_type = apply_alias(ProduceShreddedType(type_id));
 	out_type = SetShreddedType(shredded_type, fully_consistent);
 	return true;
 }

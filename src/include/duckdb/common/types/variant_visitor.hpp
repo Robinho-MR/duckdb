@@ -32,6 +32,23 @@ class VariantVisitor {
 		static constexpr bool value = decltype(test<T>(0))::value;
 	};
 
+	// Detects if T has a static VisitAliased for unified variant data
+	template <typename T, typename... Args>
+	class has_visit_aliased {
+	private:
+		template <typename U>
+		static auto test(int)
+		    -> decltype(U::VisitAliased(std::declval<const UnifiedVariantVectorData &>(), idx_t(), uint32_t(),
+		                                std::declval<const VariantAliasedData &>(), idx_t(), std::declval<Args>()...),
+		                std::true_type {});
+
+		template <typename>
+		static std::false_type test(...);
+
+	public:
+		static constexpr bool value = decltype(test<T>(0))::value;
+	};
+
 public:
 	//! Root visits start at depth zero; child visits increment the parent depth.
 	template <typename... Args>
@@ -104,6 +121,10 @@ public:
 		case VariantLogicalType::OBJECT: {
 			auto nested_data = VariantUtils::DecodeNestedData(variant, row, values_idx);
 			return Visitor::VisitObject(variant, row, nested_data, depth, std::forward<Args>(args)...);
+		}
+		case VariantLogicalType::ALIASED: {
+			auto aliased_data = VariantUtils::DecodeAliasedData(variant, row, values_idx);
+			return VisitAliased(variant, row, values_idx, aliased_data, depth, std::forward<Args>(args)...);
 		}
 		case VariantLogicalType::TIME_MICROS:
 			return Visitor::VisitTime(Load<dtime_t>(ptr), std::forward<Args>(args)...);
@@ -278,7 +299,7 @@ public:
 
 public:
 	//! Visit throws for a value nested this deep
-	static constexpr idx_t MAX_RECURSION_DEPTH = 128;
+	static constexpr idx_t MAX_RECURSION_DEPTH = Variant::MAX_NESTING_DEPTH;
 
 private:
 	static void CheckDepth(idx_t depth) {
@@ -299,6 +320,22 @@ private:
 	static typename std::enable_if<!has_visit_metadata<V, Args...>::value, void>::type VisitMetadata(VariantLogicalType,
 	                                                                                                 Args &&...) {
 		// do nothing
+	}
+
+	template <typename V = Visitor, typename... Args>
+	static typename std::enable_if<has_visit_aliased<V, Args...>::value, ReturnType>::type
+	VisitAliased(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx,
+	             const VariantAliasedData &aliased_data, idx_t depth, Args &&...args) {
+		return Visitor::VisitAliased(variant, row, values_idx, aliased_data, depth, std::forward<Args>(args)...);
+	}
+
+	//! By default an ALIASED value is visited as its underlying value
+	template <typename V = Visitor, typename... Args>
+	static typename std::enable_if<!has_visit_aliased<V, Args...>::value, ReturnType>::type
+	VisitAliased(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx,
+	             const VariantAliasedData &aliased_data, idx_t depth, Args &&...args) {
+		auto child_index = variant.GetValuesIndex(row, aliased_data.children_idx);
+		return Visit(variant, row, child_index, depth + 1, std::forward<Args>(args)...);
 	}
 
 	template <typename... Args>

@@ -183,6 +183,22 @@ void VariantNormalizer::VisitObject(const UnifiedVariantVectorData &variant, idx
 	}
 }
 
+void VariantNormalizer::VisitAliased(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx,
+                                     const VariantAliasedData &aliased_data, idx_t depth,
+                                     VariantNormalizerState &state) {
+	VisitString(aliased_data.alias, state);
+	VisitString(aliased_data.extension_info, state);
+	idx_t result_children_idx = state.children_size;
+	state.blob_size += VarintEncode(result_children_idx, state.GetDestination());
+	state.children_size++;
+
+	//! The single child holds the underlying value
+	state.values_indexes[result_children_idx] = state.values_size;
+	state.keys_index_validity.SetInvalid(state.children_offset + result_children_idx);
+	auto values_index = variant.GetValuesIndex(row, aliased_data.children_idx);
+	VariantVisitor<VariantNormalizer>::Visit(variant, row, values_index, depth + 1, state);
+}
+
 void VariantNormalizer::VisitDefault(const LogicalType &type, const_data_ptr_t, VariantNormalizerState &state) {
 	throw InternalException("VariantLogicalType(%s) not handled", type.ToString());
 }
@@ -229,7 +245,10 @@ void VariantNormalizer::Normalize(const Vector &variant_vec, Vector &result) {
 		//! Allocate for the new data, use the same size as source
 		auto &blob_data = variant_data.blob_data[i];
 		auto original_data = variant.GetData(i);
-		blob_data = StringVector::EmptyString(data, original_data.GetSize());
+		//! Each value holds at most one children index, whose varint can grow from 1 to 5 bytes when renumbered
+		auto values_count = variant.GetValuesListEntry(i).length;
+		auto blob_capacity = original_data.GetSize() + values_count * (sizeof(uint32_t) + 1);
+		blob_data = StringVector::EmptyString(data, blob_capacity);
 
 		auto &keys_list_entry = variant_data.keys_data[i];
 		keys_list_entry.offset = ListVector::GetListSize(keys);
@@ -244,7 +263,7 @@ void VariantNormalizer::Normalize(const Vector &variant_vec, Vector &result) {
 		VariantNormalizerState visitor_state(i, variant_data, dictionary, keys_arena, keys_selvec);
 		VariantVisitor<VariantNormalizer>::Visit(variant, i, 0, 0, visitor_state);
 
-		blob_data.SetSizeAndFinalize(visitor_state.blob_size, original_data.GetSize());
+		blob_data.SetSizeAndFinalize(visitor_state.blob_size, blob_capacity);
 		keys_list_entry.length = visitor_state.keys_size;
 		children_list_entry.length = visitor_state.children_size;
 		values_list_entry.length = visitor_state.values_size;

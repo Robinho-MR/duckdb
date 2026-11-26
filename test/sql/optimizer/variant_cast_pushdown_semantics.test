@@ -93,12 +93,12 @@ SELECT v.timestamp_tz::VARCHAR FROM {SOURCE};
 ----
 2026-01-01 12:34:56+00
 
-# Casts that exist for the shredded type but not for VARIANT
-statement error
+query I
 SELECT CAST(v.enum_value AS ENUM('foo', 'bar')) FROM {SOURCE};
 ----
-Unimplemented type for cast (VARIANT -> ENUM('foo', 'bar'))
+foo
 
+# Casts that exist for the shredded type but not for VARIANT
 statement error
 SELECT CAST(v.union_value AS UNION(a INTEGER)) FROM {SOURCE};
 ----

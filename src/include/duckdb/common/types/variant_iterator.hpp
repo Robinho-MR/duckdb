@@ -100,6 +100,10 @@ public:
 	bool has_fixed_type_id = false;
 	//! The size of the physical payload of this layer
 	idx_t type_size = 0;
+	//! The alias of the values of this layer, empty if the type has none
+	string alias;
+	//! The serialized extension info of the values of this layer (see VariantAliasedData)
+	string extension_info;
 };
 
 class VariantNode;
@@ -196,10 +200,14 @@ public:
 	VariantObjectIterator GetObjectChildren(VariantIterationOrder order = VariantIterationOrder::INTERNAL) const;
 	//! Lazily iterates the element values of an ARRAY value
 	VariantArrayIterator GetArrayChildren() const;
+	//! Whether the value is of an aliased type (e.g. INET), GetType() then carries the alias
+	bool HasAlias() const;
 
 private:
 	//! The storage-level type of the value the cursor points at
 	VariantLogicalType GetVariantType() const;
+	//! The alias and extension info of a value with an alias (children_idx is not set)
+	VariantAliasedData GetAliasedData() const;
 
 	//! Resolve the shredded node (a "STRUCT(typed_value, [untyped_value_index])" wrapper, or a
 	//! flattened primitive) at the given index into a concrete cursor
@@ -221,6 +229,8 @@ private:
 	idx_t row = 0;
 	//! UNSHREDDED: 0-based index into the 'values' array of the unshredded component
 	uint32_t value_index = 0;
+	//! UNSHREDDED: 1-based index into 'values' of the ALIASED value wrapping this value (0 means there is none)
+	uint32_t alias_value_index = 0;
 
 	//! SHREDDED: the current layer in the shredded format tree (the resolved 'typed_value', i.e. the
 	//! object struct, the array list, or the primitive)

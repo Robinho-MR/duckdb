@@ -35,6 +35,8 @@ enum class VariantComparisonType : uint8_t {
 	BITSTRING,
 	ARRAY,
 	OBJECT,
+	//! Precedes the value of an aliased type, which is ordered by the name of its type and then by its value
+	ALIASED,
 	//! VARIANT_NULL ranks last so a nested NULL element orders after all non-null values, matching the
 	//! native "NULLS LAST" ordering of nested NULLs under ASC. For DESC the ORDER BY operator reverses
 	//! the (always-ascending) comparator key, which then places nested NULLs first - exactly as native

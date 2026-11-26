@@ -90,6 +90,8 @@ struct VariantNormalizer {
 	                       idx_t depth, VariantNormalizerState &state);
 	static void VisitObject(const UnifiedVariantVectorData &variant, idx_t row, const VariantNestedData &nested_data,
 	                        idx_t depth, VariantNormalizerState &state);
+	static void VisitAliased(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx,
+	                         const VariantAliasedData &aliased_data, idx_t depth, VariantNormalizerState &state);
 	static void VisitDefault(const LogicalType &type, const_data_ptr_t, VariantNormalizerState &state);
 
 public:

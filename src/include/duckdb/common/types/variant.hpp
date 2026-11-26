@@ -32,6 +32,10 @@ enum class VariantChildLookupMode : uint8_t { INVALID, BY_KEY, BY_INDEX };
 struct Variant {
 public:
 	static constexpr StorageVersion VERSION_ADDED = StorageVersion::V1_5_0; // Added to core in DuckDB v1.5.0
+	//! ALIASED values (named types) can be stored starting from this storage version
+	static constexpr StorageVersion ALIASED_VERSION_ADDED = StorageVersion::V2_1_0;
+	//! The maximum nesting depth of a VARIANT value
+	static constexpr idx_t MAX_NESTING_DEPTH = 128;
 };
 
 struct VariantPathComponent {
@@ -82,6 +86,15 @@ struct VariantDecimalProperties {
 
 	uint32_t width;
 	uint32_t scale;
+};
+
+struct VariantAliasedData {
+	//! The alias of the type (e.g. "INET")
+	string_t alias;
+	//! The serialized ExtensionTypeInfo of the type (modifiers and properties), empty if it has none
+	string_t extension_info;
+	//! Index of the (single) child holding the underlying value
+	uint32_t children_idx;
 };
 
 struct VariantDecimalData {
@@ -165,6 +178,9 @@ enum class VariantLogicalType : uint8_t {
 	GEOMETRY = 33,
 	TIMESTAMP_NANOS_TZ = 34,
 	GEOGRAPHY = 35,
+	//! Wraps the value of an aliased type (e.g. INET): the alias, the extension info and a single child holding the
+	//! value. Readers see the child with the alias as part of its type, and never this wrapper.
+	ALIASED = 36,
 	ENUM_SIZE /* always kept as last item of the enum */
 };
 
