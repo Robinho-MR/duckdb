@@ -230,6 +230,90 @@ DUCKDB_V2_ERROR duckdb_v2_operator_finalize_set_have_more_output(duckdb_v2_opera
 	return WithErrorHandler(err, [&]() { Convert(info)->out_have_more_output = have_more_output; });
 }
 
+DUCKDB_V2_ERROR duckdb_v2_operator_init_global_get_column_count(duckdb_v2_operator_init_global_info_handle info,
+                                                                idx_t *count, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(count);
+	return WithErrorHandler(err, [&]() { *count = Convert(info)->in_columns->size(); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_operator_init_global_get_column_index(duckdb_v2_operator_init_global_info_handle info,
+                                                                idx_t index, idx_t *column_index,
+                                                                duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(column_index);
+	return WithErrorHandler(err, [&]() {
+		const auto &columns = *Convert(info)->in_columns;
+		if (index >= columns.size()) {
+			throw duckdb::InvalidInputException(
+			    "Index out of bounds in duckdb_v2_operator_init_global_get_column_index");
+		}
+		*column_index = columns[index];
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_operator_init_local_get_column_count(duckdb_v2_operator_init_local_info_handle info,
+                                                               idx_t *count, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(count);
+	return WithErrorHandler(err, [&]() { *count = Convert(info)->in_columns->size(); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_operator_init_local_get_column_index(duckdb_v2_operator_init_local_info_handle info,
+                                                               idx_t index, idx_t *column_index,
+                                                               duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(column_index);
+	return WithErrorHandler(err, [&]() {
+		const auto &columns = *Convert(info)->in_columns;
+		if (index >= columns.size()) {
+			throw duckdb::InvalidInputException(
+			    "Index out of bounds in duckdb_v2_operator_init_local_get_column_index");
+		}
+		*column_index = columns[index];
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_operator_execute_get_column_count(duckdb_v2_operator_execute_info_handle info, idx_t *count,
+                                                            duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(count);
+	return WithErrorHandler(err, [&]() { *count = Convert(info)->in_columns->size(); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_operator_execute_get_column_index(duckdb_v2_operator_execute_info_handle info, idx_t index,
+                                                            idx_t *column_index, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(column_index);
+	return WithErrorHandler(err, [&]() {
+		const auto &columns = *Convert(info)->in_columns;
+		if (index >= columns.size()) {
+			throw duckdb::InvalidInputException("Index out of bounds in duckdb_v2_operator_execute_get_column_index");
+		}
+		*column_index = columns[index];
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_operator_finalize_get_column_count(duckdb_v2_operator_finalize_info_handle info, idx_t *count,
+                                                             duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(count);
+	return WithErrorHandler(err, [&]() { *count = Convert(info)->in_columns->size(); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_operator_finalize_get_column_index(duckdb_v2_operator_finalize_info_handle info, idx_t index,
+                                                             idx_t *column_index, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(column_index);
+	return WithErrorHandler(err, [&]() {
+		const auto &columns = *Convert(info)->in_columns;
+		if (index >= columns.size()) {
+			throw duckdb::InvalidInputException("Index out of bounds in duckdb_v2_operator_finalize_get_column_index");
+		}
+		*column_index = columns[index];
+	});
+}
+
 DUCKDB_V2_ERROR duckdb_v2_operator_destroy(duckdb_v2_operator_handle *op) {
 	return WithErrorHandler(nullptr, [&]() {
 		if (!op) {

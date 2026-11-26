@@ -1782,6 +1782,27 @@ typedef struct {
 	DUCKDB_V2_ERROR(*duckdb_v2_table_function_set_operator)
 	(duckdb_v2_table_function_handle function, duckdb_v2_operator_handle op, DUCKDB_V2_TABLE_OPERATOR_INPUT input,
 	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_operator_execute_get_column_count)
+	(duckdb_v2_operator_execute_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_operator_execute_get_column_index)
+	(duckdb_v2_operator_execute_info_handle info, idx_t index, idx_t *column_index, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_operator_finalize_get_column_count)
+	(duckdb_v2_operator_finalize_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_operator_finalize_get_column_index)
+	(duckdb_v2_operator_finalize_info_handle info, idx_t index, idx_t *column_index, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_operator_init_global_get_column_count)
+	(duckdb_v2_operator_init_global_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_operator_init_global_get_column_index)
+	(duckdb_v2_operator_init_global_info_handle info, idx_t index, idx_t *column_index,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_operator_init_local_get_column_count)
+	(duckdb_v2_operator_init_local_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_operator_init_local_get_column_index)
+	(duckdb_v2_operator_init_local_info_handle info, idx_t index, idx_t *column_index,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_add_custom_virtual_column)
+	(duckdb_v2_table_function_handle function, const char *name, idx_t name_length, duckdb_v2_logical_type_handle type,
+	 idx_t *column_index, duckdb_v2_error_info_handle *err);
 } duckdb_ext_api_v2;
 
 //===--------------------------------------------------------------------===//
@@ -2583,6 +2604,15 @@ inline duckdb_ext_api_v2 CreateAPIv2(void) {
 	result.duckdb_v2_table_function_bind_get_input_column_name = duckdb_v2_table_function_bind_get_input_column_name;
 	result.duckdb_v2_table_function_bind_get_input_column_type = duckdb_v2_table_function_bind_get_input_column_type;
 	result.duckdb_v2_table_function_set_operator = duckdb_v2_table_function_set_operator;
+	result.duckdb_v2_operator_execute_get_column_count = duckdb_v2_operator_execute_get_column_count;
+	result.duckdb_v2_operator_execute_get_column_index = duckdb_v2_operator_execute_get_column_index;
+	result.duckdb_v2_operator_finalize_get_column_count = duckdb_v2_operator_finalize_get_column_count;
+	result.duckdb_v2_operator_finalize_get_column_index = duckdb_v2_operator_finalize_get_column_index;
+	result.duckdb_v2_operator_init_global_get_column_count = duckdb_v2_operator_init_global_get_column_count;
+	result.duckdb_v2_operator_init_global_get_column_index = duckdb_v2_operator_init_global_get_column_index;
+	result.duckdb_v2_operator_init_local_get_column_count = duckdb_v2_operator_init_local_get_column_count;
+	result.duckdb_v2_operator_init_local_get_column_index = duckdb_v2_operator_init_local_get_column_index;
+	result.duckdb_v2_table_function_add_custom_virtual_column = duckdb_v2_table_function_add_custom_virtual_column;
 	return result;
 }
 

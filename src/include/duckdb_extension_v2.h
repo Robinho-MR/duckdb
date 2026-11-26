@@ -1856,6 +1856,27 @@ typedef struct {
 	DUCKDB_V2_ERROR(*duckdb_v2_table_function_set_operator)
 	(duckdb_v2_table_function_handle function, duckdb_v2_operator_handle op, DUCKDB_V2_TABLE_OPERATOR_INPUT input,
 	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_operator_execute_get_column_count)
+	(duckdb_v2_operator_execute_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_operator_execute_get_column_index)
+	(duckdb_v2_operator_execute_info_handle info, idx_t index, idx_t *column_index, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_operator_finalize_get_column_count)
+	(duckdb_v2_operator_finalize_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_operator_finalize_get_column_index)
+	(duckdb_v2_operator_finalize_info_handle info, idx_t index, idx_t *column_index, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_operator_init_global_get_column_count)
+	(duckdb_v2_operator_init_global_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_operator_init_global_get_column_index)
+	(duckdb_v2_operator_init_global_info_handle info, idx_t index, idx_t *column_index,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_operator_init_local_get_column_count)
+	(duckdb_v2_operator_init_local_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_operator_init_local_get_column_index)
+	(duckdb_v2_operator_init_local_info_handle info, idx_t index, idx_t *column_index,
+	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_add_custom_virtual_column)
+	(duckdb_v2_table_function_handle function, const char *name, idx_t name_length, duckdb_v2_logical_type_handle type,
+	 idx_t *column_index, duckdb_v2_error_info_handle *err);
 #endif
 	// capigen:end appended
 } duckdb_ext_api_v2;
@@ -4233,6 +4254,34 @@ typedef struct {
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_table_function_set_operator duckdb_ext_api.duckdb_v2_table_function_set_operator
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_operator_execute_get_column_count duckdb_ext_api.duckdb_v2_operator_execute_get_column_count
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_operator_execute_get_column_index duckdb_ext_api.duckdb_v2_operator_execute_get_column_index
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_operator_finalize_get_column_count duckdb_ext_api.duckdb_v2_operator_finalize_get_column_count
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_operator_finalize_get_column_index duckdb_ext_api.duckdb_v2_operator_finalize_get_column_index
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_operator_init_global_get_column_count duckdb_ext_api.duckdb_v2_operator_init_global_get_column_count
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_operator_init_global_get_column_index duckdb_ext_api.duckdb_v2_operator_init_global_get_column_index
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_operator_init_local_get_column_count duckdb_ext_api.duckdb_v2_operator_init_local_get_column_count
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_operator_init_local_get_column_index duckdb_ext_api.duckdb_v2_operator_init_local_get_column_index
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_table_function_add_custom_virtual_column                                                             \
+	duckdb_ext_api.duckdb_v2_table_function_add_custom_virtual_column
 #endif
 // capigen:end appended
 #endif // DUCKDB_BUILD_STATIC_EXTENSION

@@ -226,6 +226,8 @@ class CV2OperatorInitGlobalInfo {
 public:
 	void *in_user_data = nullptr;
 	void *in_bind_data = nullptr;
+	//! The column behind each vector of the output chunk
+	optional_ptr<const vector<column_t>> in_columns;
 
 	duckdb_v2_opaque out_global_state = {};
 	optional_idx out_max_threads;
@@ -243,6 +245,8 @@ public:
 	void *in_user_data = nullptr;
 	void *in_bind_data = nullptr;
 	void *in_global_state = nullptr;
+	//! The column behind each vector of the output chunk
+	optional_ptr<const vector<column_t>> in_columns;
 
 	duckdb_v2_opaque out_local_state = {};
 };
@@ -261,6 +265,8 @@ public:
 	void *in_global_state = nullptr;
 	void *in_local_state = nullptr;
 	optional_ptr<DataChunk> input;
+	//! The column behind each vector of the output chunk
+	optional_ptr<const vector<column_t>> in_columns;
 	optional_ptr<DataChunk> output;
 
 	OperatorResultType out_result = OperatorResultType::NEED_MORE_INPUT;
@@ -280,6 +286,8 @@ public:
 	void *in_global_state = nullptr;
 	void *in_local_state = nullptr;
 	optional_ptr<DataChunk> output;
+	//! The column behind each vector of the output chunk
+	optional_ptr<const vector<column_t>> in_columns;
 
 	bool out_have_more_output = false;
 };

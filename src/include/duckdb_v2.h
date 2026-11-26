@@ -5836,6 +5836,195 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_operator_finalize_set_have_more_output(
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_operator_destroy(duckdb_v2_operator_handle *op);
 #endif
 
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Returns the number of columns the operator produces.
+ *
+ * With projection pushdown (see `duckdb_v2_table_function_set_projection_pushdown()`) this is the number of columns the
+ * query uses, which is the number of vectors in the output chunk; without it, it is the number of columns declared in
+ * bind. Valid indices for `duckdb_v2_operator_init_global_get_column_index()` are `0` up to (but excluding) this count.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The global init info handle.
+ * @param count Receives the number of columns the operator produces.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_operator_init_global_get_column_count(
+    duckdb_v2_operator_init_global_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Returns which column the output chunk's vector at the given index stands for.
+ *
+ * A declared column is identified by its index among the columns declared with
+ * `duckdb_v2_table_function_bind_add_result_column()`. A virtual column is identified by 2^63 plus its value in the
+ * `DUCKDB_V2_TABLE_VIRTUAL_COLUMN` enum, or by the index `duckdb_v2_table_function_add_custom_virtual_column()`
+ * returned. The vector that stands for a column the operator does not produce, e.g. the position column of `WITH
+ * ORDINALITY`, has index 2^64 - 2: leave it alone. Without projection pushdown the mapping is the identity. Fails if
+ * the index is out of bounds.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The global init info handle.
+ * @param index The index of the column in the output chunk.
+ * @param column_index Receives the index of the column.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR
+duckdb_v2_operator_init_global_get_column_index(duckdb_v2_operator_init_global_info_handle info, idx_t index,
+                                                idx_t *column_index, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Returns the number of columns the operator produces.
+ *
+ * With projection pushdown (see `duckdb_v2_table_function_set_projection_pushdown()`) this is the number of columns the
+ * query uses, which is the number of vectors in the output chunk; without it, it is the number of columns declared in
+ * bind. Valid indices for `duckdb_v2_operator_init_local_get_column_index()` are `0` up to (but excluding) this count.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The local init info handle.
+ * @param count Receives the number of columns the operator produces.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_operator_init_local_get_column_count(
+    duckdb_v2_operator_init_local_info_handle info, idx_t *count, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Returns which column the output chunk's vector at the given index stands for.
+ *
+ * A declared column is identified by its index among the columns declared with
+ * `duckdb_v2_table_function_bind_add_result_column()`. A virtual column is identified by 2^63 plus its value in the
+ * `DUCKDB_V2_TABLE_VIRTUAL_COLUMN` enum, or by the index `duckdb_v2_table_function_add_custom_virtual_column()`
+ * returned. The vector that stands for a column the operator does not produce, e.g. the position column of `WITH
+ * ORDINALITY`, has index 2^64 - 2: leave it alone. Without projection pushdown the mapping is the identity. Fails if
+ * the index is out of bounds.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The local init info handle.
+ * @param index The index of the column in the output chunk.
+ * @param column_index Receives the index of the column.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_operator_init_local_get_column_index(
+    duckdb_v2_operator_init_local_info_handle info, idx_t index, idx_t *column_index, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Returns the number of columns the operator produces.
+ *
+ * With projection pushdown (see `duckdb_v2_table_function_set_projection_pushdown()`) this is the number of columns the
+ * query uses, which is the number of vectors in the output chunk; without it, it is the number of columns declared in
+ * bind. Valid indices for `duckdb_v2_operator_execute_get_column_index()` are `0` up to (but excluding) this count.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The execute info handle.
+ * @param count Receives the number of columns the operator produces.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_operator_execute_get_column_count(duckdb_v2_operator_execute_info_handle info,
+                                                                         idx_t *count,
+                                                                         duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Returns which column the output chunk's vector at the given index stands for.
+ *
+ * A declared column is identified by its index among the columns declared with
+ * `duckdb_v2_table_function_bind_add_result_column()`. A virtual column is identified by 2^63 plus its value in the
+ * `DUCKDB_V2_TABLE_VIRTUAL_COLUMN` enum, or by the index `duckdb_v2_table_function_add_custom_virtual_column()`
+ * returned. The vector that stands for a column the operator does not produce, e.g. the position column of `WITH
+ * ORDINALITY`, has index 2^64 - 2: leave it alone. Without projection pushdown the mapping is the identity. Fails if
+ * the index is out of bounds.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The execute info handle.
+ * @param index The index of the column in the output chunk.
+ * @param column_index Receives the index of the column.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_operator_execute_get_column_index(duckdb_v2_operator_execute_info_handle info,
+                                                                         idx_t index, idx_t *column_index,
+                                                                         duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Returns the number of columns the operator produces.
+ *
+ * With projection pushdown (see `duckdb_v2_table_function_set_projection_pushdown()`) this is the number of columns the
+ * query uses, which is the number of vectors in the output chunk; without it, it is the number of columns declared in
+ * bind. Valid indices for `duckdb_v2_operator_finalize_get_column_index()` are `0` up to (but excluding) this count.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The finalize info handle.
+ * @param count Receives the number of columns the operator produces.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_operator_finalize_get_column_count(duckdb_v2_operator_finalize_info_handle info,
+                                                                          idx_t *count,
+                                                                          duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Returns which column the output chunk's vector at the given index stands for.
+ *
+ * A declared column is identified by its index among the columns declared with
+ * `duckdb_v2_table_function_bind_add_result_column()`. A virtual column is identified by 2^63 plus its value in the
+ * `DUCKDB_V2_TABLE_VIRTUAL_COLUMN` enum, or by the index `duckdb_v2_table_function_add_custom_virtual_column()`
+ * returned. The vector that stands for a column the operator does not produce, e.g. the position column of `WITH
+ * ORDINALITY`, has index 2^64 - 2: leave it alone. Without projection pushdown the mapping is the identity. Fails if
+ * the index is out of bounds.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The finalize info handle.
+ * @param index The index of the column in the output chunk.
+ * @param column_index Receives the index of the column.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_operator_finalize_get_column_index(duckdb_v2_operator_finalize_info_handle info,
+                                                                          idx_t index, idx_t *column_index,
+                                                                          duckdb_v2_error_info_handle *err);
+#endif
+
 /* --- Struct definitions for operator --- */
 
 /* ============================================================================
@@ -16281,6 +16470,34 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_set_projection_pushdown(du
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_add_virtual_column(duckdb_v2_table_function_handle function,
                                                                          DUCKDB_V2_TABLE_VIRTUAL_COLUMN column,
                                                                          duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Declares a virtual column of the table function of its own, with a name and a type.
+ *
+ * Like the virtual columns of `duckdb_v2_table_function_add_virtual_column()` it is not one of the columns declared in
+ * bind: the query asks for it by name, and the function only produces it when it is asked for. This requires projection
+ * pushdown (see `duckdb_v2_table_function_set_projection_pushdown()`). The callbacks recognize the vector by the column
+ * index this returns (see e.g. `duckdb_v2_table_function_exec_get_column_index()`), which is 2^63 + 1024 plus the
+ * number of custom virtual columns declared before it. A table function can declare at most 1024.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to configure.
+ * @param name The name of the virtual column. Borrowed and copied.
+ * @param name_length The length of `name` in bytes. `name` must be valid UTF-8, need not be null-terminated, and may be
+ * NULL only when this is 0.
+ * @param type The type of the virtual column. Borrowed and copied.
+ * @param column_index Receives the column index the callbacks see the virtual column by.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_add_custom_virtual_column(
+    duckdb_v2_table_function_handle function, const char *name, idx_t name_length, duckdb_v2_logical_type_handle type,
+    idx_t *column_index, duckdb_v2_error_info_handle *err);
 #endif
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE

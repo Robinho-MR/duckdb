@@ -425,12 +425,19 @@ static auto CV2ConvertOrderPreservation(DUCKDB_V2_ORDER_PRESERVATION value) -> O
 //! Virtual columns are told apart from declared ones in the column lists of the scan by this plus their value in the
 //! public enum
 static constexpr column_t CV2_VIRTUAL_COLUMN_START = UINT64_C(9223372036854775808);
+//! The index of the first virtual column a function declares itself, and how many it can declare
+static constexpr column_t CV2_CUSTOM_VIRTUAL_COLUMN_START = CV2_VIRTUAL_COLUMN_START + 1024;
+static constexpr idx_t CV2_MAX_CUSTOM_VIRTUAL_COLUMNS = 1024;
 
 //! The index the scan's column lists hold for a virtual column of the engine, which is invalid if there is no such
 //! virtual column
 static auto CV2VirtualColumnIndex(column_t engine_id) -> column_t {
 	if (engine_id == MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER) {
 		return CV2_VIRTUAL_COLUMN_START + DUCKDB_V2_TABLE_VIRTUAL_COLUMN_FILE_ROW_NUMBER;
+	}
+	if (engine_id == COLUMN_IDENTIFIER_EMPTY || engine_id >= CV2_CUSTOM_VIRTUAL_COLUMN_START) {
+		// the custom virtual columns and the column that stands for none keep the id the engine knows them by
+		return engine_id;
 	}
 	throw InternalException("Unsupported virtual column %llu in a table function scan", engine_id);
 }
@@ -458,6 +465,8 @@ public:
 	}
 	//! Whether the function can produce the file_row_number virtual column
 	bool file_row_number = false;
+	//! The virtual columns the function declared itself, which are identified by their position
+	vector<pair<Identifier, LogicalType>> custom_virtual_columns;
 	//! The operator producing the rows of a table in-out function
 	shared_ptr<const CV2OperatorInfo> op;
 	//! Whether the operator's input is a table argument, rather than the positional arguments
@@ -1021,6 +1030,8 @@ public:
 
 	CV2UserData handle;
 	idx_t max_threads = GlobalTableFunctionState::MAX_THREADS;
+	//! The column behind each vector of the output chunk
+	vector<column_t> columns;
 };
 
 class CV2OperatorLocalState final : public LocalTableFunctionState {
@@ -1045,6 +1056,7 @@ static auto CV2OperatorInitGlobal(ClientContext &context, TableFunctionInitInput
 	const auto &op = CV2OperatorOf(bind_data);
 
 	auto result = make_uniq<CV2OperatorGlobalState>();
+	result->columns = CV2TableScanColumns(bind_data, input);
 	if (!bind_data.streaming_input) {
 		// every thread of the scan would be handed the same arguments
 		result->max_threads = 1;
@@ -1054,6 +1066,7 @@ static auto CV2OperatorInitGlobal(ClientContext &context, TableFunctionInitInput
 	}
 
 	CV2OperatorInitGlobalInfo args = {};
+	args.in_columns = result->columns;
 	args.in_user_data = op.GetUserData();
 	args.in_bind_data = bind_data.handle ? bind_data.handle->GetData() : nullptr;
 
@@ -1091,7 +1104,9 @@ static auto CV2OperatorInitLocal(ExecutionContext &context, TableFunctionInitInp
 	args.in_user_data = op.GetUserData();
 	args.in_bind_data = bind_data.handle ? bind_data.handle->GetData() : nullptr;
 	if (global_state) {
-		args.in_global_state = global_state->Cast<CV2OperatorGlobalState>().handle.GetData();
+		auto &global = global_state->Cast<CV2OperatorGlobalState>();
+		args.in_global_state = global.handle.GetData();
+		args.in_columns = global.columns;
 	}
 
 	CV2ErrorInfo err = {};
@@ -1151,7 +1166,9 @@ static auto CV2OperatorCallExecute(ExecutionContext &context, TableFunctionInput
 	args.in_user_data = op.GetUserData();
 	args.in_bind_data = bind_data.handle ? bind_data.handle->GetData() : nullptr;
 	if (data.global_state) {
-		args.in_global_state = data.global_state->Cast<CV2OperatorGlobalState>().handle.GetData();
+		auto &global = data.global_state->Cast<CV2OperatorGlobalState>();
+		args.in_global_state = global.handle.GetData();
+		args.in_columns = global.columns;
 	}
 	args.in_local_state = local_state.handle.GetData();
 	auto &target = CV2OperatorTarget(context.client, bind_data, local_state, output);
@@ -1216,7 +1233,9 @@ static auto CV2OperatorFinalize(ExecutionContext &context, TableFunctionInput &d
 	args.in_user_data = op.GetUserData();
 	args.in_bind_data = bind_data.handle ? bind_data.handle->GetData() : nullptr;
 	if (data.global_state) {
-		args.in_global_state = data.global_state->Cast<CV2OperatorGlobalState>().handle.GetData();
+		auto &global = data.global_state->Cast<CV2OperatorGlobalState>();
+		args.in_global_state = global.handle.GetData();
+		args.in_columns = global.columns;
 	}
 	args.in_local_state = local_state.handle.GetData();
 	auto &target = CV2OperatorTarget(context.client, bind_data, local_state, output);
@@ -1337,11 +1356,21 @@ static auto CV2TableGetMetrics(TableFunctionGetMetricsInput &input) -> void {
 	}
 }
 
-//! Registered only for functions that declared the file_row_number virtual column, which is all there is to know
-static auto CV2TableGetFileRowNumberColumn(ClientContext &, optional_ptr<FunctionData>) -> virtual_column_map_t {
+//! Registered only for functions that declared virtual columns
+static auto CV2TableGetVirtualColumns(ClientContext &, optional_ptr<FunctionData> bind_data) -> virtual_column_map_t {
 	virtual_column_map_t result;
-	result.insert(make_pair(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER,
-	                        TableColumn("file_row_number", LogicalType::BIGINT)));
+	if (!bind_data) {
+		return result;
+	}
+	const auto &info = *bind_data->Cast<CV2TableFunctionData>().info;
+	if (info.file_row_number) {
+		result.insert(make_pair(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER,
+		                        TableColumn("file_row_number", LogicalType::BIGINT)));
+	}
+	for (idx_t i = 0; i < info.custom_virtual_columns.size(); i++) {
+		const auto &column = info.custom_virtual_columns[i];
+		result.insert(make_pair(CV2_CUSTOM_VIRTUAL_COLUMN_START + i, TableColumn(column.first, column.second)));
+	}
 	return result;
 }
 
@@ -1489,7 +1518,7 @@ public:
 		}
 
 		// Both are told apart from the declared columns by their place among the columns the scan was asked for
-		if (info.file_row_number && !info.projection_pushdown) {
+		if ((info.file_row_number || !info.custom_virtual_columns.empty()) && !info.projection_pushdown) {
 			throw InvalidInputException(
 			    "A table function that produces a virtual column requires projection pushdown.");
 		}
@@ -1532,8 +1561,8 @@ public:
 			// The engine applies the filters to what the function produces, so they only need to reach the scan
 			function.filter_pushdown = true;
 		}
-		if (info.file_row_number) {
-			function.get_virtual_columns = CV2TableGetFileRowNumberColumn;
+		if (info.file_row_number || !info.custom_virtual_columns.empty()) {
+			function.get_virtual_columns = CV2TableGetVirtualColumns;
 		}
 		if (info.metrics_cb) {
 			function.get_metrics = CV2TableGetMetrics;
@@ -1560,10 +1589,13 @@ private:
 		if (!info.op || !info.table_input) {
 			return signature;
 		}
-		// the declared parameters are all named, so the table input goes first
-		auto result = signature;
+		// the table input goes first, ahead of the parameters the function declares
+		FunctionSignature result;
 		CAPIFunctionSignature::AddParameter(result, FunctionParameter(Identifier("input"), LogicalType::TABLE, {},
 		                                                              FunctionParameterKind::POSITIONAL_ONLY));
+		for (auto &parameter : signature.GetParameters()) {
+			CAPIFunctionSignature::AddParameter(result, parameter);
+		}
 		return result;
 	}
 
@@ -1583,19 +1615,12 @@ private:
 		reject(info.partition_data_cb, "a partition data callback");
 		reject(info.partitioning_cb, "a partitioning callback");
 		reject(info.claim_batch_cb, "a claim batch callback");
-		reject(info.projection_pushdown, "projection pushdown");
-		reject(info.file_row_number, "virtual columns");
+		reject(info.file_row_number, "the file_row_number virtual column");
 		if (!info.op->execute_cb) {
 			throw InvalidInputException("Execute callback must be set for the operator of the function.");
 		}
 		if (info.table_input) {
-			for (idx_t i = 0; i < signature.GetParameterCount(); i++) {
-				auto &parameter = signature.GetParameter(i);
-				if (parameter.AcceptsPosition() || parameter.GetKind() == FunctionParameterKind::VAR_POSITIONAL) {
-					throw InvalidInputException(
-					    "A table function whose operator takes a table input cannot declare positional parameters.");
-				}
-			}
+			// the table input comes first, any positional parameters follow it
 		} else if (info.op->finalize_cb) {
 			throw InvalidInputException(
 			    "The operator of a table function that takes its input from its arguments cannot have a finalize "
@@ -1814,6 +1839,34 @@ DUCKDB_V2_ERROR duckdb_v2_table_function_add_virtual_column(duckdb_v2_table_func
 		default:
 			throw duckdb::InvalidInputException("Invalid value in duckdb_v2_table_function_add_virtual_column");
 		}
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_add_custom_virtual_column(duckdb_v2_table_function_handle function,
+                                                                   const char *name, idx_t name_length,
+                                                                   duckdb_v2_logical_type_handle type,
+                                                                   idx_t *column_index,
+                                                                   duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	DUCKDB_CHECK_STR_ARG(name, name_length);
+	DUCKDB_CHECK_ARG(type);
+	DUCKDB_CHECK_ARG(column_index);
+	return WithErrorHandler(err, [&]() {
+		if (name_length == 0) {
+			throw duckdb::InvalidInputException("A virtual column needs a name");
+		}
+		auto column_type_ref = Convert(type);
+		const auto &column_type = *column_type_ref;
+		if (!column_type.IsComplete()) {
+			throw duckdb::InvalidInputException("Virtual column type must be a fully defined concrete type");
+		}
+		auto &columns = Convert(function)->info.custom_virtual_columns;
+		if (columns.size() >= CV2_MAX_CUSTOM_VIRTUAL_COLUMNS) {
+			throw duckdb::InvalidInputException("A table function can declare at most %llu virtual columns",
+			                                    CV2_MAX_CUSTOM_VIRTUAL_COLUMNS);
+		}
+		*column_index = CV2_CUSTOM_VIRTUAL_COLUMN_START + columns.size();
+		columns.emplace_back(ConvertIdentifierName(name, name_length), column_type);
 	});
 }
 

@@ -747,3 +747,219 @@ functions:
         description: The operator to destroy.
         indirection: 1
     return_type: ERROR
+
+  operator_init_global_get_column_count:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-26" ]
+    description: |
+      Returns the number of columns the operator produces.
+
+      With projection pushdown (see `[[table_function_set_projection_pushdown]]`) this is the number of columns the
+      query uses, which is the number of vectors in the output chunk; without it, it is the number of columns declared
+      in bind. Valid indices for `[[operator_init_global_get_column_index]]` are `0` up to (but excluding) this count.
+    parameters:
+      info:
+        type: operator_init_global_info
+        description: The global init info handle.
+      count:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the number of columns the operator produces.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  operator_init_global_get_column_index:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-26" ]
+    description: |
+      Returns which column the output chunk's vector at the given index stands for.
+
+      A declared column is identified by its index among the columns declared with
+      `[[table_function_bind_add_result_column]]`. A virtual column is identified by 2^63 plus its value in the
+      `[[TABLE_VIRTUAL_COLUMN]]` enum, or by the index `[[table_function_add_custom_virtual_column]]` returned. The
+      vector that stands for a column the operator does not produce, e.g. the position column of `WITH ORDINALITY`,
+      has index 2^64 - 2: leave it alone. Without projection pushdown the mapping is the
+      identity. Fails if the index is out of bounds.
+    parameters:
+      info:
+        type: operator_init_global_info
+        description: The global init info handle.
+      index:
+        type: idx
+        description: The index of the column in the output chunk.
+      column_index:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the index of the column.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  operator_init_local_get_column_count:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-26" ]
+    description: |
+      Returns the number of columns the operator produces.
+
+      With projection pushdown (see `[[table_function_set_projection_pushdown]]`) this is the number of columns the
+      query uses, which is the number of vectors in the output chunk; without it, it is the number of columns declared
+      in bind. Valid indices for `[[operator_init_local_get_column_index]]` are `0` up to (but excluding) this count.
+    parameters:
+      info:
+        type: operator_init_local_info
+        description: The local init info handle.
+      count:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the number of columns the operator produces.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  operator_init_local_get_column_index:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-26" ]
+    description: |
+      Returns which column the output chunk's vector at the given index stands for.
+
+      A declared column is identified by its index among the columns declared with
+      `[[table_function_bind_add_result_column]]`. A virtual column is identified by 2^63 plus its value in the
+      `[[TABLE_VIRTUAL_COLUMN]]` enum, or by the index `[[table_function_add_custom_virtual_column]]` returned. The
+      vector that stands for a column the operator does not produce, e.g. the position column of `WITH ORDINALITY`,
+      has index 2^64 - 2: leave it alone. Without projection pushdown the mapping is the
+      identity. Fails if the index is out of bounds.
+    parameters:
+      info:
+        type: operator_init_local_info
+        description: The local init info handle.
+      index:
+        type: idx
+        description: The index of the column in the output chunk.
+      column_index:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the index of the column.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  operator_execute_get_column_count:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-26" ]
+    description: |
+      Returns the number of columns the operator produces.
+
+      With projection pushdown (see `[[table_function_set_projection_pushdown]]`) this is the number of columns the
+      query uses, which is the number of vectors in the output chunk; without it, it is the number of columns declared
+      in bind. Valid indices for `[[operator_execute_get_column_index]]` are `0` up to (but excluding) this count.
+    parameters:
+      info:
+        type: operator_execute_info
+        description: The execute info handle.
+      count:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the number of columns the operator produces.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  operator_execute_get_column_index:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-26" ]
+    description: |
+      Returns which column the output chunk's vector at the given index stands for.
+
+      A declared column is identified by its index among the columns declared with
+      `[[table_function_bind_add_result_column]]`. A virtual column is identified by 2^63 plus its value in the
+      `[[TABLE_VIRTUAL_COLUMN]]` enum, or by the index `[[table_function_add_custom_virtual_column]]` returned. The
+      vector that stands for a column the operator does not produce, e.g. the position column of `WITH ORDINALITY`,
+      has index 2^64 - 2: leave it alone. Without projection pushdown the mapping is the
+      identity. Fails if the index is out of bounds.
+    parameters:
+      info:
+        type: operator_execute_info
+        description: The execute info handle.
+      index:
+        type: idx
+        description: The index of the column in the output chunk.
+      column_index:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the index of the column.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  operator_finalize_get_column_count:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-26" ]
+    description: |
+      Returns the number of columns the operator produces.
+
+      With projection pushdown (see `[[table_function_set_projection_pushdown]]`) this is the number of columns the
+      query uses, which is the number of vectors in the output chunk; without it, it is the number of columns declared
+      in bind. Valid indices for `[[operator_finalize_get_column_index]]` are `0` up to (but excluding) this count.
+    parameters:
+      info:
+        type: operator_finalize_info
+        description: The finalize info handle.
+      count:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the number of columns the operator produces.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  operator_finalize_get_column_index:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-26" ]
+    description: |
+      Returns which column the output chunk's vector at the given index stands for.
+
+      A declared column is identified by its index among the columns declared with
+      `[[table_function_bind_add_result_column]]`. A virtual column is identified by 2^63 plus its value in the
+      `[[TABLE_VIRTUAL_COLUMN]]` enum, or by the index `[[table_function_add_custom_virtual_column]]` returned. The
+      vector that stands for a column the operator does not produce, e.g. the position column of `WITH ORDINALITY`,
+      has index 2^64 - 2: leave it alone. Without projection pushdown the mapping is the
+      identity. Fails if the index is out of bounds.
+    parameters:
+      info:
+        type: operator_finalize_info
+        description: The finalize info handle.
+      index:
+        type: idx
+        description: The index of the column in the output chunk.
+      column_index:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the index of the column.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR

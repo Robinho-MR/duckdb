@@ -440,6 +440,76 @@ void TakeExecCb(duckdb_v2_operator_execute_info_handle info, duckdb_v2_context_h
 }
 
 // ---------------------------------------------------------------------------
+// cols(TABLE): with projection pushdown, columns a (2x), b (3x) and the virtual column plus_one (x + 1).
+// ---------------------------------------------------------------------------
+
+std::atomic<idx_t> cols_b_computed {0};
+constexpr idx_t COLS_EMPTY_COLUMN = UINT64_MAX - 1;
+idx_t cols_plus_one_index = 0;
+
+void ColsBindCb(duckdb_v2_function_bind_info_handle, duckdb_v2_table_function_bind_info_handle result,
+                duckdb_v2_context_handle context, duckdb_v2_error_info_handle *err) {
+	if (RequireBigintInput(result, err) && AddBigintColumn(result, context, "a", err)) {
+		AddBigintColumn(result, context, "b", err);
+	}
+}
+
+void ColsExecCb(duckdb_v2_operator_execute_info_handle info, duckdb_v2_context_handle,
+                duckdb_v2_error_info_handle *err) {
+	ExecuteChunks chunks;
+	duckdb_v2_data_chunk_handle output = nullptr;
+	idx_t column_count = 0;
+	if (!GetChunks(info, chunks, err) ||
+	    duckdb_v2_operator_execute_get_column_count(info, &column_count, err) != DUCKDB_V2_ERROR_NONE ||
+	    duckdb_v2_operator_execute_get_output_chunk(info, &output, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	for (idx_t column = 0; column < column_count; column++) {
+		idx_t index = 0;
+		duckdb_v2_vector_handle vec = nullptr;
+		void *raw = nullptr;
+		if (duckdb_v2_operator_execute_get_column_index(info, column, &index, err) != DUCKDB_V2_ERROR_NONE) {
+			return;
+		}
+		if (index == COLS_EMPTY_COLUMN) {
+			continue;
+		}
+		if (duckdb_v2_data_chunk_get_vector(output, column, &vec, err) != DUCKDB_V2_ERROR_NONE ||
+		    duckdb_v2_vector_get_data_mutable(vec, &raw, err) != DUCKDB_V2_ERROR_NONE) {
+			return;
+		}
+		auto data = static_cast<int64_t *>(raw);
+		for (idx_t i = 0; i < chunks.input_size; i++) {
+			if (index == 0) {
+				data[i] = 2 * InputAt(chunks, i);
+			} else if (index == 1) {
+				data[i] = 3 * InputAt(chunks, i);
+				cols_b_computed++;
+			} else if (index == cols_plus_one_index) {
+				data[i] = InputAt(chunks, i) + 1;
+			} else {
+				SetErrorInfo(err, DUCKDB_V2_ERROR_INPUT_INVALID, "unexpected column index");
+				return;
+			}
+		}
+	}
+	duckdb_v2_vector_set_size(chunks.out, chunks.input_size, err);
+}
+
+void RegisterCols(EnvFixture &fx) {
+	auto function = MakeTable(fx.conn, "cols");
+	auto bigint = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_BIGINT);
+	REQUIRE(duckdb_v2_table_function_set_bind_callback(function, ColsBindCb, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_table_function_set_projection_pushdown(function, true, nullptr) == DUCKDB_V2_ERROR_NONE);
+	std::string_view name = "plus_one";
+	REQUIRE(duckdb_v2_table_function_add_custom_virtual_column(function, name.data(), name.size(), bigint,
+	                                                           &cols_plus_one_index, nullptr) == DUCKDB_V2_ERROR_NONE);
+	duckdb_v2_logical_type_destroy(&bigint);
+	auto op = MakeOperator(fx.conn, ColsExecCb);
+	REQUIRE(Register(fx.conn, function, op, DUCKDB_V2_TABLE_OPERATOR_INPUT_TABLE) == DUCKDB_V2_ERROR_NONE);
+}
+
+// ---------------------------------------------------------------------------
 // echo(TABLE): returns its input as-is, named and typed after it.
 // ---------------------------------------------------------------------------
 
@@ -789,16 +859,6 @@ TEST_CASE("V2 operator: registration refusals", "[capi_v2][capi_v2_operator]") {
 		       duckdb_v2_error_info_handle *) {},
 		    nullptr);
 	});
-	refuse("projection pushdown", table, [](duckdb_v2_table_function_handle function, duckdb_v2_operator_handle) {
-		duckdb_v2_table_function_set_projection_pushdown(function, true, nullptr);
-	});
-	refuse(
-	    "cannot declare positional parameters", table,
-	    [&](duckdb_v2_table_function_handle function, duckdb_v2_operator_handle) { AddParam(function, "x", bigint); });
-	refuse("cannot declare positional parameters", table,
-	       [&](duckdb_v2_table_function_handle function, duckdb_v2_operator_handle) {
-		       AddParam(function, "xs", bigint, DUCKDB_V2_FUNCTION_PARAMETER_KIND_POSITIONAL_VARIADIC);
-	       });
 	refuse("cannot have a finalize callback", arguments,
 	       [](duckdb_v2_table_function_handle, duckdb_v2_operator_handle op) {
 		       duckdb_v2_operator_set_finalize_callback(op, CountFinalizeCb, nullptr);
@@ -822,6 +882,78 @@ TEST_CASE("V2 operator: registration refusals", "[capi_v2][capi_v2_operator]") {
 
 	duckdb_v2_logical_type_destroy(&bigint);
 	REQUIRE(QueryError(fx.conn, "SELECT * FROM refused((SELECT 1))").find("refused") != std::string::npos);
+}
+
+TEST_CASE("V2 operator: positional parameters follow the table input", "[capi_v2][capi_v2_operator]") {
+	EnvFixture fx;
+	auto function = MakeTable(fx.conn, "my_take");
+	auto bigint = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_BIGINT);
+	AddParam(function, "n", bigint);
+	duckdb_v2_logical_type_destroy(&bigint);
+	REQUIRE(duckdb_v2_table_function_set_bind_callback(function, TakeBindCb, nullptr) == DUCKDB_V2_ERROR_NONE);
+	auto op = MakeOperator(fx.conn, TakeExecCb);
+	REQUIRE(duckdb_v2_operator_set_init_global_callback(op, TakeInitGlobalCb, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(Register(fx.conn, function, op, DUCKDB_V2_TABLE_OPERATOR_INPUT_TABLE) == DUCKDB_V2_ERROR_NONE);
+
+	REQUIRE(QueryI64(fx.conn, "SELECT count(*) FROM my_take((SELECT range FROM range(100000)), 5)") == 5);
+	REQUIRE(QueryI64(fx.conn, "SELECT sum(v) FROM my_take((SELECT range FROM range(100)), 10)") == 45);
+	REQUIRE(QueryI64(fx.conn, "SELECT sum(v) FROM my_take((SELECT range FROM range(100)), n := 10)") == 45);
+	REQUIRE(QueryI64(fx.conn, "SELECT count(*) FROM duckdb_functions() WHERE function_name = 'my_take' AND "
+	                          "parameter_types = ['TABLE', 'BIGINT']") == 1);
+}
+
+TEST_CASE("V2 operator: projection pushdown and virtual columns", "[capi_v2][capi_v2_operator]") {
+	EnvFixture fx;
+	RegisterCols(fx);
+	const std::string table = "cols((SELECT range FROM range(10)))";
+
+	cols_b_computed = 0;
+	REQUIRE(QueryI64(fx.conn, "SELECT sum(a) FROM " + table) == 90);
+	// the column that is not asked for is not produced
+	REQUIRE(cols_b_computed == 0);
+	REQUIRE(QueryI64(fx.conn, "SELECT sum(b) FROM " + table) == 135);
+	REQUIRE(cols_b_computed > 0);
+	REQUIRE(QueryI64(fx.conn, "SELECT sum(a + b) FROM " + table) == 225);
+	// virtual columns are only produced when asked for by name
+	REQUIRE(QueryI64(fx.conn, "SELECT sum(plus_one) FROM " + table) == 55);
+	REQUIRE(QueryI64(fx.conn, "SELECT sum(plus_one + a) FROM " + table) == 145);
+	REQUIRE(QueryI64(fx.conn, "SELECT count(*) FROM (SELECT * FROM " + table + ")") == 10);
+	REQUIRE(QueryI64(fx.conn, "SELECT count(*) FROM (SELECT * FROM " + table + " WHERE plus_one > 5)") == 5);
+	// no column is needed at all
+	REQUIRE(QueryI64(fx.conn, "SELECT count(*) FROM " + table) == 10);
+	REQUIRE(QueryI64(fx.conn, "SELECT count(*) FROM cols((SELECT range FROM range(100000)))") == 100000);
+	// the position column of WITH ORDINALITY stands for no column of the function
+	REQUIRE(QueryI64(fx.conn, "SELECT sum(a * ordinality) FROM cols((SELECT range FROM range(4))) WITH ORDINALITY") ==
+	        2 * (0 * 1 + 1 * 2 + 2 * 3 + 3 * 4));
+	// LATERAL
+	REQUIRE(QueryI64(fx.conn, "SELECT sum(c.plus_one) FROM range(3) t(x), "
+	                          "LATERAL cols((SELECT t.x)) c") == 6);
+	// a virtual column is not part of SELECT *
+	REQUIRE(QueryError(fx.conn, "SELECT plus_one FROM (SELECT * FROM " + table + ")").find("not found") !=
+	        std::string::npos);
+}
+
+TEST_CASE("V2 table function: custom virtual columns need projection pushdown", "[capi_v2][capi_v2_operator]") {
+	EnvFixture fx;
+	auto function = MakeTable(fx.conn, "virtual_fn");
+	REQUIRE(duckdb_v2_table_function_set_bind_callback(function, DoubleBindCb, nullptr) == DUCKDB_V2_ERROR_NONE);
+	auto bigint = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_BIGINT);
+	idx_t index = 0;
+	std::string_view name = "v";
+	REQUIRE(duckdb_v2_table_function_add_custom_virtual_column(function, name.data(), name.size(), bigint, &index,
+	                                                           nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(index == (UINT64_C(1) << 63) + 1024);
+	REQUIRE(duckdb_v2_table_function_add_custom_virtual_column(function, name.data(), name.size(), bigint, &index,
+	                                                           nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(index == (UINT64_C(1) << 63) + 1025);
+	REQUIRE(duckdb_v2_table_function_add_custom_virtual_column(function, nullptr, 0, bigint, &index, nullptr) ==
+	        DUCKDB_V2_ERROR_INPUT_INVALID);
+	auto op = MakeOperator(fx.conn, DoubleExecCb);
+	std::string error;
+	REQUIRE(Register(fx.conn, function, op, DUCKDB_V2_TABLE_OPERATOR_INPUT_TABLE, &error) ==
+	        DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(error.find("requires projection pushdown") != std::string::npos);
+	duckdb_v2_logical_type_destroy(&bigint);
 }
 
 TEST_CASE("V2 operator: a function with a table input cannot be overloaded", "[capi_v2][capi_v2_operator]") {
