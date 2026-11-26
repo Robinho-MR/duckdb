@@ -255,11 +255,11 @@ TEST_CASE("Repeated global settings keep the read cache valid", "[api][settings]
 	expect_same_value(Value(LogicalType::TIME_NS));
 	expect_same_value(Value(LogicalType::TIME_TZ));
 	expect_same_value(Value(LogicalType::TIMESTAMP));
-	expect_same_value(Value(LogicalType::TIMESTAMP_S));
-	expect_same_value(Value(LogicalType::TIMESTAMP_MS));
-	expect_same_value(Value(LogicalType::TIMESTAMP_NS));
-	expect_same_value(Value(LogicalType::TIMESTAMP_TZ));
-	expect_same_value(Value(LogicalType::TIMESTAMP_TZ_NS));
+	expect_same_value(Value(LogicalType::TIMESTAMP_S()));
+	expect_same_value(Value(LogicalType::TIMESTAMP_MS()));
+	expect_same_value(Value(LogicalType::TIMESTAMP_NS()));
+	expect_same_value(Value(LogicalType::TIMESTAMP_TZ()));
+	expect_same_value(Value(LogicalType::TIMESTAMP_TZ_NS()));
 	expect_same_value(Value(LogicalType::UUID));
 	expect_same_value(Value(LogicalType::INTERVAL));
 

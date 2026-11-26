@@ -318,9 +318,9 @@ string GetTypeName(duckdb::LogicalType &type) {
 	case duckdb::LogicalTypeId::TIME_NS:
 		return "TIME";
 	case duckdb::LogicalTypeId::TIMESTAMP:
-	case duckdb::LogicalTypeId::TIMESTAMP_NS:
-	case duckdb::LogicalTypeId::TIMESTAMP_MS:
-	case duckdb::LogicalTypeId::TIMESTAMP_SEC:
+		if (duckdb::TimestampType::HasTimeZone(type)) {
+			return "NULL";
+		}
 		return "TIMESTAMP";
 	case duckdb::LogicalTypeId::VARCHAR:
 		return "VARCHAR";

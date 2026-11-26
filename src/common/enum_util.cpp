@@ -4082,10 +4082,10 @@ const StringUtil::EnumStringLiteral *GetLogicalTypeIdValues() {
 		{ static_cast<uint32_t>(LogicalTypeId::BIGINT), "BIGINT" },
 		{ static_cast<uint32_t>(LogicalTypeId::DATE), "DATE" },
 		{ static_cast<uint32_t>(LogicalTypeId::TIME), "TIME" },
-		{ static_cast<uint32_t>(LogicalTypeId::TIMESTAMP_SEC), "TIMESTAMP_S" },
-		{ static_cast<uint32_t>(LogicalTypeId::TIMESTAMP_MS), "TIMESTAMP_MS" },
+		{ static_cast<uint32_t>(LogicalTypeId::LEGACY_TIMESTAMP_SEC), "TIMESTAMP_S" },
+		{ static_cast<uint32_t>(LogicalTypeId::LEGACY_TIMESTAMP_MS), "TIMESTAMP_MS" },
 		{ static_cast<uint32_t>(LogicalTypeId::TIMESTAMP), "TIMESTAMP" },
-		{ static_cast<uint32_t>(LogicalTypeId::TIMESTAMP_NS), "TIMESTAMP_NS" },
+		{ static_cast<uint32_t>(LogicalTypeId::LEGACY_TIMESTAMP_NS), "TIMESTAMP_NS" },
 		{ static_cast<uint32_t>(LogicalTypeId::DECIMAL), "DECIMAL" },
 		{ static_cast<uint32_t>(LogicalTypeId::FLOAT), "FLOAT" },
 		{ static_cast<uint32_t>(LogicalTypeId::DOUBLE), "DOUBLE" },
@@ -4097,8 +4097,8 @@ const StringUtil::EnumStringLiteral *GetLogicalTypeIdValues() {
 		{ static_cast<uint32_t>(LogicalTypeId::USMALLINT), "USMALLINT" },
 		{ static_cast<uint32_t>(LogicalTypeId::UINTEGER), "UINTEGER" },
 		{ static_cast<uint32_t>(LogicalTypeId::UBIGINT), "UBIGINT" },
-		{ static_cast<uint32_t>(LogicalTypeId::TIMESTAMP_TZ), "TIMESTAMP WITH TIME ZONE" },
-		{ static_cast<uint32_t>(LogicalTypeId::TIMESTAMP_TZ_NS), "TIMESTAMPTZ_NS" },
+		{ static_cast<uint32_t>(LogicalTypeId::LEGACY_TIMESTAMP_TZ), "TIMESTAMP WITH TIME ZONE" },
+		{ static_cast<uint32_t>(LogicalTypeId::LEGACY_TIMESTAMP_TZ_NS), "TIMESTAMPTZ_NS" },
 		{ static_cast<uint32_t>(LogicalTypeId::TIME_TZ), "TIME WITH TIME ZONE" },
 		{ static_cast<uint32_t>(LogicalTypeId::TIME_NS), "TIME_NS" },
 		{ static_cast<uint32_t>(LogicalTypeId::BIT), "BIT" },
@@ -4152,19 +4152,20 @@ const StringUtil::EnumStringLiteral *GetLogicalTypeInfoTypeValues() {
 		{ static_cast<uint32_t>(LogicalTypeInfoType::ANY_TYPE_INFO), "ANY_TYPE_INFO" },
 		{ static_cast<uint32_t>(LogicalTypeInfoType::INTEGER_LITERAL_TYPE_INFO), "INTEGER_LITERAL_TYPE_INFO" },
 		{ static_cast<uint32_t>(LogicalTypeInfoType::TEMPLATE_TYPE_INFO), "TEMPLATE_TYPE_INFO" },
-		{ static_cast<uint32_t>(LogicalTypeInfoType::GEO_TYPE_INFO), "GEO_TYPE_INFO" }
+		{ static_cast<uint32_t>(LogicalTypeInfoType::GEO_TYPE_INFO), "GEO_TYPE_INFO" },
+		{ static_cast<uint32_t>(LogicalTypeInfoType::TIMESTAMP_TYPE_INFO), "TIMESTAMP_TYPE_INFO" }
 	};
 	return values;
 }
 
 template<>
 const char* EnumUtil::ToChars<LogicalTypeInfoType>(LogicalTypeInfoType value) {
-	return StringUtil::EnumToString(GetLogicalTypeInfoTypeValues(), 14, "LogicalTypeInfoType", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetLogicalTypeInfoTypeValues(), 15, "LogicalTypeInfoType", static_cast<uint32_t>(value));
 }
 
 template<>
 LogicalTypeInfoType EnumUtil::FromString<LogicalTypeInfoType>(const char *value) {
-	return static_cast<LogicalTypeInfoType>(StringUtil::StringToEnum(GetLogicalTypeInfoTypeValues(), 14, "LogicalTypeInfoType", value));
+	return static_cast<LogicalTypeInfoType>(StringUtil::StringToEnum(GetLogicalTypeInfoTypeValues(), 15, "LogicalTypeInfoType", value));
 }
 
 const StringUtil::EnumStringLiteral *GetLookupResultTypeValues() {

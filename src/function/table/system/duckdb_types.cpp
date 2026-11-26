@@ -147,9 +147,11 @@ void DuckDBTypesFunction(ClientContext &context, TableFunctionInput &data_p, Dat
 		database_oid.Append(Value::BIGINT(NumericCast<int64_t>(type_entry.catalog.GetOid())));
 		schema_name.Append(Value(type_entry.schema.name));
 		schema_oid.Append(Value::BIGINT(NumericCast<int64_t>(type_entry.schema.oid)));
+		// the timestamp variants keep the oids and names of their legacy ids
+		auto type_id = type.id() == LogicalTypeId::TIMESTAMP ? TimestampType::GetLegacyId(type) : type.id();
 		int64_t oid;
 		if (type_entry.internal) {
-			oid = NumericCast<int64_t>(type.id());
+			oid = NumericCast<int64_t>(type_id);
 		} else {
 			oid = NumericCast<int64_t>(type_entry.oid);
 		}
@@ -166,7 +168,7 @@ void DuckDBTypesFunction(ClientContext &context, TableFunctionInput &data_p, Dat
 		type_size.Append(internal_type == PhysicalType::INVALID
 		                     ? Value()
 		                     : Value::BIGINT(NumericCast<int64_t>(GetTypeIdSize(internal_type))));
-		logical_type.Append(Value(EnumUtil::ToString(type.id())));
+		logical_type.Append(Value(EnumUtil::ToString(type_id)));
 		string category;
 		switch (type.id()) {
 		case LogicalTypeId::TINYINT:
@@ -187,14 +189,9 @@ void DuckDBTypesFunction(ClientContext &context, TableFunctionInput &data_p, Dat
 		case LogicalTypeId::DATE:
 		case LogicalTypeId::TIME:
 		case LogicalTypeId::TIME_NS:
-		case LogicalTypeId::TIMESTAMP_SEC:
-		case LogicalTypeId::TIMESTAMP_MS:
 		case LogicalTypeId::TIMESTAMP:
-		case LogicalTypeId::TIMESTAMP_NS:
 		case LogicalTypeId::INTERVAL:
 		case LogicalTypeId::TIME_TZ:
-		case LogicalTypeId::TIMESTAMP_TZ:
-		case LogicalTypeId::TIMESTAMP_TZ_NS:
 			category = "DATETIME";
 			break;
 		case LogicalTypeId::CHAR:

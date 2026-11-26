@@ -247,11 +247,6 @@ static LogicalType GetJSONType(StructNames &const_struct_names, const LogicalTyp
 	case LogicalTypeId::TIME:
 	case LogicalTypeId::TIME_TZ:
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_SEC:
 	case LogicalTypeId::UUID:
 	case LogicalTypeId::BIGNUM:
 	case LogicalTypeId::DECIMAL:
@@ -450,9 +445,9 @@ CreateJSONCopyToJSONFunctionData(ClientContext &context, StructNames const_struc
 	unique_ptr<Expression> timestamptz_ns_format_expression;
 	if (has_timestamp_format) {
 		timestamptz_format_expression =
-		    BindJSONCopyTimestampTZFormatter(context, timestamp_format_string, LogicalType::TIMESTAMP_TZ);
+		    BindJSONCopyTimestampTZFormatter(context, timestamp_format_string, LogicalType::TIMESTAMP_TZ());
 		timestamptz_ns_format_expression =
-		    BindJSONCopyTimestampTZFormatter(context, timestamp_format_string, LogicalType::TIMESTAMP_TZ_NS);
+		    BindJSONCopyTimestampTZFormatter(context, timestamp_format_string, LogicalType::TIMESTAMP_TZ_NS());
 	}
 
 	return make_uniq<JSONCopyToJSONFunctionData>(
@@ -898,7 +893,7 @@ static void CreateValuesDate(yyjson_mut_doc *doc, yyjson_mut_val *vals[], Vector
 
 static void CreateValuesTimestamp(yyjson_mut_doc *doc, yyjson_mut_val *vals[], Vector &value_v, idx_t count,
                                   const JSONCopyFormatOptions &options) {
-	if (options.timestamp_format && value_v.GetType().id() != LogicalTypeId::TIMESTAMP) {
+	if (options.timestamp_format && !TimestampType::Is(value_v.GetType(), TimestampType::MICROSECOND_SCALE, false)) {
 		Vector timestamp_vector(LogicalType::TIMESTAMP, count);
 		VectorOperations::DefaultCast(value_v, timestamp_vector, count);
 		CreateValuesTimestamp(doc, vals, timestamp_vector, count, options);
@@ -930,7 +925,7 @@ static void CreateValuesTimestampTZ(yyjson_mut_doc *doc, yyjson_mut_val *vals[],
 		return;
 	}
 	CreateValuesFormatted(doc, vals, value_v, count, true, [&](Vector &string_vector) {
-		auto format_expression = value_v.GetType().id() == LogicalTypeId::TIMESTAMP_TZ_NS
+		auto format_expression = TimestampType::GetScale(value_v.GetType()) == TimestampType::NANOSECOND_SCALE
 		                             ? options.timestamptz_ns_format_expression
 		                             : options.timestamptz_format_expression;
 		if (!options.context || !format_expression) {
@@ -945,6 +940,18 @@ static void CreateValuesTimestampTZ(yyjson_mut_doc *doc, yyjson_mut_val *vals[],
 	});
 }
 
+static void CreateValuesAnyTimestamp(yyjson_mut_doc *doc, yyjson_mut_val *vals[], Vector &value_v, idx_t count,
+                                     const JSONCopyFormatOptions &options) {
+	auto &type = value_v.GetType();
+	if (TimestampType::HasTimeZone(type)) {
+		CreateValuesTimestampTZ(doc, vals, value_v, count, options);
+	} else if (TimestampType::GetScale(type) == TimestampType::NANOSECOND_SCALE) {
+		CreateValuesTimestampNS(doc, vals, value_v, count, options);
+	} else {
+		CreateValuesTimestamp(doc, vals, value_v, count, options);
+	}
+}
+
 static void CreateValuesMapKeys(yyjson_mut_doc *doc, yyjson_mut_val *vals[], Vector &value_v, idx_t count,
                                 const JSONCopyFormatOptions &options) {
 	switch (value_v.GetType().id()) {
@@ -952,16 +959,7 @@ static void CreateValuesMapKeys(yyjson_mut_doc *doc, yyjson_mut_val *vals[], Vec
 		CreateValuesDate(doc, vals, value_v, count, options);
 		break;
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-		CreateValuesTimestamp(doc, vals, value_v, count, options);
-		break;
-	case LogicalTypeId::TIMESTAMP_NS:
-		CreateValuesTimestampNS(doc, vals, value_v, count, options);
-		break;
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		CreateValuesTimestampTZ(doc, vals, value_v, count, options);
+		CreateValuesAnyTimestamp(doc, vals, value_v, count, options);
 		break;
 	default:
 		CreateValuesFromDefaultCast(doc, vals, value_v, count);
@@ -1040,16 +1038,7 @@ static void CreateValues(const StructNames &names, yyjson_mut_doc *doc, yyjson_m
 		CreateValuesDate(doc, vals, value_v, count, options);
 		break;
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-		CreateValuesTimestamp(doc, vals, value_v, count, options);
-		break;
-	case LogicalTypeId::TIMESTAMP_NS:
-		CreateValuesTimestampNS(doc, vals, value_v, count, options);
-		break;
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		CreateValuesTimestampTZ(doc, vals, value_v, count, options);
+		CreateValuesAnyTimestamp(doc, vals, value_v, count, options);
 		break;
 	case LogicalTypeId::BIT:
 	case LogicalTypeId::BLOB:

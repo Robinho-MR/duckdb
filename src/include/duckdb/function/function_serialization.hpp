@@ -174,6 +174,18 @@ public:
 		}
 	}
 
+	//! Whether the types have the same id - and the same scale / time zone for timestamps
+	static bool SameTypeKind(const LogicalType &left, const LogicalType &right) {
+		if (left.id() != right.id()) {
+			return false;
+		}
+		if (left.id() != LogicalTypeId::TIMESTAMP) {
+			return true;
+		}
+		return TimestampType::GetScale(left) == TimestampType::GetScale(right) &&
+		       TimestampType::HasTimeZone(left) == TimestampType::HasTimeZone(right);
+	}
+
 	//! Selects the overload of a v1.x aggregate whose bind lost the erased arguments, by its leading parameter types
 	template <class FUNCTION_SET>
 	static optional_idx SelectByLeadingArguments(const FUNCTION_SET &functions, vector<LogicalType> &arguments,
@@ -181,12 +193,12 @@ public:
 		for (idx_t offset = 0; offset < functions.functions.size(); offset++) {
 			auto &signature = functions.functions[offset]->GetSignature();
 			if (signature.GetParameterCount() <= arguments.size() ||
-			    signature.GetReturnType().id() != return_type.id()) {
+			    !SameTypeKind(signature.GetReturnType(), return_type)) {
 				continue;
 			}
 			bool leading = true;
 			for (idx_t i = 0; i < arguments.size() && leading; i++) {
-				leading = signature.GetParameter(i).GetType().id() == arguments[i].id();
+				leading = SameTypeKind(signature.GetParameter(i).GetType(), arguments[i]);
 			}
 			if (leading) {
 				for (idx_t i = arguments.size(); i < signature.GetParameterCount(); i++) {

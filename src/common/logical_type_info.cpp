@@ -120,6 +120,17 @@ bool LogicalTypeInfo::Equals(const LogicalTypeInfo &other) const {
 	if (HasNoEqualityParameters(type) && HasNoEqualityParameters(other.type)) {
 		return true;
 	}
+	if (type == LogicalTypeInfoType::TIMESTAMP_TYPE_INFO || other.type == LogicalTypeInfoType::TIMESTAMP_TYPE_INFO) {
+		// a timestamp without timestamp parameters (e.g. one that only has an alias) is the default timestamp
+		if (!HasNoEqualityParameters(type) && type != LogicalTypeInfoType::TIMESTAMP_TYPE_INFO) {
+			return false;
+		}
+		if (!HasNoEqualityParameters(other.type) && other.type != LogicalTypeInfoType::TIMESTAMP_TYPE_INFO) {
+			return false;
+		}
+		return TimestampTypeInfo::GetScale(*this) == TimestampTypeInfo::GetScale(other) &&
+		       TimestampTypeInfo::HasTimeZone(*this) == TimestampTypeInfo::HasTimeZone(other);
+	}
 	if (type != other.type) {
 		return false;
 	}
@@ -168,6 +179,42 @@ bool StringTypeInfo::EqualsInternal(const LogicalTypeInfo *other_p) const {
 
 unique_ptr<LogicalTypeInfo> StringTypeInfo::Copy() const {
 	return make_uniq<StringTypeInfo>(*this);
+}
+
+//===--------------------------------------------------------------------===//
+// Timestamp Type Info
+//===--------------------------------------------------------------------===//
+TimestampTypeInfo::TimestampTypeInfo()
+    : LogicalTypeInfo(LogicalTypeInfoType::TIMESTAMP_TYPE_INFO), scale(TimestampType::MICROSECOND_SCALE),
+      has_time_zone(false) {
+}
+
+TimestampTypeInfo::TimestampTypeInfo(uint8_t scale_p, bool has_time_zone_p)
+    : LogicalTypeInfo(LogicalTypeInfoType::TIMESTAMP_TYPE_INFO), scale(scale_p), has_time_zone(has_time_zone_p) {
+	D_ASSERT(TimestampType::IsValid(scale, has_time_zone));
+}
+
+bool TimestampTypeInfo::EqualsInternal(const LogicalTypeInfo *other_p) const {
+	auto &other = other_p->Cast<TimestampTypeInfo>();
+	return scale == other.scale && has_time_zone == other.has_time_zone;
+}
+
+unique_ptr<LogicalTypeInfo> TimestampTypeInfo::Copy() const {
+	return make_uniq<TimestampTypeInfo>(*this);
+}
+
+uint8_t TimestampTypeInfo::GetScale(const LogicalTypeInfo &info) {
+	if (info.type != LogicalTypeInfoType::TIMESTAMP_TYPE_INFO) {
+		return TimestampType::MICROSECOND_SCALE;
+	}
+	return info.Cast<TimestampTypeInfo>().scale;
+}
+
+bool TimestampTypeInfo::HasTimeZone(const LogicalTypeInfo &info) {
+	if (info.type != LogicalTypeInfoType::TIMESTAMP_TYPE_INFO) {
+		return false;
+	}
+	return info.Cast<TimestampTypeInfo>().has_time_zone;
 }
 
 //===--------------------------------------------------------------------===//

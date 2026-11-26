@@ -479,19 +479,27 @@ BoundCastInfo DefaultCasts::StringCastSwitch(BindCastInput &input, const Logical
 	case LogicalTypeId::TIME_TZ:
 		return BoundCastInfo(&VectorCastHelpers::TryCastErrorLoop<string_t, dtime_tz_t, duckdb::TryCastErrorMessage>);
 	case LogicalTypeId::TIMESTAMP:
-		return BoundCastInfo(&VectorCastHelpers::TryCastErrorLoop<string_t, timestamp_t, duckdb::TryCastErrorMessage>);
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return BoundCastInfo(
-		    &VectorCastHelpers::TryCastErrorLoop<string_t, timestamp_tz_t, duckdb::TryCastErrorMessage>);
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return BoundCastInfo(
-		    &VectorCastHelpers::TryCastErrorLoop<string_t, timestamp_tz_ns_t, duckdb::TryCastErrorMessage>);
-	case LogicalTypeId::TIMESTAMP_NS:
-		return BoundCastInfo(&VectorCastHelpers::TryCastStrictLoop<string_t, timestamp_ns_t, duckdb::TryCast>);
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return BoundCastInfo(&VectorCastHelpers::TryCastStrictLoop<string_t, timestamp_sec_t, duckdb::TryCast>);
-	case LogicalTypeId::TIMESTAMP_MS:
-		return BoundCastInfo(&VectorCastHelpers::TryCastStrictLoop<string_t, timestamp_ms_t, duckdb::TryCast>);
+		if (TimestampType::HasTimeZone(target)) {
+			if (TimestampType::GetScale(target) == TimestampType::NANOSECOND_SCALE) {
+				return BoundCastInfo(
+				    &VectorCastHelpers::TryCastErrorLoop<string_t, timestamp_tz_ns_t, duckdb::TryCastErrorMessage>);
+			}
+			return BoundCastInfo(
+			    &VectorCastHelpers::TryCastErrorLoop<string_t, timestamp_tz_t, duckdb::TryCastErrorMessage>);
+		}
+		switch (TimestampType::GetScale(target)) {
+		case TimestampType::SECOND_SCALE:
+			return BoundCastInfo(&VectorCastHelpers::TryCastStrictLoop<string_t, timestamp_sec_t, duckdb::TryCast>);
+		case TimestampType::MILLISECOND_SCALE:
+			return BoundCastInfo(&VectorCastHelpers::TryCastStrictLoop<string_t, timestamp_ms_t, duckdb::TryCast>);
+		case TimestampType::MICROSECOND_SCALE:
+			return BoundCastInfo(
+			    &VectorCastHelpers::TryCastErrorLoop<string_t, timestamp_t, duckdb::TryCastErrorMessage>);
+		case TimestampType::NANOSECOND_SCALE:
+			return BoundCastInfo(&VectorCastHelpers::TryCastStrictLoop<string_t, timestamp_ns_t, duckdb::TryCast>);
+		default:
+			throw InternalException("Unsupported TIMESTAMP scale in cast");
+		}
 	case LogicalTypeId::BLOB:
 		return BoundCastInfo(&VectorCastHelpers::TryCastStringLoop<string_t, string_t, duckdb::TryCastToBlob>);
 	case LogicalTypeId::BIT:

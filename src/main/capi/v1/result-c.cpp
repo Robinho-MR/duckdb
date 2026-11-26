@@ -254,8 +254,22 @@ duckdb_state deprecated_duckdb_translate_column(QueryResult &result, duckdb_colu
 		WriteData<dtime_tz_t>(column, collection, column_ids);
 		break;
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-		WriteData<timestamp_t>(column, collection, column_ids);
+		switch (TimestampType::GetScale(result.GetTypes()[col])) {
+		case TimestampType::SECOND_SCALE:
+			WriteData<timestamp_t, timestamp_t, CTimestampSecConverter>(column, collection, column_ids);
+			break;
+		case TimestampType::MILLISECOND_SCALE:
+			WriteData<timestamp_t, timestamp_t, CTimestampMsConverter>(column, collection, column_ids);
+			break;
+		case TimestampType::MICROSECOND_SCALE:
+			WriteData<timestamp_t>(column, collection, column_ids);
+			break;
+		case TimestampType::NANOSECOND_SCALE:
+			WriteData<timestamp_t, timestamp_t, CTimestampNsConverter>(column, collection, column_ids);
+			break;
+		default:
+			throw InternalException("Unsupported TIMESTAMP scale");
+		}
 		break;
 	case LogicalTypeId::VARCHAR: {
 		WriteData<string_t, const char *, CStringConverter>(column, collection, column_ids);
@@ -263,18 +277,6 @@ duckdb_state deprecated_duckdb_translate_column(QueryResult &result, duckdb_colu
 	}
 	case LogicalTypeId::BLOB: {
 		WriteData<string_t, duckdb_blob, CBlobConverter>(column, collection, column_ids);
-		break;
-	}
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		WriteData<timestamp_t, timestamp_t, CTimestampNsConverter>(column, collection, column_ids);
-		break;
-	case LogicalTypeId::TIMESTAMP_MS: {
-		WriteData<timestamp_t, timestamp_t, CTimestampMsConverter>(column, collection, column_ids);
-		break;
-	}
-	case LogicalTypeId::TIMESTAMP_SEC: {
-		WriteData<timestamp_t, timestamp_t, CTimestampSecConverter>(column, collection, column_ids);
 		break;
 	}
 	case LogicalTypeId::HUGEINT: {
@@ -436,7 +438,7 @@ bool DeprecatedMaterializeResult(duckdb_result *result) {
 	// zero initialize the columns (so we can cleanly delete it in case a malloc fails)
 	memset(result->deprecated_columns, 0, sizeof(duckdb_column) * column_count);
 	for (idx_t i = 0; i < column_count; i++) {
-		result->deprecated_columns[i].deprecated_type = LogicalTypeIdToC(materialized.GetTypes()[i].id());
+		result->deprecated_columns[i].deprecated_type = LogicalTypeToC(materialized.GetTypes()[i]);
 		result->deprecated_columns[i].deprecated_name = (char *)materialized.ColumnName(i).c_str(); // NOLINT
 	}
 
@@ -518,7 +520,7 @@ duckdb_type duckdb_column_type(duckdb_result *result, idx_t col) {
 		return DUCKDB_TYPE_INVALID;
 	}
 	auto &result_data = *(reinterpret_cast<duckdb::DuckDBResultData *>(result->internal_data));
-	return duckdb::LogicalTypeIdToC(result_data.GetTypes()[col].id());
+	return duckdb::LogicalTypeToC(result_data.GetTypes()[col]);
 }
 
 duckdb_logical_type duckdb_column_logical_type(duckdb_result *result, idx_t col) {

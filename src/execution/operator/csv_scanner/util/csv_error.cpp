@@ -332,14 +332,14 @@ void CSVError::RemoveNewLine(string &error) {
 
 CSVError CSVError::CastError(const CSVReaderOptions &options, const string &column_name, string &cast_error,
                              idx_t column_idx, string &csv_row, LinesPerBoundary error_info, idx_t row_byte_position,
-                             optional_idx byte_position, LogicalTypeId type, const String &current_path) {
+                             optional_idx byte_position, const string &type_name, const String &current_path) {
 	std::ostringstream error;
 	// Which column
 	error << "Error when converting column \"" << column_name << "\". ";
 	// What was the cast error
 	error << cast_error << '\n';
 	std::ostringstream how_to_fix_it;
-	how_to_fix_it << "Column " << column_name << " is being converted as type " << LogicalTypeIdToString(type) << '\n';
+	how_to_fix_it << "Column " << column_name << " is being converted as type " << type_name << '\n';
 	if (!options.WasTypeManuallySet(column_idx)) {
 		how_to_fix_it << "This type was auto-detected from the CSV file." << '\n';
 		how_to_fix_it << "Possible solutions:" << '\n';

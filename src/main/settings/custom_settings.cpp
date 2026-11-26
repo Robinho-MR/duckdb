@@ -858,12 +858,7 @@ static LogicalType ParseForceVariantShredding(const string &input, bool allow_un
 		case LogicalTypeId::DATE:
 		case LogicalTypeId::TIME:
 		case LogicalTypeId::TIME_TZ:
-		case LogicalTypeId::TIMESTAMP_TZ:
-		case LogicalTypeId::TIMESTAMP_TZ_NS:
 		case LogicalTypeId::TIMESTAMP:
-		case LogicalTypeId::TIMESTAMP_SEC:
-		case LogicalTypeId::TIMESTAMP_MS:
-		case LogicalTypeId::TIMESTAMP_NS:
 		case LogicalTypeId::BLOB:
 		case LogicalTypeId::VARCHAR:
 		case LogicalTypeId::UUID:

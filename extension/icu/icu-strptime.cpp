@@ -294,7 +294,7 @@ struct ICUStrptime : public ICUDateFunc {
 				}
 				bound_function.SetFunctionCallback(function);
 				bound_function.SetInitStateCallback(InitCalendarCache);
-				bound_function.SetReturnType(has_ns ? LogicalType::TIMESTAMP_TZ_NS : LogicalType::TIMESTAMP_TZ);
+				bound_function.SetReturnType(has_ns ? LogicalType::TIMESTAMP_TZ_NS() : LogicalType::TIMESTAMP_TZ());
 				bound_function.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
 				return make_uniq<ICUStrptimeBindData>(context, format);
 			}
@@ -323,7 +323,7 @@ struct ICUStrptime : public ICUDateFunc {
 				}
 				bound_function.SetFunctionCallback(function);
 				bound_function.SetInitStateCallback(InitCalendarCache);
-				bound_function.SetReturnType(has_ns ? LogicalType::TIMESTAMP_TZ_NS : LogicalType::TIMESTAMP_TZ);
+				bound_function.SetReturnType(has_ns ? LogicalType::TIMESTAMP_TZ_NS() : LogicalType::TIMESTAMP_TZ());
 				bound_function.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
 				return make_uniq<ICUStrptimeBindData>(context, formats);
 			}
@@ -515,21 +515,21 @@ struct ICUStrptime : public ICUDateFunc {
 
 		auto cast_data = BindCastData(input);
 
-		switch (target.id()) {
-		case LogicalTypeId::TIMESTAMP_TZ:
-			return BoundCastInfo(VarcharToTimestampTZ, std::move(cast_data), InitCastCalendarCache);
-		case LogicalTypeId::TIMESTAMP_TZ_NS:
-			return BoundCastInfo(VarcharToTimestampTZNS, std::move(cast_data), InitCastCalendarCache);
-		case LogicalTypeId::TIME_TZ:
+		if (target.id() == LogicalTypeId::TIME_TZ) {
 			return BoundCastInfo(VarcharToTimeTZ, std::move(cast_data));
-		default:
-			throw InternalException("Unsupported type for VARCHAR to TIME/TIMESTAMPTZ cast.");
 		}
+		if (TimestampType::Is(target, TimestampType::MICROSECOND_SCALE, true)) {
+			return BoundCastInfo(VarcharToTimestampTZ, std::move(cast_data), InitCastCalendarCache);
+		}
+		if (TimestampType::Is(target, TimestampType::NANOSECOND_SCALE, true)) {
+			return BoundCastInfo(VarcharToTimestampTZNS, std::move(cast_data), InitCastCalendarCache);
+		}
+		throw InternalException("Unsupported type for VARCHAR to TIME/TIMESTAMPTZ cast.");
 	}
 
 	static void AddCasts(ExtensionLoader &loader) {
-		loader.RegisterCastFunction(LogicalType::VARCHAR, LogicalType::TIMESTAMP_TZ, BindCastFromVarchar);
-		loader.RegisterCastFunction(LogicalType::VARCHAR, LogicalType::TIMESTAMP_TZ_NS, BindCastFromVarchar);
+		loader.RegisterCastFunction(LogicalType::VARCHAR, LogicalType::TIMESTAMP_TZ(), BindCastFromVarchar);
+		loader.RegisterCastFunction(LogicalType::VARCHAR, LogicalType::TIMESTAMP_TZ_NS(), BindCastFromVarchar);
 		loader.RegisterCastFunction(LogicalType::VARCHAR, LogicalType::TIME_TZ, BindCastFromVarchar);
 	}
 };
@@ -647,12 +647,12 @@ struct ICUStrftime : public ICUDateFunc {
 		ScalarFunctionSet set {name};
 		ScalarFunction tstz_fun({}, LogicalType::VARCHAR, ICUStrftimeFunction<timestamp_tz_t>, Bind);
 		tstz_fun.GetSignature()
-		    .AddParameter("data", LogicalType::TIMESTAMP_TZ)
+		    .AddParameter("data", LogicalType::TIMESTAMP_TZ())
 		    .AddParameter("format", LogicalType::VARCHAR);
 		set.AddFunction(tstz_fun);
 		ScalarFunction tstz_ns_fun({}, LogicalType::VARCHAR, ICUStrftimeFunction<timestamp_tz_ns_t>, Bind);
 		tstz_ns_fun.GetSignature()
-		    .AddParameter("data", LogicalType::TIMESTAMP_TZ_NS)
+		    .AddParameter("data", LogicalType::TIMESTAMP_TZ_NS())
 		    .AddParameter("format", LogicalType::VARCHAR);
 		set.AddFunction(tstz_ns_fun);
 		// throws for unsupported format specifiers
@@ -723,19 +723,18 @@ struct ICUStrftime : public ICUDateFunc {
 
 		auto cast_data = BindCastData(input);
 
-		switch (source.id()) {
-		case LogicalTypeId::TIMESTAMP_TZ:
+		if (TimestampType::Is(source, TimestampType::MICROSECOND_SCALE, true)) {
 			return BoundCastInfo(CastToVarchar<timestamp_tz_t>, std::move(cast_data));
-		case LogicalTypeId::TIMESTAMP_TZ_NS:
-			return BoundCastInfo(CastToVarchar<timestamp_tz_ns_t>, std::move(cast_data));
-		default:
-			throw InternalException("Unexpected TIMESTAMPTZ type to VARCHAR cast.");
 		}
+		if (TimestampType::Is(source, TimestampType::NANOSECOND_SCALE, true)) {
+			return BoundCastInfo(CastToVarchar<timestamp_tz_ns_t>, std::move(cast_data));
+		}
+		throw InternalException("Unexpected TIMESTAMPTZ type to VARCHAR cast.");
 	}
 
 	static void AddCasts(ExtensionLoader &loader) {
-		loader.RegisterCastFunction(LogicalType::TIMESTAMP_TZ, LogicalType::VARCHAR, BindCastToVarchar);
-		loader.RegisterCastFunction(LogicalType::TIMESTAMP_TZ_NS, LogicalType::VARCHAR, BindCastToVarchar);
+		loader.RegisterCastFunction(LogicalType::TIMESTAMP_TZ(), LogicalType::VARCHAR, BindCastToVarchar);
+		loader.RegisterCastFunction(LogicalType::TIMESTAMP_TZ_NS(), LogicalType::VARCHAR, BindCastToVarchar);
 	}
 };
 

@@ -93,8 +93,8 @@ BoundCastInfo ICUMakeDate::BindCastNsToDate(BindCastInput &input, const LogicalT
 }
 
 void ICUMakeDate::AddCasts(ExtensionLoader &loader) {
-	loader.RegisterCastFunction(LogicalType::TIMESTAMP_TZ, LogicalType::DATE, BindCastToDate);
-	loader.RegisterCastFunction(LogicalType::TIMESTAMP_TZ_NS, LogicalType::DATE, BindCastNsToDate);
+	loader.RegisterCastFunction(LogicalType::TIMESTAMP_TZ(), LogicalType::DATE, BindCastToDate);
+	loader.RegisterCastFunction(LogicalType::TIMESTAMP_TZ_NS(), LogicalType::DATE, BindCastNsToDate);
 }
 
 struct ICUMakeTimestampTZFunc : public ICUDateFunc {
@@ -167,8 +167,8 @@ struct ICUMakeTimestampTZFunc : public ICUDateFunc {
 	}
 
 	template <typename TA>
-	static ScalarFunction GetSenaryFunction(const LogicalTypeId &type) {
-		ScalarFunction function({}, LogicalType::TIMESTAMP_TZ, Execute<TA>, Bind);
+	static ScalarFunction GetSenaryFunction(const LogicalType &type) {
+		ScalarFunction function({}, LogicalType::TIMESTAMP_TZ(), Execute<TA>, Bind);
 		function.GetSignature()
 		    .AddParameter("year", type)
 		    .AddParameter("month", type)
@@ -183,8 +183,8 @@ struct ICUMakeTimestampTZFunc : public ICUDateFunc {
 	}
 
 	template <typename TA>
-	static ScalarFunction GetSeptenaryFunction(const LogicalTypeId &type) {
-		ScalarFunction function({}, LogicalType::TIMESTAMP_TZ, Execute<TA>, Bind);
+	static ScalarFunction GetSeptenaryFunction(const LogicalType &type) {
+		ScalarFunction function({}, LogicalType::TIMESTAMP_TZ(), Execute<TA>, Bind);
 		function.GetSignature()
 		    .AddParameter("year", type)
 		    .AddParameter("month", type)
@@ -203,7 +203,7 @@ struct ICUMakeTimestampTZFunc : public ICUDateFunc {
 		ScalarFunctionSet set {name};
 		set.AddFunction(GetSenaryFunction<int64_t>(LogicalType::BIGINT));
 		set.AddFunction(GetSeptenaryFunction<int64_t>(LogicalType::BIGINT));
-		ScalarFunction function({}, LogicalType::TIMESTAMP_TZ, FromMicros<int64_t>);
+		ScalarFunction function({}, LogicalType::TIMESTAMP_TZ(), FromMicros<int64_t>);
 		function.GetSignature().AddParameter("micros", LogicalType::BIGINT);
 		function.SetFallible();
 		set.AddFunction(function);

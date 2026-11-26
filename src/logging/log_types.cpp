@@ -197,7 +197,7 @@ LogicalType HTTPLogType::GetLogType() {
 	child_list_t<LogicalType> request_child_list = {
 	    {"type", LogicalType::VARCHAR},
 	    {"url", LogicalType::VARCHAR},
-	    {"start_time", LogicalType::TIMESTAMP_TZ},
+	    {"start_time", LogicalType::TIMESTAMP_TZ()},
 	    {"duration_ms", LogicalType::BIGINT},
 	    {"duration_us", LogicalType::BIGINT},
 	    {"request_body_length", LogicalType::UBIGINT},
@@ -378,8 +378,8 @@ LogicalType MetricsLogType::GetLogType() {
 	child_list_t<LogicalType> child_list = {
 	    {"metric", LogicalType::VARCHAR},
 	    {"value", LogicalType::VARCHAR},
-	    {"start_time", LogicalType::TIMESTAMP_TZ},
-	    {"end_time", LogicalType::TIMESTAMP_TZ},
+	    {"start_time", LogicalType::TIMESTAMP_TZ()},
+	    {"end_time", LogicalType::TIMESTAMP_TZ()},
 	};
 	return LogicalType::STRUCT(child_list);
 }

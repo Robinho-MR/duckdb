@@ -61,7 +61,7 @@ static vector<LogicalType> GetComparisonTypes(ClientContext &context, const Logi
 	for (idx_t i = 0; i < left_types.size(); i++) {
 		auto type = LogicalType::ForceMaxLogicalType(context, left_types[i], right_types[i]);
 		// the operator types can be outdated (e.g. compressed children), only take a collation from them
-		if (i < op.types.size() && op.types[i].id() == type.id()) {
+		if (i < op.types.size() && op.types[i].id() == type.id() && type.id() != LogicalTypeId::TIMESTAMP) {
 			type = LogicalType::ForceMaxLogicalType(context, op.types[i], type);
 		}
 		types.push_back(std::move(type));

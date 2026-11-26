@@ -19,6 +19,14 @@
 namespace duckdb::capiv2 {
 namespace {
 
+//! The C API keeps a separate id per timestamp scale and time zone
+LogicalTypeId GetCTypeId(const LogicalType &type) {
+	if (type.id() == LogicalTypeId::TIMESTAMP) {
+		return TimestampType::GetLegacyId(type);
+	}
+	return type.id();
+}
+
 // The set of LogicalTypeIds a parameterless duckdb_v2_*_create_type_from_id
 // instantiates directly, without touching the catalog. Includes ANY, the
 // function-signature wildcard: it is constructible so it can be passed to
@@ -49,12 +57,7 @@ bool IsPrimitiveCreatable(LogicalTypeId id) {
 	case LogicalTypeId::TIME:
 	case LogicalTypeId::TIME_TZ:
 	case LogicalTypeId::TIME_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::INTERVAL:
 	case LogicalTypeId::VARCHAR:
 	case LogicalTypeId::BLOB:
@@ -300,6 +303,14 @@ static void CreateLogicalTypeFromIdV2(CV2Factory &factory, DUCKDB_V2_LOGICAL_TYP
 	if (IsNonConstructible(id)) {
 		throw duckdb::InvalidInputException("%s does not accept this type id", fn);
 	}
+	uint8_t timestamp_scale;
+	bool timestamp_has_time_zone;
+	if (param_count == 0 &&
+	    duckdb::TimestampType::TryGetLegacyParameters(id, timestamp_scale, timestamp_has_time_zone)) {
+		// the C API keeps a separate id per timestamp scale and time zone
+		*out_type = Convert(duckdb::LogicalType::TIMESTAMP_TYPE(timestamp_scale, timestamp_has_time_zone));
+		return;
+	}
 	if (param_count == 0) {
 		if (!IsPrimitiveCreatable(id)) {
 			throw duckdb::InvalidInputException("%s requires type parameters for this type id", fn);
@@ -428,7 +439,10 @@ DUCKDB_V2_ERROR duckdb_v2_logical_type_get_id(duckdb_v2_logical_type_handle type
                                               duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(type);
 	DUCKDB_CHECK_ARG(out_id);
-	return WithErrorHandler(err, [&]() { *out_id = static_cast<DUCKDB_V2_LOGICAL_TYPE_ID>(Convert(type)->id()); });
+	return WithErrorHandler(err, [&]() {
+		auto type_ref = Convert(type);
+		*out_id = static_cast<DUCKDB_V2_LOGICAL_TYPE_ID>(GetCTypeId(*type_ref));
+	});
 }
 
 DUCKDB_V2_ERROR duckdb_v2_logical_type_get_name(duckdb_v2_logical_type_handle type, const char **out_name,
@@ -445,7 +459,7 @@ DUCKDB_V2_ERROR duckdb_v2_logical_type_get_name(duckdb_v2_logical_type_handle ty
 		}
 		// Canonical fixed name of the id: static storage, so the borrowed
 		// view outlives even the handle.
-		const char *canonical = duckdb::EnumUtil::ToChars<duckdb::LogicalTypeId>(lt->id());
+		const char *canonical = duckdb::EnumUtil::ToChars<duckdb::LogicalTypeId>(GetCTypeId(*lt));
 		SetStringOut(out_name, out_name_length, std::string_view(canonical));
 	});
 }

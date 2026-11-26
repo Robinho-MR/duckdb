@@ -25,14 +25,29 @@ struct TestVectorTypesData : public GlobalTableFunctionState {
 	atomic<idx_t> offset;
 };
 
+//! The test type for the type id - the timestamps share an id, so they are told apart by their parameters
+static optional_ptr<const TestType> FindTestType(const map<LogicalTypeId, vector<TestType>> &test_type_map,
+                                                 const LogicalType &type) {
+	auto entry = test_type_map.find(type.id());
+	if (entry == test_type_map.end()) {
+		return nullptr;
+	}
+	for (auto &test_type : entry->second) {
+		if (type.id() != LogicalTypeId::TIMESTAMP || test_type.type == type) {
+			return &test_type;
+		}
+	}
+	return nullptr;
+}
+
 struct TestVectorInfo {
-	TestVectorInfo(const vector<LogicalType> &types, const map<LogicalTypeId, TestType> &test_type_map,
+	TestVectorInfo(const vector<LogicalType> &types, const map<LogicalTypeId, vector<TestType>> &test_type_map,
 	               vector<unique_ptr<DataChunk>> &entries)
 	    : types(types), test_type_map(test_type_map), entries(entries) {
 	}
 
 	const vector<LogicalType> &types;
-	const map<LogicalTypeId, TestType> &test_type_map;
+	const map<LogicalTypeId, vector<TestType>> &test_type_map;
 	vector<unique_ptr<DataChunk>> &entries;
 };
 
@@ -102,12 +117,12 @@ struct TestVectorFlat {
 			break;
 		}
 		default: {
-			auto entry = info.test_type_map.find(type.id());
-			if (entry == info.test_type_map.end() || entry->second.type != type) {
+			auto entry = FindTestType(info.test_type_map, type);
+			if (!entry || entry->type != type) {
 				throw NotImplementedException("Unimplemented type for test_vector_types %s", type.ToString());
 			}
-			result.push_back(entry->second.min_value);
-			result.push_back(entry->second.max_value);
+			result.push_back(entry->min_value);
+			result.push_back(entry->max_value);
 			result.emplace_back(type);
 			break;
 		}
@@ -196,12 +211,12 @@ struct TestVectorSequence {
 			break;
 		}
 		default: {
-			auto entry = info.test_type_map.find(type.id());
-			if (entry == info.test_type_map.end()) {
+			auto entry = FindTestType(info.test_type_map, type);
+			if (!entry) {
 				throw NotImplementedException("Unimplemented type for test_vector_types %s", type.ToString());
 			}
-			result.Append(entry->second.min_value);
-			result.Append(entry->second.max_value);
+			result.Append(entry->min_value);
+			result.Append(entry->max_value);
 			result.Append(Value(type));
 			break;
 		}
@@ -300,10 +315,10 @@ unique_ptr<GlobalTableFunctionState> TestVectorTypesInit(ClientContext &context,
 
 	auto test_types = TestAllTypesFun::GetTestTypes();
 
-	map<LogicalTypeId, TestType> test_type_map;
+	map<LogicalTypeId, vector<TestType>> test_type_map;
 	for (auto &test_type : test_types) {
 		auto type_id = test_type.type.id();
-		test_type_map.insert(make_pair(type_id, std::move(test_type)));
+		test_type_map[type_id].push_back(std::move(test_type));
 	}
 
 	TestVectorInfo info(bind_data.types, test_type_map, result->entries);

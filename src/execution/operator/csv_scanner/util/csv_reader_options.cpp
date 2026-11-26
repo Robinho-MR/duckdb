@@ -373,7 +373,6 @@ void CSVReaderOptions::SetWriteOption(Context &context, const Identifier &loptio
 			format = "%Y-%m-%dT%H:%M:%S.%fZ";
 		}
 		SetDateFormat(LogicalTypeId::TIMESTAMP, format, false);
-		SetDateFormat(LogicalTypeId::TIMESTAMP_TZ, format, false);
 	} else if (loption == "prefix") {
 		prefix = ParseString(value, loption);
 	} else if (loption == "suffix") {
@@ -520,20 +519,30 @@ string CSVReaderOptions::ToString(const String &current_file_path) const {
 static uint8_t GetCandidateSpecificity(const LogicalType &candidate_type) {
 	//! Const ht with accepted auto_types and their weights in specificity
 	const duckdb::unordered_map<uint8_t, uint8_t> auto_type_candidates_specificity {
-	    {static_cast<uint8_t>(LogicalTypeId::VARCHAR), 0},       {static_cast<uint8_t>(LogicalTypeId::DOUBLE), 1},
-	    {static_cast<uint8_t>(LogicalTypeId::FLOAT), 2},         {static_cast<uint8_t>(LogicalTypeId::DECIMAL), 3},
-	    {static_cast<uint8_t>(LogicalTypeId::BIGNUM), 4},        {static_cast<uint8_t>(LogicalTypeId::HUGEINT), 5},
-	    {static_cast<uint8_t>(LogicalTypeId::BIGINT), 6},        {static_cast<uint8_t>(LogicalTypeId::INTEGER), 7},
-	    {static_cast<uint8_t>(LogicalTypeId::SMALLINT), 8},      {static_cast<uint8_t>(LogicalTypeId::TINYINT), 9},
-	    {static_cast<uint8_t>(LogicalTypeId::TIMESTAMP_TZ), 10}, {static_cast<uint8_t>(LogicalTypeId::TIMESTAMP), 11},
-	    {static_cast<uint8_t>(LogicalTypeId::DATE), 12},         {static_cast<uint8_t>(LogicalTypeId::TIME), 13},
-	    {static_cast<uint8_t>(LogicalTypeId::BOOLEAN), 14},      {static_cast<uint8_t>(LogicalTypeId::SQLNULL), 15}};
+	    {static_cast<uint8_t>(LogicalTypeId::VARCHAR), 0},    {static_cast<uint8_t>(LogicalTypeId::DOUBLE), 1},
+	    {static_cast<uint8_t>(LogicalTypeId::FLOAT), 2},      {static_cast<uint8_t>(LogicalTypeId::DECIMAL), 3},
+	    {static_cast<uint8_t>(LogicalTypeId::BIGNUM), 4},     {static_cast<uint8_t>(LogicalTypeId::HUGEINT), 5},
+	    {static_cast<uint8_t>(LogicalTypeId::BIGINT), 6},     {static_cast<uint8_t>(LogicalTypeId::INTEGER), 7},
+	    {static_cast<uint8_t>(LogicalTypeId::SMALLINT), 8},   {static_cast<uint8_t>(LogicalTypeId::TINYINT), 9},
+	    {static_cast<uint8_t>(LogicalTypeId::TIMESTAMP), 11}, {static_cast<uint8_t>(LogicalTypeId::DATE), 12},
+	    {static_cast<uint8_t>(LogicalTypeId::TIME), 13},      {static_cast<uint8_t>(LogicalTypeId::BOOLEAN), 14},
+	    {static_cast<uint8_t>(LogicalTypeId::SQLNULL), 15}};
 
 	auto id = static_cast<uint8_t>(candidate_type.id());
 	auto it = auto_type_candidates_specificity.find(id);
+	if (candidate_type.id() == LogicalTypeId::TIMESTAMP) {
+		// only the microsecond timestamps are accepted as candidates
+		if (TimestampType::GetScale(candidate_type) != TimestampType::MICROSECOND_SCALE) {
+			it = auto_type_candidates_specificity.end();
+		} else if (TimestampType::HasTimeZone(candidate_type)) {
+			return 10;
+		}
+	}
 	if (it == auto_type_candidates_specificity.end()) {
 		throw BinderException("Auto Type Candidate of type %s is not accepted as a valid input",
-		                      EnumUtil::ToString(candidate_type.id()));
+		                      candidate_type.id() == LogicalTypeId::TIMESTAMP
+		                          ? candidate_type.ToString()
+		                          : EnumUtil::ToString(candidate_type.id()));
 	}
 	return it->second;
 }

@@ -192,7 +192,10 @@ void BaseAppender::AppendValueInternal(T input) {
 		AppendValueInternal<T, date_t>(col, input);
 		break;
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
+		if (TimestampType::GetScale(col.GetType()) != TimestampType::MICROSECOND_SCALE) {
+			AppendValue(Value::CreateValue<T>(input));
+			return;
+		}
 		AppendValueInternal<T, timestamp_t>(col, input);
 		break;
 	case LogicalTypeId::TIME:

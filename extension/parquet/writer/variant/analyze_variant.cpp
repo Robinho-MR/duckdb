@@ -124,8 +124,9 @@ struct ShredAnalysisState {
 
 } // namespace
 
-template <VariantLogicalType VARIANT_TYPE, LogicalTypeId SHREDDED_TYPE>
-static void CheckPrimitive(const VariantAnalyzeData &state, ShredAnalysisState &result) {
+template <VariantLogicalType VARIANT_TYPE>
+static void CheckPrimitive(const VariantAnalyzeData &state, ShredAnalysisState &result,
+                           const LogicalType &shredded_type) {
 	auto count = state.type_map[static_cast<uint8_t>(VARIANT_TYPE)];
 	if (count <= result.highest_count) {
 		return;
@@ -140,7 +141,7 @@ static void CheckPrimitive(const VariantAnalyzeData &state, ShredAnalysisState &
 		result.type = LogicalType::DECIMAL(state.decimal_width, state.decimal_scale);
 	} else {
 		result.highest_count = count;
-		result.type = SHREDDED_TYPE;
+		result.type = shredded_type;
 	}
 }
 
@@ -153,31 +154,31 @@ static bool ConstructShreddedType(const VariantAnalyzeData &state, LogicalType &
 		return true;
 	}
 
-	CheckPrimitive<VariantLogicalType::BOOL_TRUE, LogicalTypeId::BOOLEAN>(state, result);
-	CheckPrimitive<VariantLogicalType::INT8, LogicalTypeId::TINYINT>(state, result);
-	CheckPrimitive<VariantLogicalType::INT16, LogicalTypeId::SMALLINT>(state, result);
-	CheckPrimitive<VariantLogicalType::INT32, LogicalTypeId::INTEGER>(state, result);
-	CheckPrimitive<VariantLogicalType::INT64, LogicalTypeId::BIGINT>(state, result);
-	CheckPrimitive<VariantLogicalType::FLOAT, LogicalTypeId::FLOAT>(state, result);
-	CheckPrimitive<VariantLogicalType::DOUBLE, LogicalTypeId::DOUBLE>(state, result);
-	CheckPrimitive<VariantLogicalType::DECIMAL, LogicalTypeId::DECIMAL>(state, result);
-	CheckPrimitive<VariantLogicalType::DATE, LogicalTypeId::DATE>(state, result);
-	CheckPrimitive<VariantLogicalType::TIME_MICROS, LogicalTypeId::TIME>(state, result);
-	CheckPrimitive<VariantLogicalType::TIMESTAMP_MICROS, LogicalTypeId::TIMESTAMP>(state, result);
-	CheckPrimitive<VariantLogicalType::TIMESTAMP_NANOS, LogicalTypeId::TIMESTAMP_NS>(state, result);
-	CheckPrimitive<VariantLogicalType::TIMESTAMP_MICROS_TZ, LogicalTypeId::TIMESTAMP_TZ>(state, result);
-	CheckPrimitive<VariantLogicalType::TIMESTAMP_NANOS_TZ, LogicalTypeId::TIMESTAMP_TZ_NS>(state, result);
-	CheckPrimitive<VariantLogicalType::BLOB, LogicalTypeId::BLOB>(state, result);
-	CheckPrimitive<VariantLogicalType::VARCHAR, LogicalTypeId::VARCHAR>(state, result);
-	CheckPrimitive<VariantLogicalType::UUID, LogicalTypeId::UUID>(state, result);
+	CheckPrimitive<VariantLogicalType::BOOL_TRUE>(state, result, LogicalTypeId::BOOLEAN);
+	CheckPrimitive<VariantLogicalType::INT8>(state, result, LogicalTypeId::TINYINT);
+	CheckPrimitive<VariantLogicalType::INT16>(state, result, LogicalTypeId::SMALLINT);
+	CheckPrimitive<VariantLogicalType::INT32>(state, result, LogicalTypeId::INTEGER);
+	CheckPrimitive<VariantLogicalType::INT64>(state, result, LogicalTypeId::BIGINT);
+	CheckPrimitive<VariantLogicalType::FLOAT>(state, result, LogicalTypeId::FLOAT);
+	CheckPrimitive<VariantLogicalType::DOUBLE>(state, result, LogicalTypeId::DOUBLE);
+	CheckPrimitive<VariantLogicalType::DECIMAL>(state, result, LogicalTypeId::DECIMAL);
+	CheckPrimitive<VariantLogicalType::DATE>(state, result, LogicalTypeId::DATE);
+	CheckPrimitive<VariantLogicalType::TIME_MICROS>(state, result, LogicalTypeId::TIME);
+	CheckPrimitive<VariantLogicalType::TIMESTAMP_MICROS>(state, result, LogicalTypeId::TIMESTAMP);
+	CheckPrimitive<VariantLogicalType::TIMESTAMP_NANOS>(state, result, LogicalType::TIMESTAMP_NS());
+	CheckPrimitive<VariantLogicalType::TIMESTAMP_MICROS_TZ>(state, result, LogicalType::TIMESTAMP_TZ());
+	CheckPrimitive<VariantLogicalType::TIMESTAMP_NANOS_TZ>(state, result, LogicalType::TIMESTAMP_TZ_NS());
+	CheckPrimitive<VariantLogicalType::BLOB>(state, result, LogicalTypeId::BLOB);
+	CheckPrimitive<VariantLogicalType::VARCHAR>(state, result, LogicalTypeId::VARCHAR);
+	CheckPrimitive<VariantLogicalType::UUID>(state, result, LogicalTypeId::UUID);
 	// these types are not natively supported in Parquet - we convert them during write
 	// during analysis map them to the type we convert them into
-	CheckPrimitive<VariantLogicalType::UINT8, LogicalTypeId::SMALLINT>(state, result);
-	CheckPrimitive<VariantLogicalType::UINT16, LogicalTypeId::INTEGER>(state, result);
-	CheckPrimitive<VariantLogicalType::UINT32, LogicalTypeId::BIGINT>(state, result);
-	CheckPrimitive<VariantLogicalType::UINT64, LogicalTypeId::BIGINT>(state, result);
-	CheckPrimitive<VariantLogicalType::UINT128, LogicalTypeId::BIGINT>(state, result);
-	CheckPrimitive<VariantLogicalType::INT128, LogicalTypeId::BIGINT>(state, result);
+	CheckPrimitive<VariantLogicalType::UINT8>(state, result, LogicalTypeId::SMALLINT);
+	CheckPrimitive<VariantLogicalType::UINT16>(state, result, LogicalTypeId::INTEGER);
+	CheckPrimitive<VariantLogicalType::UINT32>(state, result, LogicalTypeId::BIGINT);
+	CheckPrimitive<VariantLogicalType::UINT64>(state, result, LogicalTypeId::BIGINT);
+	CheckPrimitive<VariantLogicalType::UINT128>(state, result, LogicalTypeId::BIGINT);
+	CheckPrimitive<VariantLogicalType::INT128>(state, result, LogicalTypeId::BIGINT);
 
 	auto array_count = state.type_map[static_cast<uint8_t>(VariantLogicalType::ARRAY)];
 	auto object_count = state.type_map[static_cast<uint8_t>(VariantLogicalType::OBJECT)];

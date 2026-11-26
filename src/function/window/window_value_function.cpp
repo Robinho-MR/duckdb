@@ -1606,14 +1606,17 @@ static fill_validate_t GetFillValidateFunction(const LogicalType &type) {
 	case LogicalTypeId::DATE:
 		return FillValidateFinite<date_t>;
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return FillValidateFinite<timestamp_t>;
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return FillValidateScaledTimestamp<Interval::MICROS_PER_SEC>;
-	case LogicalTypeId::TIMESTAMP_MS:
-		return FillValidateScaledTimestamp<Interval::MICROS_PER_MSEC>;
+		switch (TimestampType::GetScale(type)) {
+		case TimestampType::SECOND_SCALE:
+			return FillValidateScaledTimestamp<Interval::MICROS_PER_SEC>;
+		case TimestampType::MILLISECOND_SCALE:
+			return FillValidateScaledTimestamp<Interval::MICROS_PER_MSEC>;
+		case TimestampType::MICROSECOND_SCALE:
+		case TimestampType::NANOSECOND_SCALE:
+			return FillValidateFinite<timestamp_t>;
+		default:
+			throw InternalException("Unsupported TIMESTAMP scale");
+		}
 	case LogicalTypeId::DECIMAL:
 		switch (type.InternalType()) {
 		case PhysicalType::INT16:
@@ -1651,11 +1654,6 @@ static fill_value_t GetFillValueFunction(const LogicalType &type) {
 	case LogicalTypeId::DATE:
 		return FillValueFunction<date_t>;
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
 		return FillValueFunction<timestamp_t>;
 	default:
 		break;

@@ -156,17 +156,24 @@ BoundCastInfo DefaultCasts::GetDefaultCastFunction(BindCastInput &input, const L
 	case LogicalTypeId::TIME_TZ:
 		return TimeTzCastSwitch(input, source, target);
 	case LogicalTypeId::TIMESTAMP:
-		return TimestampCastSwitch(input, source, target);
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return TimestampTzCastSwitch(input, source, target);
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return TimestampTzNsCastSwitch(input, source, target);
-	case LogicalTypeId::TIMESTAMP_NS:
-		return TimestampNsCastSwitch(input, source, target);
-	case LogicalTypeId::TIMESTAMP_MS:
-		return TimestampMsCastSwitch(input, source, target);
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return TimestampSecCastSwitch(input, source, target);
+		if (TimestampType::HasTimeZone(source)) {
+			if (TimestampType::GetScale(source) == TimestampType::NANOSECOND_SCALE) {
+				return TimestampTzNsCastSwitch(input, source, target);
+			}
+			return TimestampTzCastSwitch(input, source, target);
+		}
+		switch (TimestampType::GetScale(source)) {
+		case TimestampType::SECOND_SCALE:
+			return TimestampSecCastSwitch(input, source, target);
+		case TimestampType::MILLISECOND_SCALE:
+			return TimestampMsCastSwitch(input, source, target);
+		case TimestampType::MICROSECOND_SCALE:
+			return TimestampCastSwitch(input, source, target);
+		case TimestampType::NANOSECOND_SCALE:
+			return TimestampNsCastSwitch(input, source, target);
+		default:
+			throw InternalException("Unsupported TIMESTAMP scale in cast");
+		}
 	case LogicalTypeId::INTERVAL:
 		return IntervalCastSwitch(input, source, target);
 	case LogicalTypeId::VARCHAR:

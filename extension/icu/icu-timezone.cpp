@@ -247,14 +247,13 @@ struct ICUFromNaiveTimestamp : public ICUDateFunc {
 	template <typename SRC>
 	static BoundCastInfo BindCastFromNaiveType(BindCastInput &input, const LogicalType &target) {
 		auto cast_data = BindCastData(input);
-		switch (target.id()) {
-		case LogicalTypeId::TIMESTAMP_TZ:
+		if (TimestampType::Is(target, TimestampType::MICROSECOND_SCALE, true)) {
 			return BoundCastInfo(CastFromNaive<SRC, timestamp_tz_t>, std::move(cast_data));
-		case LogicalTypeId::TIMESTAMP_TZ_NS:
-			return BoundCastInfo(CastFromNaive<SRC, timestamp_tz_ns_t>, std::move(cast_data));
-		default:
-			throw InternalException("Type %s not handled in BindCastFromNaiveType", LogicalTypeIdToString(target.id()));
 		}
+		if (TimestampType::Is(target, TimestampType::NANOSECOND_SCALE, true)) {
+			return BoundCastInfo(CastFromNaive<SRC, timestamp_tz_ns_t>, std::move(cast_data));
+		}
+		throw InternalException("Type %s not handled in BindCastFromNaiveType", target.ToString());
 	}
 
 	static BoundCastInfo BindCastFromNaive(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
@@ -266,19 +265,23 @@ struct ICUFromNaiveTimestamp : public ICUDateFunc {
 			                      "has been disabled  - use \"AT TIME ZONE ...\"");
 		}
 
-		switch (source.id()) {
-		case LogicalTypeId::TIMESTAMP:
-			return BindCastFromNaiveType<timestamp_t>(input, target);
-		case LogicalTypeId::TIMESTAMP_MS:
-			return BindCastFromNaiveType<timestamp_ms_t>(input, target);
-		case LogicalTypeId::TIMESTAMP_NS:
-			return BindCastFromNaiveType<timestamp_ns_t>(input, target);
-		case LogicalTypeId::TIMESTAMP_SEC:
-			return BindCastFromNaiveType<timestamp_sec_t>(input, target);
-		case LogicalTypeId::DATE:
+		if (source.id() == LogicalTypeId::DATE) {
 			return BindCastFromNaiveType<date_t>(input, target);
+		}
+		if (source.id() != LogicalTypeId::TIMESTAMP || TimestampType::HasTimeZone(source)) {
+			throw InternalException("Type %s not handled in BindCastFromNaive", source.ToString());
+		}
+		switch (TimestampType::GetScale(source)) {
+		case TimestampType::MICROSECOND_SCALE:
+			return BindCastFromNaiveType<timestamp_t>(input, target);
+		case TimestampType::MILLISECOND_SCALE:
+			return BindCastFromNaiveType<timestamp_ms_t>(input, target);
+		case TimestampType::NANOSECOND_SCALE:
+			return BindCastFromNaiveType<timestamp_ns_t>(input, target);
+		case TimestampType::SECOND_SCALE:
+			return BindCastFromNaiveType<timestamp_sec_t>(input, target);
 		default:
-			throw InternalException("Type %s not handled in BindCastFromNaive", LogicalTypeIdToString(source.id()));
+			throw InternalException("Type %s not handled in BindCastFromNaive", source.ToString());
 		}
 	}
 	static void AddCast(CastFunctionSet &casts, const LogicalType &source, const LogicalType &target) {
@@ -290,12 +293,12 @@ struct ICUFromNaiveTimestamp : public ICUDateFunc {
 		auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
 		auto &casts = config.GetCastFunctions();
 
-		AddCast(casts, LogicalType::TIMESTAMP, LogicalType::TIMESTAMP_TZ);
-		AddCast(casts, LogicalType::TIMESTAMP_MS, LogicalType::TIMESTAMP_TZ);
-		AddCast(casts, LogicalType::TIMESTAMP_NS, LogicalType::TIMESTAMP_TZ);
-		AddCast(casts, LogicalType::TIMESTAMP_NS, LogicalType::TIMESTAMP_TZ_NS);
-		AddCast(casts, LogicalType::TIMESTAMP_S, LogicalType::TIMESTAMP_TZ);
-		AddCast(casts, LogicalType::DATE, LogicalType::TIMESTAMP_TZ);
+		AddCast(casts, LogicalType::TIMESTAMP, LogicalType::TIMESTAMP_TZ());
+		AddCast(casts, LogicalType::TIMESTAMP_MS(), LogicalType::TIMESTAMP_TZ());
+		AddCast(casts, LogicalType::TIMESTAMP_NS(), LogicalType::TIMESTAMP_TZ());
+		AddCast(casts, LogicalType::TIMESTAMP_NS(), LogicalType::TIMESTAMP_TZ_NS());
+		AddCast(casts, LogicalType::TIMESTAMP_S(), LogicalType::TIMESTAMP_TZ());
+		AddCast(casts, LogicalType::DATE, LogicalType::TIMESTAMP_TZ());
 	}
 };
 
@@ -435,41 +438,46 @@ struct ICUToNaiveTimestamp : public ICUDateFunc {
 
 	static BoundCastInfo BindCastToNaive(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
 		if (!input.context) {
-			throw InternalException("Missing context for TIMESTAMPTZ to %s cast.", LogicalTypeIdToString(target.id()));
+			throw InternalException("Missing context for TIMESTAMPTZ to %s cast.", target.ToString());
 		}
 		if (Settings::Get<DisableTimestamptzCastsSetting>(*input.context)) {
 			throw BinderException("Casting from TIMESTAMP WITH TIME ZONE to %s without an explicit time zone "
 			                      "has been disabled  - use \"AT TIME ZONE ...\"",
-			                      LogicalTypeIdToString(target.id()));
+			                      target.ToString());
 		}
 
 		auto cast_data = BindCastData(input);
 
-		switch (source.id()) {
-		case LogicalTypeId::TIMESTAMP_TZ:
-			switch (target.id()) {
-			case LogicalType::TIMESTAMP:
+		if (!TimestampType::HasTimeZone(source) || target.id() != LogicalTypeId::TIMESTAMP ||
+		    TimestampType::HasTimeZone(target)) {
+			throw InternalException("Type %s to %s not handled in BindCastToNaive", source.ToString(),
+			                        target.ToString());
+		}
+		switch (TimestampType::GetScale(source)) {
+		case TimestampType::MICROSECOND_SCALE:
+			switch (TimestampType::GetScale(target)) {
+			case TimestampType::MICROSECOND_SCALE:
 				return BoundCastInfo(CastToNaive<timestamp_tz_t, timestamp_t>, std::move(cast_data));
-			case LogicalType::TIMESTAMP_MS:
+			case TimestampType::MILLISECOND_SCALE:
 				return BoundCastInfo(CastToNaive<timestamp_tz_t, timestamp_ms_t>, std::move(cast_data));
-			case LogicalType::TIMESTAMP_NS:
+			case TimestampType::NANOSECOND_SCALE:
 				return BoundCastInfo(CastToNaive<timestamp_tz_t, timestamp_ns_t>, std::move(cast_data));
-			case LogicalType::TIMESTAMP_S:
+			case TimestampType::SECOND_SCALE:
 				return BoundCastInfo(CastToNaive<timestamp_tz_t, timestamp_sec_t>, std::move(cast_data));
 			default:
-				throw InternalException("Type %s not handled in BindCastToNaive", LogicalTypeIdToString(target.id()));
+				throw InternalException("Type %s not handled in BindCastToNaive", target.ToString());
 			}
-		case LogicalTypeId::TIMESTAMP_TZ_NS:
-			switch (target.id()) {
-			case LogicalType::TIMESTAMP:
+		case TimestampType::NANOSECOND_SCALE:
+			switch (TimestampType::GetScale(target)) {
+			case TimestampType::MICROSECOND_SCALE:
 				return BoundCastInfo(CastToNaive<timestamp_tz_ns_t, timestamp_t>, std::move(cast_data));
-			case LogicalType::TIMESTAMP_NS:
+			case TimestampType::NANOSECOND_SCALE:
 				return BoundCastInfo(CastToNaive<timestamp_tz_ns_t, timestamp_ns_t>, std::move(cast_data));
 			default:
-				throw InternalException("Type %s not handled in BindCastToNaive", LogicalTypeIdToString(target.id()));
+				throw InternalException("Type %s not handled in BindCastToNaive", target.ToString());
 			}
 		default:
-			throw InternalException("Type %s not handled in BindCastToNaive", LogicalTypeIdToString(source.id()));
+			throw InternalException("Type %s not handled in BindCastToNaive", source.ToString());
 		}
 	}
 
@@ -482,13 +490,13 @@ struct ICUToNaiveTimestamp : public ICUDateFunc {
 		auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
 		auto &casts = config.GetCastFunctions();
 
-		AddCast(casts, LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP);
-		AddCast(casts, LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP_MS);
-		AddCast(casts, LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP_NS);
-		AddCast(casts, LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP_S);
+		AddCast(casts, LogicalType::TIMESTAMP_TZ(), LogicalType::TIMESTAMP);
+		AddCast(casts, LogicalType::TIMESTAMP_TZ(), LogicalType::TIMESTAMP_MS());
+		AddCast(casts, LogicalType::TIMESTAMP_TZ(), LogicalType::TIMESTAMP_NS());
+		AddCast(casts, LogicalType::TIMESTAMP_TZ(), LogicalType::TIMESTAMP_S());
 
-		AddCast(casts, LogicalType::TIMESTAMP_TZ_NS, LogicalType::TIMESTAMP);
-		AddCast(casts, LogicalType::TIMESTAMP_TZ_NS, LogicalType::TIMESTAMP_NS);
+		AddCast(casts, LogicalType::TIMESTAMP_TZ_NS(), LogicalType::TIMESTAMP);
+		AddCast(casts, LogicalType::TIMESTAMP_TZ_NS(), LogicalType::TIMESTAMP_NS());
 	}
 };
 
@@ -677,8 +685,8 @@ BoundCastInfo ICUToTimeTZ::BindCastFromTime(BindCastInput &input, const LogicalT
 }
 
 void ICUToTimeTZ::AddCasts(ExtensionLoader &loader) {
-	const auto implicit_cost = CastRules::ImplicitCast(LogicalType::TIMESTAMP_TZ, LogicalType::TIME_TZ);
-	loader.RegisterCastFunction(LogicalType::TIMESTAMP_TZ, LogicalType::TIME_TZ, BindCastToTimeTZ, implicit_cost);
+	const auto implicit_cost = CastRules::ImplicitCast(LogicalType::TIMESTAMP_TZ(), LogicalType::TIME_TZ);
+	loader.RegisterCastFunction(LogicalType::TIMESTAMP_TZ(), LogicalType::TIME_TZ, BindCastToTimeTZ, implicit_cost);
 
 	const auto time_implicit_cost = CastRules::ImplicitCast(LogicalType::TIME, LogicalType::TIME_TZ);
 	loader.RegisterCastFunction(LogicalType::TIME, LogicalType::TIME_TZ, BindCastFromTime, time_implicit_cost);
@@ -712,7 +720,7 @@ struct ICUTimeZoneFunc : public ICUDateFunc {
 
 	static void AddFunction(const Identifier &name, ExtensionLoader &loader) {
 		ScalarFunctionSet set {name};
-		ScalarFunction ts_fun({}, LogicalType::TIMESTAMP_TZ,
+		ScalarFunction ts_fun({}, LogicalType::TIMESTAMP_TZ(),
 		                      Execute<ICUFromNaiveTimestamp, timestamp_t, timestamp_tz_t>, Bind);
 		ts_fun.GetSignature()
 		    .AddParameter("timezone", LogicalType::VARCHAR)
@@ -722,7 +730,7 @@ struct ICUTimeZoneFunc : public ICUDateFunc {
 		                        Bind);
 		tstz_fun.GetSignature()
 		    .AddParameter("timezone", LogicalType::VARCHAR)
-		    .AddParameter("timestamp", LogicalType::TIMESTAMP_TZ);
+		    .AddParameter("timestamp", LogicalType::TIMESTAMP_TZ());
 		set.AddFunction(tstz_fun);
 
 		ScalarFunction timetz_fun({}, LogicalType::TIME_TZ, Execute<ICUToTimeTZ, dtime_tz_t, dtime_tz_t>, Bind);
@@ -731,21 +739,21 @@ struct ICUTimeZoneFunc : public ICUDateFunc {
 		    .AddParameter("timestamp", LogicalType::TIME_TZ);
 		set.AddFunction(timetz_fun);
 
-		ScalarFunction timens_fun({}, LogicalType::TIMESTAMP_TZ_NS,
+		ScalarFunction timens_fun({}, LogicalType::TIMESTAMP_TZ_NS(),
 		                          Execute<ICUFromNaiveTimestamp, timestamp_ns_t, timestamp_tz_ns_t>, Bind);
 		timens_fun.GetSignature()
 		    .AddParameter("timezone", LogicalType::VARCHAR)
-		    .AddParameter("timestamp", LogicalType::TIMESTAMP_NS);
+		    .AddParameter("timestamp", LogicalType::TIMESTAMP_NS());
 		set.AddFunction(timens_fun);
 
-		ScalarFunction timetzns_fun({}, LogicalType::TIMESTAMP_NS,
+		ScalarFunction timetzns_fun({}, LogicalType::TIMESTAMP_NS(),
 		                            Execute<ICUToNaiveTimestamp, timestamp_tz_ns_t, timestamp_ns_t>, Bind);
 		timetzns_fun.GetSignature()
 		    .AddParameter("timezone", LogicalType::VARCHAR)
-		    .AddParameter("timestamp", LogicalType::TIMESTAMP_TZ_NS);
+		    .AddParameter("timestamp", LogicalType::TIMESTAMP_TZ_NS());
 		set.AddFunction(timetzns_fun);
 
-		ScalarFunction date_fun({}, LogicalType::TIMESTAMP_TZ, Execute<ICUFromNaiveTimestamp, date_t, timestamp_tz_t>,
+		ScalarFunction date_fun({}, LogicalType::TIMESTAMP_TZ(), Execute<ICUFromNaiveTimestamp, date_t, timestamp_tz_t>,
 		                        Bind);
 		date_fun.GetSignature().AddParameter("timezone", LogicalType::VARCHAR).AddParameter("date", LogicalType::DATE);
 		set.AddFunction(date_fun);

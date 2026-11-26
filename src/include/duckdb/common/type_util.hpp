@@ -177,15 +177,15 @@ LogicalType PrimitiveToLogicalType() {
 	} else if (std::is_same<TYPE, timestamp_t>()) {
 		return LogicalType::TIMESTAMP;
 	} else if (std::is_same<TYPE, timestamp_sec_t>()) {
-		return LogicalType::TIMESTAMP_S;
+		return LogicalType::TIMESTAMP_S();
 	} else if (std::is_same<TYPE, timestamp_ms_t>()) {
-		return LogicalType::TIMESTAMP_MS;
+		return LogicalType::TIMESTAMP_MS();
 	} else if (std::is_same<TYPE, timestamp_ns_t>()) {
-		return LogicalType::TIMESTAMP_NS;
+		return LogicalType::TIMESTAMP_NS();
 	} else if (std::is_same<TYPE, timestamp_tz_t>()) {
-		return LogicalType::TIMESTAMP_TZ;
+		return LogicalType::TIMESTAMP_TZ();
 	} else if (std::is_same<TYPE, timestamp_tz_ns_t>()) {
-		return LogicalType::TIMESTAMP_TZ_NS;
+		return LogicalType::TIMESTAMP_TZ_NS();
 	} else if (std::is_same<TYPE, interval_t>()) {
 		return LogicalType::INTERVAL;
 	} else if (std::is_same<TYPE, const char *>() || std::is_same<TYPE, char *>() || std::is_same<TYPE, string_t>() ||

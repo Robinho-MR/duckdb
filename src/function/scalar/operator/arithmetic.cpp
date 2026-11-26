@@ -679,7 +679,7 @@ ScalarFunction AddFunction::GetFunction(const LogicalType &left_type, const Logi
 		} else if (right_type.id() == LogicalTypeId::TIME_TZ) {
 			// DATE + TIME_TZ -> TIMESTAMP_TZ orders in UTC, but TIME_TZ ordering does not agree
 			// with UTC instant ordering — corner-evaluation picks the wrong extremum.
-			ScalarFunction function("+", {left_type, right_type}, LogicalType::TIMESTAMP_TZ,
+			ScalarFunction function("+", {left_type, right_type}, LogicalType::TIMESTAMP_TZ(),
 			                        ScalarFunction::BinaryFunction<date_t, dtime_tz_t, timestamp_t, AddOperator>);
 			function.SetFallible();
 			return function;
@@ -719,14 +719,14 @@ ScalarFunction AddFunction::GetFunction(const LogicalType &left_type, const Logi
 			    ScalarFunction::BinaryFunction<interval_t, dtime_tz_t, dtime_tz_t, AddTimeOperator>);
 			function.SetFallible();
 			return function;
-		} else if (right_type.id() == LogicalTypeId::TIMESTAMP) {
+		} else if (TimestampType::Is(right_type, TimestampType::MICROSECOND_SCALE, false)) {
 			ScalarFunction function("+", {left_type, right_type}, LogicalType::TIMESTAMP,
 			                        ScalarFunction::BinaryFunction<interval_t, timestamp_t, timestamp_t, AddOperator>);
 			function.SetFallible();
 			// not monotonic: adding months clamps the day but keeps the time, e.g.
 			// '2000-01-30 23:00' + INTERVAL '1 month' > '2000-01-31 01:00' + INTERVAL '1 month'
 			return function;
-		} else if (right_type.id() == LogicalTypeId::TIMESTAMP_SEC) {
+		} else if (TimestampType::Is(right_type, TimestampType::SECOND_SCALE, false)) {
 			ScalarFunction function(
 			    "+", {left_type, right_type}, LogicalType::TIMESTAMP,
 			    ScalarFunction::BinaryFunction<interval_t, timestamp_sec_t, timestamp_t, AddOperator>);
@@ -734,7 +734,7 @@ ScalarFunction AddFunction::GetFunction(const LogicalType &left_type, const Logi
 			// not monotonic: adding months clamps the day but keeps the time, e.g.
 			// '2000-01-30 23:00' + INTERVAL '1 month' > '2000-01-31 01:00' + INTERVAL '1 month'
 			return function;
-		} else if (right_type.id() == LogicalTypeId::TIMESTAMP_MS) {
+		} else if (TimestampType::Is(right_type, TimestampType::MILLISECOND_SCALE, false)) {
 			ScalarFunction function(
 			    "+", {left_type, right_type}, LogicalType::TIMESTAMP,
 			    ScalarFunction::BinaryFunction<interval_t, timestamp_ms_t, timestamp_t, AddOperator>);
@@ -742,9 +742,9 @@ ScalarFunction AddFunction::GetFunction(const LogicalType &left_type, const Logi
 			// not monotonic: adding months clamps the day but keeps the time, e.g.
 			// '2000-01-30 23:00' + INTERVAL '1 month' > '2000-01-31 01:00' + INTERVAL '1 month'
 			return function;
-		} else if (right_type.id() == LogicalTypeId::TIMESTAMP_NS) {
+		} else if (TimestampType::Is(right_type, TimestampType::NANOSECOND_SCALE, false)) {
 			ScalarFunction function(
-			    "+", {left_type, right_type}, LogicalType::TIMESTAMP_NS,
+			    "+", {left_type, right_type}, LogicalType::TIMESTAMP_NS(),
 			    ScalarFunction::BinaryFunction<interval_t, timestamp_ns_t, timestamp_ns_t, AddOperator>);
 			function.SetFallible();
 			// not monotonic: adding months clamps the day but keeps the time, e.g.
@@ -767,7 +767,7 @@ ScalarFunction AddFunction::GetFunction(const LogicalType &left_type, const Logi
 		break;
 	case LogicalTypeId::TIME_TZ:
 		if (right_type.id() == LogicalTypeId::DATE) {
-			ScalarFunction function("+", {left_type, right_type}, LogicalType::TIMESTAMP_TZ,
+			ScalarFunction function("+", {left_type, right_type}, LogicalType::TIMESTAMP_TZ(),
 			                        ScalarFunction::BinaryFunction<dtime_tz_t, date_t, timestamp_t, AddOperator>);
 			function.SetFallible();
 			return function;
@@ -779,45 +779,42 @@ ScalarFunction AddFunction::GetFunction(const LogicalType &left_type, const Logi
 			return function;
 		}
 		break;
-	case LogicalTypeId::TIMESTAMP_SEC:
-		if (right_type.id() == LogicalTypeId::INTERVAL) {
+	case LogicalTypeId::TIMESTAMP:
+		if (right_type.id() != LogicalTypeId::INTERVAL || TimestampType::HasTimeZone(left_type)) {
+			break;
+		}
+		// not monotonic: see INTERVAL + TIMESTAMP
+		switch (TimestampType::GetScale(left_type)) {
+		case TimestampType::SECOND_SCALE: {
 			ScalarFunction function(
 			    "+", {left_type, right_type}, LogicalType::TIMESTAMP,
 			    ScalarFunction::BinaryFunction<timestamp_sec_t, interval_t, timestamp_t, AddOperator>);
 			function.SetFallible();
-			// not monotonic: see INTERVAL + TIMESTAMP_SEC
 			return function;
 		}
-		break;
-	case LogicalTypeId::TIMESTAMP_MS:
-		if (right_type.id() == LogicalTypeId::INTERVAL) {
+		case TimestampType::MILLISECOND_SCALE: {
 			ScalarFunction function(
 			    "+", {left_type, right_type}, LogicalType::TIMESTAMP,
 			    ScalarFunction::BinaryFunction<timestamp_ms_t, interval_t, timestamp_t, AddOperator>);
 			function.SetFallible();
-			// not monotonic: see INTERVAL + TIMESTAMP_MS
 			return function;
 		}
-		break;
-	case LogicalTypeId::TIMESTAMP:
-		if (right_type.id() == LogicalTypeId::INTERVAL) {
+		case TimestampType::MICROSECOND_SCALE: {
 			ScalarFunction function("+", {left_type, right_type}, LogicalType::TIMESTAMP,
 			                        ScalarFunction::BinaryFunction<timestamp_t, interval_t, timestamp_t, AddOperator>);
 			function.SetFallible();
-			// not monotonic: see INTERVAL + TIMESTAMP
 			return function;
 		}
-		break;
-	case LogicalTypeId::TIMESTAMP_NS:
-		if (right_type.id() == LogicalTypeId::INTERVAL) {
+		case TimestampType::NANOSECOND_SCALE: {
 			ScalarFunction function(
-			    "+", {left_type, right_type}, LogicalType::TIMESTAMP_NS,
+			    "+", {left_type, right_type}, LogicalType::TIMESTAMP_NS(),
 			    ScalarFunction::BinaryFunction<timestamp_ns_t, interval_t, timestamp_ns_t, AddOperator>);
 			function.SetFallible();
-			// not monotonic: see INTERVAL + TIMESTAMP
 			return function;
 		}
-		break;
+		default:
+			throw InternalException("Unsupported TIMESTAMP scale");
+		}
 	default:
 		break;
 	}
@@ -866,17 +863,17 @@ ScalarFunctionSet OperatorAddFun::GetFunctions() {
 	add.AddFunction(AddFunction::GetFunction(LogicalType::TIME, LogicalType::INTERVAL));
 	add.AddFunction(AddFunction::GetFunction(LogicalType::INTERVAL, LogicalType::TIME));
 
-	add.AddFunction(AddFunction::GetFunction(LogicalType::TIMESTAMP_S, LogicalType::INTERVAL));
-	add.AddFunction(AddFunction::GetFunction(LogicalType::INTERVAL, LogicalType::TIMESTAMP_S));
+	add.AddFunction(AddFunction::GetFunction(LogicalType::TIMESTAMP_S(), LogicalType::INTERVAL));
+	add.AddFunction(AddFunction::GetFunction(LogicalType::INTERVAL, LogicalType::TIMESTAMP_S()));
 
-	add.AddFunction(AddFunction::GetFunction(LogicalType::TIMESTAMP_MS, LogicalType::INTERVAL));
-	add.AddFunction(AddFunction::GetFunction(LogicalType::INTERVAL, LogicalType::TIMESTAMP_MS));
+	add.AddFunction(AddFunction::GetFunction(LogicalType::TIMESTAMP_MS(), LogicalType::INTERVAL));
+	add.AddFunction(AddFunction::GetFunction(LogicalType::INTERVAL, LogicalType::TIMESTAMP_MS()));
 
 	add.AddFunction(AddFunction::GetFunction(LogicalType::TIMESTAMP, LogicalType::INTERVAL));
 	add.AddFunction(AddFunction::GetFunction(LogicalType::INTERVAL, LogicalType::TIMESTAMP));
 
-	add.AddFunction(AddFunction::GetFunction(LogicalType::TIMESTAMP_NS, LogicalType::INTERVAL));
-	add.AddFunction(AddFunction::GetFunction(LogicalType::INTERVAL, LogicalType::TIMESTAMP_NS));
+	add.AddFunction(AddFunction::GetFunction(LogicalType::TIMESTAMP_NS(), LogicalType::INTERVAL));
+	add.AddFunction(AddFunction::GetFunction(LogicalType::INTERVAL, LogicalType::TIMESTAMP_NS()));
 
 	add.AddFunction(AddFunction::GetFunction(LogicalType::TIME_TZ, LogicalType::INTERVAL));
 	add.AddFunction(AddFunction::GetFunction(LogicalType::INTERVAL, LogicalType::TIME_TZ));
@@ -1066,60 +1063,55 @@ ScalarFunction SubtractFunction::GetFunction(const LogicalType &left_type, const
 		}
 		break;
 	case LogicalTypeId::TIMESTAMP:
-		if (right_type.id() == LogicalTypeId::TIMESTAMP) {
+		if (TimestampType::HasTimeZone(left_type)) {
+			break;
+		}
+		if (TimestampType::Is(left_type, TimestampType::MICROSECOND_SCALE, false) &&
+		    TimestampType::Is(right_type, TimestampType::MICROSECOND_SCALE, false)) {
 			ScalarFunction function(
 			    "-", {left_type, right_type}, LogicalType::INTERVAL,
 			    ScalarFunction::BinaryFunction<timestamp_t, timestamp_t, interval_t, SubtractOperator>);
 			function.SetFallible();
 			function.SetArgProperties({ArgProperties().StrictlyIncreasing(), ArgProperties().StrictlyDecreasing()});
 			return function;
-		} else if (right_type.id() == LogicalTypeId::INTERVAL) {
-			ScalarFunction function(
-			    "-", {left_type, right_type}, LogicalType::TIMESTAMP,
-			    ScalarFunction::BinaryFunction<timestamp_t, interval_t, timestamp_t, SubtractOperator>);
-			function.SetFallible();
-			// not monotonic: subtracting months clamps the day but keeps the time, e.g.
-			// '2000-03-30 23:00' - INTERVAL '1 month' > '2000-03-31 01:00' - INTERVAL '1 month'
-
-			return function;
 		}
-		break;
-	case LogicalTypeId::TIMESTAMP_SEC:
-		if (right_type.id() == LogicalTypeId::INTERVAL) {
+		if (right_type.id() != LogicalTypeId::INTERVAL) {
+			break;
+		}
+		// not monotonic: subtracting months clamps the day but keeps the time, e.g.
+		// '2000-03-30 23:00' - INTERVAL '1 month' > '2000-03-31 01:00' - INTERVAL '1 month'
+		switch (TimestampType::GetScale(left_type)) {
+		case TimestampType::SECOND_SCALE: {
 			ScalarFunction function(
 			    "-", {left_type, right_type}, LogicalType::TIMESTAMP,
 			    ScalarFunction::BinaryFunction<timestamp_sec_t, interval_t, timestamp_t, SubtractOperator>);
 			function.SetFallible();
-			// not monotonic: subtracting months clamps the day but keeps the time, e.g.
-			// '2000-03-30 23:00' - INTERVAL '1 month' > '2000-03-31 01:00' - INTERVAL '1 month'
-
 			return function;
 		}
-		break;
-	case LogicalTypeId::TIMESTAMP_MS:
-		if (right_type.id() == LogicalTypeId::INTERVAL) {
+		case TimestampType::MILLISECOND_SCALE: {
 			ScalarFunction function(
 			    "-", {left_type, right_type}, LogicalType::TIMESTAMP,
 			    ScalarFunction::BinaryFunction<timestamp_ms_t, interval_t, timestamp_t, SubtractOperator>);
 			function.SetFallible();
-			// not monotonic: subtracting months clamps the day but keeps the time, e.g.
-			// '2000-03-30 23:00' - INTERVAL '1 month' > '2000-03-31 01:00' - INTERVAL '1 month'
-
 			return function;
 		}
-		break;
-	case LogicalTypeId::TIMESTAMP_NS:
-		if (right_type.id() == LogicalTypeId::INTERVAL) {
+		case TimestampType::MICROSECOND_SCALE: {
 			ScalarFunction function(
-			    "-", {left_type, right_type}, LogicalType::TIMESTAMP_NS,
+			    "-", {left_type, right_type}, LogicalType::TIMESTAMP,
+			    ScalarFunction::BinaryFunction<timestamp_t, interval_t, timestamp_t, SubtractOperator>);
+			function.SetFallible();
+			return function;
+		}
+		case TimestampType::NANOSECOND_SCALE: {
+			ScalarFunction function(
+			    "-", {left_type, right_type}, LogicalType::TIMESTAMP_NS(),
 			    ScalarFunction::BinaryFunction<timestamp_ns_t, interval_t, timestamp_ns_t, SubtractOperator>);
 			function.SetFallible();
-			// not monotonic: subtracting months clamps the day but keeps the time, e.g.
-			// '2000-03-30 23:00' - INTERVAL '1 month' > '2000-03-31 01:00' - INTERVAL '1 month'
-
 			return function;
 		}
-		break;
+		default:
+			throw InternalException("Unsupported TIMESTAMP scale");
+		}
 	case LogicalTypeId::INTERVAL:
 		if (right_type.id() == LogicalTypeId::INTERVAL) {
 			ScalarFunction function(
@@ -1181,9 +1173,9 @@ ScalarFunctionSet OperatorSubtractFun::GetFunctions() {
 	subtract.AddFunction(SubtractFunction::GetFunction(LogicalType::DATE, LogicalType::INTERVAL));
 	subtract.AddFunction(SubtractFunction::GetFunction(LogicalType::TIME, LogicalType::INTERVAL));
 	subtract.AddFunction(SubtractFunction::GetFunction(LogicalType::TIMESTAMP, LogicalType::INTERVAL));
-	subtract.AddFunction(SubtractFunction::GetFunction(LogicalType::TIMESTAMP_S, LogicalType::INTERVAL));
-	subtract.AddFunction(SubtractFunction::GetFunction(LogicalType::TIMESTAMP_MS, LogicalType::INTERVAL));
-	subtract.AddFunction(SubtractFunction::GetFunction(LogicalType::TIMESTAMP_NS, LogicalType::INTERVAL));
+	subtract.AddFunction(SubtractFunction::GetFunction(LogicalType::TIMESTAMP_S(), LogicalType::INTERVAL));
+	subtract.AddFunction(SubtractFunction::GetFunction(LogicalType::TIMESTAMP_MS(), LogicalType::INTERVAL));
+	subtract.AddFunction(SubtractFunction::GetFunction(LogicalType::TIMESTAMP_NS(), LogicalType::INTERVAL));
 	subtract.AddFunction(SubtractFunction::GetFunction(LogicalType::TIME_TZ, LogicalType::INTERVAL));
 	// we can negate intervals
 	subtract.AddFunction(SubtractFunction::GetFunction(LogicalType::INTERVAL));

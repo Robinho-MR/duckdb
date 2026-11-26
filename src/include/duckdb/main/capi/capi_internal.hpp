@@ -150,8 +150,8 @@ struct DuckDBResultData {
 	}
 };
 
-duckdb_type LogicalTypeIdToC(const LogicalTypeId type);
-LogicalTypeId LogicalTypeIdFromC(const duckdb_type type);
+duckdb_type LogicalTypeToC(const LogicalType &type);
+LogicalType LogicalTypeFromC(const duckdb_type type);
 idx_t GetCTypeSize(const duckdb_type type);
 duckdb_statement_type StatementTypeToC(const StatementType type);
 duckdb_error_type ErrorTypeToC(const ExceptionType type);

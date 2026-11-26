@@ -17,7 +17,7 @@ bool CSVSniffer::TryCastVector(Vector &parse_chunk_col, idx_t size, const Logica
 		                                  dummy_result, size, parameters, line_error);
 	}
 	if (!sniffing_state_machine.dialect_options.date_format[LogicalTypeId::TIMESTAMP].GetValue().Empty() &&
-	    sql_type.id() == LogicalTypeId::TIMESTAMP) {
+	    TimestampType::Is(sql_type, TimestampType::MICROSECOND_SCALE, false)) {
 		// use the timestamp format to cast the chunk
 		string error_message;
 		CastParameters parameters(false, &error_message);

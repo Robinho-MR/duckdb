@@ -100,6 +100,23 @@
     ]
   },
   {
+    "class": "TimestampTypeInfo",
+    "base": "LogicalTypeInfo",
+    "enum": "TIMESTAMP_TYPE_INFO",
+    "members": [
+      {
+        "id": 200,
+        "name": "scale",
+        "type": "uint8_t"
+      },
+      {
+        "id": 201,
+        "name": "has_time_zone",
+        "type": "bool"
+      }
+    ]
+  },
+  {
     "class": "ListTypeInfo",
     "base": "LogicalTypeInfo",
     "enum": "LIST_TYPE_INFO",

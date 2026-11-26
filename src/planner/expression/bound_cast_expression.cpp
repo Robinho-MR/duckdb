@@ -196,30 +196,15 @@ bool BoundCastExpression::CastIsInvertible(const LogicalType &source_type, const
 	}
 	switch (source_type.id()) {
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
 		switch (target_type.id()) {
-			// see types.hpp to see timestamp ranking
 		case LogicalTypeId::TIMESTAMP:
-			return source_type.id() <= LogicalTypeId::TIMESTAMP;
-		case LogicalTypeId::TIMESTAMP_SEC:
-			return source_type.id() <= LogicalTypeId::TIMESTAMP_SEC;
-		case LogicalTypeId::TIMESTAMP_MS:
-			return source_type.id() <= LogicalTypeId::TIMESTAMP_MS;
-		case LogicalTypeId::TIMESTAMP_NS:
-			return source_type.id() <= LogicalTypeId::TIMESTAMP_NS;
+			// a cast to a timestamp with the same time zone and an equal or larger scale is lossless
+			return TimestampType::HasTimeZone(source_type) == TimestampType::HasTimeZone(target_type) &&
+			       TimestampType::GetScale(source_type) <= TimestampType::GetScale(target_type);
 		case LogicalTypeId::DATE:
 		case LogicalTypeId::TIME:
 		case LogicalTypeId::TIME_TZ:
 			return false;
-		case LogicalTypeId::TIMESTAMP_TZ:
-			return source_type.id() == LogicalTypeId::TIMESTAMP_TZ;
-		case LogicalTypeId::TIMESTAMP_TZ_NS:
-			return LogicalTypeId::TIMESTAMP_TZ <= source_type.id() &&
-			       source_type.id() <= LogicalTypeId::TIMESTAMP_TZ_NS;
 		default:
 			break;
 		}
@@ -243,12 +228,7 @@ bool BoundCastExpression::CastIsInvertible(const LogicalType &source_type, const
 		case LogicalTypeId::TIME:
 		case LogicalTypeId::TIME_NS:
 		case LogicalTypeId::TIMESTAMP:
-		case LogicalTypeId::TIMESTAMP_NS:
-		case LogicalTypeId::TIMESTAMP_MS:
-		case LogicalTypeId::TIMESTAMP_SEC:
 		case LogicalTypeId::TIME_TZ:
-		case LogicalTypeId::TIMESTAMP_TZ:
-		case LogicalTypeId::TIMESTAMP_TZ_NS:
 			return true;
 		default:
 			return false;
@@ -316,11 +296,9 @@ static bool HasCanonicalVarcharRepresentation(const LogicalType &type) {
 	case LogicalTypeId::DATE:
 	case LogicalTypeId::TIME:
 	case LogicalTypeId::TIME_NS:
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
 		return true;
+	case LogicalTypeId::TIMESTAMP:
+		return !TimestampType::HasTimeZone(type);
 	default:
 		return false;
 	}
@@ -535,7 +513,7 @@ bool BoundCastExpression::CastCanThrow(const LogicalType &source_type, const Log
 	}
 	// Casting to a TIMESTAMP overflows for values outside of the timestamp range, even when widening the type,
 	// e.g. a DATE far in the future does not fit in a TIMESTAMP
-	if (LogicalType::TypeIsTimestamp(target_type) || target_type.id() == LogicalTypeId::TIMESTAMP_TZ_NS) {
+	if (LogicalType::TypeIsTimestamp(target_type)) {
 		return true;
 	}
 	// A cast only succeeds for every input if the target type can represent every value of the source type,

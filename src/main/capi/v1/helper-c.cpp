@@ -26,7 +26,7 @@ void PrepareCAPIVector(Vector &result) {
 	FlatVector::GetDataMutable(result);
 }
 
-LogicalTypeId LogicalTypeIdFromC(const duckdb_type type) {
+LogicalType LogicalTypeFromC(const duckdb_type type) {
 	switch (type) {
 	case DUCKDB_TYPE_INVALID:
 		return LogicalTypeId::INVALID;
@@ -71,11 +71,11 @@ LogicalTypeId LogicalTypeIdFromC(const duckdb_type type) {
 	case DUCKDB_TYPE_DECIMAL:
 		return LogicalTypeId::DECIMAL;
 	case DUCKDB_TYPE_TIMESTAMP_S:
-		return LogicalTypeId::TIMESTAMP_SEC;
+		return LogicalType::TIMESTAMP_S();
 	case DUCKDB_TYPE_TIMESTAMP_MS:
-		return LogicalTypeId::TIMESTAMP_MS;
+		return LogicalType::TIMESTAMP_MS();
 	case DUCKDB_TYPE_TIMESTAMP_NS:
-		return LogicalTypeId::TIMESTAMP_NS;
+		return LogicalType::TIMESTAMP_NS();
 	case DUCKDB_TYPE_ENUM:
 		return LogicalTypeId::ENUM;
 	case DUCKDB_TYPE_LIST:
@@ -95,9 +95,9 @@ LogicalTypeId LogicalTypeIdFromC(const duckdb_type type) {
 	case DUCKDB_TYPE_TIME_TZ:
 		return LogicalTypeId::TIME_TZ;
 	case DUCKDB_TYPE_TIMESTAMP_TZ:
-		return LogicalTypeId::TIMESTAMP_TZ;
+		return LogicalType::TIMESTAMP_TZ();
 	case DUCKDB_TYPE_TIMESTAMP_TZ_NS:
-		return LogicalTypeId::TIMESTAMP_TZ_NS;
+		return LogicalType::TIMESTAMP_TZ_NS();
 	case DUCKDB_TYPE_ANY:
 		return LogicalTypeId::ANY;
 	case DUCKDB_TYPE_BIGNUM:
@@ -122,8 +122,8 @@ LogicalTypeId LogicalTypeIdFromC(const duckdb_type type) {
 	} // LCOV_EXCL_STOP
 }
 
-duckdb_type LogicalTypeIdToC(const LogicalTypeId type) {
-	switch (type) {
+duckdb_type LogicalTypeToC(const LogicalType &type) {
+	switch (type.id()) {
 	case LogicalTypeId::INVALID:
 		return DUCKDB_TYPE_INVALID;
 	case LogicalTypeId::UNKNOWN:
@@ -155,17 +155,18 @@ duckdb_type LogicalTypeIdToC(const LogicalTypeId type) {
 	case LogicalTypeId::DOUBLE:
 		return DUCKDB_TYPE_DOUBLE;
 	case LogicalTypeId::TIMESTAMP:
-		return DUCKDB_TYPE_TIMESTAMP;
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return DUCKDB_TYPE_TIMESTAMP_TZ;
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return DUCKDB_TYPE_TIMESTAMP_TZ_NS;
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return DUCKDB_TYPE_TIMESTAMP_S;
-	case LogicalTypeId::TIMESTAMP_MS:
-		return DUCKDB_TYPE_TIMESTAMP_MS;
-	case LogicalTypeId::TIMESTAMP_NS:
-		return DUCKDB_TYPE_TIMESTAMP_NS;
+		switch (TimestampType::GetScale(type)) {
+		case TimestampType::SECOND_SCALE:
+			return DUCKDB_TYPE_TIMESTAMP_S;
+		case TimestampType::MILLISECOND_SCALE:
+			return DUCKDB_TYPE_TIMESTAMP_MS;
+		case TimestampType::MICROSECOND_SCALE:
+			return TimestampType::HasTimeZone(type) ? DUCKDB_TYPE_TIMESTAMP_TZ : DUCKDB_TYPE_TIMESTAMP;
+		case TimestampType::NANOSECOND_SCALE:
+			return TimestampType::HasTimeZone(type) ? DUCKDB_TYPE_TIMESTAMP_TZ_NS : DUCKDB_TYPE_TIMESTAMP_NS;
+		default:
+			return DUCKDB_TYPE_INVALID;
+		}
 	case LogicalTypeId::DATE:
 		return DUCKDB_TYPE_DATE;
 	case LogicalTypeId::TIME:

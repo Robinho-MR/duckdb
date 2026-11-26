@@ -170,8 +170,8 @@ unique_ptr<ParsedExpression> LiteralChild(unique_ptr<ConstantExpression> child, 
 }
 
 //! The name a built-in type is spelled with. Must be a name DefaultTypeGenerator knows.
-const char *BuiltinTypeName(LogicalTypeId id) {
-	switch (id) {
+const char *BuiltinTypeName(const LogicalType &type) {
+	switch (type.id()) {
 	case LogicalTypeId::BOOLEAN:
 		return "BOOLEAN";
 	case LogicalTypeId::TINYINT:
@@ -209,17 +209,18 @@ const char *BuiltinTypeName(LogicalTypeId id) {
 	case LogicalTypeId::TIME_TZ:
 		return "TIMETZ";
 	case LogicalTypeId::TIMESTAMP:
-		return "TIMESTAMP_US";
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return "TIMESTAMP_S";
-	case LogicalTypeId::TIMESTAMP_MS:
-		return "TIMESTAMP_MS";
-	case LogicalTypeId::TIMESTAMP_NS:
-		return "TIMESTAMP_NS";
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return "TIMESTAMPTZ";
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return "TIMESTAMPTZ_NS";
+		switch (TimestampType::GetScale(type)) {
+		case TimestampType::SECOND_SCALE:
+			return "TIMESTAMP_S";
+		case TimestampType::MILLISECOND_SCALE:
+			return "TIMESTAMP_MS";
+		case TimestampType::MICROSECOND_SCALE:
+			return TimestampType::HasTimeZone(type) ? "TIMESTAMPTZ" : "TIMESTAMP_US";
+		case TimestampType::NANOSECOND_SCALE:
+			return TimestampType::HasTimeZone(type) ? "TIMESTAMPTZ_NS" : "TIMESTAMP_NS";
+		default:
+			return nullptr;
+		}
 	case LogicalTypeId::INTERVAL:
 		return "INTERVAL";
 	case LogicalTypeId::VARCHAR:
@@ -285,7 +286,7 @@ unique_ptr<TypeExpression> TypeExpression::FromLogicalType(const LogicalType &ty
 		return make_uniq<TypeExpression>(Identifier(alias), std::move(children));
 	}
 
-	auto name = BuiltinTypeName(type.id());
+	auto name = BuiltinTypeName(type);
 	if (!name) {
 		// only the internal placeholder ids (ANY, UNKNOWN, INVALID, ...) have no name, and none of them is a
 		// type a user can name in the first place

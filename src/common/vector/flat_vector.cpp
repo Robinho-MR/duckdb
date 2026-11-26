@@ -414,17 +414,24 @@ Value StandardVectorBuffer::GetValue(const LogicalType &type, idx_t index) const
 	case LogicalTypeId::UBIGINT:
 		return Value::UBIGINT(reinterpret_cast<const uint64_t *>(data_ptr)[index]);
 	case LogicalTypeId::TIMESTAMP:
-		return Value::TIMESTAMP(reinterpret_cast<const timestamp_t *>(data_ptr)[index]);
-	case LogicalTypeId::TIMESTAMP_NS:
-		return Value::TIMESTAMPNS(reinterpret_cast<const timestamp_ns_t *>(data_ptr)[index]);
-	case LogicalTypeId::TIMESTAMP_MS:
-		return Value::TIMESTAMPMS(reinterpret_cast<const timestamp_ms_t *>(data_ptr)[index]);
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return Value::TIMESTAMPSEC(reinterpret_cast<const timestamp_sec_t *>(data_ptr)[index]);
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return Value::TIMESTAMPTZ(reinterpret_cast<const timestamp_tz_t *>(data_ptr)[index]);
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return Value::TIMESTAMPTZNS(reinterpret_cast<const timestamp_tz_ns_t *>(data_ptr)[index]);
+		switch (TimestampType::GetScale(type)) {
+		case TimestampType::SECOND_SCALE:
+			return Value::TIMESTAMPSEC(reinterpret_cast<const timestamp_sec_t *>(data_ptr)[index]);
+		case TimestampType::MILLISECOND_SCALE:
+			return Value::TIMESTAMPMS(reinterpret_cast<const timestamp_ms_t *>(data_ptr)[index]);
+		case TimestampType::MICROSECOND_SCALE:
+			if (TimestampType::HasTimeZone(type)) {
+				return Value::TIMESTAMPTZ(reinterpret_cast<const timestamp_tz_t *>(data_ptr)[index]);
+			}
+			return Value::TIMESTAMP(reinterpret_cast<const timestamp_t *>(data_ptr)[index]);
+		case TimestampType::NANOSECOND_SCALE:
+			if (TimestampType::HasTimeZone(type)) {
+				return Value::TIMESTAMPTZNS(reinterpret_cast<const timestamp_tz_ns_t *>(data_ptr)[index]);
+			}
+			return Value::TIMESTAMPNS(reinterpret_cast<const timestamp_ns_t *>(data_ptr)[index]);
+		default:
+			throw InternalException("Unsupported TIMESTAMP scale");
+		}
 	case LogicalTypeId::HUGEINT:
 		return Value::HUGEINT(reinterpret_cast<const hugeint_t *>(data_ptr)[index]);
 	case LogicalTypeId::UHUGEINT:

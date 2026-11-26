@@ -462,9 +462,9 @@ AggregateFunction GetVectorArgMinMaxFunctionBy(const LogicalType &by_type, const
 #endif
 
 const vector<LogicalType> ArgMaxByTypes() {
-	vector<LogicalType> types = {LogicalType::INTEGER,   LogicalType::BIGINT,       LogicalType::HUGEINT,
-	                             LogicalType::DOUBLE,    LogicalType::VARCHAR,      LogicalType::DATE,
-	                             LogicalType::TIMESTAMP, LogicalType::TIMESTAMP_TZ, LogicalType::BLOB};
+	vector<LogicalType> types = {LogicalType::INTEGER,   LogicalType::BIGINT,         LogicalType::HUGEINT,
+	                             LogicalType::DOUBLE,    LogicalType::VARCHAR,        LogicalType::DATE,
+	                             LogicalType::TIMESTAMP, LogicalType::TIMESTAMP_TZ(), LogicalType::BLOB};
 	return types;
 }
 
@@ -642,7 +642,7 @@ void AddArgMinMaxFunctions(AggregateFunctionSet &fun, const ArgMinMaxNullHandlin
 	AddArgMinMaxFunctionBy<OP, string_t>(fun, LogicalType::VARCHAR, null_handling);
 	AddArgMinMaxFunctionBy<OP, date_t>(fun, LogicalType::DATE, null_handling);
 	AddArgMinMaxFunctionBy<OP, timestamp_t>(fun, LogicalType::TIMESTAMP, null_handling);
-	AddArgMinMaxFunctionBy<OP, timestamp_t>(fun, LogicalType::TIMESTAMP_TZ, null_handling);
+	AddArgMinMaxFunctionBy<OP, timestamp_t>(fun, LogicalType::TIMESTAMP_TZ(), null_handling);
 	AddArgMinMaxFunctionBy<OP, string_t>(fun, LogicalType::BLOB, null_handling);
 
 	auto by_types = ArgMaxByTypes();

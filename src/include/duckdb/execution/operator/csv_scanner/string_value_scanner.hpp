@@ -164,10 +164,22 @@ struct ParseTypeInfo {
 	ParseTypeInfo(const LogicalType &type, const bool validate_utf_8_p) : validate_utf8(validate_utf_8_p) {
 		type_id = type.id();
 		internal_type = type.InternalType();
+		has_time_zone = TimestampType::HasTimeZone(type);
+		if (type.id() == LogicalTypeId::TIMESTAMP) {
+			timestamp_scale = TimestampType::GetScale(type);
+		}
 		if (type.id() == LogicalTypeId::DECIMAL) {
 			// We only care about these if we have a decimal value
 			type.GetDecimalProperties(width, scale);
 		}
+	}
+
+	//! The name of the type in error messages
+	string TypeName() const {
+		if (type_id == LogicalTypeId::TIMESTAMP) {
+			return TimestampType::GetName(timestamp_scale, has_time_zone);
+		}
+		return LogicalTypeIdToString(type_id);
 	}
 
 	bool validate_utf8;
@@ -175,6 +187,8 @@ struct ParseTypeInfo {
 	PhysicalType internal_type;
 	uint32_t scale;
 	uint32_t width;
+	uint8_t timestamp_scale = TimestampType::MICROSECOND_SCALE;
+	bool has_time_zone = false;
 };
 
 class StringValueResult : public ScannerResult {

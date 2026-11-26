@@ -127,12 +127,7 @@ void VariantShredding::WriteTypedPrimitiveValues(UnifiedVariantVectorData &varia
 	case LogicalTypeId::TIME:
 	case LogicalTypeId::TIME_NS:
 	case LogicalTypeId::TIME_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
 	case LogicalTypeId::INTERVAL:
 	case LogicalTypeId::UUID: {
 		const auto physical_type = type.InternalType();
@@ -366,8 +361,13 @@ VariantShreddingState::VariantShreddingState(const LogicalType &type, idx_t tota
 
 bool VariantShreddingState::ValueIsShredded(UnifiedVariantVectorData &variant, idx_t row, uint32_t values_index) {
 	auto type_id = variant.GetTypeId(row, values_index);
-	if (!GetVariantTypes().count(VariantTypeToLogicalTypeId(type_id))) {
+	auto logical_type_id = VariantTypeToLogicalTypeId(type_id);
+	if (!GetVariantTypes().count(logical_type_id)) {
 		return false;
+	}
+	if (logical_type_id == LogicalTypeId::TIMESTAMP) {
+		// the timestamp variants share an id, but are shredded into a column of a single scale and time zone
+		return VariantDefaultType(type_id) == type;
 	}
 	if (type_id == VariantLogicalType::DECIMAL) {
 		// the shredded column stores the unscaled value, so it only holds decimals of its scale that fit its width

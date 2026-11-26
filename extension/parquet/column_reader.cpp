@@ -1331,19 +1331,38 @@ static unique_ptr<ColumnReader> CreateDecimalReader(const ParquetReader &reader,
 	}
 }
 
-static_assert(ParquetTimestampLogicalType(ParquetExtraTypeInfo::UNIT_NS) != LogicalTypeId::TIMESTAMP);
-static_assert(ParquetTimestampTzLogicalType(ParquetExtraTypeInfo::UNIT_NS) != LogicalTypeId::TIMESTAMP_TZ);
+static_assert(ParquetTimestampScale(ParquetExtraTypeInfo::UNIT_NS) == TimestampType::NANOSECOND_SCALE, "");
+static_assert(ParquetTimestampTzScale(ParquetExtraTypeInfo::UNIT_NS) == TimestampType::NANOSECOND_SCALE, "");
 
-static_assert(ParquetTimestampLogicalType(ParquetExtraTypeInfo::IMPALA_TIMESTAMP) != LogicalTypeId::TIMESTAMP_NS);
-static_assert(ParquetTimestampTzLogicalType(ParquetExtraTypeInfo::IMPALA_TIMESTAMP) != LogicalTypeId::TIMESTAMP_TZ_NS);
-static_assert(ParquetTimestampLogicalType(ParquetExtraTypeInfo::UNIT_MS) != LogicalTypeId::TIMESTAMP_NS);
-static_assert(ParquetTimestampTzLogicalType(ParquetExtraTypeInfo::UNIT_MS) != LogicalTypeId::TIMESTAMP_TZ_NS);
-static_assert(ParquetTimestampLogicalType(ParquetExtraTypeInfo::UNIT_MICROS) != LogicalTypeId::TIMESTAMP_NS);
-static_assert(ParquetTimestampTzLogicalType(ParquetExtraTypeInfo::UNIT_MICROS) != LogicalTypeId::TIMESTAMP_TZ_NS);
+static_assert(ParquetTimestampScale(ParquetExtraTypeInfo::IMPALA_TIMESTAMP) == TimestampType::MICROSECOND_SCALE, "");
+static_assert(ParquetTimestampTzScale(ParquetExtraTypeInfo::IMPALA_TIMESTAMP) == INVALID_PARQUET_TIMESTAMP_SCALE, "");
+static_assert(ParquetTimestampScale(ParquetExtraTypeInfo::UNIT_MS) == TimestampType::MICROSECOND_SCALE, "");
+static_assert(ParquetTimestampTzScale(ParquetExtraTypeInfo::UNIT_MS) == TimestampType::MICROSECOND_SCALE, "");
+static_assert(ParquetTimestampScale(ParquetExtraTypeInfo::UNIT_MICROS) == TimestampType::MICROSECOND_SCALE, "");
+static_assert(ParquetTimestampTzScale(ParquetExtraTypeInfo::UNIT_MICROS) == TimestampType::MICROSECOND_SCALE, "");
 
 static_assert(ParquetTimeLogicalType(ParquetExtraTypeInfo::UNIT_NS) != LogicalTypeId::TIME);
 static_assert(ParquetTimeLogicalType(ParquetExtraTypeInfo::UNIT_MS) != LogicalTypeId::TIME_NS);
 static_assert(ParquetTimeLogicalType(ParquetExtraTypeInfo::UNIT_MICROS) != LogicalTypeId::TIME_NS);
+
+static unique_ptr<ColumnReader> CreateTimestampNSReader(const ParquetReader &reader,
+                                                        const ParquetColumnSchema &schema) {
+	switch (schema.type_info) {
+	case ParquetExtraTypeInfo::IMPALA_TIMESTAMP:
+		return make_uniq<CallbackColumnReader<Int96, timestamp_ns_t, ImpalaTimestampToTimestampNS>>(reader, schema);
+	case ParquetExtraTypeInfo::UNIT_MS:
+		return make_uniq<CallbackColumnReader<int64_t, timestamp_ns_t, ParquetTimestampMsToTimestampNs>>(reader,
+		                                                                                                 schema);
+	case ParquetExtraTypeInfo::UNIT_MICROS:
+		return make_uniq<CallbackColumnReader<int64_t, timestamp_ns_t, ParquetTimestampUsToTimestampNs>>(reader,
+		                                                                                                 schema);
+	case ParquetExtraTypeInfo::UNIT_NS:
+		return make_uniq<CallbackColumnReader<int64_t, timestamp_ns_t, ParquetTimestampNsToTimestampNs>>(reader,
+		                                                                                                 schema);
+	default:
+		throw InternalException("TIMESTAMP_NS requires type info");
+	}
+}
 
 unique_ptr<ColumnReader> ColumnReader::CreateReader(const ParquetReader &reader, const ParquetColumnSchema &schema) {
 	switch (schema.type.id()) {
@@ -1376,7 +1395,12 @@ unique_ptr<ColumnReader> ColumnReader::CreateReader(const ParquetReader &reader,
 		}
 		return make_uniq<TemplatedColumnReader<double, TemplatedParquetValueConversion<double>>>(reader, schema);
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
+		if (TimestampType::GetScale(schema.type) == TimestampType::NANOSECOND_SCALE) {
+			return CreateTimestampNSReader(reader, schema);
+		}
+		if (TimestampType::GetScale(schema.type) != TimestampType::MICROSECOND_SCALE) {
+			throw InternalException("Unsupported TIMESTAMP scale for the Parquet reader");
+		}
 		switch (schema.type_info) {
 		case ParquetExtraTypeInfo::IMPALA_TIMESTAMP:
 			return make_uniq<CallbackColumnReader<Int96, timestamp_t, ImpalaTimestampToTimestamp>>(reader, schema);
@@ -1387,23 +1411,6 @@ unique_ptr<ColumnReader> ColumnReader::CreateReader(const ParquetReader &reader,
 			                                                                                                schema);
 		default:
 			throw InternalException("TIMESTAMP requires type info");
-		}
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		switch (schema.type_info) {
-		case ParquetExtraTypeInfo::IMPALA_TIMESTAMP:
-			return make_uniq<CallbackColumnReader<Int96, timestamp_ns_t, ImpalaTimestampToTimestampNS>>(reader, schema);
-		case ParquetExtraTypeInfo::UNIT_MS:
-			return make_uniq<CallbackColumnReader<int64_t, timestamp_ns_t, ParquetTimestampMsToTimestampNs>>(reader,
-			                                                                                                 schema);
-		case ParquetExtraTypeInfo::UNIT_MICROS:
-			return make_uniq<CallbackColumnReader<int64_t, timestamp_ns_t, ParquetTimestampUsToTimestampNs>>(reader,
-			                                                                                                 schema);
-		case ParquetExtraTypeInfo::UNIT_NS:
-			return make_uniq<CallbackColumnReader<int64_t, timestamp_ns_t, ParquetTimestampNsToTimestampNs>>(reader,
-			                                                                                                 schema);
-		default:
-			throw InternalException("TIMESTAMP_NS requires type info");
 		}
 	case LogicalTypeId::DATE:
 		return make_uniq<CallbackColumnReader<int32_t, date_t, ParquetIntToDate>>(reader, schema);

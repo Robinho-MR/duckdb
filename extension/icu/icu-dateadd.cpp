@@ -251,8 +251,7 @@ struct ICUDateAdd : public ICUDateFunc {
 	}
 
 	template <typename TA, typename TR, typename OP>
-	inline static ScalarFunction GetUnaryDateFunction(const LogicalTypeId &left_type,
-	                                                  const LogicalTypeId &result_type) {
+	inline static ScalarFunction GetUnaryDateFunction(const LogicalType &left_type, const LogicalType &result_type) {
 		return ScalarFunction({left_type}, result_type, ExecuteUnary<TA, TR, OP>, ICUBindIntervalMonths);
 	}
 
@@ -270,20 +269,20 @@ struct ICUDateAdd : public ICUDateFunc {
 	}
 
 	template <typename TA, typename TB, typename TR, typename OP>
-	inline static ScalarFunction GetBinaryDateFunction(const LogicalTypeId &left_type, const LogicalTypeId &right_type,
-	                                                   const LogicalTypeId &result_type) {
+	inline static ScalarFunction GetBinaryDateFunction(const LogicalType &left_type, const LogicalType &right_type,
+	                                                   const LogicalType &result_type) {
 		return ScalarFunction({left_type, right_type}, result_type, ExecuteBinary<TA, TB, TR, OP>,
 		                      ICUBindIntervalMonths);
 	}
 
 	template <typename TA, typename TB, typename TR, typename OP>
-	static ScalarFunction GetDateAddFunction(const LogicalTypeId &left_type, const LogicalTypeId &right_type,
-	                                         const LogicalTypeId &result_type) {
+	static ScalarFunction GetDateAddFunction(const LogicalType &left_type, const LogicalType &right_type,
+	                                         const LogicalType &result_type) {
 		return GetBinaryDateFunction<TA, TB, TR, OP>(left_type, right_type, result_type);
 	}
 
 	template <typename T>
-	static void AddDateAddFunctions(ScalarFunctionSet &set, const LogicalTypeId &type) {
+	static void AddDateAddFunctions(ScalarFunctionSet &set, const LogicalType &type) {
 		//	temporal + interval
 		auto tstz_interval_fun =
 		    GetDateAddFunction<T, interval_t, T, ICUCalendarAdd>(type, LogicalType::INTERVAL, type);
@@ -301,8 +300,8 @@ struct ICUDateAdd : public ICUDateFunc {
 
 	static void AddDateAddOperators(const Identifier &name, ExtensionLoader &loader) {
 		ScalarFunctionSet set {name};
-		AddDateAddFunctions<timestamp_tz_t>(set, LogicalType::TIMESTAMP_TZ);
-		AddDateAddFunctions<timestamp_tz_ns_t>(set, LogicalType::TIMESTAMP_TZ_NS);
+		AddDateAddFunctions<timestamp_tz_t>(set, LogicalType::TIMESTAMP_TZ());
+		AddDateAddFunctions<timestamp_tz_ns_t>(set, LogicalType::TIMESTAMP_TZ_NS());
 		// throws for dates that overflow the timestamp range
 		set.SetFallible();
 		set.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
@@ -310,17 +309,17 @@ struct ICUDateAdd : public ICUDateFunc {
 	}
 
 	template <typename TA, typename OP>
-	static ScalarFunction GetUnaryAgeFunction(const LogicalTypeId &left_type) {
+	static ScalarFunction GetUnaryAgeFunction(const LogicalType &left_type) {
 		return GetUnaryDateFunction<TA, interval_t, OP>(left_type, LogicalType::INTERVAL);
 	}
 
 	template <typename TA, typename TB, typename OP>
-	static ScalarFunction GetBinaryAgeFunction(const LogicalTypeId &left_type, const LogicalTypeId &right_type) {
+	static ScalarFunction GetBinaryAgeFunction(const LogicalType &left_type, const LogicalType &right_type) {
 		return GetBinaryDateFunction<TA, TB, interval_t, OP>(left_type, right_type, LogicalType::INTERVAL);
 	}
 
 	template <typename T>
-	static void AddDateSubFunction(ScalarFunctionSet &set, const LogicalTypeId &type) {
+	static void AddDateSubFunction(ScalarFunctionSet &set, const LogicalType &type) {
 		//	temporal - interval
 		auto tstz_interval_fun =
 		    GetDateAddFunction<T, interval_t, T, ICUCalendarSub>(type, LogicalType::INTERVAL, type);
@@ -331,12 +330,12 @@ struct ICUDateAdd : public ICUDateFunc {
 
 	static void AddDateSubOperators(const Identifier &name, ExtensionLoader &loader) {
 		ScalarFunctionSet set {name};
-		AddDateSubFunction<timestamp_tz_t>(set, LogicalType::TIMESTAMP_TZ);
-		AddDateSubFunction<timestamp_tz_ns_t>(set, LogicalType::TIMESTAMP_TZ_NS);
+		AddDateSubFunction<timestamp_tz_t>(set, LogicalType::TIMESTAMP_TZ());
+		AddDateSubFunction<timestamp_tz_ns_t>(set, LogicalType::TIMESTAMP_TZ_NS());
 
 		//	temporal - temporal
 		auto tstz_tstz_fun = GetBinaryAgeFunction<timestamp_tz_t, timestamp_tz_t, ICUCalendarSub>(
-		    LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP_TZ);
+		    LogicalType::TIMESTAMP_TZ(), LogicalType::TIMESTAMP_TZ());
 		tstz_tstz_fun.GetSignature().GetParameter(0).SetName("left");
 		tstz_tstz_fun.GetSignature().GetParameter(1).SetName("right");
 		set.AddFunction(tstz_tstz_fun);
@@ -350,12 +349,12 @@ struct ICUDateAdd : public ICUDateFunc {
 		//	age(temporal, temporal)
 		ScalarFunctionSet set {name};
 		auto binary_fun = GetBinaryAgeFunction<timestamp_tz_t, timestamp_tz_t, ICUCalendarAge>(
-		    LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP_TZ);
+		    LogicalType::TIMESTAMP_TZ(), LogicalType::TIMESTAMP_TZ());
 		binary_fun.GetSignature().GetParameter(0).SetName("timestamp1");
 		binary_fun.GetSignature().GetParameter(1).SetName("timestamp2");
 		binary_fun.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
 		set.AddFunction(binary_fun);
-		auto unary_fun = GetUnaryAgeFunction<timestamp_tz_t, ICUCalendarAge>(LogicalType::TIMESTAMP_TZ);
+		auto unary_fun = GetUnaryAgeFunction<timestamp_tz_t, ICUCalendarAge>(LogicalType::TIMESTAMP_TZ());
 		unary_fun.GetSignature().GetParameter(0).SetName("timestamp");
 		// the age is taken at the start of the transaction
 		unary_fun.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);

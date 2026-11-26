@@ -48,8 +48,7 @@ duckdb_logical_type duckdb_create_logical_type(duckdb_type type) {
 		// a VARIANT carries the types of its children
 		return reinterpret_cast<duckdb_logical_type>(new duckdb::LogicalType(duckdb::LogicalType::VARIANT()));
 	}
-	auto type_id = duckdb::LogicalTypeIdFromC(type);
-	return reinterpret_cast<duckdb_logical_type>(new duckdb::LogicalType(type_id));
+	return reinterpret_cast<duckdb_logical_type>(new duckdb::LogicalType(duckdb::LogicalTypeFromC(type)));
 }
 
 duckdb_logical_type duckdb_create_list_type(duckdb_logical_type type) {
@@ -182,7 +181,7 @@ duckdb_type duckdb_get_type_id(duckdb_logical_type type) {
 		return DUCKDB_TYPE_INVALID;
 	}
 	auto logical_type = reinterpret_cast<duckdb::LogicalType *>(type);
-	return duckdb::LogicalTypeIdToC(logical_type->id());
+	return duckdb::LogicalTypeToC(*logical_type);
 }
 
 void duckdb_destroy_logical_type(duckdb_logical_type *type) {

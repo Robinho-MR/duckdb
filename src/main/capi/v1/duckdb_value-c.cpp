@@ -11,6 +11,7 @@
 #include "duckdb/main/capi/cast/utils.hpp"
 #include "duckdb/main/capi/capi_internal.hpp"
 
+using duckdb::LogicalType;
 using duckdb::LogicalTypeId;
 
 static duckdb_value WrapValue(duckdb::Value *value) {
@@ -49,14 +50,19 @@ static duckdb_value CAPICreateValue(T input) {
 	return WrapValue(new duckdb::Value(duckdb::Value::CreateValue<T>(input)));
 }
 
-template <class T, LogicalTypeId TYPE_ID>
-static T CAPIGetValue(duckdb_value val) {
+template <class T>
+static T CAPIGetValueAs(duckdb_value val, const LogicalType &type) {
 	auto &v = UnwrapValue(val);
-	auto cast = v.DefaultTryCastAs(TYPE_ID);
+	auto cast = v.DefaultTryCastAs(type);
 	if (!cast) {
 		return duckdb::NullValue<T>();
 	}
 	return cast->template GetValue<T>();
+}
+
+template <class T, LogicalTypeId TYPE_ID>
+static T CAPIGetValue(duckdb_value val) {
+	return CAPIGetValueAs<T>(val, TYPE_ID);
 }
 
 duckdb_value duckdb_create_bool(bool input) {
@@ -240,7 +246,7 @@ duckdb_timestamp duckdb_get_timestamp_tz(duckdb_value val) {
 	if (!val) {
 		return {0};
 	}
-	return {CAPIGetValue<duckdb::timestamp_tz_t, LogicalTypeId::TIMESTAMP_TZ>(val).value};
+	return {CAPIGetValueAs<duckdb::timestamp_tz_t>(val, LogicalType::TIMESTAMP_TZ()).value};
 }
 
 duckdb_value duckdb_create_timestamp_tz_ns(duckdb_timestamp_ns input) {
@@ -252,7 +258,7 @@ duckdb_timestamp_ns duckdb_get_timestamp_tz_ns(duckdb_value val) {
 	if (!val) {
 		return {0};
 	}
-	return {CAPIGetValue<duckdb::timestamp_tz_ns_t, LogicalTypeId::TIMESTAMP_TZ_NS>(val).value};
+	return {CAPIGetValueAs<duckdb::timestamp_tz_ns_t>(val, LogicalType::TIMESTAMP_TZ_NS()).value};
 }
 
 duckdb_value duckdb_create_timestamp_s(duckdb_timestamp_s input) {
@@ -264,7 +270,7 @@ duckdb_timestamp_s duckdb_get_timestamp_s(duckdb_value val) {
 	if (!val) {
 		return {0};
 	}
-	return {CAPIGetValue<duckdb::timestamp_sec_t, LogicalTypeId::TIMESTAMP_SEC>(val).value};
+	return {CAPIGetValueAs<duckdb::timestamp_sec_t>(val, LogicalType::TIMESTAMP_S()).value};
 }
 
 duckdb_value duckdb_create_timestamp_ms(duckdb_timestamp_ms input) {
@@ -276,7 +282,7 @@ duckdb_timestamp_ms duckdb_get_timestamp_ms(duckdb_value val) {
 	if (!val) {
 		return {0};
 	}
-	return {CAPIGetValue<duckdb::timestamp_ms_t, LogicalTypeId::TIMESTAMP_MS>(val).value};
+	return {CAPIGetValueAs<duckdb::timestamp_ms_t>(val, LogicalType::TIMESTAMP_MS()).value};
 }
 
 duckdb_value duckdb_create_timestamp_ns(duckdb_timestamp_ns input) {
@@ -288,7 +294,7 @@ duckdb_timestamp_ns duckdb_get_timestamp_ns(duckdb_value val) {
 	if (!val) {
 		return {0};
 	}
-	return {CAPIGetValue<duckdb::timestamp_ns_t, LogicalTypeId::TIMESTAMP_NS>(val).value};
+	return {CAPIGetValueAs<duckdb::timestamp_ns_t>(val, LogicalType::TIMESTAMP_NS()).value};
 }
 
 duckdb_value duckdb_create_interval(duckdb_interval input) {

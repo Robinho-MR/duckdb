@@ -52,6 +52,29 @@ private:
 	StringTypeInfo();
 };
 
+struct TimestampTypeInfo : public LogicalTypeInfo {
+	TimestampTypeInfo(uint8_t scale_p, bool has_time_zone_p);
+
+	//! The number of fractional second digits (0, 3, 6 or 9)
+	uint8_t scale;
+	bool has_time_zone;
+
+public:
+	void Serialize(Serializer &serializer) const override;
+	static unique_ptr<LogicalTypeInfo> Deserialize(Deserializer &source);
+	unique_ptr<LogicalTypeInfo> Copy() const override;
+
+	//! The scale / time zone of a TIMESTAMP's info - an info without timestamp parameters is the default timestamp
+	static uint8_t GetScale(const LogicalTypeInfo &info);
+	static bool HasTimeZone(const LogicalTypeInfo &info);
+
+protected:
+	bool EqualsInternal(const LogicalTypeInfo *other_p) const override;
+
+private:
+	TimestampTypeInfo();
+};
+
 struct ListTypeInfo : public LogicalTypeInfo {
 	explicit ListTypeInfo(LogicalType child_type_p);
 

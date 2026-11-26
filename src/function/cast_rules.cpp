@@ -20,18 +20,20 @@ static int64_t TargetTypeCost(const LogicalType &type) {
 		return 105;
 	case LogicalTypeId::BIGNUM:
 		return 106;
-	case LogicalTypeId::TIMESTAMP_NS:
-		return 119;
 	case LogicalTypeId::TIMESTAMP:
-		return 120;
-	case LogicalTypeId::TIMESTAMP_MS:
-		return 121;
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return 122;
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return 123;
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return 124;
+		if (TimestampType::HasTimeZone(type)) {
+			return TimestampType::GetScale(type) == TimestampType::NANOSECOND_SCALE ? 124 : 123;
+		}
+		switch (TimestampType::GetScale(type)) {
+		case TimestampType::NANOSECOND_SCALE:
+			return 119;
+		case TimestampType::MICROSECOND_SCALE:
+			return 120;
+		case TimestampType::MILLISECOND_SCALE:
+			return 121;
+		default:
+			return 122;
+		}
 	case LogicalTypeId::VARCHAR:
 		return 149;
 	case LogicalTypeId::STRUCT:
@@ -236,11 +238,6 @@ static int64_t ImplicitCastUhugeint(const LogicalType &to) {
 static int64_t ImplicitCastDate(const LogicalType &to) {
 	switch (to.id()) {
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
 		return TargetTypeCost(to);
 	default:
 		return -1;
@@ -256,59 +253,31 @@ static int64_t ImplicitCastEnum(const LogicalType &to) {
 	}
 }
 
-static int64_t ImplicitCastTimestampSec(const LogicalType &to) {
-	switch (to.id()) {
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return TargetTypeCost(to);
-	default:
+static int64_t ImplicitCastTimestamp(const LogicalType &from, const LogicalType &to) {
+	if (to.id() != LogicalTypeId::TIMESTAMP) {
 		return -1;
 	}
-}
-
-static int64_t ImplicitCastTimestampMS(const LogicalType &to) {
-	switch (to.id()) {
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return TargetTypeCost(to);
-	default:
-		return -1;
+	auto from_scale = TimestampType::GetScale(from);
+	auto to_scale = TimestampType::GetScale(to);
+	auto from_tz = TimestampType::HasTimeZone(from);
+	auto to_tz = TimestampType::HasTimeZone(to);
+	if (from_scale == to_scale && from_tz == to_tz) {
+		return 0;
 	}
-}
-
-static int64_t ImplicitCastTimestampNS(const LogicalType &to) {
-	switch (to.id()) {
-	case LogicalTypeId::TIMESTAMP:
-		// we allow casting ALL timestamps, including nanosecond ones, to TimestampNS
-		return TargetTypeCost(to);
-	default:
-		return -1;
+	if (from_tz) {
+		// a TIMESTAMPTZ combines with a TIMESTAMPTZ_NS at nanosecond precision
+		return to_tz && to_scale > from_scale ? TargetTypeCost(to) : -1;
 	}
-}
-
-static int64_t ImplicitCastTimestamp(const LogicalType &to) {
-	switch (to.id()) {
-	case LogicalTypeId::TIMESTAMP_NS:
-		return TargetTypeCost(to);
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return TargetTypeCost(to);
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return TargetTypeCost(to);
-	default:
-		return -1;
-	}
-}
-
-static int64_t ImplicitCastTimestampTz(const LogicalType &to) {
-	switch (to.id()) {
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		// like TIMESTAMP to TIMESTAMP_NS: a TIMESTAMPTZ combines with a TIMESTAMPTZ_NS at nanosecond precision
-		return TargetTypeCost(to);
+	switch (from_scale) {
+	case TimestampType::SECOND_SCALE:
+	case TimestampType::MILLISECOND_SCALE:
+		// seconds / milliseconds can be cast to any timestamp with a larger scale
+		return to_scale > from_scale ? TargetTypeCost(to) : -1;
+	case TimestampType::MICROSECOND_SCALE:
+		return to_tz || to_scale == TimestampType::NANOSECOND_SCALE ? TargetTypeCost(to) : -1;
+	case TimestampType::NANOSECOND_SCALE:
+		// we allow casting nanosecond timestamps to the default timestamp
+		return !to_tz && to_scale == TimestampType::MICROSECOND_SCALE ? TargetTypeCost(to) : -1;
 	default:
 		return -1;
 	}
@@ -604,7 +573,7 @@ int64_t CastRules::ImplicitCast(const LogicalType &from, const LogicalType &to) 
 		return cost;
 	}
 
-	if (from.id() == to.id()) {
+	if (from.id() == to.id() && from.id() != LogicalTypeId::TIMESTAMP) {
 		// arguments match: do nothing
 		return 0;
 	}
@@ -644,16 +613,8 @@ int64_t CastRules::ImplicitCast(const LogicalType &from, const LogicalType &to) 
 		return ImplicitCastDecimal(to);
 	case LogicalTypeId::ENUM:
 		return ImplicitCastEnum(to);
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return ImplicitCastTimestampSec(to);
-	case LogicalTypeId::TIMESTAMP_MS:
-		return ImplicitCastTimestampMS(to);
-	case LogicalTypeId::TIMESTAMP_NS:
-		return ImplicitCastTimestampNS(to);
 	case LogicalTypeId::TIMESTAMP:
-		return ImplicitCastTimestamp(to);
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return ImplicitCastTimestampTz(to);
+		return ImplicitCastTimestamp(from, to);
 	case LogicalTypeId::BIGNUM:
 		return ImplicitCastBignum(to);
 	case LogicalTypeId::VARIANT:

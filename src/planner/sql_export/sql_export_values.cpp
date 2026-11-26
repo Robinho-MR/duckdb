@@ -104,11 +104,6 @@ static bool OrderDistinguishesValues(ClientContext &context, const LogicalType &
 		case LogicalTypeId::DECIMAL:
 		case LogicalTypeId::DATE:
 		case LogicalTypeId::TIME:
-		case LogicalTypeId::TIMESTAMP:
-		case LogicalTypeId::TIMESTAMP_SEC:
-		case LogicalTypeId::TIMESTAMP_MS:
-		case LogicalTypeId::TIMESTAMP_NS:
-		case LogicalTypeId::TIMESTAMP_TZ:
 		case LogicalTypeId::BLOB:
 		case LogicalTypeId::BIT:
 		case LogicalTypeId::UUID:
@@ -118,6 +113,8 @@ static bool OrderDistinguishesValues(ClientContext &context, const LogicalType &
 		case LogicalTypeId::STRUCT:
 		case LogicalTypeId::MAP:
 			return false;
+		case LogicalTypeId::TIMESTAMP:
+			return TimestampType::Is(child, TimestampType::NANOSECOND_SCALE, true);
 		case LogicalTypeId::VARCHAR:
 			return !StringType::GetCollation(child).empty() || !default_collation.empty();
 		default:

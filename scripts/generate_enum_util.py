@@ -96,10 +96,12 @@ enum_util_source_file = os.path.join("..", "src", "common", "enum_util.cpp")
 overrides = {
     "LogicalTypeId": {
         "SQLNULL": "NULL",
-        "TIMESTAMP_TZ": "TIMESTAMP WITH TIME ZONE",
+        "LEGACY_TIMESTAMP_TZ": "TIMESTAMP WITH TIME ZONE",
         "TIME_TZ": "TIME WITH TIME ZONE",
-        "TIMESTAMP_SEC": "TIMESTAMP_S",
-        "TIMESTAMP_TZ_NS": "TIMESTAMPTZ_NS",
+        "LEGACY_TIMESTAMP_SEC": "TIMESTAMP_S",
+        "LEGACY_TIMESTAMP_MS": "TIMESTAMP_MS",
+        "LEGACY_TIMESTAMP_NS": "TIMESTAMP_NS",
+        "LEGACY_TIMESTAMP_TZ_NS": "TIMESTAMPTZ_NS",
     },
     "JoinType": {"OUTER": "FULL"},
     "OrderType": {

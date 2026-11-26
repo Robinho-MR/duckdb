@@ -66,19 +66,14 @@ LogicalTypeId VariantTypeToLogicalTypeId(VariantLogicalType type) {
 	case VariantLogicalType::TIME_NANOS:
 		return LogicalTypeId::TIME_NS;
 	case VariantLogicalType::TIMESTAMP_SEC:
-		return LogicalTypeId::TIMESTAMP_SEC;
 	case VariantLogicalType::TIMESTAMP_MILIS:
-		return LogicalTypeId::TIMESTAMP_MS;
 	case VariantLogicalType::TIMESTAMP_MICROS:
-		return LogicalTypeId::TIMESTAMP;
 	case VariantLogicalType::TIMESTAMP_NANOS:
-		return LogicalTypeId::TIMESTAMP_NS;
+	case VariantLogicalType::TIMESTAMP_MICROS_TZ:
+	case VariantLogicalType::TIMESTAMP_NANOS_TZ:
+		return LogicalTypeId::TIMESTAMP;
 	case VariantLogicalType::TIME_MICROS_TZ:
 		return LogicalTypeId::TIME_TZ;
-	case VariantLogicalType::TIMESTAMP_MICROS_TZ:
-		return LogicalTypeId::TIMESTAMP_TZ;
-	case VariantLogicalType::TIMESTAMP_NANOS_TZ:
-		return LogicalTypeId::TIMESTAMP_TZ_NS;
 	case VariantLogicalType::INTERVAL:
 		return LogicalTypeId::INTERVAL;
 	case VariantLogicalType::OBJECT:
@@ -98,8 +93,8 @@ LogicalTypeId VariantTypeToLogicalTypeId(VariantLogicalType type) {
 	}
 }
 
-bool TryVariantTypeFromLogicalTypeId(LogicalTypeId id, VariantLogicalType &result, bool bool_value) {
-	switch (id) {
+bool TryVariantTypeFromLogicalType(const LogicalType &type, VariantLogicalType &result, bool bool_value) {
+	switch (type.id()) {
 	case LogicalTypeId::BOOLEAN:
 		result = bool_value ? VariantLogicalType::BOOL_TRUE : VariantLogicalType::BOOL_FALSE;
 		return true;
@@ -163,26 +158,27 @@ bool TryVariantTypeFromLogicalTypeId(LogicalTypeId id, VariantLogicalType &resul
 	case LogicalTypeId::TIME_NS:
 		result = VariantLogicalType::TIME_NANOS;
 		return true;
-	case LogicalTypeId::TIMESTAMP_SEC:
-		result = VariantLogicalType::TIMESTAMP_SEC;
-		return true;
-	case LogicalTypeId::TIMESTAMP_MS:
-		result = VariantLogicalType::TIMESTAMP_MILIS;
-		return true;
 	case LogicalTypeId::TIMESTAMP:
-		result = VariantLogicalType::TIMESTAMP_MICROS;
-		return true;
-	case LogicalTypeId::TIMESTAMP_NS:
-		result = VariantLogicalType::TIMESTAMP_NANOS;
-		return true;
+		switch (TimestampType::GetScale(type)) {
+		case TimestampType::SECOND_SCALE:
+			result = VariantLogicalType::TIMESTAMP_SEC;
+			return true;
+		case TimestampType::MILLISECOND_SCALE:
+			result = VariantLogicalType::TIMESTAMP_MILIS;
+			return true;
+		case TimestampType::MICROSECOND_SCALE:
+			result = TimestampType::HasTimeZone(type) ? VariantLogicalType::TIMESTAMP_MICROS_TZ
+			                                          : VariantLogicalType::TIMESTAMP_MICROS;
+			return true;
+		case TimestampType::NANOSECOND_SCALE:
+			result = TimestampType::HasTimeZone(type) ? VariantLogicalType::TIMESTAMP_NANOS_TZ
+			                                          : VariantLogicalType::TIMESTAMP_NANOS;
+			return true;
+		default:
+			return false;
+		}
 	case LogicalTypeId::TIME_TZ:
 		result = VariantLogicalType::TIME_MICROS_TZ;
-		return true;
-	case LogicalTypeId::TIMESTAMP_TZ:
-		result = VariantLogicalType::TIMESTAMP_MICROS_TZ;
-		return true;
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		result = VariantLogicalType::TIMESTAMP_NANOS_TZ;
 		return true;
 	case LogicalTypeId::INTERVAL:
 		result = VariantLogicalType::INTERVAL;
@@ -210,7 +206,24 @@ bool TryVariantTypeFromLogicalTypeId(LogicalTypeId id, VariantLogicalType &resul
 	}
 }
 
-LogicalType VariantDefaultType(LogicalTypeId id) {
+LogicalType VariantDefaultType(VariantLogicalType type) {
+	switch (type) {
+	case VariantLogicalType::TIMESTAMP_SEC:
+		return LogicalType::TIMESTAMP_S();
+	case VariantLogicalType::TIMESTAMP_MILIS:
+		return LogicalType::TIMESTAMP_MS();
+	case VariantLogicalType::TIMESTAMP_MICROS:
+		return LogicalType::TIMESTAMP;
+	case VariantLogicalType::TIMESTAMP_NANOS:
+		return LogicalType::TIMESTAMP_NS();
+	case VariantLogicalType::TIMESTAMP_MICROS_TZ:
+		return LogicalType::TIMESTAMP_TZ();
+	case VariantLogicalType::TIMESTAMP_NANOS_TZ:
+		return LogicalType::TIMESTAMP_TZ_NS();
+	default:
+		break;
+	}
+	auto id = VariantTypeToLogicalTypeId(type);
 	switch (id) {
 	case LogicalTypeId::STRUCT:
 		return LogicalType::STRUCT(child_list_t<LogicalType>());
@@ -225,10 +238,10 @@ LogicalType VariantDefaultType(LogicalTypeId id) {
 	}
 }
 
-VariantLogicalType VariantTypeFromLogicalTypeId(LogicalTypeId id, bool bool_value) {
+VariantLogicalType VariantTypeFromLogicalType(const LogicalType &type, bool bool_value) {
 	VariantLogicalType result;
-	if (!TryVariantTypeFromLogicalTypeId(id, result, bool_value)) {
-		throw InternalException("LogicalTypeId %s cannot be stored in a VARIANT", EnumUtil::ToString(id));
+	if (!TryVariantTypeFromLogicalType(type, result, bool_value)) {
+		throw InternalException("Type %s cannot be stored in a VARIANT", type.ToString());
 	}
 	return result;
 }

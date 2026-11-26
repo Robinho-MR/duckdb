@@ -146,13 +146,13 @@ unique_ptr<ArrowType> ArrowType::GetTypeFromFormat(string &format) {
 	} else if (format == "vu") {
 		return make_uniq<ArrowType>(LogicalType::VARCHAR, make_uniq<ArrowStringInfo>(ArrowVariableSizeType::VIEW));
 	} else if (format == "tsn:") {
-		return make_uniq<ArrowType>(LogicalTypeId::TIMESTAMP_NS);
+		return make_uniq<ArrowType>(LogicalType::TIMESTAMP_NS());
 	} else if (format == "tsu:") {
 		return make_uniq<ArrowType>(LogicalTypeId::TIMESTAMP);
 	} else if (format == "tsm:") {
-		return make_uniq<ArrowType>(LogicalTypeId::TIMESTAMP_MS);
+		return make_uniq<ArrowType>(LogicalType::TIMESTAMP_MS());
 	} else if (format == "tss:") {
-		return make_uniq<ArrowType>(LogicalTypeId::TIMESTAMP_SEC);
+		return make_uniq<ArrowType>(LogicalType::TIMESTAMP_S());
 	} else if (format == "tdD") {
 		return make_uniq<ArrowType>(LogicalType::DATE, make_uniq<ArrowDateTimeInfo>(ArrowDateTimeType::DAYS));
 	} else if (format == "tdm") {
@@ -207,7 +207,7 @@ unique_ptr<ArrowType> ArrowType::GetTypeFromFormat(string &format) {
 		unique_ptr<ArrowTypeInfo> type_info;
 		if (format[2] == 'n') {
 			type_info = make_uniq<ArrowDateTimeInfo>(ArrowDateTimeType::NANOSECONDS);
-			return make_uniq<ArrowType>(LogicalType::TIMESTAMP_TZ_NS, std::move(type_info));
+			return make_uniq<ArrowType>(LogicalType::TIMESTAMP_TZ_NS(), std::move(type_info));
 		} else if (format[2] == 'u') {
 			type_info = make_uniq<ArrowDateTimeInfo>(ArrowDateTimeType::MICROSECONDS);
 		} else if (format[2] == 'm') {
@@ -217,7 +217,7 @@ unique_ptr<ArrowType> ArrowType::GetTypeFromFormat(string &format) {
 		} else {
 			throw NotImplementedException(" Timestamptz precision of not accepted");
 		}
-		return make_uniq<ArrowType>(LogicalType::TIMESTAMP_TZ, std::move(type_info));
+		return make_uniq<ArrowType>(LogicalType::TIMESTAMP_TZ(), std::move(type_info));
 	}
 	return nullptr;
 }

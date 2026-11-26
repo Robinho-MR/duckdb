@@ -11,7 +11,7 @@ static void WriteTypeResult(const optional<VariantNode> &node, VectorWriter<stri
 	}
 
 	//! variant_type reports the type name of the physical variant encoding
-	const auto type = VariantTypeFromLogicalTypeId(node->GetTypeId(), node->GetBool());
+	const auto type = VariantTypeFromLogicalType(node->GetType(), node->GetBool());
 	types_writer.WriteValue(string_t(EnumUtil::ToString(type)));
 }
 

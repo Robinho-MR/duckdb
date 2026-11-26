@@ -589,13 +589,19 @@ static bool HasVarcharCastOverride(FromVariantConversionData &conversion_data) {
 		case LogicalTypeId::DOUBLE:
 		case LogicalTypeId::DATE:
 		case LogicalTypeId::TIME:
-		case LogicalTypeId::TIMESTAMP:
 		case LogicalTypeId::INTERVAL:
 		case LogicalTypeId::UUID:
 		case LogicalTypeId::DECIMAL:
 		case LogicalTypeId::STRUCT:
 		case LogicalTypeId::LIST:
 		case LogicalTypeId::VARIANT:
+			conversion_data.varchar_cast_override = true;
+			return true;
+		case LogicalTypeId::TIMESTAMP:
+			if (!TimestampType::Is(type, TimestampType::MICROSECOND_SCALE, false)) {
+				// the serializer already falls back for the other timestamps
+				break;
+			}
 			conversion_data.varchar_cast_override = true;
 			return true;
 		default:
@@ -1173,17 +1179,36 @@ static bool CastVariant(FromVariantConversionData &conversion_data, Vector &resu
 			return CastVariantToPrimitive<VariantDirectConversion<date_t, VariantLogicalType::DATE>>(
 			    conversion_data, result, sel, offset, count, row, empty_payload);
 		case LogicalTypeId::TIMESTAMP:
-			return CastVariantToPrimitive<VariantDirectConversion<timestamp_t, VariantLogicalType::TIMESTAMP_MICROS>>(
-			    conversion_data, result, sel, offset, count, row, empty_payload);
-		case LogicalTypeId::TIMESTAMP_MS:
-			return CastVariantToPrimitive<VariantDirectConversion<timestamp_ms_t, VariantLogicalType::TIMESTAMP_MILIS>>(
-			    conversion_data, result, sel, offset, count, row, empty_payload);
-		case LogicalTypeId::TIMESTAMP_SEC:
-			return CastVariantToPrimitive<VariantDirectConversion<timestamp_sec_t, VariantLogicalType::TIMESTAMP_SEC>>(
-			    conversion_data, result, sel, offset, count, row, empty_payload);
-		case LogicalTypeId::TIMESTAMP_NS:
-			return CastVariantToPrimitive<VariantDirectConversion<timestamp_ns_t, VariantLogicalType::TIMESTAMP_NANOS>>(
-			    conversion_data, result, sel, offset, count, row, empty_payload);
+			switch (TimestampType::GetScale(target_type)) {
+			case TimestampType::SECOND_SCALE:
+				return CastVariantToPrimitive<
+				    VariantDirectConversion<timestamp_sec_t, VariantLogicalType::TIMESTAMP_SEC>>(
+				    conversion_data, result, sel, offset, count, row, empty_payload);
+			case TimestampType::MILLISECOND_SCALE:
+				return CastVariantToPrimitive<
+				    VariantDirectConversion<timestamp_ms_t, VariantLogicalType::TIMESTAMP_MILIS>>(
+				    conversion_data, result, sel, offset, count, row, empty_payload);
+			case TimestampType::MICROSECOND_SCALE:
+				if (TimestampType::HasTimeZone(target_type)) {
+					return CastVariantToPrimitive<
+					    VariantDirectConversion<timestamp_tz_t, VariantLogicalType::TIMESTAMP_MICROS_TZ>>(
+					    conversion_data, result, sel, offset, count, row, empty_payload);
+				}
+				return CastVariantToPrimitive<
+				    VariantDirectConversion<timestamp_t, VariantLogicalType::TIMESTAMP_MICROS>>(
+				    conversion_data, result, sel, offset, count, row, empty_payload);
+			case TimestampType::NANOSECOND_SCALE:
+				if (TimestampType::HasTimeZone(target_type)) {
+					return CastVariantToPrimitive<
+					    VariantDirectConversion<timestamp_tz_ns_t, VariantLogicalType::TIMESTAMP_NANOS_TZ>>(
+					    conversion_data, result, sel, offset, count, row, empty_payload);
+				}
+				return CastVariantToPrimitive<
+				    VariantDirectConversion<timestamp_ns_t, VariantLogicalType::TIMESTAMP_NANOS>>(
+				    conversion_data, result, sel, offset, count, row, empty_payload);
+			default:
+				throw InternalException("Unsupported TIMESTAMP scale");
+			}
 		case LogicalTypeId::BLOB: {
 			StringConversionPayload string_payload(result);
 			return CastVariantToPrimitive<VariantDirectConversion<string_t, VariantLogicalType::BLOB>>(
@@ -1245,14 +1270,6 @@ static bool CastVariant(FromVariantConversionData &conversion_data, Vector &resu
 			    conversion_data, result, sel, offset, count, row, empty_payload);
 		case LogicalTypeId::TIME_TZ:
 			return CastVariantToPrimitive<VariantDirectConversion<dtime_tz_t, VariantLogicalType::TIME_MICROS_TZ>>(
-			    conversion_data, result, sel, offset, count, row, empty_payload);
-		case LogicalTypeId::TIMESTAMP_TZ:
-			return CastVariantToPrimitive<
-			    VariantDirectConversion<timestamp_tz_t, VariantLogicalType::TIMESTAMP_MICROS_TZ>>(
-			    conversion_data, result, sel, offset, count, row, empty_payload);
-		case LogicalTypeId::TIMESTAMP_TZ_NS:
-			return CastVariantToPrimitive<
-			    VariantDirectConversion<timestamp_tz_ns_t, VariantLogicalType::TIMESTAMP_NANOS_TZ>>(
 			    conversion_data, result, sel, offset, count, row, empty_payload);
 		case LogicalTypeId::UUID:
 			return CastVariantToPrimitive<VariantDirectConversion<hugeint_t, VariantLogicalType::UUID>>(
@@ -1353,9 +1370,6 @@ BoundCastInfo DefaultCasts::VariantCastSwitch(BindCastInput &input, const Logica
 	case LogicalTypeId::BIGINT:
 	case LogicalTypeId::DATE:
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
 	case LogicalTypeId::DOUBLE:
 	case LogicalTypeId::FLOAT:
 	case LogicalTypeId::BLOB:
@@ -1375,8 +1389,6 @@ BoundCastInfo DefaultCasts::VariantCastSwitch(BindCastInput &input, const Logica
 	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::TIME_TZ:
 	case LogicalTypeId::TIME_NS:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::MAP:
 	case LogicalTypeId::UNION:
 	case LogicalTypeId::UUID:

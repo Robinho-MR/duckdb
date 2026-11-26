@@ -31,11 +31,11 @@ vector<LogicalType> LogSink::GetSchema(LoggingTargetTable table) {
 	}
 	case LoggingTargetTable::LOG_ENTRIES:
 		return {
-		    LogicalType::UBIGINT,      // context_id
-		    LogicalType::TIMESTAMP_TZ, // timestamp
-		    LogicalType::VARCHAR,      // log_type
-		    LogicalType::VARCHAR,      // level
-		    LogicalType::VARCHAR,      // message
+		    LogicalType::UBIGINT,        // context_id
+		    LogicalType::TIMESTAMP_TZ(), // timestamp
+		    LogicalType::VARCHAR,        // log_type
+		    LogicalType::VARCHAR,        // level
+		    LogicalType::VARCHAR,        // message
 		};
 	case LoggingTargetTable::LOG_CONTEXTS:
 		return {

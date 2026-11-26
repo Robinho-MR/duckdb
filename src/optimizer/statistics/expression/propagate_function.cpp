@@ -29,12 +29,7 @@ bool TryEvaluateAtConstants(ClientContext &context, const BoundFunctionExpressio
 bool HoldsNegativeInfinity(const Value &lo, const Value &hi) {
 	switch (lo.type().id()) {
 	case LogicalTypeId::DATE:
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS: {
+	case LogicalTypeId::TIMESTAMP: {
 		auto ninfinity = Value::NegativeInfinity(lo.type());
 		return lo < hi && lo <= ninfinity && ninfinity <= hi;
 	}

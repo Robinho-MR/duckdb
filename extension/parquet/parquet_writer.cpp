@@ -170,11 +170,6 @@ bool ParquetWriter::TryGetParquetType(const LogicalType &duckdb_type, optional_p
 		parquet_type = Type::INT64;
 		break;
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
 		parquet_type = write_timestamp_as_int96 ? Type::INT96 : Type::INT64;
 		break;
 	case LogicalTypeId::UTINYINT:
@@ -230,10 +225,10 @@ Type::type ParquetWriter::DuckDBTypeToParquetType(const LogicalType &duckdb_type
 	throw NotImplementedException("Unimplemented type for Parquet \"%s\"", duckdb_type.ToString());
 }
 
-static bool GetTimestampIsAdjustedToUTC(const LogicalTypeId type_id, const TimeStampIsAdjustedToUTC setting) {
+static bool GetTimestampIsAdjustedToUTC(const LogicalType &type, const TimeStampIsAdjustedToUTC setting) {
 	switch (setting) {
 	case TimeStampIsAdjustedToUTC::AUTO:
-		return type_id == LogicalTypeId::TIMESTAMP_TZ || type_id == LogicalTypeId::TIMESTAMP_TZ_NS;
+		return TimestampType::HasTimeZone(type);
 	case TimeStampIsAdjustedToUTC::ALWAYS_TRUE:
 		return true;
 	case TimeStampIsAdjustedToUTC::ALWAYS_FALSE:
@@ -305,43 +300,42 @@ void ParquetWriter::SetSchemaProperties(const LogicalType &duckdb_type, duckdb_p
 		schema_ele.logicalType.TIME.isAdjustedToUTC = false;
 		schema_ele.logicalType.TIME.unit.__isset.NANOS = true;
 		break;
-	case LogicalTypeId::TIMESTAMP_TZ:
 	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_SEC:
 		if (write_timestamp_as_int96) {
 			return;
 		}
-		schema_ele.converted_type = ConvertedType::TIMESTAMP_MICROS;
-		schema_ele.__isset.converted_type = true;
-		schema_ele.__isset.logicalType = true;
-		schema_ele.logicalType.__isset.TIMESTAMP = true;
-		schema_ele.logicalType.TIMESTAMP.isAdjustedToUTC =
-		    GetTimestampIsAdjustedToUTC(duckdb_type.id(), timestamp_is_adjusted_to_utc);
-		schema_ele.logicalType.TIMESTAMP.unit.__isset.MICROS = true;
-		break;
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		if (write_timestamp_as_int96) {
-			return;
+		switch (TimestampType::GetScale(duckdb_type)) {
+		case TimestampType::SECOND_SCALE:
+		case TimestampType::MICROSECOND_SCALE:
+			// seconds are written as microseconds
+			schema_ele.converted_type = ConvertedType::TIMESTAMP_MICROS;
+			schema_ele.__isset.converted_type = true;
+			schema_ele.__isset.logicalType = true;
+			schema_ele.logicalType.__isset.TIMESTAMP = true;
+			schema_ele.logicalType.TIMESTAMP.isAdjustedToUTC =
+			    GetTimestampIsAdjustedToUTC(duckdb_type, timestamp_is_adjusted_to_utc);
+			schema_ele.logicalType.TIMESTAMP.unit.__isset.MICROS = true;
+			break;
+		case TimestampType::NANOSECOND_SCALE:
+			schema_ele.__isset.converted_type = false;
+			schema_ele.__isset.logicalType = true;
+			schema_ele.logicalType.__isset.TIMESTAMP = true;
+			schema_ele.logicalType.TIMESTAMP.isAdjustedToUTC =
+			    GetTimestampIsAdjustedToUTC(duckdb_type, timestamp_is_adjusted_to_utc);
+			schema_ele.logicalType.TIMESTAMP.unit.__isset.NANOS = true;
+			break;
+		case TimestampType::MILLISECOND_SCALE:
+			schema_ele.converted_type = ConvertedType::TIMESTAMP_MILLIS;
+			schema_ele.__isset.converted_type = true;
+			schema_ele.__isset.logicalType = true;
+			schema_ele.logicalType.__isset.TIMESTAMP = true;
+			schema_ele.logicalType.TIMESTAMP.isAdjustedToUTC =
+			    GetTimestampIsAdjustedToUTC(duckdb_type, timestamp_is_adjusted_to_utc);
+			schema_ele.logicalType.TIMESTAMP.unit.__isset.MILLIS = true;
+			break;
+		default:
+			throw InternalException("Unsupported TIMESTAMP scale for Parquet");
 		}
-		schema_ele.__isset.converted_type = false;
-		schema_ele.__isset.logicalType = true;
-		schema_ele.logicalType.__isset.TIMESTAMP = true;
-		schema_ele.logicalType.TIMESTAMP.isAdjustedToUTC =
-		    GetTimestampIsAdjustedToUTC(duckdb_type.id(), timestamp_is_adjusted_to_utc);
-		schema_ele.logicalType.TIMESTAMP.unit.__isset.NANOS = true;
-		break;
-	case LogicalTypeId::TIMESTAMP_MS:
-		if (write_timestamp_as_int96) {
-			return;
-		}
-		schema_ele.converted_type = ConvertedType::TIMESTAMP_MILLIS;
-		schema_ele.__isset.converted_type = true;
-		schema_ele.__isset.logicalType = true;
-		schema_ele.logicalType.__isset.TIMESTAMP = true;
-		schema_ele.logicalType.TIMESTAMP.isAdjustedToUTC =
-		    GetTimestampIsAdjustedToUTC(duckdb_type.id(), timestamp_is_adjusted_to_utc);
-		schema_ele.logicalType.TIMESTAMP.unit.__isset.MILLIS = true;
 		break;
 	case LogicalTypeId::ENUM:
 	case LogicalTypeId::VARCHAR:
@@ -1254,17 +1248,27 @@ static unique_ptr<ColumnStatsUnifier> GetBaseStatsUnifier(const LogicalType &typ
 		return make_uniq<NumericStatsUnifier<dtime_t>>();
 	case LogicalTypeId::TIME_NS:
 		return make_uniq<NumericStatsUnifier<dtime_ns_t>>();
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP:
-		return make_uniq<NumericStatsUnifier<timestamp_t>>();
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return make_uniq<NumericStatsUnifier<timestamp_tz_t>>();
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-		return make_uniq<NumericStatsUnifier<timestamp_tz_ns_t>>();
-	case LogicalTypeId::TIMESTAMP_MS:
-		return make_uniq<NumericStatsUnifier<timestamp_ms_t>>();
-	case LogicalTypeId::TIMESTAMP_NS:
-		return make_uniq<NumericStatsUnifier<timestamp_ns_t>>();
+	case LogicalTypeId::TIMESTAMP: {
+		auto has_time_zone = TimestampType::HasTimeZone(type);
+		switch (TimestampType::GetScale(type)) {
+		case TimestampType::SECOND_SCALE:
+			return make_uniq<NumericStatsUnifier<timestamp_t>>();
+		case TimestampType::MILLISECOND_SCALE:
+			return make_uniq<NumericStatsUnifier<timestamp_ms_t>>();
+		case TimestampType::MICROSECOND_SCALE:
+			if (has_time_zone) {
+				return make_uniq<NumericStatsUnifier<timestamp_tz_t>>();
+			}
+			return make_uniq<NumericStatsUnifier<timestamp_t>>();
+		case TimestampType::NANOSECOND_SCALE:
+			if (has_time_zone) {
+				return make_uniq<NumericStatsUnifier<timestamp_tz_ns_t>>();
+			}
+			return make_uniq<NumericStatsUnifier<timestamp_ns_t>>();
+		default:
+			throw InternalException("Unsupported TIMESTAMP scale for Parquet");
+		}
+	}
 	case LogicalTypeId::TIME_TZ:
 		return make_uniq<TimeTZStatsUnifier>();
 	case LogicalTypeId::UINTEGER:

@@ -64,7 +64,7 @@ idx_t CompositeChildCount(const Value &v) {
 // two borrowing getters use RequireTypedValue directly -- a converted copy
 // would not outlive the call.
 template <class T>
-T ReadAs(duckdb_v2_value_handle value, LogicalTypeId expected) {
+T ReadAs(duckdb_v2_value_handle value, const LogicalType &expected) {
 	if (!value) {
 		throw InvalidInputException("value handle cannot be null");
 	}
@@ -72,14 +72,17 @@ T ReadAs(duckdb_v2_value_handle value, LogicalTypeId expected) {
 	if (v.IsNull()) {
 		throw InvalidInputException("value is NULL");
 	}
-	if (v.type().id() == expected) {
+	auto &type = v.type();
+	if (type.id() == expected.id() &&
+	    (type.id() != LogicalTypeId::TIMESTAMP ||
+	     TimestampType::Is(type, TimestampType::GetScale(expected), TimestampType::HasTimeZone(expected)))) {
 		return v.GetValueUnsafe<T>();
 	}
 	string error;
-	auto converted = v.DefaultTryCastAs(LogicalType(expected), &error);
+	auto converted = v.DefaultTryCastAs(expected, &error);
 	if (!converted) {
-		throw InvalidInputException("cannot read a " + v.type().ToString() + " value as " +
-		                            LogicalType(expected).ToString() + ": " + error);
+		throw InvalidInputException("cannot read a " + type.ToString() + " value as " + expected.ToString() + ": " +
+		                            error);
 	}
 	return converted->GetValueUnsafe<T>();
 }
@@ -428,35 +431,35 @@ DUCKDB_V2_ERROR duckdb_v2_value_get_timestamp_sec(duckdb_v2_value_handle value, 
                                                   duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(out);
 	return WithErrorHandler(
-	    err, [&]() { *out = ReadAs<duckdb::timestamp_sec_t>(value, duckdb::LogicalTypeId::TIMESTAMP_SEC).value; });
+	    err, [&]() { *out = ReadAs<duckdb::timestamp_sec_t>(value, duckdb::LogicalType::TIMESTAMP_S()).value; });
 }
 
 DUCKDB_V2_ERROR duckdb_v2_value_get_timestamp_ms(duckdb_v2_value_handle value, int64_t *out,
                                                  duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(out);
 	return WithErrorHandler(
-	    err, [&]() { *out = ReadAs<duckdb::timestamp_ms_t>(value, duckdb::LogicalTypeId::TIMESTAMP_MS).value; });
+	    err, [&]() { *out = ReadAs<duckdb::timestamp_ms_t>(value, duckdb::LogicalType::TIMESTAMP_MS()).value; });
 }
 
 DUCKDB_V2_ERROR duckdb_v2_value_get_timestamp_ns(duckdb_v2_value_handle value, int64_t *out,
                                                  duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(out);
 	return WithErrorHandler(
-	    err, [&]() { *out = ReadAs<duckdb::timestamp_ns_t>(value, duckdb::LogicalTypeId::TIMESTAMP_NS).value; });
+	    err, [&]() { *out = ReadAs<duckdb::timestamp_ns_t>(value, duckdb::LogicalType::TIMESTAMP_NS()).value; });
 }
 
 DUCKDB_V2_ERROR duckdb_v2_value_get_timestamp_tz(duckdb_v2_value_handle value, int64_t *out,
                                                  duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(out);
 	return WithErrorHandler(
-	    err, [&]() { *out = ReadAs<duckdb::timestamp_tz_t>(value, duckdb::LogicalTypeId::TIMESTAMP_TZ).value; });
+	    err, [&]() { *out = ReadAs<duckdb::timestamp_tz_t>(value, duckdb::LogicalType::TIMESTAMP_TZ()).value; });
 }
 
 DUCKDB_V2_ERROR duckdb_v2_value_get_timestamp_tz_ns(duckdb_v2_value_handle value, int64_t *out,
                                                     duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(out);
 	return WithErrorHandler(
-	    err, [&]() { *out = ReadAs<duckdb::timestamp_tz_ns_t>(value, duckdb::LogicalTypeId::TIMESTAMP_TZ_NS).value; });
+	    err, [&]() { *out = ReadAs<duckdb::timestamp_tz_ns_t>(value, duckdb::LogicalType::TIMESTAMP_TZ_NS()).value; });
 }
 
 DUCKDB_V2_ERROR duckdb_v2_value_get_interval(duckdb_v2_value_handle value, duckdb_v2_interval_t *out,
