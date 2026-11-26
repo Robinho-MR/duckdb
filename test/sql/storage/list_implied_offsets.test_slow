@@ -121,11 +121,11 @@ CHECKPOINT;
 
 restart
 
-# the lists no longer have the same length, so their offsets are stored
+# the lists no longer have the same length: only the offsets of the appended lists are stored
 query I
-SELECT COUNT(*) > 0 FROM pragma_storage_info('idx') WHERE column_name = 'l' AND column_path = '[1]';
+SELECT SUM(count) FROM pragma_storage_info('idx') WHERE column_name = 'l' AND column_path = '[1]';
 ----
-true
+3
 
 query III
 SELECT COUNT(l), SUM(len(l)), SUM(l[1]) FROM idx;

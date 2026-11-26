@@ -29,7 +29,7 @@ public:
 	static unique_ptr<ExtraPersistentColumnData> Deserialize(Deserializer &deserializer);
 
 	ListStatsData length_data = ListStatsData {false, false, false, 0, 0, 0};
-	//! The length of every list, if the list offsets are implied by it instead of being stored
+	//! The length of the lists whose offsets are not stored, if the length statistics do not imply it
 	optional_idx implied_list_length;
 };
 
@@ -101,7 +101,8 @@ protected:
 	//! The validity column data of the list
 	shared_ptr<ValidityColumnData> validity;
 
-	//! The length of the lists in [0, implied_count), whose offsets are implied by it instead of being stored
+	//! The lists in [0, implied_count) all have length implied_list_length: their offsets are not stored, and the
+	//! offset segments hold the offsets of the rows from implied_count on
 	optional_idx implied_list_length;
 	idx_t implied_count = 0;
 	//! Whether any of the lists in [0, implied_count) can be NULL
@@ -109,17 +110,17 @@ protected:
 
 private:
 	uint64_t FetchListOffset(idx_t row_idx);
-	//! Whether the list offsets are implied by the list length and not stored
-	bool HasImpliedOffsets() const;
-	//! Whether a scan state scans implied list offsets
+	//! Whether a scan state is at a row with implied offsets (the offset segments are not scanned yet)
 	bool ScansImpliedOffsets(const ColumnScanState &state) const;
+	//! The row of the list column a scan state is at
+	idx_t ScanRow(const ColumnScanState &state) const;
 	void InitializeImpliedScan(ColumnScanState &state, idx_t row_idx);
+	//! Moves a scan from the rows with implied offsets to the first row with stored offsets
+	void StartStoredScan(ColumnScanState &state);
 	//! Counts the non-NULL lists in [start_row, start_row + row_count)
 	idx_t CountValidLists(idx_t start_row, idx_t row_count);
-	//! The offset of the end of the list at row_idx - 1, i.e. the child row the list at row_idx starts at
+	//! The child row the list at row_idx starts at, for row_idx <= implied_count
 	idx_t ImpliedOffset(idx_t row_idx);
-	//! Writes the implied list offsets to segments, so that new lists can be appended to them
-	void MaterializeImpliedOffsets(ColumnAppendState &state);
 	//! The list length if the offsets do not have to be stored when checkpointing
 	optional_idx GetCheckpointListLength(const BaseStatistics &stats);
 };
