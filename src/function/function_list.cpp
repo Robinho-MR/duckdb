@@ -104,6 +104,8 @@ static const StaticFunctionDefinition function[] = {
 	DUCKDB_SCALAR_FUNCTION(BetweenFun),
 	DUCKDB_SCALAR_FUNCTION(CastFun),
 	DUCKDB_SCALAR_FUNCTION(BarrierFun),
+	DUCKDB_SCALAR_FUNCTION(InternalCaseOperandFun),
+	DUCKDB_SCALAR_FUNCTION(InternalCaseWithOperandFun),
 	DUCKDB_SCALAR_FUNCTION(InternalCompressGeometryPointFun),
 	DUCKDB_SCALAR_FUNCTION_SET(InternalCompressIntegralUbigintFun),
 	DUCKDB_SCALAR_FUNCTION_SET(InternalCompressIntegralUintegerFun),

@@ -76,6 +76,26 @@ struct BarrierFun {
 	static ScalarFunction GetFunction();
 };
 
+struct InternalCaseWithOperandFun {
+	static constexpr const char *Name = "__internal_case_with_operand";
+	static constexpr const char *Parameters = "operand,args,...";
+	static constexpr const char *Description = "A simple CASE expression whose operand is evaluated exactly once";
+	static constexpr const char *Example = "";
+	static constexpr const char *Categories = "";
+
+	static ScalarFunction GetFunction();
+};
+
+struct InternalCaseOperandFun {
+	static constexpr const char *Name = "__internal_case_operand";
+	static constexpr const char *Parameters = "";
+	static constexpr const char *Description = "Refers to the value of the operand of the enclosing CASE with an operand";
+	static constexpr const char *Example = "";
+	static constexpr const char *Categories = "";
+
+	static ScalarFunction GetFunction();
+};
+
 struct CreateSortKeyFun {
 	static constexpr const char *Name = "create_sort_key";
 	static constexpr const char *Parameters = "key1,...";

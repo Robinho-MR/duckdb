@@ -1,0 +1,45 @@
+# name: test/sql/storage/simple_case_operand_storage_version.test
+# description: A simple CASE with a volatile operand in a view keeps evaluating the operand once when the storage version supports it
+# group: [storage]
+
+statement ok
+ATTACH '__TEST_DIR__/simple_case_operand_v21.db' AS new_db (STORAGE_VERSION 'v2.1.0');
+
+statement ok
+CREATE SEQUENCE new_db.s;
+
+statement ok
+CREATE VIEW new_db.v AS SELECT CASE nextval('new_db.s') WHEN 0 THEN 'zero' WHEN 2 THEN 'two' ELSE 'other' END AS c;
+
+statement ok
+ATTACH '__TEST_DIR__/simple_case_operand_v20.db' AS old_db (STORAGE_VERSION 'v2.0.0');
+
+statement ok
+CREATE SEQUENCE old_db.s;
+
+statement ok
+CREATE VIEW old_db.v AS SELECT CASE nextval('old_db.s') WHEN 0 THEN 'zero' WHEN 2 THEN 'two' ELSE 'other' END AS c;
+
+statement ok
+DETACH new_db;
+
+statement ok
+DETACH old_db;
+
+statement ok
+ATTACH '__TEST_DIR__/simple_case_operand_v21.db' AS new_db;
+
+statement ok
+ATTACH '__TEST_DIR__/simple_case_operand_v20.db' AS old_db;
+
+# the operand is evaluated once after reloading the view
+query I
+SELECT * FROM new_db.v;
+----
+other
+
+# older storage versions cannot represent the shared operand: the view is expanded and the operand evaluated per comparison
+query I
+SELECT * FROM old_db.v;
+----
+two

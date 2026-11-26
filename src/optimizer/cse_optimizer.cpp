@@ -3,6 +3,7 @@
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/column_binding_map.hpp"
@@ -99,6 +100,16 @@ void CommonSubExpressionOptimizer::CountExpressions(Expression &expr, CSEReplace
 			// we encountered this expression before, increment the occurrence count
 			node->second.count++;
 		}
+	}
+
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
+	    expr.Cast<BoundFunctionExpression>().Function().HasLazyExecuteCallback()) {
+		// a lazy function decides which of its children are executed, and on which rows
+		const auto save_short_circuit = state.short_circuited;
+		state.short_circuited = true;
+		ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) { CountExpressions(child, state); });
+		state.short_circuited = save_short_circuit;
+		return;
 	}
 
 	// If we have a function that uses short circuiting, then we can only extract CSEs from the leftmost

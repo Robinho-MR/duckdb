@@ -10,6 +10,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/error_data.hpp"
+#include "duckdb/common/optional_ptr.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/function/function.hpp"
 
@@ -93,11 +94,21 @@ private:
 	string current_input_dictionary_id;
 };
 
+//! A value that a function exposes to the expressions in its subtree, see LazyExecuteInput::ScopeValue
+struct ScopedValue {
+	//! The value, holding one row for every row of the selection of the function that exposes it
+	const Vector &value;
+	//! Maps the physical row index of the expression that reads the value to its row in `value` (null: the identity)
+	optional_ptr<const SelectionVector> row_map;
+};
+
 struct ExpressionExecutorState {
 	ExpressionExecutorState();
 
 	unique_ptr<ExpressionState> root_state;
 	ExpressionExecutor *executor = nullptr;
+	//! The values that are currently in scope, innermost last
+	vector<ScopedValue> scoped_values;
 	//! True while initializing the states below a TRY
 	bool inside_try = false;
 

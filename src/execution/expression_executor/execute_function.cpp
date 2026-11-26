@@ -1,6 +1,7 @@
 #include "duckdb/common/enums/debug_verification_mode.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/function/lazy_execute_input.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 
@@ -232,6 +233,16 @@ static void ExecuteConstantSelectFunction(const BoundFunctionExpression &expr, D
 void ExpressionExecutor::Execute(const BoundFunctionExpression &expr, ExpressionState *state,
                                  const SelectionVector *sel, idx_t count, Vector &result) {
 	state->intermediate_chunk.Reset();
+	if (expr.Function().HasLazyExecuteCallback()) {
+		// the function executes its children itself
+		auto &lazy_function_state = state->Cast<ExecuteFunctionState>();
+		if (lazy_function_state.init_error.HasError()) {
+			lazy_function_state.init_error.Throw();
+		}
+		LazyExecuteInput input(*this, expr, *state, sel, count);
+		expr.Function().ExecuteLazy(input, result);
+		return;
+	}
 	auto &arguments = state->intermediate_chunk;
 	// if the input is constant and there function is non-volatile we only need to run it on one value
 	bool all_constant = true;
