@@ -1945,19 +1945,20 @@ const StringUtil::EnumStringLiteral *GetDebugVectorVerificationValues() {
 		{ static_cast<uint32_t>(DebugVectorVerification::SEQUENCE_OPERATOR), "SEQUENCE_OPERATOR" },
 		{ static_cast<uint32_t>(DebugVectorVerification::NESTED_SHUFFLE), "NESTED_SHUFFLE" },
 		{ static_cast<uint32_t>(DebugVectorVerification::VARIANT_VECTOR), "VARIANT_VECTOR" },
-		{ static_cast<uint32_t>(DebugVectorVerification::SHREDDED_VECTOR), "SHREDDED_VECTOR" }
+		{ static_cast<uint32_t>(DebugVectorVerification::SHREDDED_VECTOR), "SHREDDED_VECTOR" },
+		{ static_cast<uint32_t>(DebugVectorVerification::FIXED_LENGTH_LIST_VECTOR), "FIXED_LENGTH_LIST_VECTOR" }
 	};
 	return values;
 }
 
 template<>
 const char* EnumUtil::ToChars<DebugVectorVerification>(DebugVectorVerification value) {
-	return StringUtil::EnumToString(GetDebugVectorVerificationValues(), 8, "DebugVectorVerification", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetDebugVectorVerificationValues(), 9, "DebugVectorVerification", static_cast<uint32_t>(value));
 }
 
 template<>
 DebugVectorVerification EnumUtil::FromString<DebugVectorVerification>(const char *value) {
-	return static_cast<DebugVectorVerification>(StringUtil::StringToEnum(GetDebugVectorVerificationValues(), 8, "DebugVectorVerification", value));
+	return static_cast<DebugVectorVerification>(StringUtil::StringToEnum(GetDebugVectorVerificationValues(), 9, "DebugVectorVerification", value));
 }
 
 const StringUtil::EnumStringLiteral *GetDebugVerificationModeValues() {
@@ -7803,19 +7804,20 @@ const StringUtil::EnumStringLiteral *GetVectorBufferTypeValues() {
 		{ static_cast<uint32_t>(VectorBufferType::DICTIONARY_BUFFER), "DICTIONARY_BUFFER" },
 		{ static_cast<uint32_t>(VectorBufferType::FSST_BUFFER), "FSST_BUFFER" },
 		{ static_cast<uint32_t>(VectorBufferType::SHREDDED_BUFFER), "SHREDDED_BUFFER" },
-		{ static_cast<uint32_t>(VectorBufferType::SEQUENCE_BUFFER), "SEQUENCE_BUFFER" }
+		{ static_cast<uint32_t>(VectorBufferType::SEQUENCE_BUFFER), "SEQUENCE_BUFFER" },
+		{ static_cast<uint32_t>(VectorBufferType::FIXED_LENGTH_LIST_BUFFER), "FIXED_LENGTH_LIST_BUFFER" }
 	};
 	return values;
 }
 
 template<>
 const char* EnumUtil::ToChars<VectorBufferType>(VectorBufferType value) {
-	return StringUtil::EnumToString(GetVectorBufferTypeValues(), 9, "VectorBufferType", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetVectorBufferTypeValues(), 10, "VectorBufferType", static_cast<uint32_t>(value));
 }
 
 template<>
 VectorBufferType EnumUtil::FromString<VectorBufferType>(const char *value) {
-	return static_cast<VectorBufferType>(StringUtil::StringToEnum(GetVectorBufferTypeValues(), 9, "VectorBufferType", value));
+	return static_cast<VectorBufferType>(StringUtil::StringToEnum(GetVectorBufferTypeValues(), 10, "VectorBufferType", value));
 }
 
 const StringUtil::EnumStringLiteral *GetVectorPrepareStateValues() {
@@ -7844,19 +7846,20 @@ const StringUtil::EnumStringLiteral *GetVectorTypeValues() {
 		{ static_cast<uint32_t>(VectorType::CONSTANT_VECTOR), "CONSTANT_VECTOR" },
 		{ static_cast<uint32_t>(VectorType::DICTIONARY_VECTOR), "DICTIONARY_VECTOR" },
 		{ static_cast<uint32_t>(VectorType::SEQUENCE_VECTOR), "SEQUENCE_VECTOR" },
-		{ static_cast<uint32_t>(VectorType::SHREDDED_VECTOR), "SHREDDED_VECTOR" }
+		{ static_cast<uint32_t>(VectorType::SHREDDED_VECTOR), "SHREDDED_VECTOR" },
+		{ static_cast<uint32_t>(VectorType::FIXED_LENGTH_LIST_VECTOR), "FIXED_LENGTH_LIST_VECTOR" }
 	};
 	return values;
 }
 
 template<>
 const char* EnumUtil::ToChars<VectorType>(VectorType value) {
-	return StringUtil::EnumToString(GetVectorTypeValues(), 6, "VectorType", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetVectorTypeValues(), 7, "VectorType", static_cast<uint32_t>(value));
 }
 
 template<>
 VectorType EnumUtil::FromString<VectorType>(const char *value) {
-	return static_cast<VectorType>(StringUtil::StringToEnum(GetVectorTypeValues(), 6, "VectorType", value));
+	return static_cast<VectorType>(StringUtil::StringToEnum(GetVectorTypeValues(), 7, "VectorType", value));
 }
 
 const StringUtil::EnumStringLiteral *GetVerifyExistenceTypeValues() {

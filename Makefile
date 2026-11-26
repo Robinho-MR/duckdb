@@ -581,6 +581,7 @@ TEST_CONFIGS_EXECUTION := \
 	test/configs/verify_aggregate_state_export.json \
 	test/configs/verify_functions.json \
 	test/configs/shredded_vector.json \
+	test/configs/fixed_length_list_vector.json \
 	test/configs/verify_progress.json
 
 TEST_CONFIGS_PERSISTENCE := \

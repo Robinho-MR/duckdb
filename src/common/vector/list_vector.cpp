@@ -1,5 +1,6 @@
 #include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
+#include "duckdb/common/vector/fixed_length_list_vector.hpp"
 
 namespace duckdb {
 
@@ -276,6 +277,9 @@ T &ListVector::GetEntryInternal(T &vector) {
 		auto &child = DictionaryVector::Child(vector);
 		return GetEntryInternal<T>(child);
 	}
+	if (vector.GetVectorType() == VectorType::FIXED_LENGTH_LIST_VECTOR) {
+		return vector.GetBufferRef()->template Cast<FixedLengthListBuffer>().GetChild();
+	}
 	D_ASSERT(vector.GetVectorType() == VectorType::FLAT_VECTOR ||
 	         vector.GetVectorType() == VectorType::CONSTANT_VECTOR);
 	D_ASSERT(vector.GetBufferRef());
@@ -313,6 +317,9 @@ idx_t ListVector::GetListSize(const Vector &vec) {
 	if (vec.GetVectorType() == VectorType::DICTIONARY_VECTOR) {
 		auto &child = DictionaryVector::Child(vec);
 		return ListVector::GetListSize(child);
+	}
+	if (vec.GetVectorType() == VectorType::FIXED_LENGTH_LIST_VECTOR) {
+		return FixedLengthListVector::GetChild(vec).size();
 	}
 	D_ASSERT(vec.GetBufferRef());
 	return vec.Buffer().Cast<VectorListBuffer>().GetChildSize();
