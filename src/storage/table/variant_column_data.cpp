@@ -164,16 +164,16 @@ void VariantColumnData::CreateScanStates(ColumnScanState &state) {
 	//! Re-initialize the scan state, since VARIANT can have a different shape for every RowGroup
 	state.child_states.clear();
 
-	state.child_states.emplace_back(state.parent);
+	state.child_states.emplace_back(state.parent, state.context);
 	state.child_states[0].scan_options = state.scan_options;
 
 	auto unshredded_type = VariantShredding::GetUnshreddedType();
-	state.child_states.emplace_back(state.parent);
+	state.child_states.emplace_back(state.parent, state.context);
 	state.child_states[1].Initialize(state.context, unshredded_type, state.scan_options);
 
 	if (IsShredded()) {
 		auto &shredded_column = sub_columns[1];
-		state.child_states.emplace_back(state.parent);
+		state.child_states.emplace_back(state.parent, state.context);
 		if (state.storage_index.IsPushdownExtract()) {
 			StorageIndex struct_extract;
 			if (PushdownShreddedFieldExtract(state.storage_index.GetChildIndex(0), struct_extract)) {
@@ -385,8 +385,13 @@ struct VariantShreddedAppendInput {
 
 } // namespace
 
-//! Whether a VARIANT value holds a decimal wider than 38 digits, which engines before wide decimals cannot read
-static bool ContainsWideDecimal(const VariantNode &root) {
+//! A value inside a VARIANT that engines of an older storage version cannot read back
+enum class VariantUnsupportedValue : uint8_t { NONE, WIDE_DECIMAL, GEOGRAPHY };
+
+//! Finds a value in a VARIANT that the given storage version cannot represent
+static VariantUnsupportedValue FindUnsupportedValue(const VariantNode &root, StorageVersion storage_version) {
+	const bool check_wide_decimals = storage_version < Decimal::WIDE_VERSION_ADDED;
+	const bool check_geography = storage_version < Geometry::GEOGRAPHY_VERSION_ADDED;
 	// an explicit work list, deeply nested values must not consume stack
 	vector<VariantNode> pending;
 	pending.push_back(root);
@@ -395,8 +400,13 @@ static bool ContainsWideDecimal(const VariantNode &root) {
 		pending.pop_back();
 		switch (node.GetTypeId()) {
 		case LogicalTypeId::DECIMAL:
-			if (Decimal::IsWide(node.GetDecimalProperties().width)) {
-				return true;
+			if (check_wide_decimals && Decimal::IsWide(node.GetDecimalProperties().width)) {
+				return VariantUnsupportedValue::WIDE_DECIMAL;
+			}
+			break;
+		case LogicalTypeId::GEOGRAPHY:
+			if (check_geography) {
+				return VariantUnsupportedValue::GEOGRAPHY;
 			}
 			break;
 		case LogicalTypeId::STRUCT:
@@ -413,22 +423,32 @@ static bool ContainsWideDecimal(const VariantNode &root) {
 			break;
 		}
 	}
-	return false;
+	return VariantUnsupportedValue::NONE;
 }
 
-//! The unshredded payload of a wide decimal is stored as it is, so a storage version before wide decimals refuses it
-static void CheckWideDecimals(StorageManager &storage_manager, const Vector &vector, idx_t count) {
+//! The unshredded payload stores values as they are, so a storage version that predates a value's type refuses it
+static void CheckStorageVersionSupport(StorageManager &storage_manager, const Vector &vector, idx_t count) {
 	const auto storage_version = storage_manager.GetStorageVersion();
-	if (storage_version >= Decimal::WIDE_VERSION_ADDED) {
+	if (storage_version >= Decimal::WIDE_VERSION_ADDED && storage_version >= Geometry::GEOGRAPHY_VERSION_ADDED) {
 		return;
 	}
 	VariantIterator iterator(vector);
 	for (idx_t row = 0; row < count; row++) {
-		if (!iterator.RowIsValid(row) || !ContainsWideDecimal(iterator.Root(row))) {
+		if (!iterator.RowIsValid(row)) {
 			continue;
 		}
-		auto required = GetStorageVersionName(Decimal::WIDE_VERSION_ADDED, false);
+		auto unsupported = FindUnsupportedValue(iterator.Root(row), storage_version);
+		if (unsupported == VariantUnsupportedValue::NONE) {
+			continue;
+		}
 		auto current = GetStorageVersionName(storage_version, false);
+		if (unsupported == VariantUnsupportedValue::GEOGRAPHY) {
+			auto required = GetStorageVersionName(Geometry::GEOGRAPHY_VERSION_ADDED, false);
+			throw InvalidInputException("GEOGRAPHY values cannot be stored in a VARIANT column in storage versions "
+			                            "prior to %s (database %s is using storage version %s)",
+			                            required, storage_manager.GetAttached().GetName(), current);
+		}
+		auto required = GetStorageVersionName(Decimal::WIDE_VERSION_ADDED, false);
 		throw InvalidInputException("DECIMAL values wider than %d digits cannot be stored in a VARIANT column in "
 		                            "storage versions prior to %s (database %s is using storage version %s)",
 		                            Decimal::MAX_WIDTH_INT128, required, storage_manager.GetAttached().GetName(),
@@ -443,7 +463,7 @@ void VariantColumnData::Append(ColumnAppendState &state, const Vector &vector, i
 		Append(state, append_vector, count);
 		return;
 	}
-	CheckWideDecimals(GetStorageManager(), vector, count);
+	CheckStorageVersionSupport(GetStorageManager(), vector, count);
 
 	// append the null values
 	validity->Append(state.child_appends[0], vector, count);
@@ -567,7 +587,7 @@ void VariantColumnData::FetchRows(TransactionData transaction, ColumnFetchState 
 
 		//! Need to perform the cast here as well
 		auto &cast_set = CastFunctionSet::Get(GetDatabase());
-		auto cast_input = GetCastFunctionInput::Default();
+		GetCastFunctionInput cast_input(state.context);
 		auto fetched_row = extracted_variant.GetValue(0).CastAs(cast_set, cast_input, result.GetType());
 		result.SetValue(result_idx, fetched_row);
 	}
@@ -739,7 +759,7 @@ vector<shared_ptr<ColumnData>> VariantColumnData::WriteShreddedData(const RowGro
 	ColumnAppendState shredded_append_state;
 	shredded->InitializeAppend(shredded_append_state);
 
-	ColumnScanState scan_state(nullptr);
+	ColumnScanState scan_state(nullptr, GetDatabase().GetContext());
 
 	InitializeScan(scan_state);
 	//! Scan + transform + append
@@ -774,7 +794,7 @@ LogicalType VariantColumnData::GetShreddedType() {
 	scan_chunk.Initialize(Allocator::DefaultAllocator(), {LogicalType::VARIANT()}, STANDARD_VECTOR_SIZE);
 	auto &scan_vector = scan_chunk.data[0];
 
-	ColumnScanState scan_state(nullptr);
+	ColumnScanState scan_state(nullptr, GetDatabase().GetContext());
 	InitializeScan(scan_state);
 	idx_t total_count = count.load();
 	idx_t vector_index = 0;
@@ -934,7 +954,7 @@ void VariantColumnData::InitializeColumn(PersistentColumnData &column_data, Base
 	this->count = validity->count.load();
 }
 
-void VariantColumnData::GetColumnSegmentInfo(const QueryContext &context, idx_t row_group_index, vector<idx_t> col_path,
+void VariantColumnData::GetColumnSegmentInfo(Context &context, idx_t row_group_index, vector<idx_t> col_path,
                                              vector<ColumnSegmentInfo> &result,
                                              const ColumnSegmentInfoScanOptions &options) {
 	col_path.push_back(0);

@@ -246,7 +246,7 @@ using duckdb_parquet::Statistics;
 using duckdb_parquet::Type;
 
 static unique_ptr<duckdb_apache::thrift::protocol::TProtocol>
-CreateThriftFileProtocol(QueryContext context, CachingFileHandle &file_handle, bool prefetch_mode,
+CreateThriftFileProtocol(Context &context, CachingFileHandle &file_handle, bool prefetch_mode,
                          uint64_t accepted_column_gap = ReadHeadComparator::DEFAULT_ACCEPTED_COLUMN_GAP) {
 	auto transport =
 	    duckdb_base_std::make_shared<ThriftFileTransport>(context, file_handle, prefetch_mode, accepted_column_gap);
@@ -2094,7 +2094,8 @@ void ParquetReader::PrepareRowGroupBuffer(ClientContext &context, ParquetReaderS
 					}
 					if (ParquetStatisticsUtils::BloomFilterExcludes(
 					        *bloom_filter, group.columns[bloom_reader->ColumnIndex()].meta_data,
-					        *state.thrift_file_proto, allocator, bloom_reader->Schema(), *hash_strategy)) {
+					        *state.thrift_file_proto, allocator, bloom_reader->Schema(), *hash_strategy, *this,
+					        group.ordinal, bloom_reader->ColumnIndex())) {
 						prune_result = FilterPropagateResult::FILTER_ALWAYS_FALSE;
 					}
 				}

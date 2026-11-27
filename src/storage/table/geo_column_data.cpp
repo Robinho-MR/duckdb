@@ -383,7 +383,7 @@ unique_ptr<ColumnCheckpointState> GeoColumnData::Checkpoint(const RowGroup &row_
 
 		// Setup scan from the old column
 		DataChunk scan_chunk;
-		ColumnScanState scan_state(nullptr);
+		ColumnScanState scan_state(nullptr, GetDatabase().GetContext());
 		scan_chunk.Initialize(Allocator::DefaultAllocator(), {base_column->type}, STANDARD_VECTOR_SIZE);
 		InitializeScan(scan_state);
 
@@ -485,7 +485,7 @@ unique_ptr<ColumnCheckpointState> GeoColumnData::Checkpoint(const RowGroup &row_
 
 	// Setup scan from the old column
 	DataChunk scan_chunk;
-	ColumnScanState scan_state(nullptr);
+	ColumnScanState scan_state(nullptr, GetDatabase().GetContext());
 	scan_chunk.Initialize(Allocator::DefaultAllocator(), {base_column->type}, STANDARD_VECTOR_SIZE);
 	InitializeScan(scan_state);
 
@@ -603,7 +603,7 @@ idx_t GeoColumnData::GetMaxEntry() {
 	return base_column->GetMaxEntry();
 }
 
-void GeoColumnData::GetColumnSegmentInfo(const QueryContext &context, idx_t row_group_index, vector<idx_t> col_path,
+void GeoColumnData::GetColumnSegmentInfo(Context &context, idx_t row_group_index, vector<idx_t> col_path,
                                          vector<ColumnSegmentInfo> &result,
                                          const ColumnSegmentInfoScanOptions &options) {
 	return base_column->GetColumnSegmentInfo(context, row_group_index, col_path, result, options);
