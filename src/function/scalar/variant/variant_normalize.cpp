@@ -120,6 +120,11 @@ void VariantNormalizer::VisitType(const UnifiedVariantVectorData &variant, idx_t
 	//! The children of a type are in a fixed order, like the elements of an ARRAY
 	VisitArray(variant, row, VariantUtils::DecodeNestedData(variant, row, values_idx), depth, state);
 }
+void VariantNormalizer::VisitExtension(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx,
+                                       idx_t depth, VariantNormalizerState &state) {
+	//! The type and the value of an extension value are in a fixed order, like the elements of an ARRAY
+	VisitArray(variant, row, VariantUtils::DecodeNestedData(variant, row, values_idx), depth, state);
+}
 void VariantNormalizer::VisitBitstring(const string_t &bits, VariantNormalizerState &state) {
 	return VisitString(bits, state);
 }
@@ -234,7 +239,10 @@ void VariantNormalizer::Normalize(const Vector &variant_vec, Vector &result) {
 		//! Allocate for the new data, use the same size as source
 		auto &blob_data = variant_data.blob_data[i];
 		auto original_data = variant.GetData(i);
-		blob_data = StringVector::EmptyString(data, original_data.GetSize());
+		//! Each value holds at most one children index, whose varint can grow from 1 to 5 bytes when renumbered
+		auto values_count = variant.GetValuesListEntry(i).length;
+		auto blob_capacity = original_data.GetSize() + values_count * (sizeof(uint32_t) + 1);
+		blob_data = StringVector::EmptyString(data, blob_capacity);
 
 		auto &keys_list_entry = variant_data.keys_data[i];
 		keys_list_entry.offset = ListVector::GetListSize(keys);
@@ -249,7 +257,7 @@ void VariantNormalizer::Normalize(const Vector &variant_vec, Vector &result) {
 		VariantNormalizerState visitor_state(i, variant_data, dictionary, keys_arena, keys_selvec);
 		VariantVisitor<VariantNormalizer>::Visit(variant, i, 0, 0, visitor_state);
 
-		blob_data.SetSizeAndFinalize(visitor_state.blob_size, original_data.GetSize());
+		blob_data.SetSizeAndFinalize(visitor_state.blob_size, blob_capacity);
 		keys_list_entry.length = visitor_state.keys_size;
 		children_list_entry.length = visitor_state.children_size;
 		values_list_entry.length = visitor_state.values_size;

@@ -34,6 +34,8 @@ public:
 	static constexpr StorageVersion VERSION_ADDED = StorageVersion::V1_5_0; // Added to core in DuckDB v1.5.0
 	//! TYPE values can be stored starting from this storage version
 	static constexpr StorageVersion TYPE_VERSION_ADDED = StorageVersion::V2_1_0;
+	//! EXTENSION values (values of extension types) can be stored starting from this storage version
+	static constexpr StorageVersion EXTENSION_VERSION_ADDED = StorageVersion::V2_1_0;
 };
 
 struct VariantPathComponent {
@@ -67,6 +69,16 @@ public:
 	string key;
 	//! 0-based, negative indexes count from the end of the array
 	int64_t index;
+};
+
+//! The children of an EXTENSION value, a value of an extension type (e.g. INET): its type and the value of that type
+struct VariantExtensionData {
+	static constexpr idx_t TYPE_CHILD = 0;
+	static constexpr idx_t VALUE_CHILD = 1;
+
+	//! Indexes into 'values' of the TYPE value of the extension type, and of the value
+	uint32_t type_idx;
+	uint32_t value_idx;
 };
 
 struct VariantNestedData {
@@ -168,6 +180,7 @@ enum class VariantLogicalType : uint8_t {
 	TIMESTAMP_NANOS_TZ = 34,
 	GEOGRAPHY = 35,
 	TYPE = 36,
+	EXTENSION = 37,
 	ENUM_SIZE /* always kept as last item of the enum */
 };
 

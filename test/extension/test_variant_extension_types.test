@@ -1,0 +1,275 @@
+# name: test/extension/test_variant_extension_types.test
+# description: Values of extension types keep their type in a VARIANT
+# group: [extension]
+
+require skip_reload
+
+require notmingw
+
+require allow_unsigned_extensions
+
+require parquet
+
+statement ok
+LOAD '{BUILD_DIRECTORY}/test/extension/loadable_extension_demo.duckdb_extension';
+
+# a STRUCT based type
+query IIII
+SELECT v, variant_typeof(v), v::POINT, typeof(v::POINT)
+FROM (SELECT {'x': 1, 'y': 2}::POINT::VARIANT v)
+----
+{'x': 1, 'y': 2}	POINT	{'x': 1, 'y': 2}	POINT
+
+# the underlying value can be used directly
+query IIII
+SELECT v::STRUCT(x INT, y INT), v.x, variant_keys(v), v::VARCHAR
+FROM (SELECT {'x': 1, 'y': 2}::POINT::VARIANT v)
+----
+{'x': 1, 'y': 2}	1	[x, y]	{'x': 1, 'y': 2}
+
+# type modifiers are kept
+query IIII
+SELECT variant_typeof(v), v::BOUNDED(10), typeof(v::BOUNDED(10)), v::INTEGER
+FROM (SELECT 5::BOUNDED(10)::VARIANT v)
+----
+BOUNDED(10)	5	BOUNDED(10)	5
+
+query II
+SELECT variant_typeof(v), typeof(v::MINMAX(1, 10))
+FROM (SELECT 7::MINMAX(1, 10)::VARIANT v)
+----
+MINMAX(1, 10)	MINMAX(1, 10)
+
+# casts to other types use the casts of the named type
+query III
+SELECT variant_typeof(v), v::VARCHAR, v::INTEGER
+FROM (SELECT 255::HEXINT::VARIANT v)
+----
+HEXINT	0xff	255
+
+query I
+SELECT 255::HEXINT::VARIANT::HEXINT::VARCHAR
+----
+0xff
+
+# nested named types
+query IIII
+SELECT v::VARCHAR, variant_typeof(v.a), variant_typeof(v.b[1]), v::VARCHAR = {'a': 255::HEXINT, 'b': [16::HEXINT, NULL]}::VARCHAR
+FROM (SELECT {'a': 255::HEXINT, 'b': [16::HEXINT, NULL]}::VARIANT v)
+----
+{'a': 0xff, 'b': [0x10, NULL]}	HEXINT	HEXINT	true
+
+query II
+SELECT v::POINT[], typeof(v::POINT[])
+FROM (SELECT [{'x': 1, 'y': 2}::POINT, NULL, {'x': 3, 'y': 4}::POINT]::VARIANT v)
+----
+[{'x': 1, 'y': 2}, NULL, {'x': 3, 'y': 4}]	POINT[]
+
+query II
+SELECT s, typeof(s)
+FROM (SELECT {'a': 7::MINMAX(1, 10), 'b': 'hi'}::VARIANT::STRUCT(a MINMAX(1, 10), b VARCHAR) s)
+----
+{'a': 7, 'b': hi}	STRUCT(a MINMAX(1, 10), b VARCHAR)
+
+query I
+SELECT [255::HEXINT::VARIANT, {'k': 1::HEXINT}::VARIANT]::VARCHAR
+----
+[0xff, {'k': 0x1}]
+
+# NULL values
+query II
+SELECT NULL::HEXINT::VARIANT IS NULL, {'a': NULL::HEXINT}::VARIANT::VARCHAR
+----
+true	{'a': NULL}
+
+# the named type is part of the value: comparisons and containment
+query IIII
+SELECT v = 5::BOUNDED(10)::VARIANT, v < 6::BOUNDED(10)::VARIANT, v = 5::VARIANT, v = 5::BOUNDED(20)::VARIANT
+FROM (SELECT 5::BOUNDED(10)::VARIANT v)
+----
+true	true	false	false
+
+query II
+SELECT variant_contains([v]::VARIANT, v), variant_contains([5]::VARIANT, v)
+FROM (SELECT 5::BOUNDED(10)::VARIANT v)
+----
+true	false
+
+query I
+SELECT v::VARCHAR FROM (VALUES (2::HEXINT::VARIANT), (10::HEXINT::VARIANT), (1::HEXINT::VARIANT)) t(v) ORDER BY v
+----
+0x1
+0x2
+0xa
+
+query II
+SELECT variant_typeof(v), count(*)
+FROM (VALUES (1::HEXINT::VARIANT), (1::HEXINT::VARIANT), (1::VARIANT)) t(v)
+GROUP BY v ORDER BY ALL
+----
+HEXINT	2
+INT32	1
+
+# values that don't convert
+statement error
+SELECT {'x': 1, 'y': 2}::POINT::VARIANT::BOUNDED(10)
+----
+Can't convert VARIANT(POINT) value
+
+query I
+SELECT TRY_CAST({'x': 1, 'y': 2}::POINT::VARIANT AS INTEGER)
+----
+NULL
+
+# VARIANT -> VARIANT keeps the named types
+query II
+SELECT variant_typeof(s.v), s.v::VARCHAR
+FROM (SELECT {'v': 255::HEXINT::VARIANT}::VARIANT::STRUCT(v VARIANT) s)
+----
+HEXINT	0xff
+
+query I
+SELECT variant_typeof(variant_normalize(255::HEXINT::VARIANT))
+----
+HEXINT
+
+# storage, with shredding
+statement ok
+ATTACH '{TEST_DIR}/variant_extension_types.db' AS db (STORAGE_VERSION 'v2.1.0')
+
+statement ok
+SET variant_minimum_shredding_size = 0
+
+statement ok
+CREATE TABLE db.tbl AS
+SELECT CASE WHEN i % 3 = 0 THEN i::HEXINT::VARIANT
+            WHEN i % 3 = 1 THEN {'x': i::INT, 'y': 1}::POINT::VARIANT
+            ELSE i::VARIANT END AS v,
+       {'k': i::INT::HEXINT, 'n': i}::VARIANT AS o
+FROM range(10000) t(i)
+
+statement ok
+CHECKPOINT db
+
+query II
+SELECT variant_typeof(v) AS type, count(*) FROM db.tbl GROUP BY type ORDER BY type
+----
+HEXINT	3334
+INT64	3333
+POINT	3333
+
+query III
+SELECT v::VARCHAR, variant_typeof(o.k), o::VARCHAR FROM db.tbl LIMIT 4
+----
+0x0	HEXINT	{'k': 0x0, 'n': 0}
+{'x': 1, 'y': 1}	HEXINT	{'k': 0x1, 'n': 1}
+2	HEXINT	{'k': 0x2, 'n': 2}
+0x3	HEXINT	{'k': 0x3, 'n': 3}
+
+statement ok
+DETACH db
+
+statement ok
+ATTACH '{TEST_DIR}/variant_extension_types.db' AS db
+
+query II
+SELECT count(*), sum(v::INTEGER) FROM db.tbl WHERE variant_typeof(v) = 'HEXINT'
+----
+3334	16668333
+
+# 'o.k' only holds HEXINT values, so it is shredded as HEXINT
+query I
+SELECT DISTINCT vector_type(o) FROM db.tbl
+----
+SHREDDED_VECTOR
+
+query I
+SELECT count(*) FROM pragma_storage_info('db.tbl') WHERE column_name = 'o' AND segment_type = 'HEXINT'
+----
+1
+
+query IIII
+SELECT variant_typeof(o.k), o.k::VARCHAR, o.k::INTEGER, o::VARCHAR FROM db.tbl WHERE o.n::INT = 255
+----
+HEXINT	0xff	255	{'k': 0xff, 'n': 255}
+
+query II
+SELECT sum(o.k::INTEGER), count(DISTINCT o.k::VARCHAR) FROM db.tbl
+----
+49995000	10000
+
+# values with and without the alias, or with different aliases, are not shredded together
+statement ok
+CREATE TABLE db.mixed AS
+SELECT {'k': CASE WHEN i % 2 = 0 THEN i::HEXINT::VARIANT ELSE i::INT::VARIANT END}::VARIANT AS a,
+       {'k': CASE WHEN i % 2 = 0 THEN i::HEXINT::VARIANT ELSE 5::BOUNDED(10)::VARIANT END}::VARIANT AS b
+FROM range(10000) t(i)
+
+statement ok
+CHECKPOINT db
+
+query IIII
+SELECT variant_typeof(a.k) AS ta, variant_typeof(b.k) AS tb, count(*), count(DISTINCT a.k::VARCHAR)
+FROM db.mixed GROUP BY ALL ORDER BY ALL
+----
+HEXINT	HEXINT	5000	5000
+INT32	BOUNDED(10)	5000	5000
+
+query II
+SELECT a::VARCHAR, b::VARCHAR FROM db.mixed WHERE a.k::INT IN (10, 11) ORDER BY a.k::INT
+----
+{'k': 0xa}	{'k': 0xa}
+{'k': 11}	{'k': 5}
+
+# parquet has no named types
+statement error
+COPY db.tbl TO '{TEST_DIR}/variant_extension_types.parquet'
+----
+Not implemented Error: Writing a VARIANT value of type
+
+# storage versions that predate EXTENSION values can't store them
+statement ok
+ATTACH '{TEST_DIR}/variant_extension_types_old.db' AS old_db (STORAGE_VERSION 'v2.0.0')
+
+statement error
+CREATE TABLE old_db.tbl AS SELECT 255::HEXINT::VARIANT AS v
+----
+VARIANT values of type HEXINT cannot be stored in a VARIANT column in storage versions prior to
+
+statement error
+CREATE TABLE old_db.tbl AS SELECT [{'a': 1::HEXINT}, NULL]::VARIANT AS l
+----
+VARIANT values of type HEXINT cannot be stored in a VARIANT column in storage versions prior to
+
+statement ok
+CREATE TABLE old_db.tbl AS SELECT 255::VARIANT AS v, NULL::HEXINT::VARIANT AS n
+
+query II
+SELECT v, n FROM old_db.tbl
+----
+255	NULL
+
+# normalizing renumbers the children of a value, which can need wider indices
+query I
+SELECT count(DISTINCT variant_normalize(v)::VARCHAR)
+FROM (SELECT r, list_transform(range(70), lambda x: {'x': x::INT, 'y': 2}::POINT)::VARIANT v FROM range(5) t(r))
+----
+1
+
+# without the extension that defines the type, the casts of the type are not available: the underlying value is used
+restart
+
+statement ok
+ATTACH '{TEST_DIR}/variant_extension_types.db' AS db
+
+query II
+SELECT variant_typeof(v), variant_typeof(o.k) FROM db.tbl LIMIT 1
+----
+HEXINT	HEXINT
+
+query I
+SELECT v::VARCHAR FROM db.tbl ORDER BY o.n::INT LIMIT 3
+----
+0
+{'x': 1, 'y': 1}
+2

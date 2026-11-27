@@ -23,6 +23,7 @@
 #include "duckdb/common/types/interval.hpp"
 #include "duckdb/common/types/decimal.hpp"
 #include "duckdb/common/types/variant.hpp"
+#include "duckdb/common/types/variant/variant_type_encoding.hpp"
 #include "duckdb/common/hugeint.hpp"
 #include "duckdb/function/scalar/variant_utils.hpp"
 #include "duckdb/common/helper.hpp"
@@ -40,6 +41,22 @@ struct VariantNodeStorageAccess {
 	template <class NODE>
 	static VariantLogicalType GetStorageType(const NODE &node) {
 		return node.GetVariantType();
+	}
+	template <class NODE>
+	static bool HasAlias(const NODE &node) {
+		if constexpr (std::is_same<NODE, VariantNode>::value) {
+			return node.HasAlias();
+		} else {
+			return false;
+		}
+	}
+	template <class NODE>
+	static LogicalType GetExtensionType(const NODE &node) {
+		if constexpr (std::is_same<NODE, VariantNode>::value) {
+			return node.GetType();
+		} else {
+			throw InternalException("Only a VariantNode can be of an extension type");
+		}
 	}
 };
 
@@ -531,6 +548,32 @@ struct VariantBuilder {
 	}
 };
 
+//! Receives the values of a decomposed type (see VariantTypeEncoding::Emit) and adds them to the builder
+struct VariantBuilderTypeSink {
+	explicit VariantBuilderTypeSink(VariantBuilder &builder) : builder(builder) {
+	}
+
+	template <class EMIT_CHILD>
+	void Container(VariantLogicalType type_id, idx_t child_count, EMIT_CHILD &&emit_child) {
+		auto block = builder.BeginContainer(type_id, child_count);
+		for (idx_t child = 0; child < child_count; child++) {
+			builder.AssignArrayChild(block.GetIndex(), child);
+			emit_child(child);
+		}
+	}
+	void Null() {
+		builder.EmitNull();
+	}
+	void Scalar(const Value &value) {
+		if (value.IsNull()) {
+			return Null();
+		}
+		builder.EmitPrimitive(value, static_cast<uint32_t>(builder.blob.size()));
+	}
+
+	VariantBuilder &builder;
+};
+
 //===--------------------------------------------------------------------===//
 // Emit (source: a VariantNode-like cursor)
 //===--------------------------------------------------------------------===//
@@ -568,6 +611,15 @@ void EmitIterator(const NODE &root, VariantBuilder &builder) {
 		if (node.IsNull() || node.IsMissing()) {
 			builder.EmitNull();
 			return;
+		}
+		if (VariantNodeStorageAccess::HasAlias(node)) {
+			//! A value of an extension type: its type, followed by its value
+			auto block = builder.BeginContainer(VariantLogicalType::EXTENSION, 2);
+			builder.AssignArrayChild(block.GetIndex(), VariantExtensionData::TYPE_CHILD);
+			VariantBuilderTypeSink sink(builder);
+			VariantTypeEncoding::Emit(VariantTypeEncoding::Decompose(VariantNodeStorageAccess::GetExtensionType(node)),
+			                          sink);
+			builder.AssignArrayChild(block.GetIndex(), VariantExtensionData::VALUE_CHILD);
 		}
 		auto type_id = VariantNodeStorageAccess::GetStorageType(node);
 		switch (type_id) {

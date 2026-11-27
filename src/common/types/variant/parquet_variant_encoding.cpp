@@ -305,6 +305,9 @@ static idx_t AnalyzePrimitiveValueData(const UnifiedVariantVectorData &variant, 
 		break;
 	case VariantLogicalType::TYPE:
 		throw NotImplementedException("Writing a VARIANT value of type TYPE to Parquet is not supported");
+	case VariantLogicalType::EXTENSION:
+		VariantUtils::VerifyNotExtension(variant, row, values_index);
+		break;
 	case VariantLogicalType::INTERVAL:
 	case VariantLogicalType::BIGNUM:
 	case VariantLogicalType::BITSTRING:
@@ -637,6 +640,9 @@ static void WritePrimitiveValueData(const UnifiedVariantVectorData &variant, idx
 		break;
 	case VariantLogicalType::TYPE:
 		throw NotImplementedException("Writing a VARIANT value of type TYPE to Parquet is not supported");
+	case VariantLogicalType::EXTENSION:
+		VariantUtils::VerifyNotExtension(variant, row, values_index);
+		break;
 	case VariantLogicalType::INTERVAL:
 	case VariantLogicalType::BIGNUM:
 	case VariantLogicalType::BITSTRING:

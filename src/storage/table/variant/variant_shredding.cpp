@@ -9,6 +9,7 @@
 #include "duckdb/common/types/variant_visitor.hpp"
 #include "duckdb/function/variant/variant_shredding.hpp"
 #include "duckdb/function/variant/variant_normalize.hpp"
+#include "duckdb/common/types/variant/variant_type_encoding.hpp"
 #include "duckdb/common/serializer/varint.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #ifdef DEBUG
@@ -30,6 +31,10 @@ struct VariantStatsVisitor {
 	}
 
 	static void VisitMetadata(VariantLogicalType type_id, VariantShreddingStats &stats, idx_t stats_column_index) {
+		if (type_id == VariantLogicalType::EXTENSION) {
+			//! Counted as the type of the underlying value
+			return;
+		}
 		auto &column_stats = stats.GetColumnStats(stats_column_index);
 		column_stats.SetType(type_id);
 	}
@@ -81,6 +86,22 @@ struct VariantStatsVisitor {
 	                      VariantShreddingStats &stats, idx_t stats_column_index) {
 	}
 	static void VisitBitstring(const string_t &bits, VariantShreddingStats &stats, idx_t stats_column_index) {
+	}
+
+	//! Records the type, the underlying value is visited as the value of this column
+	static void VisitExtension(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx, idx_t depth,
+	                           VariantShreddingStats &stats, idx_t stats_column_index) {
+		auto &column_stats = stats.GetColumnStats(stats_column_index);
+		auto extension = VariantUtils::DecodeExtensionData(variant, row, values_idx);
+		auto type = VariantTypeEncoding::Read(variant, row, extension.type_idx);
+		if (!column_stats.extension_count++) {
+			column_stats.extension_type = std::move(type);
+			column_stats.extension_consistent = true;
+		} else if (column_stats.extension_consistent && type != column_stats.extension_type) {
+			column_stats.extension_consistent = false;
+		}
+		VariantVisitor<VariantStatsVisitor>::Visit(variant, row, extension.value_idx, depth + 1, stats,
+		                                           stats_column_index);
 	}
 
 	template <typename T>
@@ -373,6 +394,21 @@ bool VariantShreddingStats::GetShreddedTypeInternal(const VariantColumnStatsData
 		return true;
 	}
 
+	if (column.extension_count) {
+		if (!column.extension_consistent || column.extension_count != column.total_count - null_count) {
+			//! Values of different types, or with and without an extension type, can't share a shredded type
+			return false;
+		}
+		//! The values are shredded on their type
+		if (!VariantUtils::SupportsShreddedType(column.extension_type)) {
+			return false;
+		}
+		auto fully_consistent =
+		    !force_partial && !column.extension_type.IsNested() && column.total_count == total_value_count;
+		out_type = SetShreddedType(column.extension_type, fully_consistent);
+		return true;
+	}
+
 	idx_t max_count = 0;
 	uint8_t type_index = 0;
 	//! Skip the 'VARIANT_NULL' type, we can't shred on NULL
@@ -381,8 +417,9 @@ bool VariantShreddingStats::GetShreddedTypeInternal(const VariantColumnStatsData
 			//! Can't shred on DECIMAL, not consistent
 			continue;
 		}
-		if (i == static_cast<uint8_t>(VariantLogicalType::TYPE)) {
-			//! TYPE values are not shredded
+		if (i == static_cast<uint8_t>(VariantLogicalType::TYPE) ||
+		    i == static_cast<uint8_t>(VariantLogicalType::EXTENSION)) {
+			//! TYPE values are not shredded, and EXTENSION values are dealt with above
 			continue;
 		}
 		idx_t count = column.type_counts[i] + null_count;
@@ -560,6 +597,7 @@ void DuckDBVariantShredding::AnalyzeVariantValues(UnifiedVariantVectorData &vari
 		}
 
 		if (variant.RowIsValid(row) && shredding_state.ValueIsShredded(variant, row, value_index)) {
+			value_index = shredding_state.GetShreddedIndex(variant, row, value_index);
 			shredding_state.SetShredded(row, value_index, result_index);
 			if (shredding_state.type.id() != LogicalTypeId::STRUCT) {
 				//! Value is shredded, directly write a `NULL` to the 'value' if the type is not an OBJECT

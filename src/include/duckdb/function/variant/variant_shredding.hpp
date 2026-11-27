@@ -28,6 +28,11 @@ public:
 	uint32_t decimal_width;
 	uint32_t decimal_scale;
 	bool decimal_consistent = false;
+	//! The number of values of an extension type, with the type of the first one
+	idx_t extension_count = 0;
+	LogicalType extension_type;
+	//! Whether all values of an extension type have the same type
+	bool extension_consistent = false;
 
 	idx_t total_count = 0;
 	//! indices into the top-level 'columns' vector where the stats for the field/element live
@@ -117,6 +122,8 @@ public:
 
 public:
 	bool ValueIsShredded(UnifiedVariantVectorData &variant, idx_t row, uint32_t values_index);
+	//! The index of the value that is written to the shredded column: the underlying value of an EXTENSION value
+	uint32_t GetShreddedIndex(UnifiedVariantVectorData &variant, idx_t row, uint32_t values_index) const;
 	void SetShredded(uint32_t row, uint32_t values_index, uint32_t result_idx);
 	//! The field names of the STRUCT type - the keys point into 'type'
 	const string_set_t &ObjectFields() const;
@@ -125,6 +132,8 @@ public:
 public:
 	//! The type the field is shredded on
 	const LogicalType &type;
+	//! Whether the type is an extension type, its values are EXTENSION values
+	bool is_extension_type;
 	string_set_t object_fields;
 	//! row that is shredded
 	SelectionVector shredded_sel;

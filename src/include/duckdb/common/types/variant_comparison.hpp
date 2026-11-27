@@ -36,6 +36,8 @@ enum class VariantComparisonType : uint8_t {
 	ARRAY,
 	OBJECT,
 	TYPE,
+	//! Precedes the value of an extension type, which is ordered by its type and then by its value
+	EXTENSION,
 	//! VARIANT_NULL ranks last so a nested NULL element orders after all non-null values, matching the
 	//! native "NULLS LAST" ordering of nested NULLs under ASC. For DESC the ORDER BY operator reverses
 	//! the (always-ascending) comparator key, which then places nested NULLs first - exactly as native
