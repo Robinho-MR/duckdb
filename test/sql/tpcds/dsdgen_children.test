@@ -1,0 +1,88 @@
+# name: test/sql/tpcds/dsdgen_children.test
+# description: dsdgen generates one of several parts of the data with children and step
+# group: [tpcds]
+
+require tpcds
+
+statement error
+CALL dsdgen(sf=0.01, children=2);
+----
+Step must be defined when children are defined
+
+statement error
+CALL dsdgen(sf=0.01, children=0, step=0);
+----
+children must be at least 1
+
+statement error
+CALL dsdgen(sf=0.01, children=-1, step=0);
+----
+<REGEX>:.*-1 can't be cast.*out of range.*
+
+statement error
+CALL dsdgen(sf=0.01, children=2, step=NULL);
+----
+Cannot use NULL as function argument
+
+statement ok
+SET threads=4
+
+statement ok
+CALL dsdgen(sf=0.01)
+
+# a step past the last one creates and generates nothing
+statement ok
+CALL dsdgen(sf=0.01, children=3, step=3, suffix='_3');
+
+statement error
+SELECT count(*) FROM call_center_3
+----
+<REGEX>:.*Table with name call_center_3 does not exist.*
+
+# the steps, generated in order, are the rows of a full generation, in the same order
+loop i 0 3
+
+statement ok
+CALL dsdgen(sf=0.01, children=3, step={i}, suffix='_3');
+
+endloop
+
+# a step does not depend on the steps generated before it: in reverse order, the tables hold the same rows
+statement ok
+SET threads=1
+
+foreach i 7 6 5 4 3 2 1 0
+
+statement ok
+CALL dsdgen(sf=0.01, children=8, step={i}, suffix='_8', keys=true);
+
+endloop
+
+statement ok
+CALL dsdgen(sf=0.01, children=8, step=100, suffix='_8');
+
+# step 0 of a single child is the full generation; step 1 is past it
+statement ok
+CALL dsdgen(sf=0.01, step=0, suffix='_1');
+
+statement ok
+CALL dsdgen(sf=0.01, step=1, suffix='_1');
+
+foreach tbl call_center catalog_page catalog_returns catalog_sales customer customer_address customer_demographics date_dim household_demographics income_band inventory item promotion reason ship_mode store store_returns store_sales time_dim warehouse web_page web_returns web_sales web_site
+
+foreach suffix _3 _1
+
+query I
+SELECT (SELECT (count(*), sum(hash(t)), sum(hash(t, rowid))) FROM {tbl} t) =
+       (SELECT (count(*), sum(hash(t)), sum(hash(t, rowid))) FROM {tbl}{suffix} t)
+----
+true
+
+endloop
+
+query I
+SELECT (SELECT (count(*), sum(hash(t))) FROM {tbl} t) = (SELECT (count(*), sum(hash(t))) FROM {tbl}_8 t)
+----
+true
+
+endloop
