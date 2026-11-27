@@ -19,6 +19,7 @@
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/capi/extension_api.hpp"
+#include "duckdb/common/multi_file/table_function_query_filter.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/context.hpp"
 #include "duckdb/main/connection_manager.hpp"
@@ -87,6 +88,7 @@ DatabaseInstance::DatabaseInstance() : db_validity(*this) {
 	config.is_user_config = false;
 	create_api_v1 = nullptr;
 	invoke_capi_v2 = nullptr;
+	create_file_filter = nullptr;
 	parser_cache = make_uniq<ParserCache>();
 	services = make_uniq<Context>(*this);
 }
@@ -162,6 +164,14 @@ Catalog &Catalog::GetSystemCatalog(DatabaseInstance &db) {
 
 Catalog &Catalog::GetCatalog(AttachedDatabase &db) {
 	return db.GetCatalog();
+}
+
+VirtualFileSystem &VirtualFileSystem::Get(DatabaseInstance &db) {
+	return *db.config.file_system;
+}
+
+VirtualFileSystem &VirtualFileSystem::Get(ClientContext &context) {
+	return Get(*context.db);
 }
 
 FileSystem &FileSystem::GetFileSystem(DatabaseInstance &db) {
@@ -358,6 +368,7 @@ void DatabaseInstance::InitializeInstance(const char *database_path, DBConfig *u
 
 	create_api_v1 = CreateAPIv1Wrapper;
 	invoke_capi_v2 = InvokeCAPIV2Entrypoint;
+	create_file_filter = TableFunctionQueryFilter::TryCreate;
 
 	db_file_system = make_uniq<DatabaseFileSystem>(*this);
 	local_db_file_system = make_uniq<LocalDatabaseFileSystem>(*this);
@@ -399,7 +410,7 @@ void DatabaseInstance::InitializeInstance(const char *database_path, DBConfig *u
 		// if we are opening an extension database - load the extension
 		auto storage_extension = StorageExtension::Find(config, config.options.database_type);
 		if (!storage_extension) {
-			ExtensionHelper::LoadExternalExtension(*this, *config.file_system, {config.options.database_type});
+			ExtensionHelper::LoadExternalExtension(*this, fs, {config.options.database_type});
 		}
 	}
 
@@ -473,16 +484,20 @@ FileSystem &DatabaseInstance::GetLocalFileSystem() {
 	return *local_db_file_system;
 }
 
-static FileSystem &ResolveLocalFileSystem(DatabaseInstance &db) {
-	return static_cast<VirtualFileSystem &>(*db.config.file_system).GetLocalFileSystem();
-}
-
 LocalDatabaseFileSystem::LocalDatabaseFileSystem(DatabaseInstance &db_p)
-    : db(db_p), local_fs(ResolveLocalFileSystem(db_p)), database_opener(db_p) {
+    : file_system(VirtualFileSystem::Get(db_p)), database_opener(db_p) {
+	if (!file_system.GetDefaultFileSystem().IsLocalFileSystem()) {
+		owned_file_system = make_uniq<LocalFileSystem>();
+	}
 }
 
-FileSystem &LocalDatabaseFileSystem::GetFileSystem() const {
-	if (db.config.file_system->SubSystemIsDisabled(local_fs.GetName())) {
+VirtualFileSystem &LocalDatabaseFileSystem::GetFileSystem() const {
+	return file_system;
+}
+
+optional_ptr<BaseFileSystem> LocalDatabaseFileSystem::GetFixedFileSystem() const {
+	auto &local_fs = owned_file_system ? *owned_file_system : file_system.GetDefaultFileSystem();
+	if (file_system.SubSystemIsDisabled(local_fs.GetName())) {
 		throw PermissionException("File system %s has been disabled by configuration", local_fs.GetName());
 	}
 	return local_fs;
@@ -691,6 +706,11 @@ void DatabaseInstance::InvokeExtensionEntrypointV2(const ExtensionInitResult &in
                                                    optional_ptr<ClientContext> context, bool statically_linked) {
 	D_ASSERT(invoke_capi_v2);
 	invoke_capi_v2(*this, init_result, extension_name, init_fun, context, statically_linked);
+}
+
+unique_ptr<DeleteFilter> DatabaseInstance::CreateFileFilter(ClientContext &context, BaseFileReader &reader) {
+	D_ASSERT(create_file_filter);
+	return create_file_filter(context, reader);
 }
 
 LogManager &DatabaseInstance::GetLogManager() const {

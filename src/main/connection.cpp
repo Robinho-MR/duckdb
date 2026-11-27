@@ -54,6 +54,8 @@ Connection::~Connection() {
 		return;
 	}
 	ConnectionManager::Get(*context->db).RemoveConnection(*context);
+	// outstanding results can keep the context alive, but the connection stops participating in a shared transaction
+	context->LeaveSharedTransaction();
 }
 
 string Connection::GetProfilingInformation(const ProfilerPrintFormat &format) {
@@ -189,10 +191,6 @@ vector<unique_ptr<SQLStatement>> Connection::ExtractStatements(const string &que
 		error.Throw();
 	}
 	return result;
-}
-
-unique_ptr<LogicalOperator> Connection::ExtractPlan(const string &query) {
-	return context->ExtractPlan(query);
 }
 
 void Connection::Append(TableDescription &description, ColumnDataCollection &collection) {
