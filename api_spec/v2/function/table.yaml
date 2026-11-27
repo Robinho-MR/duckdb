@@ -35,6 +35,26 @@ enums:
           from 0. A function that reads a single file produces it when it is wrapped in a multi-file function (see
           `[[multi_file_function_create]]`), which is where the name of the file comes from.
 
+  TABLE_OPERATOR_INPUT:
+    description: |
+      Where the input of a table function's operator comes from: what the rows of the input chunks the operator
+      receives are. Chosen with `[[table_function_set_operator]]`.
+    values:
+      TABLE_OPERATOR_INPUT_ARGUMENTS:
+        value: 0
+        description: |
+          The positional arguments of a call of the function are the columns of the operator's input, one row per
+          set of arguments. Called with constant arguments, e.g. `f(1, 'a')`, the operator receives a single input
+          row. Called with arguments that reference the columns of a table that precedes the call in the `FROM`
+          clause, e.g. `FROM t, f(t.x)` (an implicit `LATERAL` join), it receives one input row per row of that
+          table, one at a time, and every row it produces is joined to the row of `t` it was produced for.
+      TABLE_OPERATOR_INPUT_TABLE:
+        value: 1
+        description: |
+          The function takes a table as its first argument, written as a subquery, e.g. `f((SELECT * FROM t))`, and
+          the operator receives the rows of that table as its input, chunk by chunk, possibly on several threads. The
+          columns of its input are the columns of the table.
+
 #-----------------------------------------------------------------------------------------------------------------------
 # Handles
 #-----------------------------------------------------------------------------------------------------------------------
@@ -85,6 +105,13 @@ handles:
       A borrowed opaque handle to the arguments supplied to a table function when the engine describes a bound call
       of it in a query plan, e.g. for `EXPLAIN`. The "to string" callback receives this handle and can use it to
       report the key-value pairs the plan shows for the scan.
+
+  table_function_combine_schema_info:
+    description: |
+      A borrowed opaque handle to the arguments supplied to a table function when a multi-file function asks it to
+      combine the schemas of several files it was bound for. The "combine schema" callback receives this handle and can
+      use it to read the bind data of each file and the columns they combine to by name, and to declare the combined
+      columns and the bind data every file of the scan is bound with.
 
   multi_file_function:
     description: |
@@ -161,6 +188,20 @@ callbacks:
         description: Borrowed error info handle to use to report errors that occur during the callback.
     return_type: void
 
+  table_function_combine_schema_callback:
+    parameters:
+      info:
+        type: table_function_combine_schema_info
+        description: Borrowed opaque handle providing access to the information available to the callback.
+      context:
+        type: context
+        description: Borrowed handle to the context of the query the files are bound for.
+      err:
+        type: error_info
+        indirection: 1
+        description: Borrowed error info handle to use to report errors that occur during the callback.
+    return_type: void
+
   table_function_stats_callback:
     parameters:
       info:
@@ -185,6 +226,25 @@ callbacks:
         indirection: 1
         description: Borrowed error info handle to use to report errors that occur during the callback.
     return_type: void
+
+#-----------------------------------------------------------------------------------------------------------------------
+# Constants
+#-----------------------------------------------------------------------------------------------------------------------
+constants:
+  VIRTUAL_COLUMN_START:
+    value: "0x8000000000000000ULL"
+    description: |
+      The first identifier of a virtual column, 2^63. The identifiers a function gives its virtual columns with
+      `[[table_function_bind_add_virtual_column]]` are at least this, and so is every column index the scan's column index functions
+      report for a virtual column.
+  COLUMN_IDENTIFIER_ROW_ID:
+    value: "0xFFFFFFFFFFFFFFFFULL"
+    description: The identifier of a row id column, a virtual column with a meaning of its own to the engine.
+  COLUMN_IDENTIFIER_EMPTY:
+    value: "0xFFFFFFFFFFFFFFFEULL"
+    description: |
+      The identifier of the empty column, a virtual column the engine requests when the query needs the rows but none
+      of their values, e.g. `SELECT count(*)`.
 
 #-----------------------------------------------------------------------------------------------------------------------
 # Functions
@@ -306,6 +366,34 @@ functions:
         description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
     return_type: ERROR
 
+  table_function_set_property:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-09" ]
+    description: |
+      Sets a property on the table function.
+
+      Only `FUNCTION_PROPERTY_STABILITY` is supported for table functions; any other key, a key that is not
+      valid for table functions, or a value that does not belong to `key` results in an error. A table function
+      defaults to `FUNCTION_PROPERTY_STABILITY_VOLATILE`. Declaring
+      `FUNCTION_PROPERTY_STABILITY_CONSISTENT_WITHIN_QUERY` promises that repeated executions with the same bound
+      data and input rows return equivalent rows within one query and have no observable side effects, which allows
+      the optimizer to share identical scans.
+    parameters:
+      function:
+        type: table_function
+        description: The function to set the property of.
+      key:
+        type: FUNCTION_PROPERTY_KEY
+        description: The property to set.
+      value:
+        type: FUNCTION_PROPERTY_VALUE
+        description: The value to set for the property. Must belong to `key`.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
   table_function_set_user_data:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-09-01" ]
@@ -363,7 +451,10 @@ functions:
       callback's output chunk holds one vector per requested column rather than one per column declared in bind,
       and the global init, local init and exec callbacks can look up which declared column each vector stands for
       via e.g. `[[data_source_exec_get_column_index]]`. Without it the output chunk always holds every declared
-      column, and the engine drops the unused ones itself.
+      column, and the engine drops the unused ones itself. The same holds for the output chunk of the operator of a
+      table in-out function (see `[[table_function_set_operator]]` and `[[operator_execute_get_column_index]]`).
+      Virtual columns (see `[[table_function_bind_add_virtual_column]]`) need projection pushdown, since it is what
+      lets the query ask for them.
     parameters:
       function:
         type: table_function
@@ -522,6 +613,171 @@ functions:
       type:
         type: logical_type
         description: The type of the column. Borrowed and copied.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_bind_add_virtual_column:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-09" ]
+    description: |
+      Declares a virtual column of this call of the function, identified by the given identifier.
+
+      A virtual column is not one of the columns the function returns (see `[[table_function_bind_add_result_column]]`):
+      it is not part of `SELECT *`, and the query asks for it by name. The function only produces it when it is asked
+      for, as a vector of the output chunk like any other column the function produces (the output chunk of the exec
+      callback of its data source, or of the execute and finalize callbacks of its operator). That requires projection
+      pushdown (see `[[table_function_set_projection_pushdown]]`), which is what lets the engine ask for it; declaring
+      a virtual column fails otherwise. The function recognizes the column by its identifier: the column count and
+      column index functions of the data source (e.g. `[[data_source_exec_get_column_index]]`) and of the operator
+      (e.g. `[[operator_execute_get_column_index]]`) return it for the vectors that stand for the column.
+
+      The identifier must be at least `DUCKDB_V2_VIRTUAL_COLUMN_START`, and unique among the virtual columns of the
+      call. Two identifiers have a meaning of their own to the engine: `DUCKDB_V2_COLUMN_IDENTIFIER_ROW_ID` is the
+      identifier of the row id of a row, conventionally declared with the name `rowid`, and
+      `DUCKDB_V2_COLUMN_IDENTIFIER_EMPTY` is that of a column the engine requests when the query needs the rows but
+      none of their values, e.g. `SELECT count(*)`. A function that declares the latter receives it as the only
+      requested column then; its vector is a BOOLEAN one whose values are never read, but whose size, like for any
+      other column, is the batch's row count. A function that does not declare it receives its row id column if it
+      declares one, and its first declared column otherwise. Any other identifier is the function's to give a meaning
+      to, e.g. `DUCKDB_V2_VIRTUAL_COLUMN_START + 1`. The name must not be empty, except for the identifier
+      `DUCKDB_V2_COLUMN_IDENTIFIER_EMPTY`, and the type must be a fully defined concrete type. The name and type are
+      borrowed and copied.
+    parameters:
+      info:
+        type: table_function_bind_info
+        description: The bind info handle.
+      identifier:
+        type: idx
+        description: The identifier of the virtual column, at least `DUCKDB_V2_VIRTUAL_COLUMN_START`.
+      name:
+        type: char
+        indirection: 1
+        const: true
+        kind: IN
+        description: The name of the column. Borrowed and copied.
+      name_length:
+        type: idx
+        description: The length of `name` in bytes. `name` must be valid UTF-8, need not be null-terminated, and may be NULL only when this is 0.
+      type:
+        type: logical_type
+        description: The type of the column. Borrowed and copied.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_bind_get_expected_column_count:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Returns the number of columns of the schema the scan expects this call to produce, or 0 when the schema is not
+      known upfront.
+
+      A multi-file function registered with `[[connection_register_multi_file_function]]` or
+      `[[extension_register_multi_file_function]]` binds the single-file function it wraps once for every file it
+      reads. Once the schema of the scan was determined (e.g. by sampling several files, see
+      `[[table_function_set_combine_schema_callback]]`) it tells the bind of the remaining files the schema, so that
+      they can read their file using it instead of determining a schema of their own. A call that is not part of a
+      multi-file scan, or whose scan does not know its schema yet, has no expected schema. Valid indices for
+      `[[table_function_bind_get_expected_column_type]]` and `[[table_function_bind_get_expected_column_name]]` are
+      [0, count).
+    parameters:
+      info:
+        type: table_function_bind_info
+        description: The bind info handle.
+      count:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the number of expected columns, 0 when there is no expected schema.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_bind_get_expected_column_type:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Retrieves the type of the expected column at the given index.
+
+      Fails if the index is out of bounds. The returned type is owned by the caller and must be destroyed via
+      `[[logical_type_destroy]]`.
+    parameters:
+      info:
+        type: table_function_bind_info
+        description: The bind info handle.
+      index:
+        type: idx
+        description: The index of the expected column to get the type of.
+      type:
+        type: logical_type
+        indirection: 1
+        kind: OUT
+        description: Receives the column type. Owned by the caller; destroy via `[[logical_type_destroy]]`.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_bind_get_expected_column_name:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Retrieves the name of the expected column at the given index.
+
+      Fails if the index is out of bounds. The name is borrowed and valid only for the duration of the callback.
+    parameters:
+      info:
+        type: table_function_bind_info
+        description: The bind info handle.
+      index:
+        type: idx
+        description: The index of the expected column to get the name of.
+      name:
+        type: char
+        indirection: 2
+        const: true
+        kind: OUT_BORROW
+        description: Receives a borrowed pointer to the column name. Valid only for the duration of the callback.
+      name_length:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the length of `*name` in bytes. `*name` is not guaranteed to be null-terminated.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_bind_get_expected_bind_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Retrieves the bind data that determined the expected schema, when it came from this same function: either the
+      bind data a combine schema callback returned (see `[[table_function_combine_schema_set_bind_data]]`), or the bind
+      data of the first file of the scan. The bind can then read its file exactly the way the schema was determined,
+      rather than deriving that from the names and types of the expected columns alone.
+
+      Null when there is no expected schema, or when the schema did not come from a bind of this function (e.g. it is
+      the schema of the table a `COPY` loads into). The data is borrowed: it is shared with the other binds of the
+      scan and stays valid for the duration of the callback. A bind that needs it for longer must copy it.
+    parameters:
+      info:
+        type: table_function_bind_info
+        description: The bind info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the bind data pointer, or null if there is none.
       err:
         type: error_info
         indirection: 1
@@ -862,6 +1118,93 @@ functions:
         description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
     return_type: ERROR
 
+  table_function_bind_get_input_column_count:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-25" ]
+    description: |
+      Returns the number of columns of the input of the function's operator (see `[[table_function_set_operator]]`).
+
+      These are the vectors of the input chunks the operator's execute callback receives: the positional arguments of
+      the call for `TABLE_OPERATOR_INPUT_ARGUMENTS`, or the columns of the table argument for
+      `TABLE_OPERATOR_INPUT_TABLE`. A bind callback typically derives the function's result columns from them. Unlike
+      `[[function_bind_get_arg_value]]`, this also describes arguments that are not constant. 0 for a function without
+      an operator.
+    parameters:
+      info:
+        type: table_function_bind_info
+        description: The bind info handle.
+      count:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the number of input columns.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_bind_get_input_column_type:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-25" ]
+    description: |
+      Retrieves the type of the operator's input column at the given index (see
+      `[[table_function_bind_get_input_column_count]]`).
+
+      Fails if the index is out of bounds. The returned type is owned by the caller and must be destroyed via
+      `[[logical_type_destroy]]`.
+    parameters:
+      info:
+        type: table_function_bind_info
+        description: The bind info handle.
+      index:
+        type: idx
+        description: The index of the input column.
+      type:
+        type: logical_type
+        indirection: 1
+        kind: OUT
+        description: Receives the column type. Owned by the caller; destroy via `[[logical_type_destroy]]`.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_bind_get_input_column_name:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-25" ]
+    description: |
+      Retrieves the name of the operator's input column at the given index (see
+      `[[table_function_bind_get_input_column_count]]`).
+
+      For `TABLE_OPERATOR_INPUT_TABLE` this is the name of the column of the table argument. The arguments of
+      `TABLE_OPERATOR_INPUT_ARGUMENTS` have no names, and yield an empty name. Fails if the index is out of bounds.
+      The name is borrowed and valid only for the duration of the callback.
+    parameters:
+      info:
+        type: table_function_bind_info
+        description: The bind info handle.
+      index:
+        type: idx
+        description: The index of the input column.
+      name:
+        type: char
+        indirection: 2
+        const: true
+        kind: OUT_BORROW
+        description: Receives a borrowed pointer to the column name. Valid only for the duration of the callback.
+      name_length:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the length of `*name` in bytes. `*name` is not guaranteed to be null-terminated.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
   #---------------------------------------------------------------------------------------------------------------------
   # Stats Callback Functions
   #---------------------------------------------------------------------------------------------------------------------
@@ -967,7 +1310,7 @@ functions:
 
       The function is registered on the connection's database, visible to every connection, in the connection's
       transaction: inside an explicit transaction, it is invisible to other connections until the transaction commits,
-      and a rollback undoes it. Registration requires a name, a bind callback and an exec callback, and rejects a
+      and a rollback undoes it. Registration requires a name, a bind callback and either a data source or an operator (see `[[table_function_set_operator]]`), and rejects a
       signature that declares a return type, since a table function declares the columns it returns from its bind
       callback. The table function must have been created through a factory of the same database. The caller still owns
       the handle after registration and must destroy it with `[[table_function_destroy]]`, which does not affect the
@@ -994,7 +1337,7 @@ functions:
       Registers the table function, making it available for use in SQL queries.
 
       The function is registered on the loading extension's database and attributed to the extension. Use this from the
-      extension's load callback. Registration requires a name, a bind callback and an exec callback, and rejects a
+      extension's load callback. Registration requires a name, a bind callback and either a data source or an operator (see `[[table_function_set_operator]]`), and rejects a
       signature that declares a return type, since a table function declares the columns it returns from its bind
       callback. The table function must have been created through a factory of the same database. The caller still owns
       the handle after registration and must destroy it with `[[table_function_destroy]]`, which does not affect the
@@ -1280,6 +1623,309 @@ functions:
     return_type: ERROR
 
   #---------------------------------------------------------------------------------------------------------------------
+  # Operator
+  #---------------------------------------------------------------------------------------------------------------------
+  table_function_set_operator:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-25" ]
+    description: |
+      Makes the table function a table in-out function, whose rows the given operator produces from an input.
+
+      Instead of producing its rows from nothing by scanning a data source, the function then transforms an input into
+      its rows: the operator's execute callback receives the input chunk by chunk, and writes the function's rows
+      into its output chunk, which holds the columns declared by the bind callback. Where the input comes from is set
+      by `input`, see `[[TABLE_OPERATOR_INPUT]]`. The bind callback still runs first, declares the result columns,
+      and can inspect the input columns with `[[table_function_bind_get_input_column_count]]` and its siblings; the
+      operator reaches the bind data via e.g. `[[operator_execute_get_bind_data]]`.
+
+      The operator's configuration is copied, so the caller still owns `op` and must destroy it with
+      `[[operator_destroy]]`; it may be handed to several functions. Calling this again replaces the operator.
+
+      Registration rejects a function with an operator that also has a data source, or a callback that is part of
+      scanning: init global, init local, progress, metrics, filter pushdown, partition data, partitioning and claim
+      batch callbacks, and the `file_row_number` virtual column. The operator itself carries the init, finalize and
+      progress callbacks. Projection pushdown (see `[[table_function_set_projection_pushdown]]`) and the virtual columns a bind
+      callback declares (see `[[table_function_bind_add_virtual_column]]`) apply to the operator's output chunk as
+      they do to a data source's: the operator looks up which column each of its vectors stands for with e.g.
+      `[[operator_execute_get_column_index]]`. For `TABLE_OPERATOR_INPUT_TABLE`, the signature must not declare positional parameters, since the
+      table is the only positional argument; registration adds it. It may declare named parameters, which are
+      constant arguments of the call as usual. Such a function cannot be overloaded, and its operator cannot have a
+      finalize callback when it is called with a table that is correlated with an outer query. For
+      `TABLE_OPERATOR_INPUT_ARGUMENTS`, the operator cannot have a finalize callback.
+    parameters:
+      function:
+        type: table_function
+        description: The function to set the operator of.
+      op:
+        type: operator
+        description: The operator producing the function's rows. Borrowed; its configuration is copied.
+      input:
+        type: TABLE_OPERATOR_INPUT
+        description: Where the operator's input comes from.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  #---------------------------------------------------------------------------------------------------------------------
+  # Combine Schema Callback Functions
+  #---------------------------------------------------------------------------------------------------------------------
+  table_function_set_combine_schema_callback:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Sets the optional "combine schema" callback of the table function.
+
+      A multi-file function registered with `[[connection_register_multi_file_function]]` or
+      `[[extension_register_multi_file_function]]` binds the function it wraps for each of the first files of a scan
+      (see `[[multi_file_function_set_maximum_sample_files]]`) and combines the columns they bound to by name, taking
+      the highest type of every column. It invokes the callback with the bind data of those files when it needs more
+      than that - e.g. to determine the schema of the scan as if all sampled files had been one - and the callback can
+      declare the combined columns and the bind data every file of the scan is bound with from then on. Without a
+      callback the columns of the files are combined by name only, and every file is bound on its own.
+    parameters:
+      function:
+        type: table_function
+        description: The function to set the callback of.
+      callback:
+        type: table_function_combine_schema_callback
+        description: The "combine schema" callback to set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_combine_schema_get_user_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: Retrieves the user data set via `[[table_function_set_user_data]]`.
+    parameters:
+      info:
+        type: table_function_combine_schema_info
+        description: The combine schema info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the user data pointer, or null if none was set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_combine_schema_get_file_count:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Returns the number of files whose schemas are combined.
+
+      Valid indices for `[[table_function_combine_schema_get_bind_data]]` are [0, count). The files are in the order
+      of the scan.
+    parameters:
+      info:
+        type: table_function_combine_schema_info
+        description: The combine schema info handle.
+      count:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the number of files.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_combine_schema_get_bind_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Retrieves the bind data the function's bind callback set when it bound the file at the given index.
+
+      Fails if the index is out of bounds. The data is borrowed and valid only for the duration of the callback.
+    parameters:
+      info:
+        type: table_function_combine_schema_info
+        description: The combine schema info handle.
+      index:
+        type: idx
+        description: The index of the file.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the bind data pointer, or null if the bind callback set none.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_combine_schema_get_union_by_name:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Reports whether the schemas are combined because the scan unifies the columns of its files by name
+      (`union_by_name`): the files are then expected to have different columns. Otherwise the files are expected to
+      have the same columns, and their schemas are combined to determine the schema of the scan more accurately.
+    parameters:
+      info:
+        type: table_function_combine_schema_info
+        description: The combine schema info handle.
+      union_by_name:
+        type: bool
+        indirection: 1
+        kind: OUT
+        description: Receives whether the columns are unified by name.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_combine_schema_get_combined_column_count:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Returns the number of columns the schemas of the files combine to by name, which the callback keeps unless it
+      declares columns of its own with `[[table_function_combine_schema_add_result_column]]`.
+
+      Valid indices for `[[table_function_combine_schema_get_combined_column_type]]` and
+      `[[table_function_combine_schema_get_combined_column_name]]` are [0, count).
+    parameters:
+      info:
+        type: table_function_combine_schema_info
+        description: The combine schema info handle.
+      count:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the number of combined columns.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_combine_schema_get_combined_column_type:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Retrieves the type of the combined column at the given index.
+
+      Fails if the index is out of bounds. The returned type is owned by the caller and must be destroyed via
+      `[[logical_type_destroy]]`.
+    parameters:
+      info:
+        type: table_function_combine_schema_info
+        description: The combine schema info handle.
+      index:
+        type: idx
+        description: The index of the combined column to get the type of.
+      type:
+        type: logical_type
+        indirection: 1
+        kind: OUT
+        description: Receives the column type. Owned by the caller; destroy via `[[logical_type_destroy]]`.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_combine_schema_get_combined_column_name:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Retrieves the name of the combined column at the given index.
+
+      Fails if the index is out of bounds. The name is borrowed and valid only for the duration of the callback.
+    parameters:
+      info:
+        type: table_function_combine_schema_info
+        description: The combine schema info handle.
+      index:
+        type: idx
+        description: The index of the combined column to get the name of.
+      name:
+        type: char
+        indirection: 2
+        const: true
+        kind: OUT_BORROW
+        description: Receives a borrowed pointer to the column name. Valid only for the duration of the callback.
+      name_length:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the length of `*name` in bytes. `*name` is not guaranteed to be null-terminated.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_combine_schema_add_result_column:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Declares one of the columns the files combine to, replacing the columns combined by name.
+
+      Call this once per column, in order. The first call discards the columns combined by name: a callback that
+      declares none keeps them. The type must be a fully defined concrete type; ANY is rejected. The name and type
+      are borrowed and copied.
+    parameters:
+      info:
+        type: table_function_combine_schema_info
+        description: The combine schema info handle.
+      name:
+        type: char
+        indirection: 1
+        const: true
+        kind: IN
+        description: The name of the column. Borrowed and copied.
+      name_length:
+        type: idx
+        description: The length of `name` in bytes. `name` must be valid UTF-8, need not be null-terminated, and may be NULL only when this is 0.
+      type:
+        type: logical_type
+        description: The type of the column. Borrowed and copied.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  table_function_combine_schema_set_bind_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Sets the bind data describing the combined schema.
+
+      The multi-file function binds every file of the scan with it: the bind callback finds the combined columns as its
+      expected schema (see `[[table_function_bind_get_expected_column_count]]`) and this data as the expected bind data
+      (see `[[table_function_bind_get_expected_bind_data]]`), and reads its file accordingly instead of determining a
+      schema of its own. The files that were bound to combine their schemas are bound again. Without bind data, every
+      file is bound on its own and its columns are reconciled with the combined schema by name. The opaque handle
+      bundles the pointer with an optional destructor and an optional equality callback, as for
+      `[[function_bind_set_bind_data]]`.
+    parameters:
+      info:
+        type: table_function_combine_schema_info
+        description: The combine schema info handle.
+      data:
+        type: opaque
+        indirection: 1
+        description: Opaque handle bundling the bind data pointer plus optional destructor and equality callbacks.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  #---------------------------------------------------------------------------------------------------------------------
   # Multi-file functions
   #---------------------------------------------------------------------------------------------------------------------
   multi_file_function_create:
@@ -1376,6 +2022,30 @@ functions:
         description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
     return_type: ERROR
 
+  multi_file_function_set_single_file_table_function:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Sets the table function that reads a single file, which the multi-file function wraps, without registering it.
+
+      Like `[[multi_file_function_set_single_file_function]]`, but the function is handed over directly instead of
+      being looked up by name at registration, so it does not have to be registered on its own: it is then not
+      callable from SQL, and does not show up in `duckdb_functions()`. The function's configuration is copied, so the
+      caller still owns `table_function` and must destroy it. Replaces a single-file function set by name, and the
+      other way around.
+    parameters:
+      function:
+        type: multi_file_function
+        description: The function to set the single-file function of.
+      table_function:
+        type: table_function
+        description: The table function that reads a single file. Borrowed; its configuration is copied.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
   multi_file_function_set_reader_type:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-09-18" ]
@@ -1425,6 +2095,60 @@ functions:
       extension_length:
         type: idx
         description: The length of `extension` in bytes. `extension` need not be null-terminated and may be NULL only when this is 0.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  multi_file_function_set_maximum_sample_files:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Sets how many files the function samples by default to determine the schema of a scan.
+
+      Optional: without it only the first file is sampled. The single-file function is bound for each of the sampled
+      files and, when it has a combine schema callback (see `[[table_function_set_combine_schema_callback]]`), the
+      schemas of the files are combined with it. The maximum `idx_t` samples all files; the count must be at least 1.
+      A named parameter of the single-file function can override it per call, see
+      `[[multi_file_function_set_sample_files_parameter]]`.
+    parameters:
+      function:
+        type: multi_file_function
+        description: The function to set the number of sampled files of.
+      count:
+        type: idx
+        description: The number of files to sample.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  multi_file_function_set_sample_files_parameter:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-10" ]
+    description: |
+      Sets the name of the named parameter of the single-file function that sets how many files are sampled to
+      determine the schema of a scan.
+
+      Optional. A call that passes the parameter samples that many files instead of the default (see
+      `[[multi_file_function_set_maximum_sample_files]]`); a value that is not usable as a count is left to the
+      single-file function to report when it binds. The parameter is still forwarded to the single-file function as
+      given. The name is borrowed and copied.
+    parameters:
+      function:
+        type: multi_file_function
+        description: The function to set the sample files parameter of.
+      name:
+        type: char
+        indirection: 1
+        const: true
+        kind: IN
+        description: The name of the named parameter. Borrowed and copied.
+      name_length:
+        type: idx
+        description: The length of `name` in bytes. `name` need not be null-terminated and may be NULL only when this is 0.
       err:
         type: error_info
         indirection: 1

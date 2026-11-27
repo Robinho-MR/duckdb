@@ -223,7 +223,10 @@ Value TypeParamValue(const LogicalType &type, idx_t index, std::string_view &out
 
 void CheckDecimalWidthV2(CV2Factory &factory, const LogicalType &type) {
 	auto context = factory.TryGetClientContext();
-	const uint32_t limit = context ? DecimalWidthLimit::FromSetting(context).width : Decimal::DEFAULT_MAX_WIDTH;
+	auto bind_limit = factory.GetDecimalWidthLimit();
+	const uint32_t limit = bind_limit ? bind_limit->width
+	                       : context  ? DecimalWidthLimit::FromSetting(context).width
+	                                  : Decimal::DEFAULT_MAX_WIDTH;
 	TypeVisitor::Contains(type, [&](const LogicalType &child) {
 		if (child.id() != LogicalTypeId::DECIMAL || DecimalType::GetWidth(child) <= limit) {
 			return false;
@@ -335,11 +338,14 @@ static void CreateLogicalTypeFromTextV2(CV2Factory &factory, std::string_view te
 	// Parse and bind errors propagate.
 	auto string = duckdb::string(text);
 	duckdb::LogicalType parsed;
+	// a bind parses the type names it is given within its own decimal width limit, which the setting does not bound
+	auto decimal_width_limit = factory.GetDecimalWidthLimit();
 	if (!factory.TryGetClientContext()) {
 		parsed = duckdb::TypeManager::Get(factory.GetDatabase()).ParseLogicalType(string);
 	} else {
-		factory.WithTransaction(
-		    [&](duckdb::ClientContext &context) { parsed = duckdb::TransformStringToLogicalType(string, context); });
+		factory.WithTransaction([&](duckdb::ClientContext &context) {
+			parsed = duckdb::TransformStringToLogicalType(string, context, decimal_width_limit);
+		});
 	}
 	CheckDecimalWidthV2(factory, parsed);
 	*out_type = Convert(std::move(parsed));

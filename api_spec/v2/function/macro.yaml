@@ -128,6 +128,28 @@ functions:
         description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
     return_type: ERROR
 
+  macro_function_add_overload:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Completes the current overload of the macro function and starts a new one.
+
+      A macro can have several overloads, told apart by the number and the types of their parameters, like
+      `CREATE MACRO m(x) AS x, (x DATE) AS ...`: a call runs the overload whose parameters match its arguments best.
+      The signature (see `[[macro_function_get_signature]]`) and body (see `[[macro_function_set_body]]`) set so far
+      become one overload, checked like at registration, and the function starts over with an empty signature and no
+      body for the next one. Registration registers every completed overload and the current one. The name, the type
+      and the docs are shared by all overloads.
+    parameters:
+      function:
+        type: macro_function
+        description: The macro function to add an overload to.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
   macro_function_get_signature:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-10-11" ]

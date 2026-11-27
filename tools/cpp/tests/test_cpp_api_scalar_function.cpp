@@ -125,6 +125,25 @@ void AnyReturnResolveTypes(ScalarFunction::ResolveTypesInput &input) {
 	input.SetReturnType(input.GetContext().GetFactory().ParseType("INTEGER"));
 }
 
+// Casts the VARCHAR argument to INTEGER instead, and returns BIGINT instead of the declared INTEGER
+void CastArgResolveTypes(ScalarFunction::ResolveTypesInput &input) {
+	auto &factory = input.GetContext().GetFactory();
+	REQUIRE_THROWS_MATCHES(input.SetArgType(1, factory.ParseType("INTEGER")), Exception,
+	                       HasErrorCode(DUCKDB_V2_ERROR_INPUT_INVALID));
+	input.SetArgType(0, factory.ParseType("INTEGER"));
+	input.SetReturnType(factory.ParseType("BIGINT"));
+}
+
+// out[i] = a[i] * 3, reading an INTEGER and writing a BIGINT
+void TripleToBigintExec(ScalarFunction::ExecInput &input) {
+	const auto a = input.GetArg(0).GetView();
+	auto result = input.GetResult();
+	auto *out = result.GetDataMutable<int64_t>();
+	for (idx_t i = 0; i < input.GetRowCount(); i++) {
+		out[i] = int64_t(a.Data<int32_t>()[a.SelAt(i)]) * 3;
+	}
+}
+
 // out[i] = a[i] * 2
 void DoubleExec(ScalarFunction::ExecInput &input) {
 	const auto a = input.GetArg(0).GetView();
@@ -279,6 +298,31 @@ TEST_CASE("Stable C++API: scalar function resolve types resolves an ANY return t
 	auto result = conn.Execute("SELECT cpp_double(21)");
 	REQUIRE(result.GetSchema().GetFieldType(0).ToText() == "INTEGER");
 	REQUIRE(CollectInts(std::move(result)) == std::vector<int32_t> {42});
+}
+
+TEST_CASE("Stable C++API: scalar function resolve types overrides argument and return types", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	auto &factory = conn.GetFactory();
+
+	auto function = ScalarFunction::Create(conn.GetFactory());
+	function.SetName("cpp_cast_arg").SetResolveTypesCallback(CastArgResolveTypes).SetExecCallback(TripleToBigintExec);
+	function.GetSignature().AddParameter("a", factory.ParseType("VARCHAR")).SetReturnType(factory.ParseType("INTEGER"));
+	conn.Register(function);
+
+	// the catalog reports the declared types, the call the resolved ones
+	auto first_value = [&](const std::string &sql) {
+		auto result = conn.Execute(sql);
+		auto chunk = result.FetchChunk();
+		REQUIRE(chunk);
+		return chunk.GetVector(0).GetValue(0).ToText();
+	};
+	REQUIRE(first_value("SELECT return_type FROM duckdb_functions() WHERE function_name = 'cpp_cast_arg'") ==
+	        "INTEGER");
+	REQUIRE(conn.Execute("SELECT cpp_cast_arg('14')").GetSchema().GetFieldType(0).ToText() == "BIGINT");
+	REQUIRE(first_value("SELECT cpp_cast_arg('14')") == "42");
+	// the argument is cast to the resolved type
+	REQUIRE_THROWS(conn.Execute("SELECT cpp_cast_arg('x')").Drain());
 }
 
 TEST_CASE("Stable C++API: scalar function bind reads argument types and constants", "[cpp_api]") {
@@ -896,6 +940,34 @@ TEST_CASE("Stable C++API: scalar function overloads carry their own description 
 	REQUIRE(chunk.GetVector(2).GetValue(1).ToText() == "[a, b]");
 	REQUIRE(chunk.GetVector(3).GetValue(0).ToText() == "numeric|example");
 	REQUIRE(chunk.GetVector(3).GetValue(1).ToText() == "");
+}
+
+namespace {
+// out[i] = a[i] + 1, with a type parsed through the callback context's factory.
+void PlusOneParseExec(ScalarFunction::ExecInput &input) {
+	const auto integer = input.GetContext().GetFactory().ParseType("INTEGER");
+	REQUIRE(integer.ToText() == "INTEGER");
+	PlusOneExec(input);
+}
+} // namespace
+
+// Expressions evaluated without a client context (index keys, generated columns) run API functions too.
+TEST_CASE("Stable C++API: scalar function runs in an index key and a generated column", "[cpp_api]") {
+	auto db = Instance(":memory:");
+	auto conn = db.Connect();
+	const auto integer = conn.GetFactory().ParseType("INTEGER");
+
+	auto function = ScalarFunction::Create(conn.GetFactory());
+	function.SetName("cpp_key_plus_one").SetExecCallback(PlusOneParseExec);
+	function.GetSignature().AddParameter("a", integer).SetReturnType(integer);
+	conn.Register(function);
+
+	conn.Execute("CREATE TABLE t(a INTEGER, g INTEGER GENERATED ALWAYS AS (cpp_key_plus_one(a)) VIRTUAL)").Drain();
+	conn.Execute("CREATE UNIQUE INDEX tx ON t((cpp_key_plus_one(a)))").Drain();
+	conn.Execute("INSERT INTO t VALUES (1), (2), (3)").Drain();
+	REQUIRE(CollectInts(conn.Execute("SELECT g FROM t ORDER BY a")) == std::vector<int32_t> {2, 3, 4});
+	REQUIRE_THROWS(conn.Execute("INSERT INTO t VALUES (1)").Drain());
+	REQUIRE(CollectInts(conn.Execute("SELECT a FROM t WHERE cpp_key_plus_one(a) = 3")) == std::vector<int32_t> {2});
 }
 
 TEST_CASE("Stable C++API: scalar function in a system schema", "[cpp_api]") {

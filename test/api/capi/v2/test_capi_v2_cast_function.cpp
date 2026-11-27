@@ -318,6 +318,24 @@ TEST_CASE("V2 cast: round-trip between a custom type and VARCHAR", "[capi_v2][ca
 	                               "FROM (VALUES (1), (2)) v(t)") == "1C,2C");
 }
 
+TEST_CASE("V2 cast: runs in an index key and a generated column", "[capi_v2][cast_function]") {
+	EnvFixture fx;
+	auto integer = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER);
+	auto varchar = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR);
+	auto temperature = RegisterTemperatureType(fx, integer);
+	RegisterTemperatureCasts(fx.conn, temperature, varchar, -1);
+	duckdb_v2_logical_type_destroy(&temperature);
+	duckdb_v2_logical_type_destroy(&varchar);
+	duckdb_v2_logical_type_destroy(&integer);
+
+	ExecSQL(fx.conn, "CREATE TABLE temps (t VARCHAR, g INTEGER GENERATED ALWAYS AS "
+	                 "(CAST(CAST(t AS TEMPERATURE) AS INTEGER)) VIRTUAL)");
+	ExecSQL(fx.conn, "CREATE UNIQUE INDEX temps_ix ON temps ((CAST(CAST(t AS TEMPERATURE) AS INTEGER)))");
+	ExecSQL(fx.conn, "INSERT INTO temps VALUES ('1C'), ('2C')");
+	REQUIRE(CastQueryText(fx.conn, "SELECT sum(g)::VARCHAR FROM temps") == "3");
+	REQUIRE(RunSql(fx.conn, "INSERT INTO temps VALUES ('1C')") != DUCKDB_V2_ERROR_NONE);
+}
+
 TEST_CASE("V2 cast: normal casts abort, try casts yield NULL", "[capi_v2][cast_function]") {
 	EnvFixture fx;
 	auto integer = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER);
@@ -458,6 +476,207 @@ TEST_CASE("V2 cast: null arguments and destroy null-safety", "[capi_v2][cast_fun
 	REQUIRE(duckdb_v2_cast_function_destroy(&function) == DUCKDB_V2_ERROR_NONE);
 	REQUIRE(duckdb_v2_cast_function_destroy(nullptr) == DUCKDB_V2_ERROR_NONE);
 
+	duckdb_v2_logical_type_destroy(&integer);
+}
+
+namespace {
+
+// The text of the type of the vector the wildcard cast saw last, latched for the test to assert on.
+std::string last_wildcard_type;
+
+bool LatchVectorType(duckdb_v2_vector_handle vector, duckdb_v2_error_info_handle *err) {
+	duckdb_v2_logical_type_handle type = nullptr;
+	if (duckdb_v2_vector_get_logical_type(vector, &type, err) != DUCKDB_V2_ERROR_NONE) {
+		return false;
+	}
+	char buf[256];
+	idx_t len = 0;
+	auto rc = duckdb_v2_logical_type_to_text(type, buf, sizeof(buf), &len, err);
+	duckdb_v2_logical_type_destroy(&type);
+	if (rc != DUCKDB_V2_ERROR_NONE) {
+		return false;
+	}
+	last_wildcard_type.assign(buf, len);
+	return true;
+}
+
+// Wildcard source: latches the concrete input type and writes 7 into the TEMPERATURE (INTEGER) output.
+void WildcardSourceCast(duckdb_v2_cast_function_exec_info_handle info, duckdb_v2_context_handle,
+                        duckdb_v2_error_info_handle *err) {
+	CastArgs args;
+	if (!ReadCastArgs(info, args, err) || !LatchVectorType(args.input, err)) {
+		return;
+	}
+	void *raw = nullptr;
+	if (duckdb_v2_vector_get_data_mutable(args.output, &raw, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	for (idx_t i = 0; i < args.count; i++) {
+		static_cast<int32_t *>(raw)[i] = 7;
+	}
+}
+
+// Wildcard target: latches the concrete output type and leaves every row NULL.
+void WildcardTargetCast(duckdb_v2_cast_function_exec_info_handle info, duckdb_v2_context_handle,
+                        duckdb_v2_error_info_handle *err) {
+	CastArgs args;
+	if (!ReadCastArgs(info, args, err) || !LatchVectorType(args.output, err)) {
+		return;
+	}
+	for (idx_t i = 0; i < args.count; i++) {
+		if (SetOutputNull(args.output, i, err) != DUCKDB_V2_ERROR_NONE) {
+			return;
+		}
+	}
+}
+
+// Writes 99 into the TEMPERATURE (INTEGER) output, without latching a type.
+void ExactCast(duckdb_v2_cast_function_exec_info_handle info, duckdb_v2_context_handle,
+               duckdb_v2_error_info_handle *err) {
+	CastArgs args;
+	void *raw = nullptr;
+	if (!ReadCastArgs(info, args, err) ||
+	    duckdb_v2_vector_get_data_mutable(args.output, &raw, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	for (idx_t i = 0; i < args.count; i++) {
+		static_cast<int32_t *>(raw)[i] = 99;
+	}
+}
+
+const DUCKDB_V2_CAST_WILDCARD_KIND WILDCARD_KINDS[] = {
+    DUCKDB_V2_CAST_WILDCARD_KIND_LIST,  DUCKDB_V2_CAST_WILDCARD_KIND_STRUCT, DUCKDB_V2_CAST_WILDCARD_KIND_MAP,
+    DUCKDB_V2_CAST_WILDCARD_KIND_UNION, DUCKDB_V2_CAST_WILDCARD_KIND_ARRAY,  DUCKDB_V2_CAST_WILDCARD_KIND_DECIMAL,
+    DUCKDB_V2_CAST_WILDCARD_KIND_ENUM,  DUCKDB_V2_CAST_WILDCARD_KIND_TUPLE};
+
+} // namespace
+
+TEST_CASE("V2 cast: wildcard source types match every type of a kind", "[capi_v2][cast_function]") {
+	EnvFixture fx;
+	auto integer = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER);
+	auto temperature = RegisterTemperatureType(fx, integer);
+	for (auto kind : WILDCARD_KINDS) {
+		duckdb_v2_cast_function_handle function = nullptr;
+		REQUIRE(duckdb_v2_cast_function_create(fx.factory, &function, nullptr) == DUCKDB_V2_ERROR_NONE);
+		REQUIRE(duckdb_v2_cast_function_set_source_kind(function, kind, nullptr) == DUCKDB_V2_ERROR_NONE);
+		REQUIRE(duckdb_v2_cast_function_set_target_type(function, temperature, nullptr) == DUCKDB_V2_ERROR_NONE);
+		REQUIRE(duckdb_v2_cast_function_set_exec_callback(function, WildcardSourceCast, nullptr) ==
+		        DUCKDB_V2_ERROR_NONE);
+		REQUIRE(duckdb_v2_connection_register_cast_function(fx.conn, function, nullptr) == DUCKDB_V2_ERROR_NONE);
+		duckdb_v2_cast_function_destroy(&function);
+	}
+	duckdb_v2_logical_type_destroy(&temperature);
+	duckdb_v2_logical_type_destroy(&integer);
+
+	auto check = [&](const std::string &expr, const std::string &expected) {
+		last_wildcard_type.clear();
+		REQUIRE(CastQueryText(fx.conn, "SELECT CAST(CAST(" + expr + " AS TEMPERATURE) AS INTEGER)::VARCHAR") == "7");
+		REQUIRE(last_wildcard_type == expected);
+	};
+	check("[1, 2]", "INTEGER[]");
+	check("[['a']]", "VARCHAR[][]");
+	check("{'a': 1, 'b': 'x'}", "STRUCT(a INTEGER, b VARCHAR)");
+	check("map {1: 'x'}", "MAP(INTEGER, VARCHAR)");
+	check("union_value(num := 1)", "UNION(num INTEGER)");
+	check("[1, 2, 3]::INTEGER[3]", "INTEGER[3]");
+	check("1.5::DECIMAL(4, 1)", "DECIMAL(4,1)");
+	check("1::DECIMAL(30, 2)", "DECIMAL(30,2)");
+	REQUIRE(CastQueryError(fx.conn, "CREATE TYPE mood AS ENUM ('sad', 'ok')") == DUCKDB_V2_ERROR_NONE);
+	check("'ok'::mood", "ENUM('sad', 'ok')");
+}
+
+TEST_CASE("V2 cast: wildcard target types match every type of a kind", "[capi_v2][cast_function]") {
+	EnvFixture fx;
+	auto integer = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER);
+	auto temperature = RegisterTemperatureType(fx, integer);
+	for (auto kind : WILDCARD_KINDS) {
+		duckdb_v2_cast_function_handle function = nullptr;
+		REQUIRE(duckdb_v2_cast_function_create(fx.factory, &function, nullptr) == DUCKDB_V2_ERROR_NONE);
+		REQUIRE(duckdb_v2_cast_function_set_source_type(function, temperature, nullptr) == DUCKDB_V2_ERROR_NONE);
+		REQUIRE(duckdb_v2_cast_function_set_target_kind(function, kind, nullptr) == DUCKDB_V2_ERROR_NONE);
+		REQUIRE(duckdb_v2_cast_function_set_exec_callback(function, WildcardTargetCast, nullptr) ==
+		        DUCKDB_V2_ERROR_NONE);
+		REQUIRE(duckdb_v2_connection_register_cast_function(fx.conn, function, nullptr) == DUCKDB_V2_ERROR_NONE);
+		duckdb_v2_cast_function_destroy(&function);
+	}
+	duckdb_v2_logical_type_destroy(&temperature);
+	duckdb_v2_logical_type_destroy(&integer);
+
+	REQUIRE(CastQueryError(fx.conn, "CREATE TYPE mood AS ENUM ('sad', 'ok')") == DUCKDB_V2_ERROR_NONE);
+	const std::pair<std::string, std::string> cases[] = {
+	    {"INTEGER[]", "INTEGER[]"},
+	    {"STRUCT(a INTEGER, b VARCHAR)", "STRUCT(a INTEGER, b VARCHAR)"},
+	    {"MAP(VARCHAR, INTEGER)", "MAP(VARCHAR, INTEGER)"},
+	    {"UNION(num INTEGER, str VARCHAR)", "UNION(num INTEGER, str VARCHAR)"},
+	    {"INTEGER[3]", "INTEGER[3]"},
+	    {"DECIMAL(10, 2)", "DECIMAL(10,2)"},
+	    {"mood", "ENUM('sad', 'ok')"},
+	};
+	for (auto &test : cases) {
+		last_wildcard_type.clear();
+		REQUIRE(CastQueryText(fx.conn, "SELECT (CAST(CAST(42 AS TEMPERATURE) AS " + test.first +
+		                                   ") IS NULL)::VARCHAR") == "true");
+		REQUIRE(last_wildcard_type == test.second);
+	}
+}
+
+TEST_CASE("V2 cast: wildcard types are only accepted as cast source and target kinds", "[capi_v2][cast_function]") {
+	EnvFixture fx;
+	auto integer = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER);
+	auto varchar = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR);
+	auto temperature = RegisterTemperatureType(fx, integer);
+
+	// An unknown kind is refused.
+	duckdb_v2_cast_function_handle function = nullptr;
+	REQUIRE(duckdb_v2_cast_function_create(fx.factory, &function, nullptr) == DUCKDB_V2_ERROR_NONE);
+	auto bogus = static_cast<DUCKDB_V2_CAST_WILDCARD_KIND>(99);
+	REQUIRE(duckdb_v2_cast_function_set_source_kind(function, bogus, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_cast_function_set_target_kind(function, bogus, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_cast_function_set_source_kind(nullptr, DUCKDB_V2_CAST_WILDCARD_KIND_LIST, nullptr) ==
+	        DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_cast_function_set_target_kind(nullptr, DUCKDB_V2_CAST_WILDCARD_KIND_LIST, nullptr) ==
+	        DUCKDB_V2_ERROR_INPUT_INVALID);
+	duckdb_v2_cast_function_destroy(&function);
+
+	// A wildcard source still needs the rest of the configuration.
+	REQUIRE(duckdb_v2_cast_function_create(fx.factory, &function, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_cast_function_set_source_kind(function, DUCKDB_V2_CAST_WILDCARD_KIND_LIST, nullptr) ==
+	        DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_cast_function_set_exec_callback(function, NoopCast, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_connection_register_cast_function(fx.conn, function, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	// Setting a concrete type afterwards replaces the wildcard.
+	REQUIRE(duckdb_v2_cast_function_set_source_type(function, integer, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_cast_function_set_target_type(function, temperature, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_connection_register_cast_function(fx.conn, function, nullptr) == DUCKDB_V2_ERROR_NONE);
+	duckdb_v2_cast_function_destroy(&function);
+
+	// A concrete cast for exactly the requested type wins over the wildcard of its kind.
+	REQUIRE(duckdb_v2_cast_function_create(fx.factory, &function, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_cast_function_set_source_kind(function, DUCKDB_V2_CAST_WILDCARD_KIND_LIST, nullptr) ==
+	        DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_cast_function_set_target_type(function, temperature, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_cast_function_set_exec_callback(function, WildcardSourceCast, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_connection_register_cast_function(fx.conn, function, nullptr) == DUCKDB_V2_ERROR_NONE);
+	duckdb_v2_cast_function_destroy(&function);
+	auto int_list = MakeListType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER);
+	function = MakeCast(fx.conn, int_list, temperature, ExactCast);
+	REQUIRE(duckdb_v2_connection_register_cast_function(fx.conn, function, nullptr) == DUCKDB_V2_ERROR_NONE);
+	duckdb_v2_cast_function_destroy(&function);
+	last_wildcard_type.clear();
+	REQUIRE(CastQueryText(fx.conn, "SELECT CAST(CAST([1] AS TEMPERATURE) AS INTEGER)::VARCHAR") == "99");
+	REQUIRE(last_wildcard_type.empty());
+	REQUIRE(CastQueryText(fx.conn, "SELECT CAST(CAST(['a'] AS TEMPERATURE) AS INTEGER)::VARCHAR") == "7");
+	REQUIRE(last_wildcard_type == "VARCHAR[]");
+
+	// Neither the concrete type setters nor the value APIs accept ANY, also as a child type.
+	auto any = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_ANY);
+	duckdb_v2_value_handle value = nullptr;
+	REQUIRE(duckdb_v2_value_create_type(fx.factory, any, &value, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(value == nullptr);
+	duckdb_v2_logical_type_destroy(&any);
+	duckdb_v2_logical_type_destroy(&int_list);
+	duckdb_v2_logical_type_destroy(&temperature);
+	duckdb_v2_logical_type_destroy(&varchar);
 	duckdb_v2_logical_type_destroy(&integer);
 }
 

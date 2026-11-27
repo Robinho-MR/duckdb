@@ -1,0 +1,31 @@
+# name: test/sql/json/test_json_copy_strftime_macros.test
+# description: The overloads of the json_copy_strftime_if_date and json_copy_strftime_if_timestamp macros
+# group: [json]
+
+require json
+
+query II
+SELECT json_copy_strftime_if_date(DATE '2020-01-02', '%d/%m'), json_copy_strftime_if_date(42, '%d/%m')
+----
+02/01	42
+
+query IIIII
+SELECT json_copy_strftime_if_timestamp(TIMESTAMP '2020-01-02 03:04:05', '%H:%M'),
+       json_copy_strftime_if_timestamp(TIMESTAMP_NS '2020-01-02 03:04:05', '%H'),
+       json_copy_strftime_if_timestamp('x', '%H'),
+       json_copy_strftime_if_timestamp(NULL, '%H'),
+       typeof(json_copy_strftime_if_timestamp(1.5, '%H'))
+----
+03:04	03	x	NULL	DECIMAL(2,1)
+
+query II
+SELECT function_name, parameter_types::VARCHAR FROM duckdb_functions()
+WHERE function_name LIKE 'json_copy_strftime_if_%' ORDER BY ALL
+----
+json_copy_strftime_if_date	[DATE, NULL]
+json_copy_strftime_if_date	[NULL, NULL]
+json_copy_strftime_if_timestamp	[NULL, NULL]
+json_copy_strftime_if_timestamp	[TIMESTAMP WITH TIME ZONE, NULL]
+json_copy_strftime_if_timestamp	[TIMESTAMP, NULL]
+json_copy_strftime_if_timestamp	[TIMESTAMPTZ_NS, NULL]
+json_copy_strftime_if_timestamp	[TIMESTAMP_NS, NULL]

@@ -46,6 +46,30 @@ static bool GetBooleanArg(ClientContext &context, const vector<Value> &arg) {
 	return arg.empty() || arg[0].CastAs(context, LogicalType::BOOLEAN).GetValue<bool>();
 }
 
+//! Copy functions that do not declare their options are not validated against a list: check the engine options here
+static void ValidateUndeclaredCopyToOption(const string &format, const Identifier &name, const vector<Value> &values) {
+	static const identifier_set_t ENGINE_OPTIONS {
+	    "use_tmp_file",        "overwrite_or_ignore",     "overwrite",        "append",           "filename_pattern",
+	    "file_extension",      "per_thread_output",       "return_files",     "preserve_order",   "return_stats",
+	    "return_column_types", "write_partition_columns", "write_empty_file", "hive_file_pattern"};
+	if (ENGINE_OPTIONS.find(name) == ENGINE_OPTIONS.end()) {
+		return;
+	}
+	if (values.size() > 1) {
+		throw InvalidInputException("Copy option %s did not expect a list as argument", name);
+	}
+	if (values.size() != 1) {
+		return;
+	}
+	if (values[0].IsNull()) {
+		throw BinderException("COPY (FORMAT %s) parameter %s cannot be NULL.", StringUtil::Upper(format), name);
+	}
+	if ((name == "filename_pattern" || name == "file_extension") && values[0].type().id() != LogicalTypeId::VARCHAR) {
+		throw BinderException("COPY (FORMAT %s) parameter %s expects a VARCHAR argument, but got %s.",
+		                      StringUtil::Upper(format), name, values[0].type());
+	}
+}
+
 void IsFormatExtensionKnown(const string &format) {
 	for (auto &file_postfixes : EXTENSION_FILE_POSTFIXES) {
 		if (format == file_postfixes.name + 1) {
@@ -417,6 +441,9 @@ BoundStatement Binder::BindCopyTo(CopyStatement &stmt, const CopyFunction &funct
 	auto original_options = stmt.info->options;
 	stmt.info->options.clear();
 	for (auto &[option_name, option_values] : original_options) {
+		if (!function.copy_options) {
+			ValidateUndeclaredCopyToOption(stmt.info->format, option_name, option_values);
+		}
 		if (option_name == "use_tmp_file") {
 			parsed_options.use_tmp_file = GetBooleanArg(context, option_values);
 		} else if (option_name == "overwrite_or_ignore" || option_name == "overwrite" || option_name == "append") {
@@ -531,7 +558,8 @@ BoundStatement Binder::BindCopyTo(CopyStatement &stmt, const CopyFunction &funct
 	if (function.copy_to_select) {
 		auto bindings = select_node.plan->GetColumnBindings();
 
-		CopyToSelectInput input = {context, stmt.info->options, {}, copy_to_type};
+		CopyToSelectInput input = {context,      stmt.info->options,     {},
+		                           copy_to_type, function.function_info, resolved_options.partition_cols};
 		input.select_list.reserve(bindings.size());
 
 		// Create column references for the select list

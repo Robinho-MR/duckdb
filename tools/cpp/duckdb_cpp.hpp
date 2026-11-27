@@ -118,9 +118,11 @@ class QueryMetricsNode;
 class FileSystem;
 class FileHandle;
 class FileOpenOptions;
+class MemoryReservation;
 class MultiFileFunction;
 class ScalarFunction;
 class AggregateFunction;
+class Operator;
 class TableFunction;
 class CopyFunction;
 class Factory;
@@ -546,10 +548,26 @@ public:
 	/// The file system this context reads and writes through. Borrowed, and valid only while the context is.
 	auto GetFileSystem() const -> FileSystem;
 
+	/// Reserves memory the caller allocates itself in the buffer manager of the database, so that it counts against
+	/// `memory_limit` and shows up as `EXTENSION` in `duckdb_memory()`. Reserve before allocating: when the bytes do
+	/// not fit, DuckDB first evicts what it can. Unstable API.
+	/// @param size The number of bytes to reserve. May be 0.
+	/// @return The reservation, which releases the bytes when destroyed. It must not outlive the database.
+	/// @throws Exception With the out of memory error code when the memory does not fit within the memory limit.
+	auto ReserveMemory(idx_t size) const -> MemoryReservation;
+
 	/// The factory values, types and data chunks are created through in this context.
 	auto GetFactory() -> Factory & {
 		return factory;
 	}
+
+	/// Opens a connection that runs in the transaction of this context, to run SQL from inside a callback, e.g. to read
+	/// a table in a bind callback. It sees the transaction's uncommitted changes and this context's temporary objects;
+	/// a failing statement invalidates the transaction as one of this context would. It cannot start, commit or roll
+	/// back a transaction, and destroying it does neither. Destroy it before the transaction ends, usually before the
+	/// callback returns: a commit while it is still open rolls the transaction back.
+	/// @throws Exception When the context has no active transaction or the transaction was aborted.
+	auto ConnectInTransaction() const -> Connection;
 
 	/// Writes a message to DuckDB's log, readable through `SELECT * FROM duckdb_logs`.
 	/// Whether the entry is recorded is up to the database's log configuration; a message it filters out is dropped
@@ -564,6 +582,30 @@ private:
 
 	Factory factory;
 	Config config;
+};
+
+/// Memory reserved with `Context::ReserveMemory`, released when the reservation is destroyed. A reservation only
+/// accounts for memory the owner allocates itself: it counts against `memory_limit` and shows up as `EXTENSION` in
+/// `duckdb_memory()`. Unstable API.
+class MemoryReservation final : public detail::Handle<MemoryReservation> {
+	friend detail::HandleFactory;
+
+public:
+	MemoryReservation(MemoryReservation &&) noexcept = default;
+	MemoryReservation &operator=(MemoryReservation &&) noexcept = default;
+
+	~MemoryReservation() override;
+
+	/// The number of bytes the reservation holds.
+	auto GetSize() const -> idx_t;
+
+	/// Grows or shrinks the reservation to `size` bytes in all. Growing can fail like `Context::ReserveMemory`, in
+	/// which case the reservation is left as it was; shrinking cannot fail.
+	/// @throws Exception With the out of memory error code when the additional memory does not fit.
+	auto Resize(idx_t size) -> void;
+
+private:
+	explicit MemoryReservation(void *impl);
 };
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -1528,6 +1570,7 @@ enum class LogicalTypeId : uint32_t {
 	HUGEINT = 50,
 	UUID = 54,
 	GEOMETRY = 60,
+	GEOGRAPHY = 61,
 	STRUCT = 100,
 	LIST = 101,
 	MAP = 102,
@@ -1585,7 +1628,7 @@ public:
 	/// - UNION one per member
 	/// - ENUM one per dictionary entry;
 	/// - VARCHAR 1 when a collation is set;
-	/// - GEOMETRY 1 when a coordinate system is set;
+	/// - GEOMETRY and GEOGRAPHY 1 when a coordinate system is set;
 	/// anything else 0.
 	auto GetParamCount() const -> idx_t;
 
@@ -3845,9 +3888,15 @@ public:
 			return *static_cast<T *>(GetUserDataInternal());
 		}
 
-		/// Resolves the declared return type; required, and only permitted, when the signature declared it as ANY.
+		/// Resolves the return type of this bound call; required when the signature declared it as ANY, and overrides
+		/// a declared concrete type otherwise.
 		/// @param type The concrete return type of this bound call.
 		auto SetReturnType(const LogicalType &type) -> void;
+
+		/// Sets the type the argument at `index` is cast to for this bound call, instead of the declared parameter
+		/// type: e.g. to take an integral argument of a VARCHAR parameter as a BIGINT. Unstable API.
+		/// @throws InvalidInputException When the index is out of bounds or the type is not concrete.
+		auto SetArgType(idx_t index, const LogicalType &type) -> void;
 
 	private:
 		ResolveTypesInput(void *args, void *result, void *context) : FunctionBindInput(args, context), result(result) {
@@ -4640,6 +4689,7 @@ class TableFunction final : public detail::Handle<TableFunction> {
 	friend detail::HandleFactory;
 	friend class Connection;
 	friend class Extension;
+	friend class MultiFileFunction;
 
 public:
 	class BindInput;
@@ -4652,6 +4702,7 @@ public:
 	class PartitioningInput;
 	class ClaimBatchInput;
 	class GetBindInfoInput;
+	class CombineSchemaInput;
 	class StatsInput;
 	class MetricsInput;
 	class ToStringInput;
@@ -4674,7 +4725,8 @@ public:
 	using InitGlobalCallback = void (*)(InitGlobalInput &input);
 	/// Called once per scanning thread, before the first `ExecCallback` on it. Optional.
 	using InitLocalCallback = void (*)(InitLocalInput &input);
-	/// Called repeatedly to produce the next batch of rows; an empty batch ends the scan. Required.
+	/// Called repeatedly to produce the next batch of rows; an empty batch ends the scan. Required, unless the function
+	/// has an operator (`SetOperator`).
 	using ExecCallback = void (*)(ExecInput &input);
 	/// Called on demand during execution to report how far the scan has advanced. Optional.
 	using ProgressCallback = void (*)(ProgressInput &input);
@@ -4698,6 +4750,14 @@ public:
 	/// identifiers, and exposes the options as the metadata of the reader of the file. May be called more than once
 	/// for the same bind data: only report what the bind already determined. Optional; unstable API.
 	using GetBindInfoCallback = void (*)(GetBindInfoInput &input);
+	/// Called when a `MultiFileFunction` wrapping the function has bound several files to sample the schema of a scan:
+	/// combines the schemas of the files into one. The callback reads the bind data of each file and can declare the
+	/// combined columns, and the bind data every file of the scan is then bound with: its bind callback finds the
+	/// combined columns and that bind data as its expected schema (`BindInput::GetExpectedColumnCount`,
+	/// `BindInput::TryGetExpectedBindData`) and reads its file accordingly instead of determining a schema of its own.
+	/// Optional; without it the columns of the files are combined by name and every file is bound on its own. Unstable
+	/// API.
+	using CombineSchemaCallback = void (*)(CombineSchemaInput &input);
 	/// Called while the query is optimized, once per declared column the query reads, to narrow that column's
 	/// statistics. Optional; without it the engine knows nothing about the columns. Unstable API.
 	using StatsCallback = void (*)(StatsInput &input);
@@ -4719,9 +4779,25 @@ public:
 		FILE_ROW_NUMBER = 0,
 	};
 
-	/// The first column index that stands for a virtual column rather than a declared one. The index the inputs'
-	/// `GetColumnIndex` reports for a virtual column is this plus its value in `VirtualColumn`.
+	/// Where the rows the operator of a table in-out function transforms come from: see `SetOperator`.
+	enum class OperatorInput : uint8_t {
+		/// The positional arguments are the input columns: a single row for constant arguments, one row per outer row
+		/// for `FROM t, f(t.x)` (LATERAL).
+		ARGUMENTS = 0,
+		/// The function takes a table argument, `f((SELECT ...))`, whose rows are the operator's input. Registration
+		/// adds the table parameter in front of the declared parameters, which must all be named.
+		TABLE = 1,
+	};
+
+	/// The first column index that stands for a virtual column rather than a declared one, 2^63. The index the inputs'
+	/// `GetColumnIndex` reports for a virtual column is this plus its value in `VirtualColumn`, or the identifier a
+	/// bind callback declared it with (`BindInput::AddVirtualColumn`).
 	static constexpr idx_t VIRTUAL_COLUMN_START = static_cast<idx_t>(1) << 63;
+	/// The identifier of a row id column, a virtual column with a meaning of its own to the engine. Unstable API.
+	static constexpr idx_t COLUMN_IDENTIFIER_ROW_ID = 0xFFFFFFFFFFFFFFFFULL;
+	/// The identifier of the empty column, a virtual column the engine requests when the query needs the rows but none
+	/// of their values, e.g. `SELECT count(*)`. Unstable API.
+	static constexpr idx_t COLUMN_IDENTIFIER_EMPTY = 0xFFFFFFFFFFFFFFFEULL;
 
 	/// Whether a column index reported by `GetColumnIndex` stands for a virtual column.
 	static auto IsVirtualColumn(idx_t column_index) -> bool {
@@ -4743,6 +4819,9 @@ public:
 
 	/// Sets the function's name, as SQL will call it.
 	auto SetName(const std::string &name) & -> TableFunction &;
+	/// How stable the function's results are within and across queries. Defaults to `VOLATILE`; declare
+	/// `CONSISTENT_WITHIN_QUERY` to let the optimizer share identical scans. Unstable API.
+	auto SetStability(FunctionStability value) & -> TableFunction &;
 	/// The documentation of this overload, borrowed for in-place mutation.
 	auto GetDocs() -> FunctionDocs;
 
@@ -4791,13 +4870,17 @@ public:
 	auto SetClaimBatchCallback(ClaimBatchCallback callback) & -> TableFunction &;
 	/// Lets the function describe what a bound call reads: see `GetBindInfoCallback`. Unstable API.
 	auto SetGetBindInfoCallback(GetBindInfoCallback callback) & -> TableFunction &;
+	/// Lets the function combine the schemas of the files a `MultiFileFunction` wrapping it sampled: see
+	/// `CombineSchemaCallback`. Unstable API.
+	auto SetCombineSchemaCallback(CombineSchemaCallback callback) & -> TableFunction &;
 	/// Lets the function narrow the statistics of the columns it produces: see `StatsCallback`. Unstable API.
 	auto SetStatsCallback(StatsCallback callback) & -> TableFunction &;
 
 	/// Declares whether the function supports projection pushdown. Defaults to false. With it, the engine asks for
 	/// only the columns a query uses: the exec callback's output chunk holds one vector per requested column, and
 	/// the init and exec inputs' `GetColumnIndex` says which declared column each vector stands for. Without it the
-	/// output chunk always holds every declared column, and the engine drops the unused ones itself.
+	/// output chunk always holds every declared column, and the engine drops the unused ones itself. The same holds
+	/// for the output chunks of an operator (`SetOperator`).
 	auto SetProjectionPushdown(bool enable) & -> TableFunction &;
 
 	/// Declares that the function can produce a virtual column, which a query asks for by name. It then takes up a
@@ -4810,6 +4893,15 @@ public:
 
 	/// Lets the function describe a bound call in query plans: see `ToStringCallback`. Unstable API.
 	auto SetToStringCallback(ToStringCallback callback) & -> TableFunction &;
+
+	/// Makes the function a table in-out function, whose rows `op` produces from an input instead of the exec
+	/// callback scanning them: e.g. `SELECT * FROM my_func((SELECT ...))` or `SELECT * FROM t, my_func(t.x)`. Where
+	/// the input comes from is set by `input`. The bind callback still declares the result columns, and can inspect
+	/// the input columns (`BindInput::GetInputColumnCount`). The operator's configuration is copied, so `op` may be
+	/// destroyed or set on other functions afterwards. Registration rejects a function with an operator that also
+	/// has scan callbacks (init, exec, progress, metrics, filter pushdown, partitioning, claim batch) or the
+	/// `file_row_number` virtual column. Unstable API.
+	auto SetOperator(Operator &op, OperatorInput input) & -> TableFunction &;
 
 private:
 	explicit TableFunction(void *impl);
@@ -4829,12 +4921,15 @@ private:
 	PartitioningCallback partitioning_callback = nullptr;
 	ClaimBatchCallback claim_batch_callback = nullptr;
 	GetBindInfoCallback get_bind_info_callback = nullptr;
+	CombineSchemaCallback combine_schema_callback = nullptr;
 	StatsCallback stats_callback = nullptr;
 	MetricsCallback metrics_callback = nullptr;
 	ToStringCallback to_string_callback = nullptr;
 	detail::UserData user_data;
 	//! The data source the function scans with, which holds the callbacks of the scan
 	std::shared_ptr<void> data_source;
+	//! Whether the function has an operator, which takes the place of the data source
+	bool has_operator = false;
 
 public:
 	/// What the bind callback works with. Borrowed, valid only for the callback duration.
@@ -4855,6 +4950,22 @@ public:
 			return *static_cast<T *>(GetUserDataInternal());
 		}
 
+		/// Declares a virtual column of this call of the function. A virtual column is not one of the columns the
+		/// function returns: it is not part of `SELECT *`, and the query asks for it by name. The function only
+		/// produces it when it is asked for, as a vector of the output chunk like any other column the scan produces,
+		/// and finds it by its identifier: the `GetColumnIndex` of the init and exec inputs, and of the operator
+		/// inputs, returns the identifier for the vectors that stand for the column. Requires projection pushdown
+		/// (`TableFunction::SetProjectionPushdown`). Unstable API.
+		/// @param identifier The identifier of the column, at least `VIRTUAL_COLUMN_START` and unique among the
+		/// virtual columns of the call. `COLUMN_IDENTIFIER_ROW_ID` and `COLUMN_IDENTIFIER_EMPTY` have a meaning of
+		/// their own to the engine; the latter, if declared, is the only column requested when the query needs the
+		/// rows but none of their values (e.g. `SELECT count(*)`), and its vector is only sized.
+		/// @param name The column's name. May be empty only for `COLUMN_IDENTIFIER_EMPTY`.
+		/// @param type The column's type. Must be a fully defined concrete type.
+		/// @throws InvalidInputException When projection pushdown is not enabled, the identifier is below
+		/// `VIRTUAL_COLUMN_START` or already declared, or the name is empty or already taken.
+		auto AddVirtualColumn(idx_t identifier, const std::string &name, const LogicalType &type) -> void;
+
 		/// Hints how many rows the scan will produce, for the optimizer. Producing a different number of rows is not
 		/// an error.
 		/// @param cardinality The estimated row count.
@@ -4868,6 +4979,39 @@ public:
 		/// @throws InvalidInputException When order is not a declared enum value.
 		auto SetOrderPreservation(OrderPreservation order) -> void;
 
+		/// The number of columns of the schema the scan expects this call to produce, 0 when it is not known upfront.
+		/// A `MultiFileFunction` wrapping the function binds it once for every file; once the schema of the scan was
+		/// determined (see `CombineSchemaCallback`) the remaining files should be read using that schema instead of
+		/// determining one of their own. Unstable API.
+		auto GetExpectedColumnCount() const -> idx_t;
+
+		/// The name of an expected column.
+		/// @throws InvalidInputException When the index is out of bounds.
+		auto GetExpectedColumnName(idx_t index) const -> std::string;
+
+		/// The type of an expected column.
+		/// @throws InvalidInputException When the index is out of bounds.
+		auto GetExpectedColumnType(idx_t index) const -> LogicalType;
+
+		/// The bind data that determined the expected schema, when it is of this function: the bind data set by a
+		/// `CombineSchemaInput::SetBindData` of this function, or the bind data of the first file of the scan.
+		/// Shared with the other binds of the scan: copy what is needed beyond the callback. Null when there is no
+		/// expected schema, or when it did not come from a bind of this function (e.g. `COPY`'s target table).
+		template <class T>
+		auto TryGetExpectedBindData() const -> const T * {
+			return static_cast<const T *>(GetExpectedBindDataInternal());
+		}
+
+		/// How many columns the input of the function's operator has (see `TableFunction::SetOperator`): the columns
+		/// of the table argument, or one per positional argument. 0 for a function without an operator.
+		auto GetInputColumnCount() const -> idx_t;
+		/// The type of the input column at `index`, known even when the argument is not constant.
+		/// @throws InvalidInputException When the index is out of bounds.
+		auto GetInputColumnType(idx_t index) const -> LogicalType;
+		/// The name of the input column at `index`.
+		/// @throws InvalidInputException When the index is out of bounds.
+		auto GetInputColumnName(idx_t index) const -> std::string;
+
 	private:
 		BindInput(void *args, void *result, void *context) : FunctionBindInput(args, context), result(result) {
 		}
@@ -4875,6 +5019,7 @@ public:
 		void *result;
 
 		void *GetUserDataInternal() const;
+		void *GetExpectedBindDataInternal() const;
 	};
 
 	/// What the global init callback works with. Borrowed, valid only for the callback duration.
@@ -5051,6 +5196,58 @@ public:
 		void *GetBindDataInternal() const;
 		void *GetGlobalStateInternal() const;
 		void *GetLocalStateInternal() const;
+		void *GetUserDataInternal() const;
+	};
+
+	/// What the metrics callback works with. Borrowed, valid only for the callback duration. Unstable API.
+	///
+	/// The callback runs when the engine collects the metrics of the scan, which can be while the scan is still
+	/// running, and possibly more than once: it adds up what it is told.
+	class MetricsInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// The bind data set via `BindInput::SetBindData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetBindData() const -> const T & {
+			return *static_cast<const T *>(GetBindDataInternal());
+		}
+
+		/// The user data set via `TableFunction::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// The global state set via `InitGlobalInput::SetGlobalState`, or nullptr when the scan has not been
+		/// initialized or set none. The scan can be running, so the state must be read in a thread-safe way.
+		template <class T>
+		auto GetGlobalState() const -> T * {
+			return static_cast<T *>(GetGlobalStateInternal());
+		}
+
+		/// Reports an operator metric of the scan by its profiler name: "operator.rows_scanned",
+		/// "operator.row_groups_scanned", "operator.total_row_groups_to_scan" or "operator.bytes_scanned". Reporting
+		/// "operator.bytes_scanned" also makes the query's total bytes scanned count this scan.
+		/// @param name The name of the metric.
+		/// @param value The value since the metrics were last collected ("operator.total_row_groups_to_scan": in all).
+		/// @throws InvalidInputException When the name is not a metric a table function can report.
+		auto SetMetric(std::string_view name, uint64_t value) -> void;
+
+		/// The query's context. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context &;
+
+	private:
+		MetricsInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+
+		void *args;
+		Context context;
+
+		void *GetBindDataInternal() const;
+		void *GetGlobalStateInternal() const;
 		void *GetUserDataInternal() const;
 	};
 
@@ -5413,6 +5610,76 @@ public:
 		void *GetUserDataInternal() const;
 	};
 
+	/// What the combine schema callback works with. Borrowed, valid only for the callback duration. Unstable API.
+	class CombineSchemaInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// The user data set via `TableFunction::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// The number of files whose schemas are combined, in the order of the scan.
+		auto GetFileCount() const -> idx_t;
+
+		/// The bind data set via `BindInput::SetBindData` when the file at `index` was bound.
+		/// @throws InvalidInputException When the index is out of bounds or the bind callback set no bind data.
+		template <class T>
+		auto GetBindData(idx_t index) const -> const T & {
+			return *static_cast<const T *>(GetBindDataInternal(index));
+		}
+
+		/// Whether the schemas are combined because the scan unifies the columns of its files by name
+		/// (`union_by_name`): the files are then expected to have different columns. Otherwise they are expected to
+		/// have the same columns, and are combined to determine the schema of the scan more accurately.
+		auto GetUnionByName() const -> bool;
+
+		/// The number of columns the schemas of the files combine to by name. The callback keeps these unless it
+		/// declares columns of its own with `AddResultColumn`.
+		auto GetCombinedColumnCount() const -> idx_t;
+
+		/// The name of a column the files combine to by name.
+		/// @throws InvalidInputException When the index is out of bounds.
+		auto GetCombinedColumnName(idx_t index) const -> std::string;
+
+		/// The type of a column the files combine to by name.
+		/// @throws InvalidInputException When the index is out of bounds.
+		auto GetCombinedColumnType(idx_t index) const -> LogicalType;
+
+		/// Declares one of the columns the files combine to; call it once per column, in order. The first call
+		/// discards the columns combined by name.
+		/// @param type Must be a fully defined concrete type; ANY is rejected.
+		auto AddResultColumn(const std::string &name, const LogicalType &type) -> void;
+
+		/// Constructs the bind data describing the combined schema. Every file of the scan is bound with it as the
+		/// expected bind data (`BindInput::TryGetExpectedBindData`), the files that were bound to combine their
+		/// schemas included. Without it, every file is bound on its own and reconciled with the combined schema by
+		/// name. The engine compares bind data by `operator==` when `T` has one, by identity otherwise.
+		template <class T, class... ARGS>
+		void SetBindData(ARGS &&...args) {
+			auto ptr = new T(std::forward<ARGS>(args)...);
+			SetBindDataInternal(ptr, detail::SelectEquals<T>(), detail::TypedDelete<T>);
+		}
+
+		/// The context of the query the files are bound for. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context &;
+
+	private:
+		CombineSchemaInput(void *args, void *context)
+		    : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+
+		void *args;
+		Context context;
+
+		void *GetBindDataInternal(idx_t index) const;
+		void *GetUserDataInternal() const;
+		void SetBindDataInternal(void *data, bool (*equals)(void *a, void *b), void (*destructor)(void *));
+	};
+
 	/// What the stats callback works with. Borrowed, valid only for the callback duration.
 	///
 	/// The column statistics start out unknown, with every kind of value possible, and describe every value the scan
@@ -5455,57 +5722,6 @@ public:
 		void *GetUserDataInternal() const;
 	};
 
-	/// What the metrics callback works with. Borrowed, valid only for the callback duration. Unstable API.
-	///
-	/// The callback runs when the engine collects the metrics of the scan, which can be while the scan is still
-	/// running, and possibly more than once: it adds up what it is told.
-	class MetricsInput {
-		friend detail::HandleFactory;
-
-	public:
-		/// The bind data set via `BindInput::SetBindData`.
-		/// @throws InvalidInputException When none was set.
-		template <class T>
-		auto GetBindData() const -> const T & {
-			return *static_cast<const T *>(GetBindDataInternal());
-		}
-
-		/// The user data set via `TableFunction::SetUserData`.
-		/// @throws InvalidInputException When none was set.
-		template <class T>
-		auto GetUserData() const -> T & {
-			return *static_cast<T *>(GetUserDataInternal());
-		}
-
-		/// The global state set via `InitGlobalInput::SetGlobalState`, or nullptr when the scan has not been
-		/// initialized or set none. The scan can be running, so the state must be read in a thread-safe way.
-		template <class T>
-		auto GetGlobalState() const -> T * {
-			return static_cast<T *>(GetGlobalStateInternal());
-		}
-
-		/// Reports an operator metric of the scan by its profiler name, e.g. "operator.row_groups_scanned" or
-		/// "operator.total_row_groups_to_scan". See `duckdb_v2_data_source_metrics_set` for the accepted names.
-		/// @param name The name of the metric.
-		/// @param value The value since the metrics were last collected ("operator.total_row_groups_to_scan": in all).
-		/// @throws InvalidInputException When the name is not a metric a table function can report.
-		auto SetMetric(std::string_view name, uint64_t value) -> void;
-
-		/// The query's context. Borrowed, valid only for the callback duration.
-		auto GetContext() -> Context &;
-
-	private:
-		MetricsInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
-		}
-
-		void *args;
-		Context context;
-
-		void *GetBindDataInternal() const;
-		void *GetGlobalStateInternal() const;
-		void *GetUserDataInternal() const;
-	};
-
 	/// What the to string callback works with. Borrowed, valid only for the callback duration. Unstable API.
 	class ToStringInput {
 		friend detail::HandleFactory;
@@ -5537,6 +5753,371 @@ public:
 		void *args;
 
 		void *GetBindDataInternal() const;
+		void *GetUserDataInternal() const;
+	};
+};
+
+//----------------------------------------------------------------------------------------------------------------------
+// Operator
+//----------------------------------------------------------------------------------------------------------------------
+
+/// A custom streaming operator: it receives its input as a stream of chunks and turns each into chunks of output.
+/// Hand it to `TableFunction::SetOperator` to make a table in-out function. Unstable API.
+///
+/// The engine may run an operator on several threads at once: the init global callback sets up the state every thread
+/// shares, the init local callback the state of one thread. The execute callback is then invoked with each input
+/// chunk, writes rows into the output chunk and reports what it needs next (`ExecuteInput::SetResult`). The optional
+/// finalize callback flushes held-back rows once a thread's input is exhausted. The callbacks reach the bind data of
+/// the call the operator runs for (e.g. set by `TableFunction::BindInput::SetBindData`).
+class Operator final : public detail::Handle<Operator> {
+	friend detail::HandleFactory;
+	friend class TableFunction;
+
+public:
+	class InitGlobalInput;
+	class InitLocalInput;
+	class ExecuteInput;
+	class FinalizeInput;
+	class ProgressInput;
+
+	/// What the execute callback reports about the input chunk it was given.
+	enum class Result : uint8_t {
+		/// Done with the input chunk: the callback is invoked with the next one. The default.
+		NEED_MORE_INPUT = 0,
+		/// The output chunk is full but the input chunk is not done: the callback is invoked again with the same input.
+		HAVE_MORE_OUTPUT = 1,
+		/// The operator needs no more input at all: the engine stops feeding it, and calls the finalize callback.
+		FINISHED = 2,
+	};
+
+	/// Called once per run of the operator, before the first execute callback. Optional.
+	using InitGlobalCallback = void (*)(InitGlobalInput &input);
+	/// Called once per thread running the operator, before the first execute callback on it. Optional.
+	using InitLocalCallback = void (*)(InitLocalInput &input);
+	/// Called with each input chunk, possibly more than once (see `Result`). Required.
+	using ExecuteCallback = void (*)(ExecuteInput &input);
+	/// Called once a thread's input is exhausted, again while it reports more output. Optional.
+	using FinalizeCallback = void (*)(FinalizeInput &input);
+	/// Called on demand while the operator runs as the source of its part of the query, to report its progress.
+	/// Optional.
+	using ProgressCallback = void (*)(ProgressInput &input);
+
+	Operator(Operator &&) noexcept = default;
+	Operator &operator=(Operator &&) noexcept = default;
+
+	~Operator() override;
+
+	/// Creates an operator without callbacks through `factory`.
+	static auto Create(Factory &factory) -> Operator;
+
+	/// Constructs user data of type `T`, readable from every callback via the inputs' `GetUserData<T>`. Shared by every
+	/// function the operator is set on, and freed with the last of them.
+	template <class T, class... ARGS>
+	auto SetUserData(ARGS &&...args) & -> Operator & {
+		auto ptr = new T(std::forward<ARGS>(args)...);
+		SetUserDataInternal(ptr, detail::TypedDelete<T>);
+		return *this;
+	}
+
+	auto SetInitGlobalCallback(InitGlobalCallback callback) & -> Operator &;
+	auto SetInitLocalCallback(InitLocalCallback callback) & -> Operator &;
+	auto SetExecuteCallback(ExecuteCallback callback) & -> Operator &;
+	auto SetFinalizeCallback(FinalizeCallback callback) & -> Operator &;
+	auto SetProgressCallback(ProgressCallback callback) & -> Operator &;
+
+private:
+	explicit Operator(void *impl);
+	//! Moves what the callbacks need into the C handle, right before the operator is set on a function
+	auto PrepareUse() -> void;
+	auto SetUserDataInternal(void *data, void (*destructor)(void *)) -> void;
+
+	InitGlobalCallback init_global_callback = nullptr;
+	InitLocalCallback init_local_callback = nullptr;
+	ExecuteCallback execute_callback = nullptr;
+	FinalizeCallback finalize_callback = nullptr;
+	ProgressCallback progress_callback = nullptr;
+	std::shared_ptr<detail::UserData> user_data;
+
+public:
+	/// What the init global callback works with. Borrowed, valid only for the callback duration.
+	class InitGlobalInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// Constructs global state of type `T`, shared by every thread running the operator. Access must be
+		/// synchronized.
+		template <class T, class... ARGS>
+		void SetGlobalState(ARGS &&...args) {
+			auto ptr = new T(std::forward<ARGS>(args)...);
+			SetGlobalStateInternal(ptr, detail::TypedDelete<T>);
+		}
+
+		/// The bind data of the call the operator runs for.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetBindData() const -> const T & {
+			return *static_cast<const T *>(GetBindDataInternal());
+		}
+
+		/// The user data set via `Operator::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// Caps how many threads may run the operator in parallel. Defaults to no cap. Ignored when the operator runs
+		/// on constant arguments, which a single thread handles.
+		auto SetMaxThreads(idx_t max_threads) -> void;
+
+		/// How many columns the operator produces: with projection pushdown the columns the query uses, which is the
+		/// number of vectors in the output chunks; without it, the columns declared in bind.
+		auto GetColumnCount() const -> idx_t;
+		/// Which declared column (in `AddResultColumn` order) the operator's column at `index` stands for, or the
+		/// identifier of a virtual column. The identity without projection pushdown.
+		/// @throws InvalidInputException When the index is out of bounds.
+		auto GetColumnIndex(idx_t index) const -> idx_t;
+
+		/// The context of the query. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context &;
+
+	private:
+		InitGlobalInput(void *args, void *context)
+		    : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+
+		void *args;
+		Context context;
+
+		void SetGlobalStateInternal(void *data, void (*destructor)(void *));
+		void *GetBindDataInternal() const;
+		void *GetUserDataInternal() const;
+	};
+
+	/// What the init local callback works with. Borrowed, valid only for the callback duration.
+	class InitLocalInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// Constructs local state of type `T`, owned by this thread.
+		template <class T, class... ARGS>
+		void SetLocalState(ARGS &&...args) {
+			auto ptr = new T(std::forward<ARGS>(args)...);
+			SetLocalStateInternal(ptr, detail::TypedDelete<T>);
+		}
+
+		/// The bind data of the call the operator runs for.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetBindData() const -> const T & {
+			return *static_cast<const T *>(GetBindDataInternal());
+		}
+
+		/// The global state set via `InitGlobalInput::SetGlobalState`. Access must be synchronized.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetGlobalState() const -> T & {
+			return *static_cast<T *>(GetGlobalStateInternal());
+		}
+
+		/// The user data set via `Operator::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// How many columns the operator produces; see `InitGlobalInput::GetColumnCount`.
+		auto GetColumnCount() const -> idx_t;
+		/// Which column the operator's column at `index` stands for; see `InitGlobalInput::GetColumnIndex`.
+		auto GetColumnIndex(idx_t index) const -> idx_t;
+
+		/// The context of the query. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context &;
+
+	private:
+		InitLocalInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+
+		void *args;
+		Context context;
+
+		void SetLocalStateInternal(void *data, void (*destructor)(void *));
+		void *GetBindDataInternal() const;
+		void *GetGlobalStateInternal() const;
+		void *GetUserDataInternal() const;
+	};
+
+	/// What the execute callback works with. Borrowed, valid only for the callback duration.
+	class ExecuteInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// The bind data of the call the operator runs for.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetBindData() const -> const T & {
+			return *static_cast<const T *>(GetBindDataInternal());
+		}
+
+		/// The global state set via `InitGlobalInput::SetGlobalState`. Access must be synchronized.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetGlobalState() const -> T & {
+			return *static_cast<T *>(GetGlobalStateInternal());
+		}
+
+		/// The local state set via `InitLocalInput::SetLocalState`, private to this thread.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetLocalState() const -> T & {
+			return *static_cast<T *>(GetLocalStateInternal());
+		}
+
+		/// The user data set via `Operator::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// The input chunk, the same one again after `Result::HAVE_MORE_OUTPUT`. Its row count is the size of its
+		/// first vector; a call without arguments has one row without columns.
+		/// @return A borrowed chunk, valid only for the callback duration.
+		auto GetInputChunk() const -> DataChunk;
+		/// The chunk to write the output rows into, empty on every invocation. Give it its row count with
+		/// `Vector::SetSize` on its first vector; writing more rows than its capacity is an error.
+		/// @return A borrowed chunk, valid only for the callback duration.
+		auto GetOutputChunk() const -> DataChunk;
+
+		/// How many vectors the output chunk holds; see `InitGlobalInput::GetColumnCount`.
+		auto GetColumnCount() const -> idx_t;
+		/// Which column the output chunk's vector at `index` must be filled with; see
+		/// `InitGlobalInput::GetColumnIndex`.
+		auto GetColumnIndex(idx_t index) const -> idx_t;
+
+		/// Reports what the operator needs next. Defaults to `Result::NEED_MORE_INPUT`.
+		auto SetResult(Result result) -> void;
+
+		/// The context of the query. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context &;
+
+	private:
+		ExecuteInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+
+		void *args;
+		Context context;
+
+		void *GetBindDataInternal() const;
+		void *GetGlobalStateInternal() const;
+		void *GetLocalStateInternal() const;
+		void *GetUserDataInternal() const;
+	};
+
+	/// What the finalize callback works with. Borrowed, valid only for the callback duration.
+	class FinalizeInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// The bind data of the call the operator runs for.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetBindData() const -> const T & {
+			return *static_cast<const T *>(GetBindDataInternal());
+		}
+
+		/// The global state set via `InitGlobalInput::SetGlobalState`. Access must be synchronized.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetGlobalState() const -> T & {
+			return *static_cast<T *>(GetGlobalStateInternal());
+		}
+
+		/// The local state set via `InitLocalInput::SetLocalState`, private to this thread.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetLocalState() const -> T & {
+			return *static_cast<T *>(GetLocalStateInternal());
+		}
+
+		/// The user data set via `Operator::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// The chunk to write the held-back rows into; see `ExecuteInput::GetOutputChunk`.
+		auto GetOutputChunk() const -> DataChunk;
+
+		/// How many vectors the output chunk holds; see `InitGlobalInput::GetColumnCount`.
+		auto GetColumnCount() const -> idx_t;
+		/// Which column the output chunk's vector at `index` must be filled with; see
+		/// `InitGlobalInput::GetColumnIndex`.
+		auto GetColumnIndex(idx_t index) const -> idx_t;
+
+		/// Reports that there is more output: the callback is invoked again. Defaults to false.
+		auto SetHaveMoreOutput(bool have_more_output) -> void;
+
+		/// The context of the query. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context &;
+
+	private:
+		FinalizeInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+
+		void *args;
+		Context context;
+
+		void *GetBindDataInternal() const;
+		void *GetGlobalStateInternal() const;
+		void *GetLocalStateInternal() const;
+		void *GetUserDataInternal() const;
+	};
+
+	/// What the progress callback works with. Borrowed, valid only for the callback duration.
+	class ProgressInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// The bind data of the call the operator runs for.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetBindData() const -> const T & {
+			return *static_cast<const T *>(GetBindDataInternal());
+		}
+
+		/// The global state set via `InitGlobalInput::SetGlobalState`, or nullptr when there is none yet. The operator
+		/// runs concurrently, so the state must be read in a thread-safe way.
+		template <class T>
+		auto TryGetGlobalState() const -> T * {
+			return static_cast<T *>(TryGetGlobalStateInternal());
+		}
+
+		/// The user data set via `Operator::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// Reports how far the operator has advanced, as a fraction between 0.0 and 1.0; values outside that range
+		/// are clamped.
+		auto SetProgress(double progress) -> void;
+
+		/// The context of the query. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context &;
+
+	private:
+		ProgressInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+
+		void *args;
+		Context context;
+
+		void *GetBindDataInternal() const;
+		void *TryGetGlobalStateInternal() const;
 		void *GetUserDataInternal() const;
 	};
 };
@@ -5581,6 +6162,9 @@ public:
 
 	/// Sets the name of the registered table function that reads a single file.
 	auto SetSingleFileFunction(const std::string &name) & -> MultiFileFunction &;
+	/// Sets the table function that reads a single file without registering it: it is not callable from SQL on its
+	/// own. Its configuration is copied, user data included (set it again before reusing `function`). Unstable API.
+	auto SetSingleFileFunction(TableFunction &function) & -> MultiFileFunction &;
 
 	/// Sets how the files are referred to in messages, e.g. "Avro". Defaults to the name of the function.
 	auto SetReaderType(const std::string &reader_type) & -> MultiFileFunction &;
@@ -5588,6 +6172,18 @@ public:
 	/// Sets the extension of the files the function reads, without a leading dot, e.g. "avro". A path naming a
 	/// directory then reads the files with that extension inside it.
 	auto SetFileExtension(const std::string &extension) & -> MultiFileFunction &;
+
+	/// Sets how many files are sampled by default to determine the schema of a scan. Defaults to 1. The single-file
+	/// function is bound for each of the sampled files and, when it has a combine schema callback
+	/// (`TableFunction::SetCombineSchemaCallback`), their schemas are combined with it. The maximum `idx_t` samples
+	/// all files. Unstable API.
+	/// @throws InvalidInputException When the count is 0.
+	auto SetMaximumSampleFiles(idx_t count) & -> MultiFileFunction &;
+
+	/// Sets the name of the named parameter of the single-file function that sets how many files are sampled in a
+	/// call, e.g. "maximum_sample_files" (-1 samples all files). The parameter is still forwarded to the single-file
+	/// function. Unstable API.
+	auto SetSampleFilesParameter(const std::string &name) & -> MultiFileFunction &;
 
 private:
 	explicit MultiFileFunction(void *impl);
@@ -5669,11 +6265,14 @@ public:
 	class CopyToFlushInput;
 	class CopyToFinalizeInput;
 	class CopyToStatisticsInput;
+	class CopyToSelectInput;
+	class CopyToFileSizeInput;
 	class CopyFromBindInput;
 	class CopyFromInitGlobalInput;
 	class CopyFromInitLocalInput;
 	class CopyFromExecInput;
 	class CopyFromProgressInput;
+	class CopyFromPartitionDataInput;
 
 	/// Called once per `COPY ... TO` statement while it is bound. Optional.
 	using CopyToBindCallback = void (*)(CopyToBindInput &input);
@@ -5692,6 +6291,13 @@ public:
 	/// Called once per output file after its finalize callback, to report the statistics of the written file when the
 	/// statement asks for them (`RETURN_STATS`). Optional: without it, `RETURN_STATS` is rejected. Unstable API.
 	using CopyToStatisticsCallback = void (*)(CopyToStatisticsInput &input);
+	/// Called once per `COPY ... TO` statement before the bind callback, to have the engine apply scalar functions to
+	/// columns before the rows are partitioned (see `CopyToSelectInput::ApplyFunction`). Optional. Unstable API.
+	using CopyToSelectCallback = void (*)(CopyToSelectInput &input);
+	/// Called after a batch is flushed to report the current size of the file being written, which lets the engine
+	/// rotate files for `FILE_SIZE_BYTES`; must call `SetFileSize`. Optional: without it, `FILE_SIZE_BYTES` is
+	/// rejected. Unstable API.
+	using CopyToFileSizeCallback = void (*)(CopyToFileSizeInput &input);
 
 	/// Called once per `COPY ... FROM` statement while it is bound. Required for the side.
 	using CopyFromBindCallback = void (*)(CopyFromBindInput &input);
@@ -5703,6 +6309,10 @@ public:
 	using CopyFromExecCallback = void (*)(CopyFromExecInput &input);
 	/// Called on demand during execution to report progress. Optional.
 	using CopyFromProgressCallback = void (*)(CopyFromProgressInput &input);
+	/// Called after every batch the exec callback produces, on the thread that produced it, to report the batch's
+	/// position in the file(s), so that several threads can read while the rows keep their order. Optional; without
+	/// it the read runs on one thread when the insertion order is preserved. Unstable API.
+	using CopyFromPartitionDataCallback = void (*)(CopyFromPartitionDataInput &input);
 
 	CopyFunction(CopyFunction &&) noexcept = default;
 	CopyFunction &operator=(CopyFunction &&) noexcept = default;
@@ -5738,12 +6348,15 @@ public:
 	auto SetCopyToFlushCallback(CopyToFlushCallback callback) & -> CopyFunction &;
 	auto SetCopyToFinalizeCallback(CopyToFinalizeCallback callback) & -> CopyFunction &;
 	auto SetCopyToStatisticsCallback(CopyToStatisticsCallback callback) & -> CopyFunction &;
+	auto SetCopyToSelectCallback(CopyToSelectCallback callback) & -> CopyFunction &;
+	auto SetCopyToFileSizeCallback(CopyToFileSizeCallback callback) & -> CopyFunction &;
 
 	auto SetCopyFromBindCallback(CopyFromBindCallback callback) & -> CopyFunction &;
 	auto SetCopyFromInitGlobalCallback(CopyFromInitGlobalCallback callback) & -> CopyFunction &;
 	auto SetCopyFromInitLocalCallback(CopyFromInitLocalCallback callback) & -> CopyFunction &;
 	auto SetCopyFromExecCallback(CopyFromExecCallback callback) & -> CopyFunction &;
 	auto SetCopyFromProgressCallback(CopyFromProgressCallback callback) & -> CopyFunction &;
+	auto SetCopyFromPartitionDataCallback(CopyFromPartitionDataCallback callback) & -> CopyFunction &;
 
 private:
 	explicit CopyFunction(void *impl);
@@ -5761,11 +6374,14 @@ private:
 	CopyToFlushCallback copy_to_flush_callback = nullptr;
 	CopyToFinalizeCallback copy_to_finalize_callback = nullptr;
 	CopyToStatisticsCallback copy_to_statistics_callback = nullptr;
+	CopyToSelectCallback copy_to_select_callback = nullptr;
+	CopyToFileSizeCallback copy_to_file_size_callback = nullptr;
 	CopyFromBindCallback copy_from_bind_callback = nullptr;
 	CopyFromInitGlobalCallback copy_from_init_global_callback = nullptr;
 	CopyFromInitLocalCallback copy_from_init_local_callback = nullptr;
 	CopyFromExecCallback copy_from_exec_callback = nullptr;
 	CopyFromProgressCallback copy_from_progress_callback = nullptr;
+	CopyFromPartitionDataCallback copy_from_partition_data_callback = nullptr;
 	detail::UserData user_data;
 	//! The data source the COPY FROM side scans with, which holds the callbacks of the scan
 	std::shared_ptr<void> data_source;
@@ -6127,6 +6743,115 @@ public:
 		void *GetUserDataInternal() const;
 	};
 
+	/// What the `COPY ... TO` select callback works with. Borrowed, valid only for the callback duration. Unstable API.
+	class CopyToSelectInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// The user data set via `CopyFunction::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// How many columns the copied query has, before any function is applied. Includes the `PARTITION_BY`
+		/// columns. Valid indices for `GetColumnName` and `GetColumnType` are [0, GetColumnCount()).
+		auto GetColumnCount() const -> idx_t;
+
+		/// One column's name.
+		/// @throws InvalidInputException When the index is out of range.
+		auto GetColumnName(idx_t index) const -> std::string;
+
+		/// One column's type.
+		/// @throws InvalidInputException When the index is out of range.
+		auto GetColumnType(idx_t index) const -> LogicalType;
+
+		/// Whether the column is one of the statement's `PARTITION_BY` columns.
+		/// @throws InvalidInputException When the index is out of range.
+		auto IsPartitionColumn(idx_t index) const -> bool;
+
+		/// How many options the statement passed to the function, ordered by name.
+		auto GetOptionCount() const -> idx_t;
+
+		/// One option's name, a SQL identifier matched case-insensitively.
+		/// @throws InvalidInputException When the index is out of range.
+		auto GetOptionName(idx_t index) const -> std::string;
+
+		/// One option's value, as in `CopyToBindInput::GetOptionValue`.
+		/// @throws InvalidInputException When the index is out of range.
+		auto GetOptionValue(idx_t index) const -> Value;
+
+		/// Has the engine replace a column with the result of the scalar function `function` called with the column
+		/// followed by the constant `arguments`, as in `SELECT function(column, arguments...) AS column`. The function
+		/// is looked up in the default schema, overload resolution is as in SQL. The replacement happens before the
+		/// rows are partitioned and before the bind callback, which then sees the new column type; with
+		/// `PARTITION_BY`, the partition directories are named after the new values. A second call for the same
+		/// column replaces the first.
+		/// @throws InvalidInputException When the column index is out of range.
+		auto ApplyFunction(idx_t column_index, const std::string &function, const std::vector<Value> &arguments = {})
+		    -> void;
+
+		/// The binding context. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context &;
+
+	private:
+		CopyToSelectInput(void *args, void *context)
+		    : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+
+		void *args;
+		Context context;
+
+		void *GetUserDataInternal() const;
+	};
+
+	/// What the `COPY ... TO` file size callback works with. Borrowed, valid only for the callback duration. Unstable
+	/// API.
+	class CopyToFileSizeInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// The bind data set via `CopyToBindInput::SetBindData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetBindData() const -> const T & {
+			return *static_cast<const T *>(GetBindDataInternal());
+		}
+
+		/// The init data set via `CopyToInitInput::SetInitData` for the file being measured.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetInitData() const -> T & {
+			return *static_cast<T *>(GetInitDataInternal());
+		}
+
+		/// The user data set via `CopyFunction::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// Reports how many bytes the file holds so far. Reported as 0 when not set.
+		auto SetFileSize(idx_t file_size_bytes) -> void;
+
+		/// The query context. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context &;
+
+	private:
+		CopyToFileSizeInput(void *args, void *context)
+		    : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+
+		void *args;
+		Context context;
+
+		void *GetBindDataInternal() const;
+		void *GetInitDataInternal() const;
+		void *GetUserDataInternal() const;
+	};
+
 	/// What the `COPY ... FROM` bind callback works with. Borrowed, valid only for the callback duration.
 	class CopyFromBindInput {
 		friend detail::HandleFactory;
@@ -6408,6 +7133,62 @@ public:
 		void *GetGlobalStateInternal() const;
 		void *GetUserDataInternal() const;
 	};
+
+	/// What the partition data callback works with. Borrowed, valid only for the callback duration. Unstable API.
+	///
+	/// The callback must report a batch index on every call with `SetBatchIndex`. Within one thread the index must not
+	/// decrease, and no two batches of the read may share one.
+	class CopyFromPartitionDataInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// The bind data set via `CopyFromBindInput::SetBindData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetBindData() const -> const T & {
+			return *static_cast<const T *>(GetBindDataInternal());
+		}
+
+		/// The global state set via `CopyFromInitGlobalInput::SetGlobalState`. Access must be synchronized.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetGlobalState() const -> T & {
+			return *static_cast<T *>(GetGlobalStateInternal());
+		}
+
+		/// The local state set via `CopyFromInitLocalInput::SetLocalState` of the thread that produced the batch.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetLocalState() const -> T & {
+			return *static_cast<T *>(GetLocalStateInternal());
+		}
+
+		/// The user data set via `CopyFunction::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// Reports the position of the batch the exec callback just produced among all batches of the read.
+		auto SetBatchIndex(idx_t batch_index) -> void;
+
+		/// The execution context. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context &;
+
+	private:
+		CopyFromPartitionDataInput(void *args, void *context)
+		    : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+
+		void *args;
+		Context context;
+
+		void *GetBindDataInternal() const;
+		void *GetGlobalStateInternal() const;
+		void *GetLocalStateInternal() const;
+		void *GetUserDataInternal() const;
+	};
 };
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -6421,6 +7202,26 @@ enum class CastMode : uint8_t {
 	/// A "try" cast (SQL TRY_CAST). The rows the callback could not convert should be left NULL in the output; an
 	/// exception thrown anyway is swallowed and those rows stay NULL.
 	TRY = 1,
+};
+
+/// A kind of parameterized type that a cast can be registered for as a whole, see `CastFunction::SetSourceKind`.
+enum class CastWildcardKind : uint8_t {
+	/// Every DECIMAL, whatever its width and scale.
+	DECIMAL = 0,
+	/// Every ENUM, whatever its entries.
+	ENUM = 1,
+	/// Every LIST, whatever its child type.
+	LIST = 2,
+	/// Every named STRUCT, whatever its fields.
+	STRUCT = 3,
+	/// Every unnamed struct, whatever its fields.
+	TUPLE = 4,
+	/// Every MAP, whatever its key and value types.
+	MAP = 5,
+	/// Every UNION, whatever its members.
+	UNION = 6,
+	/// Every ARRAY, whatever its child type and size.
+	ARRAY = 7,
 };
 
 /// A user-defined cast between two types, built up with the setters and made live with `Connection::Register` or
@@ -6455,8 +7256,17 @@ public:
 	/// Sets the type the cast converts from. Must be a fully defined concrete type.
 	auto SetSourceType(const LogicalType &type) & -> CastFunction &;
 
+	/// Sets the cast to convert from every type of one kind, whatever its parameters. A cast registered for exactly
+	/// the requested type wins over the wildcard. The exec callback sees the concrete input vector. Replaces a
+	/// previous source type, and is replaced by a later `SetSourceType`.
+	auto SetSourceKind(CastWildcardKind kind) & -> CastFunction &;
+
 	/// Sets the type the cast converts to. Must be a fully defined concrete type.
 	auto SetTargetType(const LogicalType &type) & -> CastFunction &;
+
+	/// Sets the cast to convert to every type of one kind, whatever its parameters: the target-side twin of
+	/// `SetSourceKind`. The exec callback writes into an output vector of the concrete requested type.
+	auto SetTargetKind(CastWildcardKind kind) & -> CastFunction &;
 
 	/// Sets what it costs to apply this cast implicitly. The binder uses the cost to choose between candidate
 	/// implicit casts: a lower non-negative cost makes this cast more likely to be picked. Built-in widening casts
@@ -6722,6 +7532,12 @@ public:
 		return *this;
 	}
 
+	/// Completes the current overload (its signature and body) and starts a new, empty one: a macro can have several
+	/// overloads, told apart by the number and types of their parameters. Registration registers all of them.
+	/// Unstable API.
+	/// @throws InvalidInputException When the current overload has no body or an invalid signature.
+	auto AddOverload() & -> MacroFunction &;
+
 private:
 	explicit MacroFunction(void *impl);
 };
@@ -6902,6 +7718,19 @@ enum class FileFlags : uint8_t {
 	EXTERNAL_FILE_CACHE = 8,
 };
 
+/// How the contents of a file are compressed, as set with `FileOpenOptions::SetCompression`.
+enum class FileCompression : uint8_t {
+	/// Determine the compression from the extension of the file (e.g. `.gz`, `.zst`). A file without such an
+	/// extension is read and written as it is, whatever its contents.
+	AUTO_DETECT = 0,
+	/// The file is not compressed, whatever its name. This is what a file opened without a compression gets.
+	NONE = 1,
+	/// The file is gzip compressed.
+	GZIP = 2,
+	/// The file is Zstandard compressed. The implementation is provided by the `parquet` extension.
+	ZSTD = 3,
+};
+
 /// An open file, obtained from `FileSystem::OpenFile`. Closes on destruction.
 /// Only usable while the `FileSystem` it came from is still valid.
 class FileHandle final : public detail::Handle<FileHandle> {
@@ -6927,6 +7756,11 @@ public:
 
 	/// The current read/write position, as a byte offset from the start of the file.
 	auto Tell() const -> idx_t;
+
+	/// How many bytes of the stored file the reads have consumed so far. For a compressed file that is the number of
+	/// compressed bytes read from the underlying file (`Tell` can fail on a compressed file); for any other file it is
+	/// the same as `Tell`. Unstable API.
+	auto GetProgress() const -> idx_t;
 
 	/// The total size of the file in bytes.
 	auto Size() const -> idx_t;
@@ -6977,6 +7811,17 @@ public:
 	/// Attaches a named value, a hint for whichever file system ends up handling the path. What a name means is that
 	/// file system's business, and one it does not recognize is ignored. Setting the same name again replaces it.
 	auto SetValue(std::string_view name, const Value &value) & -> FileOpenOptions &;
+
+	/// Sets the compression of the files opened with the options, for reading as well as for writing: the engine
+	/// decompresses what is read and compresses what is written. Without it files are opened with
+	/// `FileCompression::NONE`. A compressed file can only be read and written sequentially, so `FileHandle::ReadAt`,
+	/// `FileHandle::WriteAt` and `FileHandle::Seek` can fail on it. Unstable API.
+	/// @throws InvalidInputException When the value is not a `FileCompression`.
+	auto SetCompression(FileCompression compression) & -> FileOpenOptions &;
+	/// Sets the compression by its name, as SQL options like `COMPRESSION` take it: `auto`, `none`, `gzip`, `zstd` or
+	/// a compression an extension provides. Opening a file with a compression that is not available fails. Unstable
+	/// API.
+	auto SetCompression(std::string_view name) & -> FileOpenOptions &;
 
 	/// Attaches the options a file is specified with, as table functions that read files take it: a STRUCT holding
 	/// the path of the file in its `filename` field, and an option to open the file with in every other field - e.g.

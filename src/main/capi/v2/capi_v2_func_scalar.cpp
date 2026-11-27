@@ -155,7 +155,8 @@ static auto CV2ScalarResolveTypes(ResolveScalarFunctionTypesInput &input) -> voi
 
 	CV2ErrorInfo err = {};
 	auto err_ptr = Convert(&err);
-	CV2CallbackContext callback_context(input.GetClientContext());
+	const auto decimal_width_limit = input.GetDecimalWidthLimit();
+	CV2CallbackContext callback_context(input.GetClientContext(), decimal_width_limit);
 	info.resolve_types_cb(Convert(&bind_info), Convert(&result_info), Convert(&callback_context), &err_ptr);
 
 	if (err.HasError()) {
@@ -173,7 +174,8 @@ static auto CV2ScalarBind(BindScalarFunctionInput &input) -> unique_ptr<Function
 
 	CV2ErrorInfo err = {};
 	auto err_ptr = Convert(&err);
-	CV2CallbackContext callback_context(input.GetClientContext());
+	const auto decimal_width_limit = input.GetDecimalWidthLimit();
+	CV2CallbackContext callback_context(input.GetClientContext(), decimal_width_limit);
 	info.bind_cb(Convert(&bind_info), Convert(&result_info), Convert(&callback_context), &err_ptr);
 
 	unique_ptr<FunctionData> result = nullptr;
@@ -202,7 +204,7 @@ static auto CV2ScalarInit(ExpressionState &state, const BoundFunctionExpression 
 
 	CV2ErrorInfo err = {};
 	auto err_ptr = Convert(&err);
-	CV2CallbackContext callback_context(state.GetClientContext());
+	CV2CallbackContext callback_context(state.GetContext());
 	info.init_cb(Convert(&args), Convert(&callback_context), &err_ptr);
 
 	unique_ptr<FunctionLocalState> result = nullptr;
@@ -246,7 +248,7 @@ static auto CV2ScalarExec(DataChunk &input, ExpressionState &state, Vector &resu
 	CV2ErrorInfo err = {};
 	auto err_ptr = Convert(&err);
 
-	CV2CallbackContext callback_context(state.GetClientContext());
+	CV2CallbackContext callback_context(state.GetContext());
 	info.exec_cb(Convert(&args), Convert(&callback_context), &err_ptr);
 
 	if (err.HasError()) {
@@ -503,6 +505,26 @@ duckdb_v2_scalar_function_resolve_types_set_return_type(duckdb_v2_scalar_functio
 	return WithErrorHandler(err, [&]() {
 		auto type = Convert(return_type);
 		Convert(info)->bound_function.SetReturnType(*type);
+	});
+}
+
+DUCKDB_V2_ERROR
+duckdb_v2_scalar_function_resolve_types_set_arg_type(duckdb_v2_scalar_function_resolve_types_info_handle info,
+                                                     idx_t index, duckdb_v2_logical_type_handle type,
+                                                     duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(type);
+	return WithErrorHandler(err, [&]() {
+		auto &arguments = Convert(info)->bound_function.GetArguments();
+		if (index >= arguments.size()) {
+			throw duckdb::InvalidInputException(
+			    "Index out of bounds in duckdb_v2_scalar_function_resolve_types_set_arg_type");
+		}
+		auto arg_type = Convert(type);
+		if (!arg_type->IsComplete()) {
+			throw duckdb::InvalidInputException("Argument type must be a fully defined concrete type");
+		}
+		arguments[index] = *arg_type;
 	});
 }
 

@@ -15,27 +15,52 @@ public:
 	CV2MacroFunction(DatabaseInstance &db, MacroType type) : db(db), type(type) {
 	}
 
-	//! Validates the configuration and builds the macro to register on `target`.
+	//! Validates the configuration and builds the macro to register on `target`, with every overload.
 	unique_ptr<CreateMacroInfo> Build(DatabaseInstance &target) {
 		CheckRegistrationTarget(db, target, "macro function");
 		if (name.empty()) {
 			throw InvalidInputException("Function name cannot be empty.");
 		}
-		if (body.empty()) {
+		auto catalog_type = type == MacroType::TABLE_MACRO ? CatalogType::TABLE_MACRO_ENTRY : CatalogType::MACRO_ENTRY;
+		auto info = make_uniq<CreateMacroInfo>(catalog_type);
+		for (auto &overload : overloads) {
+			AddMacro(overload.first, overload.second, *info);
+		}
+		AddMacro(signature, body, *info);
+		info->SetQualifiedName(QualifiedName(Identifier::InvalidCatalog(), Identifier::DefaultSchema(), name));
+		info->internal = true;
+		return info;
+	}
+
+	//! Completes the current overload and starts a new one, without parameters and body
+	void AddOverload() {
+		CheckOverload(signature, body);
+		overloads.emplace_back(std::move(signature), std::move(body));
+		signature = FunctionSignature();
+		body.clear();
+	}
+
+private:
+	void CheckOverload(FunctionSignature &overload_signature, const string &overload_body) const {
+		if (overload_body.empty()) {
 			throw InvalidInputException("A body must be set for the macro function.");
 		}
-		if (signature.GetReturnType().id() != LogicalTypeId::INVALID) {
+		if (overload_signature.GetReturnType().id() != LogicalTypeId::INVALID) {
 			throw InvalidInputException(
 			    "A macro function signature cannot set a return type: the result follows from the body.");
 		}
-		if (signature.GetTypedKwargs()) {
+		if (overload_signature.GetTypedKwargs()) {
 			throw InvalidInputException("A macro function cannot have variadic parameters.");
 		}
-		signature.Verify();
+		overload_signature.Verify();
+	}
 
-		auto macro = ParseBody();
-		for (idx_t i = 0; i < signature.GetParameterCount(); i++) {
-			auto &parameter = signature.GetParameter(i);
+	//! Adds the overload with the signature and body to the macro
+	void AddMacro(FunctionSignature &overload_signature, const string &overload_body, CreateMacroInfo &info) const {
+		CheckOverload(overload_signature, overload_body);
+		auto macro = ParseBody(overload_body);
+		for (idx_t i = 0; i < overload_signature.GetParameterCount(); i++) {
+			auto &parameter = overload_signature.GetParameter(i);
 			switch (parameter.GetKind()) {
 			case FunctionParameterKind::STANDARD:
 				break;
@@ -65,15 +90,9 @@ public:
 			macro->parameters.push_back(make_uniq<ColumnRefExpression>(parameter_name));
 			macro->types.push_back(std::move(parameter_type));
 		}
-
-		auto catalog_type = type == MacroType::TABLE_MACRO ? CatalogType::TABLE_MACRO_ENTRY : CatalogType::MACRO_ENTRY;
 		auto parameter_types = macro->types;
-		auto info = make_uniq<CreateMacroInfo>(catalog_type);
-		info->macros.push_back(std::move(macro));
-		info->SetQualifiedName(QualifiedName(Identifier::InvalidCatalog(), Identifier::DefaultSchema(), name));
-		info->internal = true;
-		docs.AddTo(std::move(parameter_types), *info);
-		return info;
+		info.macros.push_back(std::move(macro));
+		docs.AddTo(std::move(parameter_types), info);
 	}
 
 public:
@@ -84,9 +103,11 @@ public:
 	string body;
 	FunctionSignature signature;
 	CV2FunctionDocs docs;
+	//! The overloads completed with AddOverload, as their signature and body
+	vector<pair<FunctionSignature, string>> overloads;
 
 private:
-	unique_ptr<MacroFunction> ParseBody() const {
+	unique_ptr<MacroFunction> ParseBody(const string &body) const {
 		auto parser = Parser::GetBuiltinParser();
 		if (type == MacroType::SCALAR_MACRO) {
 			auto expressions = parser.ParseExpressionList(body);
@@ -155,6 +176,12 @@ DUCKDB_V2_ERROR duckdb_v2_macro_function_set_body(duckdb_v2_macro_function_handl
 	DUCKDB_CHECK_ARG(function);
 	DUCKDB_CHECK_STR_ARG(body, body_length);
 	return WithErrorHandler(err, [&]() { Convert(function)->body = duckdb::string(Convert(body, body_length)); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_macro_function_add_overload(duckdb_v2_macro_function_handle function,
+                                                      duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() { Convert(function)->AddOverload(); });
 }
 
 DUCKDB_V2_ERROR duckdb_v2_macro_function_get_signature(duckdb_v2_macro_function_handle function,
