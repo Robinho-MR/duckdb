@@ -2,6 +2,7 @@ add_library_unity(
   duckdb_func_generic_main
   OBJECT
   barrier.cpp
+  coalesce.cpp
   constant_or_null.cpp
   error.cpp
   getvariable.cpp

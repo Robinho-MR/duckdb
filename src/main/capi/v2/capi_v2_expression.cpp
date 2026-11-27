@@ -1,6 +1,7 @@
 #include "duckdb/main/capi_v2/capi_v2_internal.hpp"
 #include "duckdb/main/capi_v2/capi_v2_function_internal.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
+#include "duckdb/planner/expression/bound_coalesce_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
@@ -46,6 +47,9 @@ CV2_ASSERT_EXPRESSION_TYPE(BOUND_COLUMN_REF);
 
 //! Maps an expression type onto the public enum: the exposed subset passes through, everything else is INVALID.
 static auto CV2ExpressionGetType(const Expression &expression) -> DUCKDB_V2_EXPRESSION_TYPE {
+	if (BoundCoalesceExpression::IsCoalesce(expression)) {
+		return DUCKDB_V2_EXPRESSION_TYPE_OPERATOR_COALESCE;
+	}
 	switch (expression.GetExpressionType()) {
 	case ExpressionType::OPERATOR_CAST:
 	case ExpressionType::OPERATOR_NOT:
@@ -68,7 +72,6 @@ static auto CV2ExpressionGetType(const Expression &expression) -> DUCKDB_V2_EXPR
 	case ExpressionType::VALUE_PARAMETER:
 	case ExpressionType::BOUND_FUNCTION:
 	case ExpressionType::CASE_EXPR:
-	case ExpressionType::OPERATOR_COALESCE:
 	case ExpressionType::BOUND_COLUMN_REF:
 		return static_cast<DUCKDB_V2_EXPRESSION_TYPE>(expression.GetExpressionType());
 	default:

@@ -76,6 +76,16 @@ struct BarrierFun {
 	static ScalarFunction GetFunction();
 };
 
+struct InternalCoalesceFun {
+	static constexpr const char *Name = "__internal_coalesce";
+	static constexpr const char *Parameters = "args,...";
+	static constexpr const char *Description = "Returns the first argument that is not NULL, only evaluating an argument when all earlier arguments are NULL";
+	static constexpr const char *Example = "";
+	static constexpr const char *Categories = "";
+
+	static ScalarFunction GetFunction();
+};
+
 struct CreateSortKeyFun {
 	static constexpr const char *Name = "create_sort_key";
 	static constexpr const char *Parameters = "key1,...";

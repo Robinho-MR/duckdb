@@ -7,6 +7,7 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
+#include "duckdb/planner/expression/bound_coalesce_expression.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
@@ -261,6 +262,33 @@ static optional_ptr<const BaseStatistics> TryGetExpressionStats(optional_ptr<Cli
 			// the barrier returns its argument unchanged
 			return TryGetExpressionStats(context_p, *func.GetChildren()[0], input_stats, owned_stats);
 		}
+		if (BoundCoalesceExpression::IsCoalesce(func)) {
+			// COALESCE returns the first non-NULL child: merge the stats of every reachable child,
+			// stopping at the first child that can never be NULL since later children are unreachable
+			unique_ptr<BaseStatistics> merged;
+			bool last_child_can_be_null = true;
+			for (auto &child : func.GetChildren()) {
+				auto child_stats = TryGetExpressionStats(context_p, *child, input_stats, owned_stats);
+				if (!child_stats) {
+					return nullptr;
+				}
+				if (!merged) {
+					merged = child_stats->ToUnique();
+				} else {
+					merged->Merge(*child_stats);
+				}
+				last_child_can_be_null = child_stats->CanHaveNull();
+				if (!last_child_can_be_null) {
+					break;
+				}
+			}
+			if (!last_child_can_be_null) {
+				// the result is NULL only if every considered child is NULL
+				merged->Set(StatsInfo::CANNOT_HAVE_NULL_VALUES);
+			}
+			owned_stats.push_back(std::move(merged));
+			return owned_stats.back().get();
+		}
 		if (BoundCastExpression::IsCast(func)) {
 			auto &cast_child = BoundCastExpression::Child(func);
 			auto child_stats = TryGetExpressionStats(context_p, cast_child, input_stats, owned_stats);
@@ -357,37 +385,6 @@ static optional_ptr<const BaseStatistics> TryGetExpressionStats(optional_ptr<Cli
 				return nullptr;
 			}
 			merged->Merge(*then_stats);
-		}
-		owned_stats.push_back(std::move(merged));
-		return owned_stats.back().get();
-	}
-	case ExpressionClass::BOUND_OPERATOR: {
-		auto &op = expr.Cast<BoundOperatorExpression>();
-		if (op.GetExpressionType() != ExpressionType::OPERATOR_COALESCE || op.GetChildren().empty()) {
-			return nullptr;
-		}
-		// COALESCE returns the first non-NULL child: merge the stats of every reachable child,
-		// stopping at the first child that can never be NULL since later children are unreachable
-		unique_ptr<BaseStatistics> merged;
-		bool last_child_can_be_null = true;
-		for (auto &child : op.GetChildren()) {
-			auto child_stats = TryGetExpressionStats(context_p, *child, input_stats, owned_stats);
-			if (!child_stats) {
-				return nullptr;
-			}
-			if (!merged) {
-				merged = child_stats->ToUnique();
-			} else {
-				merged->Merge(*child_stats);
-			}
-			last_child_can_be_null = child_stats->CanHaveNull();
-			if (!last_child_can_be_null) {
-				break;
-			}
-		}
-		if (!last_child_can_be_null) {
-			// the result is NULL only if every considered child is NULL
-			merged->Set(StatsInfo::CANNOT_HAVE_NULL_VALUES);
 		}
 		owned_stats.push_back(std::move(merged));
 		return owned_stats.back().get();

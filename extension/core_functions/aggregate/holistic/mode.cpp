@@ -16,6 +16,7 @@
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/optimizer/aggregate_rewrite.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/expression/bound_coalesce_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
@@ -676,9 +677,8 @@ static FrequencyAggregateFinalizeResult FinalizeEntropyRewrite(FrequencyAggregat
 	auto log_total = BindScalar(context, "log2", total_ref->Copy());
 	auto normalized = BindScalar(context, "/", std::move(weighted_ref), std::move(total_ref));
 	auto entropy = BindScalar(context, "-", std::move(log_total), std::move(normalized));
-	auto coalesce =
-	    make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_COALESCE, LogicalType::DOUBLE, std::move(entropy),
-	                                       make_uniq<BoundConstantExpression>(Value::DOUBLE(0)));
+	auto coalesce = BoundCoalesceExpression::Create(LogicalType::DOUBLE, std::move(entropy),
+	                                                make_uniq<BoundConstantExpression>(Value::DOUBLE(0)));
 	result.result = std::move(coalesce);
 	return result;
 }

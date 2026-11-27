@@ -4,6 +4,7 @@
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
+#include "duckdb/function/lazy_execute_input.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/logical_column_data_get.hpp"
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
@@ -67,12 +68,11 @@ void InClauseRewriter::VisitExpression(unique_ptr<Expression> *expression) {
 		// an IN below an error capture must stay an expression, the mark join would raise outside the capture
 		return;
 	}
-	// in conjunctions, CASE, and COALESCE only the first child evaluates unconditionally, the mark
-	// join would evaluate a guarded arm's probe for every row (the Select paths run later children
+	// in conjunctions, CASE, and lazy functions (COALESCE) only the first child evaluates unconditionally, the
+	// mark join would evaluate a guarded arm's probe for every row (the Select paths run later children
 	// on a remaining-row selection, so untaken arms never raise)
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION ||
-	    expr.GetExpressionClass() == ExpressionClass::BOUND_CASE ||
-	    expression_type == ExpressionType::OPERATOR_COALESCE) {
+	    expr.GetExpressionClass() == ExpressionClass::BOUND_CASE || LazyExecuteInput::IsLazyFunction(expr)) {
 		bool first = true;
 		ExpressionIterator::EnumerateChildren(expr, [&](unique_ptr<Expression> &child) {
 			if (first) {

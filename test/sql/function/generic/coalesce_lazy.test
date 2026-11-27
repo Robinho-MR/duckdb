@@ -1,0 +1,106 @@
+# name: test/sql/function/generic/coalesce_lazy.test
+# description: COALESCE only evaluates an argument on the rows for which all earlier arguments are NULL
+# group: [generic]
+
+statement ok
+CREATE TABLE t AS SELECT CASE WHEN i % 3 = 0 THEN NULL ELSE i END AS i, CASE WHEN i % 5 = 0 THEN NULL ELSE i * 10 END AS j FROM range(10000) r(i);
+
+# later arguments are only evaluated where all earlier arguments are NULL
+statement ok
+CREATE TABLE t_not_null AS SELECT * FROM t WHERE i IS NOT NULL OR j IS NOT NULL
+
+query II
+SELECT COUNT(*), SUM(COALESCE(i, j, error('boom'))) FROM t_not_null
+----
+9333	166693347
+
+statement error
+SELECT COALESCE(i, j, error('boom')) FROM t
+----
+boom
+
+query II
+SELECT SUM(COALESCE(i, j, -1)), COUNT(*) FILTER (WHERE COALESCE(i, j, -1) = -1) FROM t
+----
+166692680	667
+
+# a volatile argument only runs for the rows that reach it
+statement ok
+CREATE SEQUENCE seq;
+
+query I
+SELECT COUNT(COALESCE(i, nextval('seq'))) FROM t
+----
+10000
+
+query I
+SELECT currval('seq')
+----
+3334
+
+# COALESCE inside a selection (CASE WHEN / filters with a selection vector)
+query I
+SELECT SUM(CASE WHEN i % 2 = 0 THEN COALESCE(j, i, 0) ELSE COALESCE(i, j) END) FROM t WHERE j IS NULL OR i > 100
+----
+153341735
+
+# strings and nested types
+query III
+SELECT COALESCE(NULL, 'a' || i::VARCHAR), COALESCE(NULL::INT[], [i, i]), COALESCE(NULL, {'x': i}).x FROM t WHERE i = 1
+----
+a1	[1, 1]	1
+
+query I
+SELECT COALESCE(NULL, NULL, NULL)
+----
+NULL
+
+query I
+SELECT COALESCE(NULL::INT, 1, error('unreachable'))
+----
+1
+
+# a constant first argument short-circuits the rest
+query I
+SELECT COALESCE(42, error('unreachable')) FROM t LIMIT 1
+----
+42
+
+# EXPLAIN shows a regular COALESCE
+query II
+EXPLAIN SELECT COALESCE(i, j) FROM t
+----
+physical_plan	<REGEX>:.*COALESCE\(i, j\).*
+
+# the internal function requires arguments of the same type
+statement error
+SELECT __internal_coalesce(1, 'a')
+----
+<REGEX>:Binder Error:.*same type.*
+
+statement error
+SELECT __internal_coalesce(1)
+----
+<REGEX>:Binder Error:.*at least two arguments.*
+
+query I
+SELECT __internal_coalesce(NULL::INT, 2)
+----
+2
+
+# views and macros round-trip
+statement ok
+CREATE VIEW v AS SELECT COALESCE(i, j, 0) AS c FROM t
+
+statement ok
+CREATE MACRO m(a, b) AS COALESCE(a, b)
+
+query I
+SELECT SUM(c) FROM v
+----
+166693347
+
+query I
+SELECT SUM(m(i, j)) FROM t
+----
+166693347

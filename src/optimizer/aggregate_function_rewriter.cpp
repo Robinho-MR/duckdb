@@ -9,6 +9,7 @@
 #include "duckdb/function/builtin_function_lookup.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
+#include "duckdb/planner/expression/bound_coalesce_expression.hpp"
 #include "duckdb/planner/column_binding_map.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
@@ -497,9 +498,8 @@ struct CaseToFilterRewrite : public AnalyzedAggregateRewrite {
 		case CaseToFilterKind::COALESCED_SUM:
 		case CaseToFilterKind::NULLABLE_SUM: {
 			// coalesce(sum(x) FILTER (WHERE c), 0)
-			auto coalesce = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_COALESCE, result_type);
-			coalesce->GetChildrenMutable().push_back(aggregate_ref->Copy());
-			coalesce->GetChildrenMutable().push_back(make_uniq<BoundConstantExpression>(constant));
+			auto coalesce = BoundCoalesceExpression::Create(result_type, aggregate_ref->Copy(),
+			                                                make_uniq<BoundConstantExpression>(constant));
 			if (kind == CaseToFilterKind::NULLABLE_SUM) {
 				// only a group with a row that did not match holds the ELSE 0: without one the sum is the result
 				auto has_else_rows = BoundComparisonExpression::Create(

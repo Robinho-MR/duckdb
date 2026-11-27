@@ -13,6 +13,7 @@
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/expression/operator_expression.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/expression/bound_coalesce_expression.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
@@ -337,6 +338,9 @@ BoundExpressionSQLExportResult BoundExpressionSQLExportState::ExportFunction(con
                                                                              const LogicalPlanVerificationPath &path) {
 	switch (expression.GetExpressionType()) {
 	case ExpressionType::BOUND_FUNCTION:
+		if (BoundCoalesceExpression::IsCoalesce(expression)) {
+			return ExportCoalesce(expression, path);
+		}
 		return ExportScalarFunction(expression, path);
 	case ExpressionType::OPERATOR_CAST:
 		return ExportCast(expression, path);
@@ -355,6 +359,19 @@ BoundExpressionSQLExportResult BoundExpressionSQLExportState::ExportFunction(con
 		return BoundExpressionSQLExportResult::Failure({BoundExpressionSQLExportState::InternalExpressionInvariant(
 		    path, expression, "Bound function has an invalid expression type")});
 	}
+}
+
+BoundExpressionSQLExportResult BoundExpressionSQLExportState::ExportCoalesce(const BoundFunctionExpression &expression,
+                                                                             const LogicalPlanVerificationPath &path) {
+	D_ASSERT(expression.GetChildren().size() >= 2 && expression.GetReturnType().IsComplete());
+	vector<unique_ptr<ParsedExpression>> children;
+	vector<LogicalPlanVerificationIssue> issues;
+	ExportChildren(expression.GetChildren(), path, children, issues, expression.GetReturnType());
+	if (!issues.empty()) {
+		return BoundExpressionSQLExportResult::Failure(std::move(issues));
+	}
+	return BoundExpressionSQLExportResult::Success(
+	    make_uniq<OperatorExpression>(ExpressionType::OPERATOR_COALESCE, std::move(children)));
 }
 
 BoundExpressionSQLExportResult BoundExpressionSQLExportState::ExportCast(const BoundFunctionExpression &expression,
@@ -546,10 +563,6 @@ BoundExpressionSQLExportResult BoundExpressionSQLExportState::ExportOperator(con
 		D_ASSERT(expression.GetChildren().size() >= 2 && expression.GetReturnType() == LogicalType::BOOLEAN &&
 		         expression.GetChildren()[0]);
 		expected_type = expression.GetChildren()[0]->GetReturnType();
-		break;
-	case ExpressionType::OPERATOR_COALESCE:
-		D_ASSERT(expression.GetChildren().size() >= 2 && expression.GetReturnType().IsComplete());
-		expected_type = expression.GetReturnType();
 		break;
 	case ExpressionType::OPERATOR_TRY:
 		D_ASSERT(expression.GetChildren().size() == 1 && expression.GetChildren()[0] &&
