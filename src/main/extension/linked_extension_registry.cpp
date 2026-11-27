@@ -1,4 +1,5 @@
 #include "duckdb/main/extension/linked_extension_registry.hpp"
+#include "duckdb/common/no_destructor.hpp"
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -28,8 +29,8 @@ struct RegistryState {
 
 // function-local so that registrations during static initialization always find it constructed
 RegistryState &GetRegistryState() {
-	static RegistryState state;
-	return state;
+	static NoDestructor<RegistryState> state;
+	return *state;
 }
 
 void SetDescriptorError(duckdb_extension_descriptor *descriptor, const char *message) {

@@ -701,6 +701,10 @@ option(FORCE_ASSERT "Enable checking of assertions, even in release mode" FALSE)
 option(FORCE_DEBUG "Force adding a debug define, even in release mode" FALSE)
 
 option(TREAT_WARNINGS_AS_ERRORS "Treat warnings as errors" FALSE)
+option(
+  STATIC_LIFETIME_WARNINGS
+  "Error on statics with an exit-time destructor or a global constructor (needs clang)"
+  FALSE)
 option(EXPORT_DLL_SYMBOLS "Export dll symbols on Windows, else import" TRUE)
 option(WINDOWS_STATIC_LIBRARY_EXPORTS
        "Keep core DLL exports in self-contained Windows extensions" OFF)
@@ -881,6 +885,14 @@ endif()
 
 if(CLANG_TIDY)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DDUCKDB_CLANG_TIDY")
+endif()
+
+# Queries can still run on other threads while static destructors run at exit.
+# Third-party targets compile with -w, tests and benchmarks are exempt.
+if(STATIC_LIFETIME_WARNINGS)
+  set(CMAKE_CXX_FLAGS
+      "${CMAKE_CXX_FLAGS} -Werror=exit-time-destructors -Werror=global-constructors"
+  )
 endif()
 
 # Parse the feature registry in smaller_binary.hpp, which is the single source

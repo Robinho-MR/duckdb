@@ -12,5 +12,13 @@ struct DuckDBStaticExtensionLoader {
 		duckdb_register_static_extensions();
 	}
 };
+// registering the statically linked extensions has to happen before main
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wglobal-constructors"
+#endif
 const DuckDBStaticExtensionLoader duckdb_static_extension_loader;
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 } // namespace

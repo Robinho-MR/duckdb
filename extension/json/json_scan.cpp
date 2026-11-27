@@ -1,4 +1,5 @@
 #include "json_scan.hpp"
+#include "duckdb/common/static_string_table.hpp"
 #include "duckdb/main/client_context.hpp"
 
 #include "duckdb/common/enum_util.hpp"
@@ -35,22 +36,27 @@ void JSONScanData::InitializeFormats(bool auto_detect_p) {
 	}
 
 	if (auto_detect_p) {
-		static const type_id_map_t<vector<const char *>> FORMAT_TEMPLATES = {
-		    {LogicalTypeId::DATE, {"%m-%d-%Y", "%m-%d-%y", "%d-%m-%Y", "%d-%m-%y", "%Y-%m-%d", "%y-%m-%d"}},
-		    {LogicalTypeId::TIMESTAMP,
-		     {"%Y-%m-%d %H:%M:%S.%f", "%m-%d-%Y %I:%M:%S %p", "%m-%d-%y %I:%M:%S %p", "%d-%m-%Y %H:%M:%S",
-		      "%d-%m-%y %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ",
-		      "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S.%f%z"}},
+		static constexpr const char *const DATE_FORMATS[] = {"%m-%d-%Y", "%m-%d-%y", "%d-%m-%Y",
+		                                                     "%d-%m-%y", "%Y-%m-%d", "%y-%m-%d"};
+		static constexpr const char *const TIMESTAMP_FORMATS[] = {
+		    "%Y-%m-%d %H:%M:%S.%f", "%m-%d-%Y %I:%M:%S %p",  "%m-%d-%y %I:%M:%S %p", "%d-%m-%Y %H:%M:%S",
+		    "%d-%m-%y %H:%M:%S",    "%Y-%m-%d %H:%M:%S",     "%y-%m-%d %H:%M:%S",    "%Y-%m-%dT%H:%M:%S",
+		    "%Y-%m-%dT%H:%M:%SZ",   "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%S%z",  "%Y-%m-%dT%H:%M:%S.%f%z"};
+		struct FormatTemplate {
+			LogicalTypeId type;
+			StaticStringSet formats;
 		};
+		static constexpr FormatTemplate FORMAT_TEMPLATES[] = {
+		    {LogicalTypeId::DATE, StaticStringSet(DATE_FORMATS)},
+		    {LogicalTypeId::TIMESTAMP, StaticStringSet(TIMESTAMP_FORMATS)}};
 
 		// Populate possible date/timestamp formats, assume this is consistent across columns
 		for (auto &kv : FORMAT_TEMPLATES) {
-			const auto &logical_type = kv.first;
+			const auto &logical_type = kv.type;
 			if (DateFormatMap::HasFormats(candidate_formats, logical_type)) {
 				continue; // Already populated
 			}
-			const auto &format_strings = kv.second;
-			for (auto &format_string : format_strings) {
+			for (auto format_string : kv.formats) {
 				DateFormatMap::AddFormat(candidate_formats, logical_type, format_string);
 			}
 		}
@@ -178,21 +184,22 @@ bool JSONScan::ParseOption(ClientContext &context, const Identifier &key, const 
 	}
 	if (key == "format") {
 		auto arg = StringUtil::Lower(StringValue::Get(value));
-		static const auto FORMAT_OPTIONS =
-		    case_insensitive_map_t<JSONFormat> {{"auto", JSONFormat::AUTO_DETECT},
-		                                        {"unstructured", JSONFormat::UNSTRUCTURED},
-		                                        {"newline_delimited", JSONFormat::NEWLINE_DELIMITED},
-		                                        {"nd", JSONFormat::NEWLINE_DELIMITED},
-		                                        {"array", JSONFormat::ARRAY}};
-		auto lookup = FORMAT_OPTIONS.find(arg);
-		if (lookup == FORMAT_OPTIONS.end()) {
+		static constexpr StaticStringMap<JSONFormat>::Entry FORMAT_OPTIONS_ENTRIES[] = {
+		    {"auto", JSONFormat::AUTO_DETECT},
+		    {"unstructured", JSONFormat::UNSTRUCTURED},
+		    {"newline_delimited", JSONFormat::NEWLINE_DELIMITED},
+		    {"nd", JSONFormat::NEWLINE_DELIMITED},
+		    {"array", JSONFormat::ARRAY}};
+		const StaticStringMap<JSONFormat> FORMAT_OPTIONS(FORMAT_OPTIONS_ENTRIES);
+		auto lookup = FORMAT_OPTIONS.FindCaseInsensitive(arg);
+		if (!lookup) {
 			vector<string> valid_options;
-			for (auto &pair : FORMAT_OPTIONS) {
-				valid_options.push_back(StringUtil::Format("'%s'", pair.first));
+			for (auto &option : FORMAT_OPTIONS) {
+				valid_options.push_back(StringUtil::Format("'%s'", option.key));
 			}
 			throw BinderException("format must be one of [%s], not '%s'", StringUtil::Join(valid_options, ", "), arg);
 		}
-		options.format = lookup->second;
+		options.format = *lookup;
 		options.format_specified = true;
 		return true;
 	}

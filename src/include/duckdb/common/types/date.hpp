@@ -98,10 +98,12 @@ public:
 	static const DateSpecial NINF;  // NOLINT
 	static const DateSpecial EPOCH; // NOLINT
 
-	static const string_t MONTH_NAMES[12];
-	static const string_t MONTH_NAMES_ABBREVIATED[12];
-	static const string_t DAY_NAMES[7];
-	static const string_t DAY_NAMES_ABBREVIATED[7];
+	//! The 12 month names, January first
+	DUCKDB_API static const string_t *MonthNames();
+	DUCKDB_API static const string_t *MonthNamesAbbreviated();
+	//! The 7 day names, Sunday first
+	DUCKDB_API static const string_t *DayNames();
+	DUCKDB_API static const string_t *DayNamesAbbreviated();
 	static const int32_t NORMAL_DAYS[13];
 	static const int32_t CUMULATIVE_DAYS[13];
 	static const int32_t LEAP_DAYS[13];

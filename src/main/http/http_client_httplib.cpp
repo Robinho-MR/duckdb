@@ -1,9 +1,13 @@
 #include "duckdb/main/http/http_util.hpp"
+#include "duckdb/common/no_destructor.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb_static_extension.h"
 
+// vendored code with statics we do not control
+DUCKDB_ALLOW_STATIC_LIFETIME_BEGIN
 #include "httplib.hpp"
+DUCKDB_ALLOW_STATIC_LIFETIME_END
 
 #if defined(DUCKDB_DISABLE_BUILTIN_HTTPLIB) || defined(DISABLE_DUCKDB_REMOTE_INSTALL) ||                               \
     defined(DUCKDB_DISABLE_EXTENSION_LOAD)

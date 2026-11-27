@@ -1,4 +1,5 @@
 #include "duckdb/parser/peg/keyword_helper/duckdb_keyword_helper.hpp"
+#include "duckdb/common/no_destructor.hpp"
 #include "duckdb/parser/peg/parsed_grammar.hpp"
 
 namespace duckdb {
@@ -9,8 +10,8 @@ DuckDBKeywordHelper::DuckDBKeywordHelper()
 }
 
 const DuckDBKeywordHelper &DuckDBKeywordHelper::Instance() {
-	static DuckDBKeywordHelper instance;
-	return instance;
+	static const NoDestructor<DuckDBKeywordHelper> instance;
+	return *instance;
 }
 
 keyword_categories_t DuckDBKeywordHelper::GetIdentifierMask(SuggestionState type) const {

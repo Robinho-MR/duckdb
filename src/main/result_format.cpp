@@ -1,4 +1,5 @@
 #include "duckdb/main/result_format.hpp"
+#include "duckdb/common/no_destructor.hpp"
 
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/buffered_data/buffered_data.hpp"
@@ -31,13 +32,15 @@ ChunkFormat::ChunkFormat(QueryResultMemoryType memory_type_p) : memory_type(memo
 }
 
 const shared_ptr<ResultFormat> &ChunkFormat::InMemory() {
-	static const shared_ptr<ResultFormat> format = make_shared_ptr<ChunkFormat>(QueryResultMemoryType::IN_MEMORY);
-	return format;
+	static const NoDestructor<shared_ptr<ResultFormat>> format(
+	    make_shared_ptr<ChunkFormat>(QueryResultMemoryType::IN_MEMORY));
+	return *format;
 }
 
 const shared_ptr<ResultFormat> &ChunkFormat::BufferManaged() {
-	static const shared_ptr<ResultFormat> format = make_shared_ptr<ChunkFormat>(QueryResultMemoryType::BUFFER_MANAGED);
-	return format;
+	static const NoDestructor<shared_ptr<ResultFormat>> format(
+	    make_shared_ptr<ChunkFormat>(QueryResultMemoryType::BUFFER_MANAGED));
+	return *format;
 }
 
 QueryResultMemoryType ChunkFormat::MemoryType() const {

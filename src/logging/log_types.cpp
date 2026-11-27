@@ -1,4 +1,5 @@
 #include "duckdb/logging/log_type.hpp"
+#include "duckdb/common/static_string_table.hpp"
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/file_opener.hpp"
@@ -63,10 +64,10 @@ LogicalType FileSystemLogType::GetLogType() {
 //===--------------------------------------------------------------------===//
 // HTTPLogType
 //===--------------------------------------------------------------------===//
-static const case_insensitive_set_t &HTTPRequestHeaderAllowList() {
+static StaticStringSet HTTPRequestHeaderAllowList() {
 	//! For extra info, the advise from OpenTelemetry:
 	//! https://opentelemetry.io/docs/specs/semconv/registry/attributes/http/#http-request-header
-	static const case_insensitive_set_t allow_list = {
+	static constexpr const char *const ALLOW_LIST[] = {
 	    // HTTP semantics (https://www.rfc-editor.org/rfc/rfc9110.html).
 	    "accept",              // Accepted media types and parameters.
 	    "accept-charset",      // Accepted character sets.
@@ -134,11 +135,11 @@ static const case_insensitive_set_t &HTTPRequestHeaderAllowList() {
 	    // AWS JSON protocol (https://smithy.io/2.0/aws/protocols/aws-json-1_1-protocol.html), e.g. AWS Glue.
 	    "x-amz-target", // Service and operation name, e.g. AWSGlue.GetTable.
 	};
-	return allow_list;
+	return StaticStringSet(ALLOW_LIST);
 }
 
-static const case_insensitive_set_t &HTTPResponseHeaderAllowList() {
-	static const case_insensitive_set_t allow_list = {
+static StaticStringSet HTTPResponseHeaderAllowList() {
+	static constexpr const char *const ALLOW_LIST[] = {
 	    // HTTP semantics (https://www.rfc-editor.org/rfc/rfc9110.html).
 	    "accept",           // Accepted media types and parameters.
 	    "accept-encoding",  // Accepted content codings.
@@ -187,7 +188,7 @@ static const case_insensitive_set_t &HTTPResponseHeaderAllowList() {
 	    // "x-amz-server-side-encryption-customer-key-md5", // Fingerprints the customer encryption key.
 	    // "x-amz-version-id", // Identifies an object version.
 	};
-	return allow_list;
+	return StaticStringSet(ALLOW_LIST);
 }
 
 HTTPLogType::HTTPLogType() : LogType(NAME, LEVEL, GetLogType()) {
@@ -217,7 +218,7 @@ LogicalType HTTPLogType::GetLogType() {
 	return LogicalType::STRUCT(child_list);
 }
 
-static Value CreateHTTPHeadersValue(const HTTPHeaders &headers, const case_insensitive_set_t &allow_list,
+static Value CreateHTTPHeadersValue(const HTTPHeaders &headers, const StaticStringSet &allow_list,
                                     bool redact_http_logs) {
 	vector<Value> keys;
 	vector<Value> values;
@@ -228,7 +229,7 @@ static Value CreateHTTPHeadersValue(const HTTPHeaders &headers, const case_insen
 			continue;
 		}
 		keys.emplace_back(header.first);
-		const bool allow_value = !redact_http_logs || allow_list.find(header.first) != allow_list.end();
+		const bool allow_value = !redact_http_logs || allow_list.ContainsCaseInsensitive(header.first);
 		values.emplace_back(allow_value ? header.second : HTTPLogType::REDACTED_VALUE);
 	}
 	return Value::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR, keys, values);

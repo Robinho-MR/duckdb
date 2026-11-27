@@ -1,4 +1,5 @@
 #include "duckdb/main/user_settings.hpp"
+#include "duckdb/common/no_destructor.hpp"
 #include "duckdb/main/settings.hpp"
 #include "duckdb/common/type_visitor.hpp"
 #include "duckdb/common/types/string.hpp"
@@ -271,7 +272,10 @@ static CachedGlobalSettings &GetThreadSettingsCache() {
 		return *worker_settings_cache;
 	}
 	// the first use on a thread registers the destructor, which allocates
+	// the destructor releases the thread's cache when the thread exits
+	DUCKDB_ALLOW_STATIC_LIFETIME_BEGIN
 	thread_local CachedGlobalSettings current_cache;
+	DUCKDB_ALLOW_STATIC_LIFETIME_END
 	return current_cache;
 #endif
 }

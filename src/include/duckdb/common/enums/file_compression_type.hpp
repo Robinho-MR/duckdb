@@ -18,7 +18,8 @@ namespace duckdb {
 class FileCompressionType {
 public:
 	//! Creates an UNCOMPRESSED compression type
-	DUCKDB_API FileCompressionType();
+	constexpr FileCompressionType() : kind(Kind::UNCOMPRESSED), custom(nullptr) {
+	}
 	//! Creates a compression type from a string, normalizing known aliases (e.g. "infer" -> auto detection)
 	DUCKDB_API FileCompressionType(string compression); // NOLINT: allow implicit conversion from string
 
@@ -41,7 +42,16 @@ public:
 	DUCKDB_API const string &ToString() const;
 
 private:
-	string compression;
+	enum class Kind : uint8_t { UNCOMPRESSED, AUTO_DETECT, GZIP, ZSTD, CUSTOM };
+
+	constexpr explicit FileCompressionType(Kind kind_p) : kind(kind_p), custom(nullptr) {
+	}
+
+private:
+	//! Trivially destructible, so the constants above need no static initialization or destruction
+	Kind kind;
+	//! The interned (never freed) name of a CUSTOM compression type
+	const string *custom;
 };
 
 DUCKDB_API string CompressionExtensionFromType(const FileCompressionType &type);

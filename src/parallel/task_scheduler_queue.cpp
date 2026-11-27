@@ -1,9 +1,13 @@
 #include "duckdb/parallel/task_scheduler_queue.hpp"
+#include "duckdb/common/no_destructor.hpp"
 
 #include "duckdb/parallel/task.hpp"
 
 #ifndef DUCKDB_NO_THREADS
+// vendored code with statics we do not control
+DUCKDB_ALLOW_STATIC_LIFETIME_BEGIN
 #include "concurrentqueue.h"
+DUCKDB_ALLOW_STATIC_LIFETIME_END
 #endif
 
 namespace duckdb {

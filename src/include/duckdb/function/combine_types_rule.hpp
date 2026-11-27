@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/common/types.hpp"
+#include "duckdb/common/array_ptr.hpp"
 
 namespace duckdb {
 class ClientContext;
@@ -41,6 +42,6 @@ struct CombineTypesRule {
 };
 
 //! The built-in combine rules, used to seed CastFunctionSet and as the fallback when no context is available
-const vector<CombineTypesRule> &DefaultCombineTypesRules();
+array_ptr<const CombineTypesRule> DefaultCombineTypesRules();
 
 } // namespace duckdb

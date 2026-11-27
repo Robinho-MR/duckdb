@@ -276,8 +276,8 @@ void JSONStructureNode::RefineCandidateTypesString(yyjson_val *vals[], const idx
 	if (descriptions[0].candidate_types.empty()) {
 		return;
 	}
-	static JSONTransformOptions OPTIONS;
-	JSONTransform::GetStringVector(vals, val_count, LogicalType::SQLNULL, string_vector, OPTIONS);
+	JSONTransformOptions options;
+	JSONTransform::GetStringVector(vals, val_count, LogicalType::SQLNULL, string_vector, options);
 	EliminateCandidateTypes(val_count, string_vector, date_format_map, user_specified_timestamp_format);
 }
 

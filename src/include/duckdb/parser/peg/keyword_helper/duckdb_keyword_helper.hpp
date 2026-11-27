@@ -1,11 +1,14 @@
 #pragma once
 
+#include "duckdb/common/no_destructor.hpp"
 #include "duckdb/parser/peg/keyword_helper.hpp"
 #include "duckdb/parser/peg/keyword_helper/default_keyword_maps.hpp"
 
 namespace duckdb {
 
 class DuckDBKeywordHelper : public PEGKeywordHelper {
+	friend class NoDestructor<DuckDBKeywordHelper>;
+
 private:
 	DuckDBKeywordHelper();
 

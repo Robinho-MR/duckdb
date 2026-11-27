@@ -238,8 +238,9 @@ const LogicalTypeInfo &LogicalType::GetBuiltinTypeInfo(LogicalTypeId id) {
 		throw InternalException("Invalid LogicalType %d", static_cast<uint8_t>(id));
 	}
 	if (id == LogicalTypeId::VARIANT) {
-		static const auto variant_type = CreateImmortal(LogicalTypeId::VARIANT, CreateVariantTypeInfo());
-		return variant_type.GetTypeInfo();
+		static const NoDestructor<LogicalType> variant_type(
+		    CreateImmortal(LogicalTypeId::VARIANT, CreateVariantTypeInfo()));
+		return variant_type->GetTypeInfo();
 	}
 	return *info;
 }
@@ -2056,9 +2057,9 @@ PhysicalType EnumType::GetPhysicalType(const LogicalType &type) {
 // JSON Type
 //===--------------------------------------------------------------------===//
 LogicalType LogicalType::JSON() {
-	static const auto json_type = CreateImmortal(
-	    LogicalTypeId::VARCHAR, make_uniq<LogicalTypeInfo>(LogicalTypeInfoType::GENERIC_TYPE_INFO, JSON_TYPE_NAME));
-	return json_type;
+	static const NoDestructor<LogicalType> json_type(CreateImmortal(
+	    LogicalTypeId::VARCHAR, make_uniq<LogicalTypeInfo>(LogicalTypeInfoType::GENERIC_TYPE_INFO, JSON_TYPE_NAME)));
+	return *json_type;
 }
 
 bool LogicalType::IsJSONType() const {

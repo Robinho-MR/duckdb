@@ -1,9 +1,10 @@
 #include "duckdb/main/capi_v2/capi_v2_function_internal.hpp"
+#include "duckdb/common/no_destructor.hpp"
 
 namespace duckdb::capiv2 {
 
 const Identifier &CV2FunctionBindInfo::GetArgName(idx_t index) const {
-	static const Identifier variadic_name;
+	static const NoDestructor<Identifier> variadic_name;
 	const auto positional_count = function.GetPositionalArgumentCount();
 	if (index >= positional_count) {
 		return function.GetNamedArguments()[index - positional_count];
@@ -11,7 +12,7 @@ const Identifier &CV2FunctionBindInfo::GetArgName(idx_t index) const {
 	if (index < signature.GetPositionalParameterCount()) {
 		return signature.GetParameter(index).GetName();
 	}
-	return variadic_name;
+	return *variadic_name;
 }
 
 optional_idx CV2FunctionBindInfo::FindArg(const Identifier &name) const {

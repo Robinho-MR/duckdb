@@ -44,6 +44,7 @@
 #endif
 
 #include <stdlib.h>
+#include <optional>
 #include "duckdb/logging/log_sink.hpp"
 #include "duckdb/logging/log_manager.hpp"
 #include "duckdb/main/statement_iterator.hpp"
@@ -200,8 +201,8 @@ struct rusage {
 #endif
 
 /* Saved resource information for the beginning of an operation */
-static struct rusage sBegin;     /* CPU time at start */
-static duckdb::TimePoint tBegin; /* Monotonic time at start */
+static struct rusage sBegin;                    /* CPU time at start */
+static std::optional<duckdb::TimePoint> tBegin; /* Monotonic time at start */
 
 /*
 ** Begin timing an operation
@@ -225,7 +226,7 @@ static void endTimer(void) {
 	if (enableTimer) {
 		struct rusage sEnd;
 		getrusage(RUSAGE_SELF, &sEnd);
-		printf("Run Time (s): real %.*f user %f sys %f\n", timerDigits, tBegin.ElapsedSeconds(),
+		printf("Run Time (s): real %.*f user %f sys %f\n", timerDigits, tBegin->ElapsedSeconds(),
 		       timeDiff(&sBegin.ru_utime, &sEnd.ru_utime), timeDiff(&sBegin.ru_stime, &sEnd.ru_stime));
 	}
 }
@@ -240,7 +241,7 @@ static void endTimer(void) {
 static HANDLE hProcess;
 static FILETIME ftKernelBegin;
 static FILETIME ftUserBegin;
-static duckdb::TimePoint tBegin;
+static std::optional<duckdb::TimePoint> tBegin;
 typedef BOOL(WINAPI *GETPROCTIMES)(HANDLE, LPFILETIME, LPFILETIME, LPFILETIME, LPFILETIME);
 static GETPROCTIMES getProcessTimesAddr = NULL;
 
@@ -298,7 +299,7 @@ static void endTimer(void) {
 	if (enableTimer && getProcessTimesAddr) {
 		FILETIME ftCreation, ftExit, ftKernelEnd, ftUserEnd;
 		getProcessTimesAddr(hProcess, &ftCreation, &ftExit, &ftKernelEnd, &ftUserEnd);
-		printf("Run Time (s): real %.*f user %f sys %f\n", timerDigits, tBegin.ElapsedSeconds(),
+		printf("Run Time (s): real %.*f user %f sys %f\n", timerDigits, tBegin->ElapsedSeconds(),
 		       timeDiff(&ftUserBegin, &ftUserEnd), timeDiff(&ftKernelBegin, &ftKernelEnd));
 	}
 }
@@ -336,15 +337,6 @@ bool ShellState::HighlightResults() const {
 	}
 	return highlight_results == OptionType::ON;
 }
-
-/* Used with ShellState::EvaluateSQL to indicate special result states */
-const string EVAL_SQL_ERROR = "#ERROR#:";
-const string EVAL_SQL_NOT_A_QUERY = "#NOT A QUERY#";
-const string EVAL_SQL_NO_RESULT = "#NO RESULT#";
-const string EVAL_SQL_TOO_MANY_ROWS = "#TOO MANY ROWS#";
-const string EVAL_SQL_TOO_MANY_COLUMNS = "#TOO MANY COLUMNS#";
-const string EVAL_SQL_NULL = "#NULL#";
-const string EVAL_SQL_EMPTY = "#EMPTY#";
 
 void ShellState::Print(PrintOutput output, const char *str, idx_t len) {
 	if (seenInterrupt) {

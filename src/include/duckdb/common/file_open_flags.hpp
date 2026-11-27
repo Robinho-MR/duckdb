@@ -35,15 +35,15 @@ public:
 
 public:
 	FileOpenFlags() = default;
-	FileOpenFlags(idx_t flags) : flags(flags) { // NOLINT: allow implicit conversion
+	constexpr FileOpenFlags(idx_t flags) : flags(flags) { // NOLINT: allow implicit conversion
 	}
-	FileOpenFlags(FileLockType lock) : lock(lock) { // NOLINT: allow implicit conversion
+	constexpr FileOpenFlags(FileLockType lock) : lock(lock) { // NOLINT: allow implicit conversion
 	}
-	FileOpenFlags(FileCompressionType compression) // NOLINT: allow implicit conversion
-	    : compression(std::move(compression)) {
+	constexpr FileOpenFlags(FileCompressionType compression) // NOLINT: allow implicit conversion
+	    : compression(compression) {
 	}
-	FileOpenFlags(idx_t flags, FileLockType lock, FileCompressionType compression)
-	    : flags(flags), lock(lock), compression(std::move(compression)) {
+	constexpr FileOpenFlags(idx_t flags, FileLockType lock, FileCompressionType compression)
+	    : flags(flags), lock(lock), compression(compression) {
 	}
 
 	static constexpr FileLockType MergeLock(FileLockType a, FileLockType b) {

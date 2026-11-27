@@ -1,4 +1,5 @@
 #include "duckdb/storage/statistics/distinct_statistics.hpp"
+#include "duckdb/common/no_destructor.hpp"
 
 #include "duckdb/common/random_engine.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -120,11 +121,11 @@ void DistinctStatistics::UpdateSample(const Vector &new_data, idx_t count, Vecto
 		return;
 	}
 
-	static auto integral_sample =
-	    CreateSampleSelection(MaxValue<idx_t>(LossyNumericCast<idx_t>(INTEGRAL_SAMPLE_RATE * STANDARD_VECTOR_SIZE), 1));
-	static auto other_sample =
-	    CreateSampleSelection(MaxValue<idx_t>(LossyNumericCast<idx_t>(BASE_SAMPLE_RATE * STANDARD_VECTOR_SIZE), 1));
-	auto &sample_selection = new_data.GetType().IsIntegral() ? integral_sample : other_sample;
+	static NoDestructor<SelectionVector> integral_sample(CreateSampleSelection(
+	    MaxValue<idx_t>(LossyNumericCast<idx_t>(INTEGRAL_SAMPLE_RATE * STANDARD_VECTOR_SIZE), 1)));
+	static NoDestructor<SelectionVector> other_sample(
+	    CreateSampleSelection(MaxValue<idx_t>(LossyNumericCast<idx_t>(BASE_SAMPLE_RATE * STANDARD_VECTOR_SIZE), 1)));
+	auto &sample_selection = new_data.GetType().IsIntegral() ? *integral_sample : *other_sample;
 	if (TryUpdateSampleValues(*log, new_data, sample_selection, count)) {
 		sample_count += count;
 		return;

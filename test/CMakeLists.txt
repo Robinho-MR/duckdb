@@ -1,3 +1,7 @@
+if(STATIC_LIFETIME_WARNINGS)
+  add_compile_options(-Wno-exit-time-destructors -Wno-global-constructors)
+endif()
+
 include_directories(../third_party/catch)
 include_directories(../third_party/sqlite/include)
 include_directories(BEFORE include)

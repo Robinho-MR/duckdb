@@ -1,4 +1,5 @@
 #include "duckdb/common/limits.hpp"
+#include "duckdb/common/no_destructor.hpp"
 #include "duckdb/common/types/bignum_decimal.hpp"
 #include "duckdb/main/context.hpp"
 
@@ -232,17 +233,17 @@ string ComputePowerOfTen(idx_t exponent, optional_ptr<ClientContext> context) {
 
 //! The small constants are built once; their blobs outlive the intermediates that point into them
 const OwnedBignum &BignumConstant(int32_t value) {
-	static const OwnedBignum TWO(Bignum::VarcharToBignum(string_t("2")));
-	static const OwnedBignum ONE(Bignum::VarcharToBignum(string_t("1")));
-	static const OwnedBignum MINUS_ONE(Bignum::VarcharToBignum(string_t("-1")));
+	static const NoDestructor<OwnedBignum> TWO(Bignum::VarcharToBignum(string_t("2")));
+	static const NoDestructor<OwnedBignum> ONE(Bignum::VarcharToBignum(string_t("1")));
+	static const NoDestructor<OwnedBignum> MINUS_ONE(Bignum::VarcharToBignum(string_t("-1")));
 	switch (value) {
 	case 2:
-		return TWO;
+		return *TWO;
 	case 1:
-		return ONE;
+		return *ONE;
 	default:
 		D_ASSERT(value == -1);
-		return MINUS_ONE;
+		return *MINUS_ONE;
 	}
 }
 
@@ -256,16 +257,17 @@ bool IsOdd(const BignumIntermediate &value) {
 string DecimalHelper<bignum_t>::PowerOfTen(idx_t exponent, optional_ptr<ClientContext> context) {
 	// the powers of everyday widths are computed once and read without locking afterwards
 	static constexpr idx_t CACHED_POWERS = 512;
-	static array<string, CACHED_POWERS> small_powers;
+	static NoDestructor<array<string, CACHED_POWERS>> small_powers;
 	static array<OnceFlag, CACHED_POWERS> small_flags;
 	if (exponent < CACHED_POWERS) {
-		CallOnce(small_flags[exponent], [&]() { small_powers[exponent] = ComputePowerOfTen(exponent, context); });
-		return small_powers[exponent];
+		CallOnce(small_flags[exponent], [&]() { (*small_powers)[exponent] = ComputePowerOfTen(exponent, context); });
+		return (*small_powers)[exponent];
 	}
 	// wider powers are kept in a cache bounded by its total size
 	static constexpr idx_t MAX_CACHED_POWER_BYTES = 16ULL * 1024 * 1024;
 	static mutex wide_lock;
-	static unordered_map<idx_t, string> wide_powers;
+	static NoDestructor<unordered_map<idx_t, string>> wide_powers_storage;
+	auto &wide_powers = *wide_powers_storage;
 	static idx_t wide_power_bytes = 0;
 	{
 		lock_guard<mutex> guard(wide_lock);

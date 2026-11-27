@@ -1,4 +1,5 @@
 #include "duckdb/main/http/http_retry_budget.hpp"
+#include "duckdb/common/no_destructor.hpp"
 
 #include "duckdb/common/limits.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
@@ -224,14 +225,14 @@ uint64_t HTTPRetryBudget::BackoffMs(uint64_t retry_wait_ms, float retry_backoff,
 
 static const StrpTimeFormat &RetryAfterDateFormat() {
 	// RFC 7231 IMF-fixdate, e.g. "Sun, 06 Nov 1994 08:49:37 GMT".
-	static const StrpTimeFormat format = []() {
+	static const NoDestructor<StrpTimeFormat> format([]() {
 		StrpTimeFormat result;
 		auto error = StrTimeFormat::ParseFormatSpecifier("%a, %d %b %Y %H:%M:%S GMT", result);
 		D_ASSERT(error.empty());
 		(void)error;
 		return result;
-	}();
-	return format;
+	}());
+	return *format;
 }
 
 bool HTTPRetryBudget::TryParseRetryAfterMs(const string &retry_after, uint64_t &delay_ms) {

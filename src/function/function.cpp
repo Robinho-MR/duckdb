@@ -1,4 +1,5 @@
 #include "duckdb/function/function.hpp"
+#include "duckdb/common/no_destructor.hpp"
 
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/hash.hpp"
@@ -760,7 +761,7 @@ optional<Value> BindFunctionInput::TryGetConstant(const Identifier &name) const 
 }
 
 const Identifier &BindFunctionInput::GetArgumentName(idx_t arg_idx) const {
-	static const Identifier UNNAMED;
+	static const NoDestructor<Identifier> UNNAMED;
 	// The binder lays the arguments out in the order of the signature: the positional ones fill the standard
 	// parameters, then "*args" - the named ones are keyword-only parameters or "**kwargs"
 	const auto positional_count = function.GetPositionalArgumentCount();
@@ -774,7 +775,7 @@ const Identifier &BindFunctionInput::GetArgumentName(idx_t arg_idx) const {
 	if (arg_idx < signature.GetPositionalParameterCount()) {
 		return signature.GetParameter(arg_idx).GetName();
 	}
-	return UNNAMED;
+	return *UNNAMED;
 }
 
 optional_idx BindFunctionInput::GetArgumentIndex(const Identifier &name) const {

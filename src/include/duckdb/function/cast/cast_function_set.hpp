@@ -95,7 +95,7 @@ public:
 	DUCKDB_API void RegisterCombineTypesRule(CombineTypesRule rule);
 	//! Run `rules` against (left, right); the first matching rule wins and writes its outcome to `success`.
 	//! Returns false if no rule matched.
-	static bool TryCombineTypes(const vector<CombineTypesRule> &rules, LogicalTypeResolver &resolver,
+	static bool TryCombineTypes(array_ptr<const CombineTypesRule> rules, LogicalTypeResolver &resolver,
 	                            const LogicalType &left, const LogicalType &right, LogicalType &result, bool &success);
 	//! Same, over this set's rules (registered + built-in)
 	bool TryCombineTypes(LogicalTypeResolver &resolver, const LogicalType &left, const LogicalType &right,

@@ -1,5 +1,6 @@
 #pragma once
 #include "utf8proc_wrapper.hpp"
+#include "duckdb/common/no_destructor.hpp"
 #include "duckdb/common/arena_linked_list.hpp"
 #include "duckdb/common/array_ptr.hpp"
 #include "duckdb/common/exception.hpp"
@@ -151,8 +152,8 @@ public:
 	//! The name of the rule (or matcher) that produced this result. Rule names live in the compiled grammar and
 	//! outlive every parse, so a result points at one instead of owning a copy of it.
 	const string &Name() const {
-		static const string EMPTY;
-		return name ? *name : EMPTY;
+		static const NoDestructor<string> EMPTY;
+		return name ? *name : *EMPTY;
 	}
 	//! Only a pointer to the name is kept, so these only take a grammar object that owns it, or a result that already
 	//! points at one.
