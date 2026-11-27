@@ -49,6 +49,7 @@ static void AnalyzeSchemaInternal(VariantAnalyzeData &state, UnifiedVariantVecto
 	if (type_id == VariantLogicalType::TYPE) {
 		throw NotImplementedException("Writing a VARIANT value of type TYPE to Parquet is not supported");
 	}
+	VariantUtils::VerifyNotExtension(variant, row, values_index);
 	state.type_map[static_cast<uint8_t>(type_id)]++;
 
 	if (type_id == VariantLogicalType::OBJECT || type_id == VariantLogicalType::ARRAY) {

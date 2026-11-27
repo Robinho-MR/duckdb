@@ -210,8 +210,9 @@ static bool CastVariantValue(FromVariantConversionData &conversion_data, Vector 
 	const bool success = cast_value.has_value();
 	if (!success) {
 		auto type_id = conversion_data.variant.GetTypeId(row_index, values_index);
-		conversion_data.error =
-		    StringUtil::Format("Can't convert VARIANT(%s) value '%s'", EnumUtil::ToString(type_id), value.ToString());
+		auto type_name =
+		    type_id == VariantLogicalType::EXTENSION ? value.type().ToString() : string(EnumUtil::ToString(type_id));
+		conversion_data.error = StringUtil::Format("Can't convert VARIANT(%s) value '%s'", type_name, value.ToString());
 		cast_value = Value(target_type);
 	}
 	result.SetValue(result_index, *cast_value);
@@ -264,9 +265,21 @@ static bool CastVariantToPrimitive(FromVariantConversionData &conversion_data, V
                                    PAYLOAD_CLASS payload) {
 	auto &variant = conversion_data.variant;
 	auto result_data = FlatVector::GetDataMutable<T>(result);
+	auto &target_type = result.GetType();
+	const bool target_is_extension = VariantUtils::IsExtensionType(target_type);
 	auto convert = [&](idx_t row_index, uint32_t values_index, idx_t result_index) {
 		auto type_id = variant.GetTypeId(row_index, values_index);
-		if (type_id == VariantLogicalType::OBJECT || type_id == VariantLogicalType::ARRAY) {
+		if (type_id == VariantLogicalType::EXTENSION && target_is_extension) {
+			//! A value of the target type: convert its underlying value directly
+			auto extension = VariantUtils::DecodeExtensionData(variant, row_index, values_index);
+			if (VariantTypeEncoding::Read(variant, row_index, extension.type_idx) != target_type) {
+				return false;
+			}
+			values_index = extension.value_idx;
+			type_id = variant.GetTypeId(row_index, values_index);
+		}
+		if (type_id == VariantLogicalType::OBJECT || type_id == VariantLogicalType::ARRAY ||
+		    type_id == VariantLogicalType::EXTENSION) {
 			return false;
 		}
 		auto byte_offset = variant.GetByteOffset(row_index, values_index);
@@ -543,6 +556,11 @@ public:
 		return false;
 	}
 	static bool VisitType(const UnifiedVariantVectorData &, idx_t, uint32_t, idx_t, VariantVarcharSerializer &, bool) {
+		return false;
+	}
+	//! The value of an extension type is converted to a Value of the type, which has its own VARCHAR cast
+	static bool VisitExtension(const UnifiedVariantVectorData &, idx_t, uint32_t, idx_t, VariantVarcharSerializer &,
+	                           bool) {
 		return false;
 	}
 	static bool VisitBitstring(const string_t &, VariantVarcharSerializer &, bool) {
@@ -1150,6 +1168,10 @@ static bool CastVariant(FromVariantConversionData &conversion_data, Vector &resu
 	} else {
 		EmptyConversionPayloadFromVariant empty_payload;
 		switch (target_type.id()) {
+		case LogicalTypeId::ENUM:
+			//! Convert to a Value first, which is then cast to the ENUM
+			return CastVariantRows(conversion_data, result, sel, offset, count, row,
+			                       [](idx_t, uint32_t, idx_t) { return false; });
 		case LogicalTypeId::BOOLEAN:
 			return CastVariantToPrimitive<VariantBooleanConversion>(conversion_data, result, sel, offset, count, row,
 			                                                        empty_payload);
@@ -1401,6 +1423,7 @@ BoundCastInfo DefaultCasts::VariantCastSwitch(BindCastInput &input, const Logica
 	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::MAP:
 	case LogicalTypeId::UNION:
+	case LogicalTypeId::ENUM:
 	case LogicalTypeId::UUID:
 	case LogicalTypeId::ARRAY:
 		return BoundCastInfo(CastFromVARIANT, std::move(cast_data));

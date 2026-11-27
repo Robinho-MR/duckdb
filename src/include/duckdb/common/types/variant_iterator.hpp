@@ -196,6 +196,8 @@ public:
 	VariantObjectIterator GetObjectChildren(VariantIterationOrder order = VariantIterationOrder::INTERNAL) const;
 	//! Lazily iterates the element values of an ARRAY value
 	VariantArrayIterator GetArrayChildren() const;
+	//! Whether the value is of an extension type (e.g. INET), GetType() then returns that type
+	bool HasAlias() const;
 
 private:
 	//! The storage-level type of the value the cursor points at
@@ -221,6 +223,8 @@ private:
 	idx_t row = 0;
 	//! UNSHREDDED: 0-based index into the 'values' array of the unshredded component
 	uint32_t value_index = 0;
+	//! UNSHREDDED: 1-based index into 'values' of the EXTENSION value wrapping this value (0 means there is none)
+	uint32_t extension_value_index = 0;
 
 	//! SHREDDED: the current layer in the shredded format tree (the resolved 'typed_value', i.e. the
 	//! object struct, the array list, or the primitive)

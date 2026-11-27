@@ -160,28 +160,6 @@ unique_ptr<FunctionLocalState> CastToVariantLocalState(CastLocalStateParameters 
 	return make_uniq<VariantLocalData>(cast_data.shredded_type, allocator);
 }
 
-static bool SupportsShreddedCast(const LogicalType &type) {
-	if (type.id() == LogicalTypeId::STRUCT) {
-		// for struct types recurse into the child types
-		auto &child_types = StructType::GetChildTypes(type);
-		if (child_types.empty()) {
-			// an empty struct has no typed_value to shred into
-			return false;
-		}
-		for (auto &entry : child_types) {
-			if (!SupportsShreddedCast(entry.second)) {
-				return false;
-			}
-		}
-		return true;
-	}
-	if (!VariantUtils::VariantSupportsType(type)) {
-		// type is not natively supported in variant so it cannot be emitted as a shredded type without conversion
-		return false;
-	}
-	return true;
-}
-
 static void ShreddedVectorReference(const Vector &source, Vector &result, idx_t count) {
 	if (source.GetType().id() == LogicalTypeId::STRUCT) {
 		// source is "{<children>}", target is "{typed value STRUCT(<children>)}"
@@ -203,7 +181,7 @@ static void ShreddedVectorReference(const Vector &source, Vector &result, idx_t 
 }
 
 static bool TryToShreddedCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
-	if (!SupportsShreddedCast(source.GetType())) {
+	if (!VariantUtils::SupportsShreddedType(source.GetType())) {
 		return false;
 	}
 	auto &local_data = parameters.local_state->Cast<VariantLocalData>();

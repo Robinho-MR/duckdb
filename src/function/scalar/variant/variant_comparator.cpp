@@ -10,6 +10,7 @@
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/types/variant_iterator.hpp"
 #include "duckdb/common/types/variant_comparison.hpp"
+#include "duckdb/common/types/variant/variant_type_encoding.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
 
@@ -126,6 +127,32 @@ void VariantEncodeString(SINK &sink, const string_t &str, bool is_varchar) {
 	sink.Write(STRING_DELIMITER);
 }
 
+//! Encodes a type, so that the values of equal types encode the same, and the types are grouped by their name
+template <class SINK>
+void VariantEncodeType(SINK &sink, const VariantTypeDescription &description) {
+	VariantEncodeString(sink, string_t(description.name), true);
+	for (auto &modifier : description.modifiers) {
+		sink.Write(1);
+		sink.Write(modifier.has_label ? 1 : 0);
+		if (modifier.has_label) {
+			VariantEncodeString(sink, string_t(modifier.label), true);
+		}
+		if (modifier.type) {
+			sink.Write(1);
+			VariantEncodeType(sink, *modifier.type);
+		} else {
+			sink.Write(0);
+			sink.Write(static_cast<data_t>(modifier.value.type().id()));
+			VariantEncodeString(sink, string_t(modifier.value.ToString()), true);
+		}
+	}
+	sink.Write(0);
+	sink.Write(description.physical ? 1 : 0);
+	if (description.physical) {
+		VariantEncodeType(sink, *description.physical);
+	}
+}
+
 //! An ARRAY or OBJECT being encoded, and the position of its next child. The open containers are kept on an explicit
 //! stack, so that deeply nested values cannot overflow the call stack
 struct VariantEncodeFrame {
@@ -144,6 +171,11 @@ struct VariantEncodeFrame {
 //! Encodes a single value, or opens the frame of an ARRAY or OBJECT and returns true
 template <class SINK>
 bool EncodeVariantNode(const VariantNode &it, SINK &sink, vector<VariantEncodeFrame> &frames) {
+	if (it.HasAlias()) {
+		// the values of an extension type are grouped by their type, and ordered by their value within it
+		sink.Write(static_cast<data_t>(VariantComparisonType::EXTENSION));
+		VariantEncodeType(sink, VariantTypeEncoding::Decompose(it.GetType()));
+	}
 	const auto type_id = it.GetTypeId();
 	const auto comparison_type = GetVariantComparisonType(type_id);
 	// write the type rank - this guarantees values are ordered by type first

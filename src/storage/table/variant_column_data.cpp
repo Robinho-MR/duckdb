@@ -385,8 +385,8 @@ struct VariantShreddedAppendInput {
 
 } // namespace
 
-//! Checks that a VARIANT value can be stored in the given storage version: engines that predate wide decimals and TYPE
-//! values cannot read them
+//! Checks that a VARIANT value can be stored in the given storage version: engines that predate wide decimals, TYPE
+//! values and values of extension types cannot read them
 static void CheckVariantValue(StorageManager &storage_manager, StorageVersion storage_version,
                               const VariantNode &root) {
 	// an explicit work list, deeply nested values must not consume stack
@@ -395,6 +395,14 @@ static void CheckVariantValue(StorageManager &storage_manager, StorageVersion st
 	while (!pending.empty()) {
 		auto node = pending.back();
 		pending.pop_back();
+		if (node.HasAlias() && storage_version < Variant::EXTENSION_VERSION_ADDED) {
+			auto required = GetStorageVersionName(Variant::EXTENSION_VERSION_ADDED, false);
+			auto current = GetStorageVersionName(storage_version, false);
+			throw InvalidInputException(
+			    "VARIANT values of type %s cannot be stored in a VARIANT column in storage versions prior to %s "
+			    "(database %s is using storage version %s)",
+			    node.GetType().ToString(), required, storage_manager.GetAttached().GetName(), current);
+		}
 		switch (node.GetTypeId()) {
 		case LogicalTypeId::DECIMAL:
 			if (storage_version < Decimal::WIDE_VERSION_ADDED && Decimal::IsWide(node.GetDecimalProperties().width)) {
@@ -435,7 +443,8 @@ static void CheckVariantValue(StorageManager &storage_manager, StorageVersion st
 //! The unshredded payload is stored as it is, so a storage version that predates a value refuses it
 static void CheckVariantStorageVersion(StorageManager &storage_manager, const Vector &vector, idx_t count) {
 	const auto storage_version = storage_manager.GetStorageVersion();
-	if (storage_version >= Decimal::WIDE_VERSION_ADDED && storage_version >= Variant::TYPE_VERSION_ADDED) {
+	if (storage_version >= Decimal::WIDE_VERSION_ADDED && storage_version >= Variant::TYPE_VERSION_ADDED &&
+	    storage_version >= Variant::EXTENSION_VERSION_ADDED) {
 		return;
 	}
 	VariantIterator iterator(vector);

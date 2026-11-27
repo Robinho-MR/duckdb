@@ -5,6 +5,7 @@
 #include "duckdb/common/vector/struct_vector.hpp"
 #include "duckdb/common/serializer/varint.hpp"
 #include "duckdb/function/scalar/variant_utils.hpp"
+#include "duckdb/common/types/variant/variant_type_encoding.hpp"
 
 #include <algorithm>
 
@@ -240,6 +241,20 @@ VariantNode VariantNode::MakeUnshredded(const VariantIterator &state, idx_t row,
 	result.kind = Kind::UNSHREDDED;
 	result.row = row;
 	result.value_index = value_index;
+	auto &unshredded = state.unshredded;
+	if (unshredded.GetTypeId(row, value_index) == VariantLogicalType::EXTENSION) {
+		//! Point at the underlying value, the wrapper only contributes the type
+		auto nested = DecodeNestedData(unshredded.GetBlob(row), unshredded.GetByteOffset(row, value_index));
+		if (nested.child_count != 2) {
+			throw InvalidInputException("EXTENSION value in a VARIANT must have 2 children, found %d",
+			                            nested.child_count);
+		}
+		result.extension_value_index = value_index + 1;
+		result.value_index = unshredded.GetValuesIndex(row, nested.children_idx + VariantExtensionData::VALUE_CHILD);
+		if (unshredded.GetTypeId(row, result.value_index) == VariantLogicalType::EXTENSION) {
+			throw InvalidInputException("VARIANT contains an EXTENSION value that directly wraps another one");
+		}
+	}
 	return result;
 }
 
@@ -330,7 +345,29 @@ LogicalTypeId VariantNode::GetTypeId() const {
 	return VariantTypeToLogicalTypeId(GetVariantType());
 }
 
+bool VariantNode::HasAlias() const {
+	switch (kind) {
+	case Kind::UNSHREDDED:
+		return extension_value_index != 0;
+	case Kind::SHREDDED:
+		return VariantUtils::IsExtensionType(shredded_format->logical_type);
+	default:
+		return false;
+	}
+}
+
 LogicalType VariantNode::GetType() const {
+	if (HasAlias()) {
+		if (kind == Kind::SHREDDED) {
+			//! The layer is of the extension type
+			return shredded_format->logical_type;
+		}
+		auto &unshredded = state->unshredded;
+		auto extension_index = extension_value_index - 1;
+		auto nested = DecodeNestedData(unshredded.GetBlob(row), unshredded.GetByteOffset(row, extension_index));
+		auto type_index = unshredded.GetValuesIndex(row, nested.children_idx + VariantExtensionData::TYPE_CHILD);
+		return VariantTypeEncoding::Read(MakeUnshredded(*state, row, type_index));
+	}
 	auto type_id = GetTypeId();
 	if (type_id == LogicalTypeId::DECIMAL) {
 		auto properties = GetDecimalProperties();

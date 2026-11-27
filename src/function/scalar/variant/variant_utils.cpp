@@ -12,6 +12,8 @@
 #include "duckdb/common/type_visitor.hpp"
 #include "duckdb/function/variant/variant_shredding.hpp"
 #include "duckdb/common/types/variant/variant_builder.hpp"
+#include "duckdb/common/types/variant/variant_type_encoding.hpp"
+#include "duckdb/common/extension_type_info.hpp"
 
 namespace duckdb {
 
@@ -84,10 +86,78 @@ string_t VariantUtils::DecodeStringData(const UnifiedVariantVectorData &variant,
 	return string_t(reinterpret_cast<const char *>(ptr), length);
 }
 
+VariantExtensionData VariantUtils::DecodeExtensionData(const UnifiedVariantVectorData &variant, idx_t row,
+                                                       uint32_t value_index) {
+	D_ASSERT(variant.GetTypeId(row, value_index) == VariantLogicalType::EXTENSION);
+	auto nested_data = DecodeNestedData(variant, row, value_index);
+	if (nested_data.child_count != 2) {
+		throw InvalidInputException("EXTENSION value in a VARIANT must have 2 children, found %d",
+		                            nested_data.child_count);
+	}
+	VariantExtensionData result;
+	result.type_idx = variant.GetValuesIndex(row, nested_data.children_idx + VariantExtensionData::TYPE_CHILD);
+	result.value_idx = variant.GetValuesIndex(row, nested_data.children_idx + VariantExtensionData::VALUE_CHILD);
+	return result;
+}
+
+void VariantUtils::VerifyNotExtension(const UnifiedVariantVectorData &variant, idx_t row, uint32_t value_index) {
+	if (variant.GetTypeId(row, value_index) != VariantLogicalType::EXTENSION) {
+		return;
+	}
+	auto extension = DecodeExtensionData(variant, row, value_index);
+	throw NotImplementedException("Writing a VARIANT value of type %s to Parquet is not supported",
+	                              VariantTypeEncoding::Read(variant, row, extension.type_idx).ToString());
+}
+
+bool VariantUtils::IsExtensionType(const LogicalType &type) {
+	return type.HasAlias() && !type.IsJSONType() && !type.IsAggregateState();
+}
+
+LogicalType VariantUtils::GetUnaliasedType(const LogicalType &type) {
+	return type.WithAlias(string()).WithExtensionInfo(nullptr);
+}
+
+bool VariantUtils::SupportsShreddedType(const LogicalType &type) {
+	if (IsExtensionType(type)) {
+		//! The shredded layer is the type itself, so its fields can't be nested or extension types
+		auto unaliased = GetUnaliasedType(type);
+		if (unaliased.id() == LogicalTypeId::STRUCT) {
+			auto &child_types = StructType::GetChildTypes(unaliased);
+			if (child_types.empty()) {
+				return false;
+			}
+			for (auto &entry : child_types) {
+				if (!VariantSupportsType(entry.second)) {
+					return false;
+				}
+			}
+			return true;
+		}
+		return VariantSupportsType(unaliased);
+	}
+	if (type.id() == LogicalTypeId::STRUCT) {
+		// for struct types recurse into the child types
+		auto &child_types = StructType::GetChildTypes(type);
+		if (child_types.empty()) {
+			// an empty struct has no typed_value to shred into
+			return false;
+		}
+		for (auto &entry : child_types) {
+			if (!SupportsShreddedType(entry.second)) {
+				return false;
+			}
+		}
+		return true;
+	}
+	// a type that is not natively supported in variant can't be emitted as a shredded type without conversion
+	return VariantSupportsType(type);
+}
+
 VariantNestedData VariantUtils::DecodeNestedData(const UnifiedVariantVectorData &variant, idx_t row,
                                                  uint32_t value_index) {
 	D_ASSERT(IsNestedType(variant, row, value_index) ||
-	         variant.GetTypeId(row, value_index) == VariantLogicalType::TYPE);
+	         variant.GetTypeId(row, value_index) == VariantLogicalType::TYPE ||
+	         variant.GetTypeId(row, value_index) == VariantLogicalType::EXTENSION);
 	auto byte_offset = variant.GetByteOffset(row, value_index);
 	auto &blob = variant.GetData(row);
 	auto blob_size = blob.GetSize();
@@ -195,10 +265,16 @@ VariantUtils::CollectNestedData(const UnifiedVariantVectorData &variant, Variant
 		}
 
 		//! Is the variant value NULL ?
-		auto type_id = variant.GetTypeId(row_index, value_index_sel[i]);
+		auto value_index = value_index_sel[i];
+		auto type_id = variant.GetTypeId(row_index, value_index);
 		if (type_id == VariantLogicalType::VARIANT_NULL) {
 			validity.SetInvalid(i);
 			continue;
+		}
+		if (type_id == VariantLogicalType::EXTENSION && expected_type != VariantLogicalType::EXTENSION) {
+			//! Look through the EXTENSION value to the value it holds
+			value_index = DecodeExtensionData(variant, row_index, value_index).value_idx;
+			type_id = variant.GetTypeId(row_index, value_index);
 		}
 
 		//! Is the type of the VARIANT correct?
@@ -211,7 +287,7 @@ VariantUtils::CollectNestedData(const UnifiedVariantVectorData &variant, Variant
 			continue;
 		}
 
-		child_data[i] = DecodeNestedData(variant, row_index, value_index_sel[i]);
+		child_data[i] = DecodeNestedData(variant, row_index, value_index);
 	}
 
 	if (wrong_type != VariantLogicalType::VARIANT_NULL) {
@@ -401,7 +477,8 @@ bool VariantUtils::Verify(const Vector &variant, const SelectionVector &sel_p, i
 			switch (static_cast<VariantLogicalType>(value_type_id)) {
 			case VariantLogicalType::OBJECT:
 			case VariantLogicalType::ARRAY:
-			case VariantLogicalType::TYPE: {
+			case VariantLogicalType::TYPE:
+			case VariantLogicalType::EXTENSION: {
 				auto length = VarintDecode<uint32_t>(blob_data);
 				if (!length) {
 					break;
@@ -431,18 +508,43 @@ bool VariantUtils::Verify(const Vector &variant, const SelectionVector &sel_p, i
 	return true;
 }
 
-LogicalType VariantUtils::ShreddedType(const LogicalType &logical_type) {
-	auto shredding_type = TypeVisitor::VisitReplace(logical_type, [](const LogicalType &type) {
-		if (type.id() == LogicalTypeId::STRUCT) {
-			return LogicalType::STRUCT({{"typed_value", type}});
-		}
+//! The type with the alias and extension info of 'source'
+static LogicalType CopyAlias(LogicalType type, const LogicalType &source) {
+	if (!source.HasAlias()) {
 		return type;
-	});
-	return LogicalType::STRUCT({{"unshredded", VariantShredding::GetUnshreddedType()}, {"shredded", shredding_type}});
+	}
+	type = type.WithAlias(source.GetAlias());
+	auto info = source.GetExtensionInfo();
+	return info ? type.WithExtensionInfo(make_uniq<ExtensionTypeInfo>(*info)) : type;
+}
+
+//! Wraps every STRUCT in a "typed_value" struct, keeping the aliases of the types
+static LogicalType ShreddedTypedValueType(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::STRUCT: {
+		child_list_t<LogicalType> children;
+		for (auto &child : StructType::GetChildTypes(type)) {
+			children.emplace_back(child.first, ShreddedTypedValueType(child.second));
+		}
+		return LogicalType::STRUCT({{"typed_value", CopyAlias(LogicalType::STRUCT(std::move(children)), type)}});
+	}
+	case LogicalTypeId::LIST:
+		return CopyAlias(LogicalType::LIST(ShreddedTypedValueType(ListType::GetChildType(type))), type);
+	case LogicalTypeId::ARRAY:
+		return CopyAlias(
+		    LogicalType::ARRAY(ShreddedTypedValueType(ArrayType::GetChildType(type)), ArrayType::GetSize(type)), type);
+	default:
+		return type;
+	}
+}
+
+LogicalType VariantUtils::ShreddedType(const LogicalType &logical_type) {
+	return LogicalType::STRUCT(
+	    {{"unshredded", VariantShredding::GetUnshreddedType()}, {"shredded", ShreddedTypedValueType(logical_type)}});
 }
 
 bool VariantUtils::VariantSupportsType(const LogicalType &type) {
-	if (type.IsJSONType()) {
+	if (type.IsJSONType() || IsExtensionType(type)) {
 		return false;
 	}
 	switch (type.id()) {
@@ -486,6 +588,10 @@ bool VariantUtils::VariantSupportsType(const LogicalType &type) {
 bool VariantUtils::ShreddedCastMatchesVariantCast(const LogicalType &shredded_type, const LogicalType &target) {
 	if (target.id() == LogicalTypeId::VARIANT || shredded_type == target) {
 		return true;
+	}
+	if (TypeVisitor::Contains(shredded_type, [](const LogicalType &type) { return IsExtensionType(type); })) {
+		// the VARIANT cast of an extension value uses the casts of its type
+		return false;
 	}
 	// casts to JSON serialize the VARIANT, and the VARIANT cast has no conversion to e.g. ENUM or UNION
 	return VariantSupportsType(target);

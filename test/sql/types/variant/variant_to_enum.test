@@ -1,0 +1,33 @@
+# name: test/sql/types/variant/variant_to_enum.test
+# description: Cast VARIANT to ENUM
+# group: [variant]
+
+statement ok
+CREATE TYPE mood AS ENUM('sad', 'happy');
+
+query II
+SELECT v::mood, typeof(v::mood) FROM (SELECT 'happy'::mood::VARIANT v)
+----
+happy	ENUM('sad', 'happy')
+
+query I
+SELECT [v, NULL]::VARIANT::mood[] FROM (SELECT 'sad'::mood::VARIANT v)
+----
+[sad, NULL]
+
+query I
+SELECT {'m': 'happy'}::VARIANT::STRUCT(m mood)
+----
+{'m': happy}
+
+query I
+SELECT TRY_CAST(v AS mood) FROM (VALUES ('happy'::VARIANT), ('angry'::VARIANT), (NULL::VARIANT)) t(v)
+----
+happy
+NULL
+NULL
+
+statement error
+SELECT 'angry'::VARIANT::mood
+----
+Can't convert VARIANT(VARCHAR) value 'angry'

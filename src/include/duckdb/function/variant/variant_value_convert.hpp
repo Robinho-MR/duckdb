@@ -93,6 +93,20 @@ struct ValueConverter {
 	static Value VisitType(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx, idx_t depth) {
 		return Value::TYPE(VariantTypeEncoding::Read(variant, row, values_idx));
 	}
+	static Value VisitExtension(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx, idx_t depth) {
+		auto extension = VariantUtils::DecodeExtensionData(variant, row, values_idx);
+		auto type = VariantTypeEncoding::Read(variant, row, extension.type_idx);
+		auto value = VariantVisitor<ValueConverter>::Visit(variant, row, extension.value_idx, depth + 1);
+		if (value.IsNull()) {
+			return Value(type);
+		}
+		//! The value is stored in the VARIANT layout (e.g. its STRUCT fields are not in the order of the type)
+		auto underlying_type = VariantUtils::GetUnaliasedType(type);
+		if (value.type() != underlying_type) {
+			value = value.DefaultCastAs(underlying_type);
+		}
+		return value.WithType(type);
+	}
 	static Value VisitBitstring(const string_t &str) {
 		return Value::BIT(const_data_ptr_cast(str.GetData()), str.GetSize());
 	}

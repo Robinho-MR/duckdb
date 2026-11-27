@@ -73,6 +73,8 @@ struct VariantNormalizer {
 	static void VisitGeography(const string_t &geog, VariantNormalizerState &state);
 	static void VisitType(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx, idx_t depth,
 	                      VariantNormalizerState &state);
+	static void VisitExtension(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx, idx_t depth,
+	                           VariantNormalizerState &state);
 	static void VisitBitstring(const string_t &bits, VariantNormalizerState &state);
 
 	template <typename T>

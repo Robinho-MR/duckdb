@@ -4,6 +4,7 @@
 #include "duckdb/common/vector/struct_vector.hpp"
 #include "duckdb/function/variant/variant_shredding.hpp"
 #include "duckdb/function/scalar/variant_utils.hpp"
+#include "duckdb/common/types/variant/variant_type_encoding.hpp"
 
 namespace duckdb {
 
@@ -354,7 +355,8 @@ void VariantShredding::WriteTypedValues(UnifiedVariantVectorData &variant, Vecto
 }
 
 VariantShreddingState::VariantShreddingState(const LogicalType &type, idx_t total_count)
-    : type(type), shredded_sel(total_count), values_index_sel(total_count), result_sel(total_count) {
+    : type(type), is_extension_type(VariantUtils::IsExtensionType(type)), shredded_sel(total_count),
+      values_index_sel(total_count), result_sel(total_count) {
 	if (type.id() != LogicalTypeId::STRUCT) {
 		return;
 	}
@@ -364,14 +366,38 @@ VariantShreddingState::VariantShreddingState(const LogicalType &type, idx_t tota
 	}
 }
 
+uint32_t VariantShreddingState::GetShreddedIndex(UnifiedVariantVectorData &variant, idx_t row,
+                                                 uint32_t values_index) const {
+	if (variant.GetTypeId(row, values_index) != VariantLogicalType::EXTENSION) {
+		return values_index;
+	}
+	return VariantUtils::DecodeExtensionData(variant, row, values_index).value_idx;
+}
+
 bool VariantShreddingState::ValueIsShredded(UnifiedVariantVectorData &variant, idx_t row, uint32_t values_index) {
 	auto type_id = variant.GetTypeId(row, values_index);
+	if (type_id == VariantLogicalType::EXTENSION) {
+		//! Only a value of the type itself is shredded
+		if (!is_extension_type) {
+			return false;
+		}
+		auto extension = VariantUtils::DecodeExtensionData(variant, row, values_index);
+		if (VariantTypeEncoding::Read(variant, row, extension.type_idx) != type) {
+			return false;
+		}
+		type_id = variant.GetTypeId(row, extension.value_idx);
+		if (type_id == VariantLogicalType::EXTENSION) {
+			return false;
+		}
+	} else if (is_extension_type) {
+		return false;
+	}
 	if (!GetVariantTypes().count(VariantTypeToLogicalTypeId(type_id))) {
 		return false;
 	}
 	if (type_id == VariantLogicalType::DECIMAL) {
 		// the shredded column stores the unscaled value, so it only holds decimals of its scale that fit its width
-		auto decimal_data = VariantUtils::DecodeDecimalData(variant, row, values_index);
+		auto decimal_data = VariantUtils::DecodeDecimalData(variant, row, GetShreddedIndex(variant, row, values_index));
 		return type.InternalType() == decimal_data.GetPhysicalType() &&
 		       decimal_data.scale == DecimalType::GetScale(type) && decimal_data.width <= DecimalType::GetWidth(type);
 	}

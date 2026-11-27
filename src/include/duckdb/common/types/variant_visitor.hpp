@@ -32,6 +32,22 @@ class VariantVisitor {
 		static constexpr bool value = decltype(test<T>(0))::value;
 	};
 
+	// Detects if T has a static VisitExtension for unified variant data, the default visits the value of the extension
+	template <typename T, typename... Args>
+	class has_visit_extension {
+	private:
+		template <typename U>
+		static auto test(int) -> decltype(U::VisitExtension(std::declval<const UnifiedVariantVectorData &>(), idx_t(),
+		                                                    uint32_t(), idx_t(), std::declval<Args>()...),
+		                                  std::true_type {});
+
+		template <typename>
+		static std::false_type test(...);
+
+	public:
+		static constexpr bool value = decltype(test<T>(0))::value;
+	};
+
 public:
 	//! Root visits start at depth zero; child visits increment the parent depth.
 	template <typename... Args>
@@ -107,6 +123,8 @@ public:
 		}
 		case VariantLogicalType::TYPE:
 			return Visitor::VisitType(variant, row, values_idx, depth, std::forward<Args>(args)...);
+		case VariantLogicalType::EXTENSION:
+			return VisitExtension(variant, row, values_idx, depth, std::forward<Args>(args)...);
 		case VariantLogicalType::TIME_MICROS:
 			return Visitor::VisitTime(Load<dtime_t>(ptr), std::forward<Args>(args)...);
 		case VariantLogicalType::TIME_NANOS:
@@ -307,6 +325,22 @@ private:
 	static typename std::enable_if<!has_visit_metadata<V, Args...>::value, void>::type VisitMetadata(VariantLogicalType,
 	                                                                                                 Args &&...) {
 		// do nothing
+	}
+
+	template <typename V = Visitor, typename... Args>
+	static typename std::enable_if<has_visit_extension<V, Args...>::value, ReturnType>::type
+	VisitExtension(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx, idx_t depth,
+	               Args &&...args) {
+		return Visitor::VisitExtension(variant, row, values_idx, depth, std::forward<Args>(args)...);
+	}
+
+	//! By default an EXTENSION value is visited as its underlying value
+	template <typename V = Visitor, typename... Args>
+	static typename std::enable_if<!has_visit_extension<V, Args...>::value, ReturnType>::type
+	VisitExtension(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx, idx_t depth,
+	               Args &&...args) {
+		auto extension = VariantUtils::DecodeExtensionData(variant, row, values_idx);
+		return Visit(variant, row, extension.value_idx, depth + 1, std::forward<Args>(args)...);
 	}
 
 	template <typename... Args>

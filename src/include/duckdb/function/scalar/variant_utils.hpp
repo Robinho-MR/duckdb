@@ -126,6 +126,17 @@ struct VariantUtils {
 	                                                 uint32_t value_index);
 	DUCKDB_API static VariantNestedData DecodeNestedData(const UnifiedVariantVectorData &variant, idx_t row,
 	                                                     uint32_t value_index);
+	//! The type and the value of an EXTENSION value
+	DUCKDB_API static VariantExtensionData DecodeExtensionData(const UnifiedVariantVectorData &variant, idx_t row,
+	                                                           uint32_t value_index);
+	//! Throws if the value is an EXTENSION value (Parquet has no extension types)
+	DUCKDB_API static void VerifyNotExtension(const UnifiedVariantVectorData &variant, idx_t row, uint32_t value_index);
+	//! Whether values of the type are stored as EXTENSION values: types with an alias, except JSON
+	DUCKDB_API static bool IsExtensionType(const LogicalType &type);
+	//! The type with its alias and extension info removed
+	DUCKDB_API static LogicalType GetUnaliasedType(const LogicalType &type);
+	//! Whether values of the type can be emitted as a shredded VARIANT of that type without conversion
+	DUCKDB_API static bool SupportsShreddedType(const LogicalType &type);
 	DUCKDB_API static string_t DecodeStringData(const UnifiedVariantVectorData &variant, idx_t row,
 	                                            uint32_t value_index);
 	DUCKDB_API static vector<string> GetObjectKeys(const UnifiedVariantVectorData &variant, idx_t row,

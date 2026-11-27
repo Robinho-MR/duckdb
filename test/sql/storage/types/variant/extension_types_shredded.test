@@ -1,0 +1,56 @@
+# name: test/sql/storage/types/variant/extension_types_shredded.test
+# description: VARIANT columns of an extension type whose field order differs from the VARIANT keys, shredded
+# group: [variant]
+
+require inet
+
+statement ok
+ATTACH '{TEST_DIR}/variant_extension_types_shredded.db' AS db (STORAGE_VERSION 'v2.1.0')
+
+statement ok
+SET variant_minimum_shredding_size = 0
+
+# INET is STRUCT(ip_type, address, mask), the keys of a VARIANT object are sorted
+statement ok
+CREATE TABLE db.tbl AS
+SELECT CASE WHEN i % 2 = 0 THEN ('10.0.0.' || (i % 250))::INET END::VARIANT AS col
+FROM range(5000) t(i)
+
+statement ok
+CHECKPOINT db
+
+statement ok
+DETACH db
+
+statement ok
+ATTACH '{TEST_DIR}/variant_extension_types_shredded.db' AS db
+
+query I
+SELECT DISTINCT vector_type(col) FROM db.tbl
+----
+SHREDDED_VECTOR
+
+query III
+SELECT variant_typeof(col), col::VARCHAR, col::INET FROM db.tbl WHERE col IS NOT NULL LIMIT 2
+----
+INET	10.0.0.0	10.0.0.0
+INET	10.0.0.2	10.0.0.2
+
+query II
+SELECT count(DISTINCT col::VARCHAR), count(col) FROM db.tbl
+----
+125	2500
+
+query I
+SELECT col::VARCHAR FROM db.tbl WHERE col::INET = '10.0.0.4'::INET LIMIT 1
+----
+10.0.0.4
+
+# older storage versions can't store the type
+statement ok
+ATTACH '{TEST_DIR}/variant_extension_types_old.db' AS old_db (STORAGE_VERSION 'v2.0.0')
+
+statement error
+CREATE TABLE old_db.tbl AS SELECT '10.0.0.1'::INET::VARIANT AS col
+----
+VARIANT values of type INET cannot be stored in a VARIANT column in storage versions prior to v2.1.0

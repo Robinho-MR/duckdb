@@ -200,6 +200,30 @@ static bool HasUnsupportedVariantKeys(const VariantNode &node) {
 	return false;
 }
 
+static bool ContainsExtensionVariant(const VariantNode &node) {
+	if (node.HasAlias()) {
+		return true;
+	}
+	switch (node.GetTypeId()) {
+	case LogicalTypeId::STRUCT:
+		for (auto &child : node.GetObjectChildren()) {
+			if (ContainsExtensionVariant(child.value)) {
+				return true;
+			}
+		}
+		return false;
+	case LogicalTypeId::LIST:
+		for (auto child : node.GetArrayChildren()) {
+			if (ContainsExtensionVariant(child)) {
+				return true;
+			}
+		}
+		return false;
+	default:
+		return false;
+	}
+}
+
 bool ConstantExpression::RequiresTypeWitness(const LogicalType &type) {
 	return TypeVisitor::Contains(type, [&](const LogicalType &child) {
 		return child.IsAggregateState() || child.id() == LogicalTypeId::TYPE ||
@@ -397,6 +421,10 @@ unique_ptr<ParsedExpression> ConstantExpression::FromValue(const Value &value) {
 		VariantIterator iterator(vector);
 		if (HasUnsupportedVariantKeys(iterator.Root(0))) {
 			throw NotImplementedException("VARIANT object keys cannot be represented by a struct literal");
+		}
+		if (ContainsExtensionVariant(iterator.Root(0))) {
+			// the types of EXTENSION values are lost in the conversion to a plain value
+			throw NotImplementedException("VARIANT values of extension types cannot be represented by a literal");
 		}
 		auto payload = VariantValue::GetValue(value);
 		return CastTo(type, CastTo(payload.type(), FromValue(payload)));
