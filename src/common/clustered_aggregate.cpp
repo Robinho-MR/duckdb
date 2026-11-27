@@ -47,6 +47,7 @@ constexpr uint64_t GID_MASK = ClusteredAggr::MAX_GID_COUNT - 1;
 
 static_assert((1 << SLOT_GRP_BITS) >= STANDARD_VECTOR_SIZE, "Group IDs must be able to address vectorsize");
 
+//! The default Slot is the sentinel "no slot allocated yet" (all bitfields are 1s)
 struct Slot { // really just a 64-bits integer
 	union {
 		struct {
@@ -66,10 +67,7 @@ struct Slot { // really just a 64-bits integer
 		val.bitfields.idx = i;
 		val.bitfields.gid = g;
 	}
-	//! Sentinel value meaning "no slot allocated yet" (all bitfields are 1s).
-	static const Slot UNINITIALIZED;
 };
-const Slot Slot::UNINITIALIZED {};
 
 // Each cursor uses an independent slice of the shared arena and its own slice of group_runs[].
 // Each slice has a hot region first (MAX_HOT_PER_CURSOR lists of HALF_VEC slots) followed by a
@@ -202,8 +200,8 @@ bool ClusteredAggr::TryClustered(const uint64_t *group_ids, sel_t count, sel_t *
 
 	const sel_t sample = SAMPLE_SIZE / 2; // dual cursor: half as many iterations as positions
 	const sel_t half = count / 2;
-	Slot cur1 = Slot::UNINITIALIZED;
-	Slot cur2 = Slot::UNINITIALIZED;
+	Slot cur1;
+	Slot cur2;
 	sel_t miss1 = 0, miss2 = 0, pos;
 	for (pos = 0; pos < sample && st1.n_runs < MAX_HOT_PER_CURSOR && st2.n_runs < MAX_HOT_PER_CURSOR; pos++) {
 		uint64_t gid1 = group_ids[pos] & GID_MASK;

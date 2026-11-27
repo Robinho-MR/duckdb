@@ -1,4 +1,5 @@
 #include "duckdb/logging/log_type.hpp"
+#include "duckdb/common/no_destructor.hpp"
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/file_opener.hpp"
@@ -66,7 +67,7 @@ LogicalType FileSystemLogType::GetLogType() {
 static const case_insensitive_set_t &HTTPRequestHeaderAllowList() {
 	//! For extra info, the advise from OpenTelemetry:
 	//! https://opentelemetry.io/docs/specs/semconv/registry/attributes/http/#http-request-header
-	static const case_insensitive_set_t allow_list = {
+	static const NoDestructor<case_insensitive_set_t> allow_list(case_insensitive_set_t {
 	    // HTTP semantics (https://www.rfc-editor.org/rfc/rfc9110.html).
 	    "accept",              // Accepted media types and parameters.
 	    "accept-charset",      // Accepted character sets.
@@ -133,12 +134,12 @@ static const case_insensitive_set_t &HTTPRequestHeaderAllowList() {
 
 	    // AWS JSON protocol (https://smithy.io/2.0/aws/protocols/aws-json-1_1-protocol.html), e.g. AWS Glue.
 	    "x-amz-target", // Service and operation name, e.g. AWSGlue.GetTable.
-	};
-	return allow_list;
+	});
+	return *allow_list;
 }
 
 static const case_insensitive_set_t &HTTPResponseHeaderAllowList() {
-	static const case_insensitive_set_t allow_list = {
+	static const NoDestructor<case_insensitive_set_t> allow_list(case_insensitive_set_t {
 	    // HTTP semantics (https://www.rfc-editor.org/rfc/rfc9110.html).
 	    "accept",           // Accepted media types and parameters.
 	    "accept-encoding",  // Accepted content codings.
@@ -186,8 +187,8 @@ static const case_insensitive_set_t &HTTPResponseHeaderAllowList() {
 	    // "x-amz-server-side-encryption-aws-kms-key-id", // Identifies an encryption key and possibly its account.
 	    // "x-amz-server-side-encryption-customer-key-md5", // Fingerprints the customer encryption key.
 	    // "x-amz-version-id", // Identifies an object version.
-	};
-	return allow_list;
+	});
+	return *allow_list;
 }
 
 HTTPLogType::HTTPLogType() : LogType(NAME, LEVEL, GetLogType()) {

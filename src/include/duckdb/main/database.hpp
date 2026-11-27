@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/common/winapi.hpp"
+#include "duckdb/common/no_destructor.hpp"
 #include "duckdb/main/capi/extension_api.hpp"
 #include "duckdb/main/capi_v2/extension_load_v2.hpp"
 #include "duckdb/main/config.hpp"
@@ -153,11 +154,11 @@ struct StaticExtensionDescriber {
 		extension.Load(loader);
 	}
 	static int32_t Describe(duckdb_extension_descriptor *descriptor) {
-		static const std::string name = T().Name();
-		static const std::string version = T().Version();
+		static const NoDestructor<std::string> name(T().Name());
+		static const NoDestructor<std::string> version(T().Version());
 		descriptor->version = 1;
-		descriptor->name = name.c_str();
-		descriptor->extension_version = version.c_str();
+		descriptor->name = name->c_str();
+		descriptor->extension_version = version->c_str();
 		descriptor->entry_cpp = reinterpret_cast<void (*)(void)>(&Entry);
 		return 0;
 	}

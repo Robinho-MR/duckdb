@@ -3,6 +3,7 @@
 #include "duckdb/parser/peg/transformer/peg_transformer.hpp"
 #include "duckdb/parser/expression/star_expression.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
+#include "duckdb/common/no_destructor.hpp"
 
 namespace duckdb {
 
@@ -9675,8 +9676,9 @@ static case_insensitive_map_t<const TransformFrameOps *> BuildGeneratedTransform
 }
 
 const case_insensitive_map_t<const TransformFrameOps *> &PEGTransformerFactory::GeneratedTransformFrameOps() {
-	static const case_insensitive_map_t<const TransformFrameOps *> result = BuildGeneratedTransformFrameOps();
-	return result;
+	static const NoDestructor<case_insensitive_map_t<const TransformFrameOps *>> result(
+	    BuildGeneratedTransformFrameOps());
+	return *result;
 }
 
 void PEGTransformerFactory::InitializeStatementTrampoline(PEGTransformer &transformer,

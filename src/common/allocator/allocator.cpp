@@ -1,4 +1,5 @@
 #include "duckdb/common/allocator.hpp"
+#include "duckdb/common/no_destructor.hpp"
 
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/atomic.hpp"
@@ -175,8 +176,8 @@ data_ptr_t Allocator::ReallocateData(data_ptr_t pointer, idx_t old_size, idx_t s
 	return new_pointer;
 }
 shared_ptr<Allocator> &Allocator::DefaultAllocatorReference() {
-	static shared_ptr<Allocator> DEFAULT_ALLOCATOR = make_shared_ptr<Allocator>();
-	return DEFAULT_ALLOCATOR;
+	static NoDestructor<shared_ptr<Allocator>> default_allocator(make_shared_ptr<Allocator>());
+	return *default_allocator;
 }
 
 Allocator &Allocator::DefaultAllocator() {

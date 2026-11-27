@@ -1,4 +1,5 @@
 #include "duckdb/storage/block_allocator.hpp"
+#include "duckdb/common/no_destructor.hpp"
 #include "duckdb/storage/sharded_allocator_queue.hpp"
 
 #include "duckdb/common/allocator.hpp"
@@ -554,7 +555,10 @@ BlockAllocatorThreadLocalState &GetBlockAllocatorThreadLocalState(const BlockAll
 		worker_local_state->TryInitialize(block_allocator);
 		return *worker_local_state;
 	}
+	// the destructor gives the thread's blocks back when the thread exits
+	DUCKDB_ALLOW_STATIC_LIFETIME_BEGIN
 	thread_local BlockAllocatorThreadLocalState local_state(block_allocator);
+	DUCKDB_ALLOW_STATIC_LIFETIME_END
 	thread_local_state_created = true;
 	local_state.TryInitialize(block_allocator);
 	return local_state;

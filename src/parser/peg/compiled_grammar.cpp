@@ -1,4 +1,5 @@
 #include "duckdb/parser/peg/compiled_grammar.hpp"
+#include "duckdb/common/no_destructor.hpp"
 #include "duckdb/parser/peg/matcher_factory.hpp"
 #include "duckdb/parser/peg/keyword_helper/parsed_grammar_keyword_helper.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -179,8 +180,8 @@ shared_ptr<CompiledGrammar> CompiledGrammar::Create(const vector<reference<Gramm
 }
 
 shared_ptr<CompiledGrammar> CompiledGrammar::DefaultGrammar() {
-	static auto grammar = Create();
-	return grammar;
+	static const NoDestructor<shared_ptr<CompiledGrammar>> grammar(Create());
+	return *grammar;
 }
 
 shared_ptr<CompiledGrammar> CompiledGrammar::Create() {

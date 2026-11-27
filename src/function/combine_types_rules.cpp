@@ -1,4 +1,5 @@
 #include "duckdb/function/combine_types_rule.hpp"
+#include "duckdb/common/no_destructor.hpp"
 #include "duckdb/common/helper.hpp"
 #include "duckdb/common/types/decimal.hpp"
 #include "duckdb/common/numeric_utils.hpp"
@@ -414,7 +415,7 @@ static bool UnequalMatchesStringLiteral(const LogicalType &left, const LogicalTy
 
 // Rules are matched in order, so the first matching rule wins
 const vector<CombineTypesRule> &DefaultCombineTypesRules() {
-	static const vector<CombineTypesRule> rules = {
+	static const NoDestructor<vector<CombineTypesRule>> rules(vector<CombineTypesRule> {
 	    {MatchesNoAlias, CombineNoAliasTypes},
 	    {UnequalMatchesVariant, CombineVariant},
 	    {UnequalMatchesNullOrUnknown, CombineNullOrUnknown},
@@ -432,8 +433,8 @@ const vector<CombineTypesRule> &DefaultCombineTypesRules() {
 	    {EqualMatchesMap, CombineEqualMap},
 	    {EqualMatchesStruct, CombineStructTypes},
 	    {EqualMatchesUnion, CombineEqualUnion},
-	};
-	return rules;
+	});
+	return *rules;
 }
 
 } // namespace duckdb

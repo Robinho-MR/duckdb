@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "duckdb/parser/peg/sql_formatter.hpp"
+#include "duckdb/common/no_destructor.hpp"
 #include "duckdb/parser/peg/keyword_helper/duckdb_keyword_helper.hpp"
 #include "duckdb/parser/peg/tokenizer/highlight_tokenizer.hpp"
 #include "duckdb/parser/peg/compiled_grammar.hpp"
@@ -179,11 +180,12 @@ string SQLFormatter::Format(const string &sql) {
 //! Returns true if kw (already uppercased) is a structural clause keyword that
 //! starts a new line in the formatted output.
 bool SQLFormatter::IsClauseKeyword(const string &kw) {
-	static const std::unordered_set<string> clause_keywords = {
+	static const NoDestructor<std::unordered_set<string>> clause_keywords_storage(std::unordered_set<string> {
 	    "SELECT",    "FROM",    "WHERE", "HAVING", "LIMIT",    "OFFSET",     "JOIN",  "UNION",
 	    "INTERSECT", "EXCEPT",  "WITH",  "INSERT", "UPDATE",   "DELETE",     "SET",   "RETURNING",
 	    "VALUES",    "CREATE",  "DROP",  "ALTER",  "TRUNCATE", "QUALIFY",    "PIVOT", "UNPIVOT",
-	    "REFRESH",   "INSTALL", "LOAD",  "ATTACH", "DETACH",   "CHECKPOINT", "FORCE", "COPY"};
+	    "REFRESH",   "INSTALL", "LOAD",  "ATTACH", "DETACH",   "CHECKPOINT", "FORCE", "COPY"});
+	const auto &clause_keywords = *clause_keywords_storage;
 	return clause_keywords.count(kw) > 0;
 }
 
@@ -194,7 +196,7 @@ bool SQLFormatter::IsJoinModifier(const string &kw) {
 //! Complete set of clause keyword *strings* as they appear in the formatted
 //! output (single words AND compound forms).  Used by the post-processing pass.
 bool SQLFormatter::IsClauseKeywordLine(const string &trimmed) {
-	static const std::unordered_set<string> all_clause_strings = {
+	static const NoDestructor<std::unordered_set<string>> all_clause_strings_storage(std::unordered_set<string> {
 	    // Single-word clause starters
 	    "SELECT", "FROM", "WHERE", "HAVING", "LIMIT", "OFFSET", "JOIN", "UNION", "INTERSECT", "EXCEPT", "WITH",
 	    "INSERT", "UPDATE", "DELETE", "SET", "RETURNING", "VALUES", "CREATE", "DROP", "ALTER", "TRUNCATE", "QUALIFY",
@@ -210,7 +212,8 @@ bool SQLFormatter::IsClauseKeywordLine(const string &trimmed) {
 	    "CREATE TEMPORARY TABLE", "CREATE TEMPORARY VIEW", "CREATE OR REPLACE TABLE", "CREATE OR REPLACE VIEW",
 	    "CREATE OR REPLACE INDEX", "CREATE OR REPLACE MACRO", "CREATE OR REPLACE FUNCTION", "CREATE OR REPLACE TYPE",
 	    "CREATE OR REPLACE TEMP TABLE", "CREATE OR REPLACE TEMP VIEW", "CREATE OR REPLACE TEMPORARY TABLE",
-	    "CREATE OR REPLACE TEMPORARY VIEW", "ALTER TABLE"};
+	    "CREATE OR REPLACE TEMPORARY VIEW", "ALTER TABLE"});
+	const auto &all_clause_strings = *all_clause_strings_storage;
 	return all_clause_strings.count(StringUtil::Upper(trimmed)) > 0;
 }
 
@@ -218,7 +221,7 @@ bool SQLFormatter::IsClauseKeywordLine(const string &trimmed) {
 //! as identifiers (e.g. "name", "value", "type") are excluded so their
 //! original casing is preserved.
 bool SQLFormatter::ShouldUppercase(const string &kw) {
-	static const std::unordered_set<string> uppercase_set = {
+	static const NoDestructor<std::unordered_set<string>> uppercase_set_storage(std::unordered_set<string> {
 	    "SELECT",     "DISTINCT",  "FROM",        "WHERE",      "HAVING",       "LIMIT",      "OFFSET",
 	    "GROUP",      "BY",        "ORDER",       "UNION",      "INTERSECT",    "EXCEPT",     "ALL",
 	    "JOIN",       "INNER",     "LEFT",        "RIGHT",      "FULL",         "OUTER",      "CROSS",
@@ -240,7 +243,8 @@ bool SQLFormatter::ShouldUppercase(const string &kw) {
 	    "DESCRIBE",   "SHOW",      "PRAGMA",      "ATTACH",     "DETACH",       "CHECKPOINT", "VACUUM",
 	    "LOAD",       "INSTALL",   "FORCE",       "POSITIONAL", "ASOF",         "LATERAL",    "TABLESAMPLE",
 	    "REPEATABLE", "USING",     "SYSTEM",      "BERNOULLI",  "RESERVOIR",    "NEAREST",    "APPROX",
-	    "EXACT",      "DISTANCE",  "SIMILARITY"};
+	    "EXACT",      "DISTANCE",  "SIMILARITY"});
+	const auto &uppercase_set = *uppercase_set_storage;
 	return uppercase_set.count(kw) > 0;
 }
 
@@ -265,7 +269,7 @@ idx_t SQLFormatter::DetectCompoundClause(const vector<MatcherToken> &tokens, idx
                                          string &original_text) {
 	// clang-format off
 	//! Fixed multi-word clause keyword patterns.
-	static const vector<vector<const char *>> kFixedCompounds = {
+	static const NoDestructor<vector<vector<const char *>>> kFixedCompounds_storage(vector<vector<const char *>> {
 	    // Two-word clauses
 	    {"GROUP",     "BY"      },
 	    {"ORDER",     "BY"      },
@@ -290,21 +294,24 @@ idx_t SQLFormatter::DetectCompoundClause(const vector<MatcherToken> &tokens, idx
 	    {"WITH",    "RECURSIVE"        },
 	    // Special CREATE form
 	    {"CREATE",  "UNIQUE", "INDEX"  },
-	};
+	});
+	const auto &kFixedCompounds = *kFixedCompounds_storage;
 	// CREATE [OR REPLACE] [TEMP | TEMPORARY] <object> — generated from prefixes × objects.
-	static const vector<vector<const char *>> kCreatePrefixes = {
+	static const NoDestructor<vector<vector<const char *>>> kCreatePrefixes_storage(vector<vector<const char *>> {
 	    {"CREATE"},
 	    {"CREATE", "TEMP"},
 	    {"CREATE", "TEMPORARY"},
 	    {"CREATE", "OR", "REPLACE"},
 	    {"CREATE", "OR", "REPLACE", "TEMP"},
 	    {"CREATE", "OR", "REPLACE", "TEMPORARY"},
-	};
-	static const vector<const char *> kCreateObjects = {
+	});
+	const auto &kCreatePrefixes = *kCreatePrefixes_storage;
+	static const NoDestructor<vector<const char *>> kCreateObjects_storage(vector<const char *> {
 	    "TABLE", "VIEW", "INDEX", "SCHEMA", "SEQUENCE", "MACRO", "FUNCTION", "TYPE",
-	};
+	});
+	const auto &kCreateObjects = *kCreateObjects_storage;
 	// clang-format on
-	static const vector<vector<const char *>> kCompoundKeywords = [&]() {
+	static const NoDestructor<vector<vector<const char *>>> kCompoundKeywords_storage([&]() {
 		auto result = kFixedCompounds;
 		for (const auto &prefix : kCreatePrefixes) {
 			for (const char *obj : kCreateObjects) {
@@ -314,7 +321,8 @@ idx_t SQLFormatter::DetectCompoundClause(const vector<MatcherToken> &tokens, idx
 			}
 		}
 		return result;
-	}();
+	}());
+	const auto &kCompoundKeywords = *kCompoundKeywords_storage;
 
 	const string kw = StringUtil::Upper(tokens[i].text);
 
@@ -556,15 +564,18 @@ string SQLFormatter::FormatMultiline(const string &sql, const vector<MatcherToke
 			// Insert a space before '(' for most keywords (e.g. AS, IN, EXISTS,
 			// OVER, FILTER, USING ...) but NOT for function-like keywords or type
 			// names where no space is conventional (COALESCE, CAST, DECIMAL, ...).
-			static const std::unordered_set<string> no_space_before_paren = {
-			    "COALESCE",   "NULLIF",    "CAST",          "TRY_CAST",    "EXTRACT", "OVERLAY",       "POSITION",
-			    "SUBSTRING",  "TRIM",      "GROUPING",      "GROUPING_ID", "TREAT",   "XMLATTRIBUTES", "XMLCONCAT",
-			    "XMLELEMENT", "XMLFOREST", "XMLNAMESPACES", "XMLPARSE",    "XMLPI",   "XMLROOT",       "XMLSERIALIZE",
-			    "XMLTABLE",   "XMLEXISTS", "BIGINT",        "BIT",         "BOOLEAN", "CHAR",          "CHARACTER",
-			    "DEC",        "DECIMAL",   "FLOAT",         "INT",         "INTEGER", "INTERVAL",      "MAP",
-			    "NATIONAL",   "NCHAR",     "NUMERIC",       "PRECISION",   "REAL",    "SMALLINT",      "STRUCT",
-			    "TIME",       "TIMESTAMP", "VARCHAR",
-			};
+			static const NoDestructor<std::unordered_set<string>> no_space_before_paren_storage(
+			    std::unordered_set<string> {
+			        "COALESCE",      "NULLIF",    "CAST",         "TRY_CAST",  "EXTRACT",       "OVERLAY",
+			        "POSITION",      "SUBSTRING", "TRIM",         "GROUPING",  "GROUPING_ID",   "TREAT",
+			        "XMLATTRIBUTES", "XMLCONCAT", "XMLELEMENT",   "XMLFOREST", "XMLNAMESPACES", "XMLPARSE",
+			        "XMLPI",         "XMLROOT",   "XMLSERIALIZE", "XMLTABLE",  "XMLEXISTS",     "BIGINT",
+			        "BIT",           "BOOLEAN",   "CHAR",         "CHARACTER", "DEC",           "DECIMAL",
+			        "FLOAT",         "INT",       "INTEGER",      "INTERVAL",  "MAP",           "NATIONAL",
+			        "NCHAR",         "NUMERIC",   "PRECISION",    "REAL",      "SMALLINT",      "STRUCT",
+			        "TIME",          "TIMESTAMP", "VARCHAR",
+			    });
+			const auto &no_space_before_paren = *no_space_before_paren_storage;
 			if (prev_was_keyword && !no_space_before_paren.count(prev_keyword) && !at_line_start) {
 				write_space();
 			}

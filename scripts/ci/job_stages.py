@@ -29,6 +29,7 @@ COMMON_JOBS = [
     "linux-relassert",
     "linux-relassert-tests",
     "tidy-check",
+    "static-lifetimes",
     "extensions-build",
     "extensions-deploy",
     "wasm-eh",

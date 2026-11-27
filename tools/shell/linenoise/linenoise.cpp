@@ -1214,8 +1214,8 @@ BufferedKeyPresses::BufferedKeyPresses() {
 }
 
 BufferedKeyPresses &BufferedKeyPresses::Get() {
-	static BufferedKeyPresses buffered_key_presses;
-	return buffered_key_presses;
+	static NoDestructor<BufferedKeyPresses> buffered_key_presses;
+	return *buffered_key_presses;
 }
 
 void BufferedKeyPresses::BufferKeyPress(KeyPress key_press) {

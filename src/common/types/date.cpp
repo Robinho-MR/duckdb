@@ -17,12 +17,27 @@ const DateSpecial Date::PINF = {"infinity", 3};  // NOLINT
 const DateSpecial Date::NINF = {"-infinity", 4}; // NOLINT
 const DateSpecial Date::EPOCH = {"epoch", 5};    // NOLINT
 
-const string_t Date::MONTH_NAMES_ABBREVIATED[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                                                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
-const string_t Date::MONTH_NAMES[] = {"January", "February", "March",     "April",   "May",      "June",
-                                      "July",    "August",   "September", "October", "November", "December"};
-const string_t Date::DAY_NAMES[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
-const string_t Date::DAY_NAMES_ABBREVIATED[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+const string_t *Date::MonthNamesAbbreviated() {
+	static const string_t names[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+	                                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+	return names;
+}
+
+const string_t *Date::MonthNames() {
+	static const string_t names[] = {"January", "February", "March",     "April",   "May",      "June",
+	                                 "July",    "August",   "September", "October", "November", "December"};
+	return names;
+}
+
+const string_t *Date::DayNames() {
+	static const string_t names[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+	return names;
+}
+
+const string_t *Date::DayNamesAbbreviated() {
+	static const string_t names[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+	return names;
+}
 
 const int32_t Date::NORMAL_DAYS[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 const int32_t Date::CUMULATIVE_DAYS[] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365};

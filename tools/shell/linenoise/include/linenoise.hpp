@@ -10,6 +10,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/no_destructor.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/queue.hpp"
 #include "terminal.hpp"
@@ -71,6 +72,8 @@ struct TabCompletion {
 enum class RenderTruncation { NO_TRUNCATE, TRUNCATE_TOP, TRUNCATE_BOTTOM, TRUNCATE_BOTH };
 
 struct BufferedKeyPresses {
+	friend class NoDestructor<BufferedKeyPresses>;
+
 public:
 	static BufferedKeyPresses &Get();
 

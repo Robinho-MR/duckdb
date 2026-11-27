@@ -1,4 +1,5 @@
 #include "duckdb/parser/expression/type_expression.hpp"
+#include "duckdb/common/no_destructor.hpp"
 #include "duckdb/common/types/geometry_crs.hpp"
 #include "duckdb/common/extension_type_info.hpp"
 #include "duckdb/common/exception.hpp"
@@ -12,15 +13,15 @@
 namespace duckdb {
 
 bool TypeExpression::IsSQLType(LogicalTypeId id) {
-	static const auto admitted_ids = [] {
+	static const NoDestructor<unordered_set<LogicalTypeId>> admitted_ids([] {
 		// TYPE has SQL syntax but is not included in AllTypes.
 		unordered_set<LogicalTypeId> ids {LogicalTypeId::SQLNULL, LogicalTypeId::TYPE};
 		for (auto &type : LogicalType::AllTypes()) {
 			ids.insert(type.id());
 		}
 		return ids;
-	}();
-	return admitted_ids.count(id) != 0;
+	}());
+	return admitted_ids->count(id) != 0;
 }
 
 bool TypeExpression::CanRepresent(const LogicalType &type) {

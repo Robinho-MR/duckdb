@@ -952,7 +952,8 @@ class UseGramPreviewEmitter:
         lines.append(
             '\n#include "duckdb/parser/peg/transformer/peg_transformer.hpp"\n'
             '#include "duckdb/parser/expression/star_expression.hpp"\n'
-            '#include "duckdb/parser/expression/columnref_expression.hpp"\n\n'
+            '#include "duckdb/parser/expression/columnref_expression.hpp"\n'
+            '#include "duckdb/common/no_destructor.hpp"\n\n'
         )
         lines.append("namespace duckdb {\n\n")
         lines.append("")
@@ -1018,9 +1019,10 @@ class UseGramPreviewEmitter:
             "const case_insensitive_map_t<const TransformFrameOps *> &PEGTransformerFactory::GeneratedTransformFrameOps() {"
         )
         lines.append(
-            "\tstatic const case_insensitive_map_t<const TransformFrameOps *> result = BuildGeneratedTransformFrameOps();"
+            "\tstatic const NoDestructor<case_insensitive_map_t<const TransformFrameOps *>> result("
+            "BuildGeneratedTransformFrameOps());"
         )
-        lines.append("\treturn result;")
+        lines.append("\treturn *result;")
         lines.append("}")
         return lines
 

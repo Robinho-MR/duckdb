@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/common/error_data.hpp"
+#include "duckdb/common/no_destructor.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/atomic.hpp"
 #include "duckdb/common/vector.hpp"
@@ -79,9 +80,9 @@ public:
 private:
 	//! Allocated once, when the first error manager is created
 	static const ErrorData &OutOfMemoryError() {
-		static const ErrorData error(ExceptionType::OUT_OF_MEMORY,
-		                             "Failed to allocate memory to report the error of a task");
-		return error;
+		static const NoDestructor<ErrorData> error(ExceptionType::OUT_OF_MEMORY,
+		                                           "Failed to allocate memory to report the error of a task");
+		return *error;
 	}
 
 	void PushOutOfMemoryError() {

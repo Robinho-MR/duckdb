@@ -262,11 +262,11 @@ struct ICUDatePart : public ICUDateFunc {
 		if (mm == 12) {
 			return "Undecimber";
 		}
-		return Date::MONTH_NAMES[mm];
+		return Date::MonthNames()[mm];
 	}
 
 	static string_t DayName(Calendar *calendar, const uint64_t micros) {
-		return Date::DAY_NAMES[ExtractDayOfWeek(calendar, micros)];
+		return Date::DayNames()[ExtractDayOfWeek(calendar, micros)];
 	}
 
 	template <typename RESULT_TYPE>

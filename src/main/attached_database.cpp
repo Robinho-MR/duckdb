@@ -1,4 +1,5 @@
 #include "duckdb/main/attached_database.hpp"
+#include "duckdb/common/no_destructor.hpp"
 #include "duckdb/logging/log_manager.hpp"
 
 #include "duckdb/catalog/duck_catalog.hpp"
@@ -46,12 +47,15 @@ AttachOptions::AttachOptions(const DBConfigOptions &options)
 }
 
 //! The spellings of the access mode option, and whether `true` means read-only for each.
-static const unordered_map<string, bool> ACCESS_MODE_OPTIONS = {
-    {"readonly", true}, {"read_only", true}, {"readwrite", false}, {"read_write", false}};
+static const unordered_map<string, bool> &AccessModeOptions() {
+	static const NoDestructor<unordered_map<string, bool>> options(unordered_map<string, bool> {
+	    {"readonly", true}, {"read_only", true}, {"readwrite", false}, {"read_write", false}});
+	return *options;
+}
 
 string AttachOptions::OptionSetting(const string &name) {
 	auto lower = StringUtil::Lower(name);
-	if (ACCESS_MODE_OPTIONS.find(lower) != ACCESS_MODE_OPTIONS.end()) {
+	if (AccessModeOptions().find(lower) != AccessModeOptions().end()) {
 		return "access_mode";
 	}
 	return lower;
@@ -61,8 +65,8 @@ AttachOptions::AttachOptions(Context &context, const unordered_map<string, Value
                              const AccessMode default_access_mode)
     : access_mode(default_access_mode) {
 	for (auto &entry : attach_options) {
-		auto access_mode_option = ACCESS_MODE_OPTIONS.find(entry.first);
-		if (access_mode_option != ACCESS_MODE_OPTIONS.end()) {
+		auto access_mode_option = AccessModeOptions().find(entry.first);
+		if (access_mode_option != AccessModeOptions().end()) {
 			// Extract the access mode; the option reads inverted for the readwrite spellings.
 			auto value = BooleanValue::Get(entry.second.CastAs(context, LogicalType::BOOLEAN));
 			access_mode = value == access_mode_option->second ? AccessMode::READ_ONLY : AccessMode::READ_WRITE;

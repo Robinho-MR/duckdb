@@ -2261,14 +2261,14 @@ date_t LastDayOperator::Operation(timestamp_t input) {
 struct MonthNameOperator {
 	template <class TA, class TR>
 	static inline TR Operation(TA input) {
-		return Date::MONTH_NAMES[DatePart::MonthOperator::Operation<TA, int64_t>(input) - 1];
+		return Date::MonthNames()[DatePart::MonthOperator::Operation<TA, int64_t>(input) - 1];
 	}
 };
 
 struct DayNameOperator {
 	template <class TA, class TR>
 	static inline TR Operation(TA input) {
-		return Date::DAY_NAMES[DatePart::DayOfWeekOperator::Operation<TA, int64_t>(input)];
+		return Date::DayNames()[DatePart::DayOfWeekOperator::Operation<TA, int64_t>(input)];
 	}
 };
 

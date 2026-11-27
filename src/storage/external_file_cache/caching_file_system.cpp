@@ -1,4 +1,5 @@
 #include "duckdb/storage/external_file_cache/caching_file_system.hpp"
+#include "duckdb/common/no_destructor.hpp"
 
 #include "duckdb/common/checksum.hpp"
 #include "duckdb/common/chrono.hpp"
@@ -430,8 +431,8 @@ bool CachingFileHandle::ReadsAreCached() {
 }
 
 FileBufferHandleGroup CachingFileHandle::Read(const idx_t nr_bytes, const idx_t location) {
-	static const vector<pair<idx_t, idx_t>> no_absorb_ranges;
-	return Read(nr_bytes, location, no_absorb_ranges);
+	static const NoDestructor<vector<pair<idx_t, idx_t>>> no_absorb_ranges;
+	return Read(nr_bytes, location, *no_absorb_ranges);
 }
 
 FileBufferHandleGroup CachingFileHandle::Read(const idx_t nr_bytes, const idx_t location,

@@ -1,4 +1,5 @@
 #include "json_scan.hpp"
+#include "duckdb/common/no_destructor.hpp"
 #include "duckdb/main/client_context.hpp"
 
 #include "duckdb/common/enum_util.hpp"
@@ -35,13 +36,15 @@ void JSONScanData::InitializeFormats(bool auto_detect_p) {
 	}
 
 	if (auto_detect_p) {
-		static const type_id_map_t<vector<const char *>> FORMAT_TEMPLATES = {
-		    {LogicalTypeId::DATE, {"%m-%d-%Y", "%m-%d-%y", "%d-%m-%Y", "%d-%m-%y", "%Y-%m-%d", "%y-%m-%d"}},
-		    {LogicalTypeId::TIMESTAMP,
-		     {"%Y-%m-%d %H:%M:%S.%f", "%m-%d-%Y %I:%M:%S %p", "%m-%d-%y %I:%M:%S %p", "%d-%m-%Y %H:%M:%S",
-		      "%d-%m-%y %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ",
-		      "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S.%f%z"}},
-		};
+		static const NoDestructor<type_id_map_t<vector<const char *>>> FORMAT_TEMPLATES_STORAGE(
+		    type_id_map_t<vector<const char *>> {
+		        {LogicalTypeId::DATE, {"%m-%d-%Y", "%m-%d-%y", "%d-%m-%Y", "%d-%m-%y", "%Y-%m-%d", "%y-%m-%d"}},
+		        {LogicalTypeId::TIMESTAMP,
+		         {"%Y-%m-%d %H:%M:%S.%f", "%m-%d-%Y %I:%M:%S %p", "%m-%d-%y %I:%M:%S %p", "%d-%m-%Y %H:%M:%S",
+		          "%d-%m-%y %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S",
+		          "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S.%f%z"}},
+		    });
+		const auto &FORMAT_TEMPLATES = *FORMAT_TEMPLATES_STORAGE;
 
 		// Populate possible date/timestamp formats, assume this is consistent across columns
 		for (auto &kv : FORMAT_TEMPLATES) {
@@ -178,12 +181,13 @@ bool JSONScan::ParseOption(ClientContext &context, const Identifier &key, const 
 	}
 	if (key == "format") {
 		auto arg = StringUtil::Lower(StringValue::Get(value));
-		static const auto FORMAT_OPTIONS =
+		static const NoDestructor<case_insensitive_map_t<JSONFormat>> FORMAT_OPTIONS_STORAGE(
 		    case_insensitive_map_t<JSONFormat> {{"auto", JSONFormat::AUTO_DETECT},
 		                                        {"unstructured", JSONFormat::UNSTRUCTURED},
 		                                        {"newline_delimited", JSONFormat::NEWLINE_DELIMITED},
 		                                        {"nd", JSONFormat::NEWLINE_DELIMITED},
-		                                        {"array", JSONFormat::ARRAY}};
+		                                        {"array", JSONFormat::ARRAY}});
+		const auto &FORMAT_OPTIONS = *FORMAT_OPTIONS_STORAGE;
 		auto lookup = FORMAT_OPTIONS.find(arg);
 		if (lookup == FORMAT_OPTIONS.end()) {
 			vector<string> valid_options;
