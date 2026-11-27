@@ -23,20 +23,22 @@ namespace duckdb {
 //! Unlike a regular string, identifiers compare case-insensitively (using StringUtil::CIEquals).
 //! Internally the identifier is stored as-is (preserving the original casing), but all comparisons,
 //! hashing and ordering are case-insensitive.
+//! A default-constructed identifier is unset (absent); an identifier constructed from a string is set, even when
+//! that string is empty. Comparisons and hashing treat an unset identifier like the empty identifier.
 class Identifier {
 public:
 	Identifier() = default;
 	//! Construction from a string literal is implicit: literals in the source are identifiers by intent.
-	Identifier(const char *str) : value(str) { // NOLINT: implicit conversion from literals is intentional
+	Identifier(const char *str) : value(str), is_set(true) { // NOLINT: implicit conversion from literals is intentional
 	}
 	//! Construction from a runtime string is explicit: an Identifier carries case-insensitive semantics, so
 	//! promoting a runtime string must be a deliberate choice at the call site.
-	explicit Identifier(const string &str) : value(str) {
+	explicit Identifier(const string &str) : value(str), is_set(true) {
 	}
-	explicit Identifier(string &&str) : value(std::move(str)) {
+	explicit Identifier(string &&str) : value(std::move(str)), is_set(true) {
 	}
 	//! Construction from a string view is also explicit to be safe
-	explicit Identifier(const std::string_view str) : value(str) {
+	explicit Identifier(const std::string_view str) : value(str), is_set(true) {
 	}
 
 	//! Named constructors for well-known identifiers
@@ -67,11 +69,18 @@ public:
 		return value;
 	}
 
+	//! Whether the identifier is set - an unset identifier is absent, which is different from the empty identifier
+	bool IsSet() const {
+		return is_set;
+	}
+
 	bool empty() const { // NOLINT: match std::string interface
 		return value.empty();
 	}
+	//! Resets the identifier to the unset state
 	void clear() { // NOLINT: match std::string interface
 		value.clear();
+		is_set = false;
 	}
 	idx_t size() const { // NOLINT: match std::string interface
 		return value.size();
@@ -91,6 +100,7 @@ public:
 
 private:
 	string value;
+	bool is_set = false;
 };
 
 //! Generate an internal name: the given prefix followed by a random UUID

@@ -268,7 +268,8 @@
       "name",
       "expression"
     ],
-    "pointer_type": "none"
+    "pointer_type": "none",
+    "custom_implementation": true
   },
   {
     "class": "SampleOptions",

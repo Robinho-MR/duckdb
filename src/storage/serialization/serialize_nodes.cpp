@@ -388,18 +388,6 @@ ExtraOperatorInfo ExtraOperatorInfo::Deserialize(Deserializer &deserializer) {
 	return result;
 }
 
-void FunctionArgument::Serialize(Serializer &serializer) const {
-	serializer.WritePropertyWithDefault<Identifier>(100, "name", name);
-	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(101, "expression", expression);
-}
-
-FunctionArgument FunctionArgument::Deserialize(Deserializer &deserializer) {
-	auto name = deserializer.ReadPropertyWithDefault<Identifier>(100, "name");
-	auto expression = deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(101, "expression");
-	FunctionArgument result(std::move(name), std::move(expression));
-	return result;
-}
-
 void HivePartitioningIndex::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<string>(100, "value", value);
 	serializer.WritePropertyWithDefault<idx_t>(101, "index", index);

@@ -34,7 +34,7 @@ public:
 	}
 
 	bool HasName() const {
-		return !name.empty();
+		return name.IsSet();
 	}
 
 	unique_ptr<ParsedExpression> &GetExpressionMutable() {
@@ -61,7 +61,7 @@ public:
 	hash_t Hash() const;
 
 	string ToString() const {
-		if (name.empty()) {
+		if (!name.IsSet()) {
 			return expression->ToString();
 		}
 		return StringUtil::Format("%s := %s", SQLIdentifier(name), expression->ToString());
@@ -173,6 +173,10 @@ public:
 	vector<FunctionArgument> &GetArgumentsMutable() {
 		return arguments;
 	}
+
+private:
+	//! Whether this is a struct_pack call with an empty member name, which is rendered as a struct literal
+	bool RendersAsStructLiteral() const;
 
 private:
 	//! Qualified name of the function (catalog.schema.name)

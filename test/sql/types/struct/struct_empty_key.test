@@ -68,3 +68,27 @@ query IIII
 SELECT typeof(s), typeof(t), s, t FROM tbl;
 ----
 STRUCT("" INTEGER)	TUPLE(INTEGER)	{'': 42}	(42,)
+
+# views, macros and serialized SQL keep the empty member name
+statement ok
+CREATE VIEW v AS SELECT {'': 42, 'a': 1} AS s, struct_pack(x := 1) AS p, row(1, 2) AS r;
+
+statement ok
+CREATE MACRO m(x) AS {'': x};
+
+restart
+
+query III
+SELECT typeof(s), typeof(p), typeof(r) FROM v;
+----
+STRUCT("" INTEGER, a INTEGER)	STRUCT(x INTEGER)	TUPLE(INTEGER, INTEGER)
+
+query II
+SELECT m(42), typeof(m(42));
+----
+{'': 42}	STRUCT("" INTEGER)
+
+query I
+SELECT json_deserialize_sql(json_serialize_sql('SELECT {'''': 42} AS s, struct_pack(x := 1) AS p'));
+----
+SELECT {'': 42} AS s, struct_pack(x := 1) AS p

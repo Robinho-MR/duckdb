@@ -198,13 +198,11 @@ unique_ptr<LogicalTypeInfo> StringTypeInfo::Deserialize(Deserializer &deserializ
 void StructTypeInfo::Serialize(Serializer &serializer) const {
 	LogicalTypeInfo::Serialize(serializer);
 	serializer.WritePropertyWithDefault<child_list_t<LogicalType>>(200, "child_types", child_types);
-	serializer.WritePropertyWithDefault<bool>(201, "is_tuple", is_tuple, true);
 }
 
 unique_ptr<LogicalTypeInfo> StructTypeInfo::Deserialize(Deserializer &deserializer) {
 	auto result = duckdb::unique_ptr<StructTypeInfo>(new StructTypeInfo());
 	deserializer.ReadPropertyWithDefault<child_list_t<LogicalType>>(200, "child_types", result->child_types);
-	deserializer.ReadPropertyWithExplicitDefault<bool>(201, "is_tuple", result->is_tuple, true);
 	return std::move(result);
 }
 
