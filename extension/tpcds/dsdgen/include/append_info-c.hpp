@@ -14,6 +14,8 @@ struct tpcds_table_def {
 	const char *name;
 	int fl_small;
 	int fl_child;
+	//! The table keeps the revisions of its rows (a slowly changing dimension)
+	int fl_type_2;
 	int first_column;
 	int64_t *null_bitmap;
 };

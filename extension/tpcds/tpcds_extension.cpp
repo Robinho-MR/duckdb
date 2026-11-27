@@ -70,12 +70,17 @@ void DsdgenBind(TableFunction::BindInput &input) {
 			options.overwrite = CastArgument(factory, value, "BOOLEAN").Get<bool>();
 		} else if (name == "keys") {
 			options.keys = CastArgument(factory, value, "BOOLEAN").Get<bool>();
+		} else if (name == "children") {
+			options.children = CastArgument(factory, value, "UINTEGER").Get<uint32_t>();
+		} else if (name == "step") {
+			options.step = CastArgument(factory, value, "UINTEGER").Get<uint32_t>();
 		} else {
 			return false;
 		}
 		return true;
 	});
 	tpcds::DSDGenWrapper::ValidateScaleFactor(options.sf);
+	tpcds::DSDGenWrapper::ValidateSteps(options);
 	input.AddResultColumn("Success", factory.ParseType("BOOLEAN"));
 	// The result is empty, but the scan does the real work.
 	input.SetCardinality(1000, false);
@@ -260,8 +265,10 @@ DUCKDB_CPP_EXTENSION_ENTRYPOINT(Extension &extension, Context &context) {
 	    .SetStability(FunctionStability::VOLATILE)
 	    .WithSignature([&](FunctionSignature &sig) { sig.AddKwargs("options", any); })
 	    .WithDocs([](FunctionDocs &docs) {
-		    docs.SetDescription("Creates the TPC-DS tables and fills them with the data of a scale factor. Options: "
-		                        "sf, catalog, schema, suffix, overwrite and keys");
+		    docs.SetDescription(
+		        "Creates the TPC-DS tables and fills them with the data of a scale factor. Options: "
+		        "sf, catalog, schema, suffix, overwrite, keys, and children with step to generate one of "
+		        "that many parts of the data, appending to existing tables");
 	    })
 	    .SetBindCallback(DsdgenBind)
 	    .SetInitGlobalCallback(DsdgenInitGlobal)

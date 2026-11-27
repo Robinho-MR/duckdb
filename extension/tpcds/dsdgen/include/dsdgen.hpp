@@ -18,9 +18,13 @@
 
 namespace tpcds {
 
+struct DSDGenOptions;
+
 struct DSDGenWrapper {
 	//! Throws when dsdgen cannot generate the given scale factor
 	static void ValidateScaleFactor(double scale);
+	//! Throws when the children and step options do not describe a part of the data
+	static void ValidateSteps(const DSDGenOptions &options);
 
 	static uint32_t QueriesCount();
 	//! Gets the specified TPC-DS Query number as a string
@@ -39,6 +43,14 @@ struct DSDGenOptions {
 	std::string suffix;
 	bool overwrite = false;
 	bool keys = false;
+	//! Splits every table into this many steps, of which only one is generated
+	uint32_t children = 1;
+	//! The step to generate, 0-based; every step when not given
+	std::optional<uint32_t> step;
+
+	bool PartialGeneration() const {
+		return step.has_value();
+	}
 };
 
 //! Creates the TPC-DS tables in the transaction of a context, and fills them from every thread scanning dsdgen

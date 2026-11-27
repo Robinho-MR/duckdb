@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <climits>
 #include <cmath>
 #include <map>
 #include <mutex>
@@ -142,8 +143,11 @@ struct DSDGenTableRange {
 
 struct DSDGenWorkItem {
 	int table_id;
+	//! The dsdgen PARALLEL and (0-based) CHILD the rows are generated as
 	int children;
 	int step;
+	//! The position of the work item in its table: the items of a table are inserted in this order
+	int order;
 	idx_t offset;
 	idx_t count;
 	idx_t progress_units_per_row;
@@ -163,16 +167,28 @@ static int GetDSDGenChildTable(int table_id) {
 	}
 }
 
-static DSDGenTableRange GetDSDGenTableRange(idx_t row_count, int children, int current_step) {
+//! The revisions of a row of a slowly changing dimension take up to 3 rows, in a cycle of 6 rows: a revision copies
+//! fields of the previous one, so a range of such a table has to start at a whole cycle
+static constexpr idx_t DSDGEN_SCD_CYCLE_ROWS = 6;
+
+static idx_t GetDSDGenTableRangeUnit(int table_id) {
+	return GetTDefByNumber(table_id).fl_type_2 ? DSDGEN_SCD_CYCLE_ROWS : 1;
+}
+
+//! The rows of a child when splitting a table into children. With a unit of 1 these are the rows dsdgen generates
+//! for PARALLEL=children and CHILD=current_step + 1.
+static DSDGenTableRange GetDSDGenTableRange(int table_id, idx_t row_count, int children, int current_step) {
 	if (children <= 1) {
 		return DSDGenTableRange {0, row_count};
 	}
+	auto unit = GetDSDGenTableRangeUnit(table_id);
+	auto unit_count = (row_count + unit - 1) / unit;
 	auto child_count = static_cast<idx_t>(children);
 	auto step = static_cast<idx_t>(current_step);
-	auto base_count = row_count / child_count;
-	auto extra_rows = row_count % child_count;
-	auto offset = (base_count * step) + std::min<idx_t>(step, extra_rows);
-	auto count = base_count + (step < extra_rows ? 1 : 0);
+	auto base_count = unit_count / child_count;
+	auto extra_units = unit_count % child_count;
+	auto offset = std::min<idx_t>(((base_count * step) + std::min<idx_t>(step, extra_units)) * unit, row_count);
+	auto count = std::min<idx_t>((base_count + (step < extra_units ? 1 : 0)) * unit, row_count - offset);
 	return DSDGenTableRange {offset, count};
 }
 
@@ -235,6 +251,15 @@ static idx_t GetDSDGenTableChildCount(int table_id, idx_t row_count, idx_t threa
 	    std::min<idx_t>(thread_count * DSDGEN_WORK_ITEMS_PER_THREAD, DSDGEN_MAX_WORK_ITEMS_PER_TABLE);
 	max_child_count = std::min<idx_t>(max_child_count, std::max<idx_t>(1, row_count / DSDGEN_MIN_PARALLEL_TASK_ROWS));
 	return std::min<idx_t>(row_count_child_count, max_child_count);
+}
+
+//! The work items each step of a table is split into when only one of the steps is generated. It does not depend on
+//! the threads, so that the steps of different calls tile the table.
+static idx_t GetDSDGenStepItemCount(int table_id, idx_t row_count, uint32_t steps) {
+	auto step_row_count = (row_count + steps - 1) / steps;
+	auto item_count = GetDSDGenTableChildCount(table_id, step_row_count, DSDGEN_MAX_WORK_ITEMS_PER_TABLE);
+	// dsdgen takes PARALLEL as an int
+	return std::max<idx_t>(1, std::min<idx_t>(item_count, INT_MAX / steps));
 }
 
 static bool DSDGenPhysicalTableMatches(int table_id, int physical_table_id) {
@@ -408,17 +433,17 @@ struct DSDGenItemBuffers {
 	std::vector<std::unique_ptr<tpcds_append_information>> append_info;
 };
 
-//! Inserts the work items of one table, and the rows they generate for its child table, in the order of their steps.
+//! Inserts the work items of one table, and the rows they generate for its child table, in the order of the items.
 //! Each table inserts through its own connection, so the tables are filled in parallel.
 struct DSDGenTableInserter {
 	//! Closed once every work item of the table is inserted
 	std::unique_ptr<Connection> connection;
 	//! Held while inserting: the connection runs one statement at a time, and the rows go in step order
 	std::mutex insert_lock;
-	//! Protects the finished work items and the next step to insert
+	//! Protects the finished work items and the next item to insert
 	std::mutex queue_lock;
 	std::vector<std::unique_ptr<DSDGenItemBuffers>> finished_items;
-	int next_step = 0;
+	int next_order = 0;
 	//! The work items still to insert, written while holding the insert lock
 	idx_t remaining_items = 0;
 };
@@ -428,7 +453,10 @@ public:
 	TPCDSDSDGenGenerator(Context &context, const DSDGenOptions &options)
 	    : scale(options.sf), connection(std::make_unique<Connection>(context.ConnectInTransaction())) {
 		ResolveTables(options);
-		CreateTables(options);
+		// a step past the last one generates nothing, as in tpch's dbgen
+		if (!options.PartialGeneration() || *options.step < options.children) {
+			CreateTables(options);
+		}
 		auto &factory = connection->GetFactory();
 		for (int table_id = CALL_CENTER; table_id < DBGEN_VERSION; table_id++) {
 			auto schema = GetDSDGenTableSchema(table_id);
@@ -443,7 +471,7 @@ public:
 #endif
 		if (scale > 0) {
 			InitializeDSDgen(scale);
-			PlanWork();
+			PlanWork(options);
 		}
 		connection.reset();
 		inserters.resize(DBGEN_VERSION);
@@ -510,7 +538,10 @@ private:
 	void CreateTables(const DSDGenOptions &options) {
 		for (int table_id = CALL_CENTER; table_id < DBGEN_VERSION; table_id++) {
 			auto schema = GetDSDGenTableSchema(table_id);
-			std::string sql = options.overwrite ? "CREATE OR REPLACE TABLE " : "CREATE TABLE ";
+			// the steps of a partial generation append to the tables
+			std::string sql = options.overwrite             ? "CREATE OR REPLACE TABLE "
+			                  : options.PartialGeneration() ? "CREATE TABLE IF NOT EXISTS "
+			                                                : "CREATE TABLE ";
 			sql += table_names[table_id] + " (";
 			for (idx_t col = 0; col < schema.column_count; col++) {
 				sql += (col > 0 ? ", " : "") + RenderQuotedIdentifier(schema.columns[col]) + " " + schema.types[col];
@@ -527,19 +558,35 @@ private:
 		}
 	}
 
-	void PlanWork() {
+	//! Splits the tables into work items. A step of a partial generation is the consecutive work items
+	//! [step * n, (step + 1) * n) of a table split into children * n items, so the steps of a table, in order, are
+	//! the rows of a full generation.
+	void PlanWork(const DSDGenOptions &options) {
 		total_work = 0;
+		if (options.PartialGeneration() && *options.step >= options.children) {
+			return;
+		}
 		for (auto table_id : DSDGEN_TABLES) {
 			auto row_count = static_cast<idx_t>(GetRowCount(table_id));
 			auto progress_units_per_row = GetDSDGenTableProgressUnitsPerRow(table_id);
-			auto children = static_cast<int>(GetDSDGenTableChildCount(table_id, row_count, thread_count));
-			for (auto step = 0; step < children; step++) {
-				auto range = GetDSDGenTableRange(row_count, children, step);
+			idx_t item_count;
+			idx_t first_item = 0;
+			if (options.children > 1) {
+				item_count = GetDSDGenStepItemCount(table_id, row_count, options.children);
+				first_item = *options.step * item_count;
+			} else {
+				item_count = GetDSDGenTableChildCount(table_id, row_count, thread_count);
+			}
+			auto children = static_cast<int>(item_count * options.children);
+			int order = 0;
+			for (idx_t item = 0; item < item_count; item++) {
+				auto step = static_cast<int>(first_item + item);
+				auto range = GetDSDGenTableRange(table_id, row_count, children, step);
 				if (range.count == 0) {
 					continue;
 				}
 				auto progress_units = range.count * progress_units_per_row;
-				work_items.push_back(DSDGenWorkItem {table_id, children, step, range.offset, range.count,
+				work_items.push_back(DSDGenWorkItem {table_id, children, step, order++, range.offset, range.count,
 				                                     progress_units_per_row, progress_units});
 				total_work += progress_units;
 			}
@@ -554,7 +601,7 @@ private:
 			if (left_table_order != right_table_order) {
 				return left_table_order < right_table_order;
 			}
-			return left.step < right.step;
+			return left.order < right.order;
 		});
 	}
 
@@ -650,16 +697,16 @@ private:
 		}
 	}
 
-	bool IsNextStep(DSDGenTableInserter &inserter, const DSDGenWorkItem &work_item) {
+	bool IsNextItem(DSDGenTableInserter &inserter, const DSDGenWorkItem &work_item) {
 		std::lock_guard<std::mutex> guard(inserter.queue_lock);
-		return inserter.next_step == work_item.step;
+		return inserter.next_order == work_item.order;
 	}
 
 	//! Inserts the rows generated so far when the work item is the next one of its table: rows are inserted in order
 	void TryInsertPartial(DSDGenItemBuffers &buffers) {
 		auto &inserter = *inserters[buffers.work_item.table_id];
 		std::unique_lock<std::mutex> guard(inserter.insert_lock, std::try_to_lock);
-		if (!guard.owns_lock() || !IsNextStep(inserter, buffers.work_item)) {
+		if (!guard.owns_lock() || !IsNextItem(inserter, buffers.work_item)) {
 			return;
 		}
 		InsertBuffers(inserter, buffers);
@@ -670,7 +717,7 @@ private:
 		std::lock_guard<std::mutex> guard(inserter.queue_lock);
 		auto &items = inserter.finished_items;
 		for (auto it = items.begin(); it != items.end(); it++) {
-			if ((*it)->work_item.step == inserter.next_step) {
+			if ((*it)->work_item.order == inserter.next_order) {
 				auto result = std::move(*it);
 				items.erase(it);
 				return result;
@@ -682,7 +729,7 @@ private:
 	bool HasInsertableItem(DSDGenTableInserter &inserter) {
 		std::lock_guard<std::mutex> guard(inserter.queue_lock);
 		for (auto &buffers : inserter.finished_items) {
-			if (buffers->work_item.step == inserter.next_step) {
+			if (buffers->work_item.order == inserter.next_order) {
 				return true;
 			}
 		}
@@ -704,7 +751,7 @@ private:
 					inserted_work.fetch_add(buffers->work_item.progress_units);
 					{
 						std::lock_guard<std::mutex> queue_guard(inserter.queue_lock);
-						inserter.next_step++;
+						inserter.next_order++;
 					}
 					if (--inserter.remaining_items == 0) {
 						// the transaction cannot commit while the connection is open
@@ -758,7 +805,20 @@ private:
 
 std::unique_ptr<DSDGenGenerator> DSDGenGenerator::Create(Context &context, const DSDGenOptions &options) {
 	DSDGenWrapper::ValidateScaleFactor(options.sf);
+	DSDGenWrapper::ValidateSteps(options);
 	return std::make_unique<TPCDSDSDGenGenerator>(context, options);
+}
+
+void DSDGenWrapper::ValidateSteps(const DSDGenOptions &options) {
+	if (options.children == 0) {
+		ThrowInvalidInputError("children must be at least 1");
+	}
+	if (options.children > INT_MAX) {
+		ThrowInvalidInputError("DSDGen does not support more than " + std::to_string(INT_MAX) + " children");
+	}
+	if (options.children > 1 && !options.step) {
+		ThrowInvalidInputError("Step must be defined when children are defined");
+	}
 }
 
 //===--------------------------------------------------------------------===//
