@@ -1599,6 +1599,9 @@ typedef struct {
 	(duckdb_v2_stats_handle stats, duckdb_v2_value_handle *value, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_stats_set_value)
 	(duckdb_v2_stats_handle stats, duckdb_v2_value_handle value, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_set_property)
+	(duckdb_v2_table_function_handle function, DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
+	 DUCKDB_V2_FUNCTION_PROPERTY_VALUE value, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_aggregate_function_get_generic_property)
 	(duckdb_v2_aggregate_function_handle function, const char *name, idx_t name_length,
 	 duckdb_v2_value_handle *out_value, duckdb_v2_error_info_handle *err);
@@ -3841,6 +3844,9 @@ typedef struct {
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_stats_set_value duckdb_ext_api.duckdb_v2_stats_set_value
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_table_function_set_property duckdb_ext_api.duckdb_v2_table_function_set_property
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_aggregate_function_get_generic_property                                                              \
