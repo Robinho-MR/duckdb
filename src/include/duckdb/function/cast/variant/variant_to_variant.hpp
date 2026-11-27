@@ -114,8 +114,9 @@ struct VariantToVariantSizeAnalyzer {
 	static uint32_t VisitGeography(const string_t &geog, AnalyzeState &state) {
 		return VisitString(geog, state);
 	}
-	static uint32_t VisitType(const string_t &type, AnalyzeState &state) {
-		return VisitString(type, state);
+	static uint32_t VisitType(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx, idx_t depth,
+	                          AnalyzeState &state) {
+		return VisitArray(variant, row, VariantUtils::DecodeNestedData(variant, row, values_idx), depth, state);
 	}
 	static uint32_t VisitBitstring(const string_t &bits, AnalyzeState &state) {
 		return VisitString(bits, state);
@@ -228,8 +229,9 @@ struct VariantToVariantDataWriter {
 	static void VisitGeography(const string_t &geog, WriteState &state) {
 		return VisitString(geog, state);
 	}
-	static void VisitType(const string_t &type, WriteState &state) {
-		return VisitString(type, state);
+	static void VisitType(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx, idx_t depth,
+	                      WriteState &state) {
+		return VisitArray(variant, row, VariantUtils::DecodeNestedData(variant, row, values_idx), depth, state);
 	}
 	static void VisitBitstring(const string_t &bits, WriteState &state) {
 		return VisitString(bits, state);

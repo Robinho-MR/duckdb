@@ -2,6 +2,8 @@
 # description: TYPE values in VARIANT columns are stored unshredded, and need storage version v2.1.0
 # group: [variant]
 
+require inet
+
 statement ok
 ATTACH '{TEST_DIR}/variant_type_values_new.db' AS db (STORAGE_VERSION 'v2.1.0')
 
@@ -107,3 +109,59 @@ query I
 SELECT count(*) FROM old.v
 ----
 4
+
+# the types are rebuilt from what is stored, including the layout of extension types
+statement ok
+CREATE TABLE db.types AS
+SELECT
+	i AS id,
+	CASE i % 4
+		WHEN 0 THEN get_type('127.0.0.1'::INET)::VARIANT
+		WHEN 1 THEN get_type({'a': [1], 'b': MAP {'k': 1::DECIMAL(10,2)}, 'c': union_value(u := 'x')})::VARIANT
+		WHEN 2 THEN get_type('a'::ENUM('x y', 'z'))::VARIANT
+		ELSE get_type('abc' COLLATE NOCASE)::VARIANT
+	END AS ty,
+	{'id': i, 'ty': CASE WHEN i % 2 = 0 THEN get_type('127.0.0.1'::INET) ELSE get_type(1::DOUBLE[2]) END}::VARIANT AS o
+FROM range(5000) t(i)
+
+statement ok
+CHECKPOINT db
+
+statement ok
+DETACH db
+
+statement ok
+ATTACH '{TEST_DIR}/variant_type_values_new.db' AS db
+
+query II
+SELECT ty::TYPE::VARCHAR, count(*) FROM db.types GROUP BY ALL ORDER BY ALL
+----
+ENUM('x y', 'z')	1250
+INET	1250
+STRUCT(a INTEGER[], b MAP(VARCHAR, DECIMAL(10,2)), c UNION(u VARCHAR))	1250
+VARCHAR('NOCASE')	1250
+
+query I
+SELECT count(*) FROM db.types WHERE ty::TYPE = get_type('10.0.0.1'::INET)
+----
+1250
+
+query II
+SELECT variant_typeof(o.ty), count(*) FROM db.types GROUP BY ALL ORDER BY ALL
+----
+TYPE	5000
+
+query I
+SELECT count(*) FROM db.types WHERE o.ty::TYPE = get_type('10.0.0.1'::INET) AND o.id::INT % 2 = 0
+----
+2500
+
+query I
+SELECT count(*) FROM db.types WHERE o.ty::TYPE = get_type(1::DOUBLE[2])
+----
+2500
+
+query I
+SELECT count(DISTINCT o.ty) FROM db.types
+----
+2

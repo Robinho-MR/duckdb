@@ -4,6 +4,10 @@
 
 require json
 
+require inet
+
+require parquet
+
 # round trip
 query IIII
 SELECT variant_typeof(v), variant_type(v), v::VARCHAR, v::TYPE FROM (SELECT make_type('INTEGER')::VARIANT v)
@@ -15,28 +19,114 @@ SELECT typeof((make_type('INTEGER')::VARIANT)::TYPE)
 ----
 TYPE
 
-# parameterized and nested types keep their definition
-query I
-SELECT v::VARIANT::TYPE::VARCHAR
+# every family of types is decomposed and rebuilt to the same type
+query II
+SELECT v::VARIANT::TYPE::VARCHAR, v::VARIANT::TYPE = v
 FROM (VALUES
-	(make_type('DECIMAL', width := 10, scale := 2)),
-	(make_type('LIST', make_type('STRUCT', a := make_type('INTEGER')))),
-	(make_type('MAP', make_type('VARCHAR'), make_type('DOUBLE'))),
-	(make_type('STRUCT', a := make_type('INTEGER'), b := make_type('VARCHAR')))
+	(get_type(NULL)),
+	(get_type(true)),
+	(get_type(1::TINYINT)), (get_type(1::SMALLINT)), (get_type(1::INTEGER)), (get_type(1::BIGINT)), (get_type(1::HUGEINT)),
+	(get_type(1::UTINYINT)), (get_type(1::USMALLINT)), (get_type(1::UINTEGER)), (get_type(1::UBIGINT)),
+	(get_type(1::UHUGEINT)),
+	(get_type(1::FLOAT)), (get_type(1::DOUBLE)),
+	(get_type(DATE '2020-01-01')), (get_type(TIME '10:00:00')), (get_type(TIME_NS '10:00:00')),
+	(get_type(TIMETZ '10:00:00+01')),
+	(get_type(TIMESTAMP_S '2020-01-01')), (get_type(TIMESTAMP_MS '2020-01-01')), (get_type(TIMESTAMP '2020-01-01')),
+	(get_type(TIMESTAMP_NS '2020-01-01')), (get_type(TIMESTAMPTZ '2020-01-01 00:00:00+00')),
+	(get_type(INTERVAL 1 DAY)), (get_type(uuid())), (get_type('a'::BLOB)), (get_type('101'::BIT)),
+	(get_type(1::BIGNUM)),
+	(get_type('a')), (get_type('a'::VARCHAR COLLATE NOCASE)), (get_type('{}'::JSON)),
+	(get_type(1::DECIMAL(4,1))), (get_type(1::DECIMAL(18,3))), (get_type(1::DECIMAL(38,10))),
+	(get_type('a'::ENUM('a', 'b c', ''))),
+	(get_type([1])), (get_type([1, 2]::INTEGER[2])), (get_type(MAP {'a': 1})),
+	(get_type({'a': 1, 'b': 'x'})), (get_type(row(1, 'a'))), (get_type(union_value(a := 1))),
+	(get_type({'a b': 1, '"q"': 2, 'ä': 3, 'x.y': 4})),
+	(get_type(make_type('INTEGER'))),
+	(get_type(1::VARIANT)),
+	(get_type({'a': [{'b': MAP {'c': [1, 2]::INTEGER[2]}}], 'u': union_value(x := {'y': [1]})}))
 ) t(v)
 ----
-DECIMAL(10,2)
-STRUCT(a INTEGER)[]
-MAP(VARCHAR, DOUBLE)
-STRUCT(a INTEGER, b VARCHAR)
+"NULL"	true
+BOOLEAN	true
+TINYINT	true
+SMALLINT	true
+INTEGER	true
+BIGINT	true
+HUGEINT	true
+UTINYINT	true
+USMALLINT	true
+UINTEGER	true
+UBIGINT	true
+UHUGEINT	true
+FLOAT	true
+DOUBLE	true
+DATE	true
+TIME	true
+TIME_NS	true
+TIME WITH TIME ZONE	true
+TIMESTAMP_S	true
+TIMESTAMP_MS	true
+TIMESTAMP	true
+TIMESTAMP_NS	true
+TIMESTAMP WITH TIME ZONE	true
+INTERVAL	true
+UUID	true
+BLOB	true
+BIT	true
+BIGNUM	true
+VARCHAR	true
+VARCHAR('NOCASE')	true
+JSON	true
+DECIMAL(4,1)	true
+DECIMAL(18,3)	true
+DECIMAL(38,10)	true
+ENUM('a', 'b c', '')	true
+INTEGER[]	true
+INTEGER[2]	true
+MAP(VARCHAR, INTEGER)	true
+STRUCT(a INTEGER, b VARCHAR)	true
+TUPLE(INTEGER, VARCHAR)	true
+UNION(a INTEGER)	true
+STRUCT("a b" INTEGER, """q""" INTEGER, "ä" INTEGER, "x.y" INTEGER)	true
+TYPE	true
+VARIANT	true
+STRUCT(a STRUCT(b MAP(VARCHAR, INTEGER[2]))[], u UNION(x STRUCT(y INTEGER[])))	true
 
-query I
-SELECT get_type('a'::ENUM('a', 'b'))::VARIANT::TYPE::VARCHAR
+# a type that can't be decomposed is refused
+statement error
+SELECT get_type(s)::VARIANT FROM (SELECT sum(i) EXPORT_STATE AS s FROM range(3) t(i))
 ----
-ENUM('a', 'b')
+Not implemented Error: Type AGGREGATE_STATE can't be stored in a VARIANT
+
+statement error
+SELECT TRY_CAST(get_type(s) AS VARIANT) FROM (SELECT sum(i) EXPORT_STATE AS s FROM range(3) t(i))
+----
+Not implemented Error: Type AGGREGATE_STATE can't be stored in a VARIANT
 
 query I
-SELECT (get_type('a'::ENUM('a', 'b'))::VARIANT::TYPE) = get_type('a'::ENUM('a', 'b'))
+SELECT get_type(NULL::UNION(a INTEGER, b VARCHAR))::VARIANT::TYPE::VARCHAR
+----
+UNION(a INTEGER, b VARCHAR)
+
+# extension types: the name, the modifiers and the layout of the physical type
+query I
+SELECT get_type('127.0.0.1'::INET)::VARIANT::TYPE::VARCHAR
+----
+INET
+
+query I
+SELECT get_type('127.0.0.1'::INET)::VARIANT::TYPE = get_type('10.0.0.1'::INET)
+----
+true
+
+query I
+SELECT get_type('127.0.0.1'::INET)::VARIANT::TYPE = get_type('10.0.0.1'::VARCHAR)
+----
+false
+
+# the layout of the physical type is part of the value, so it keeps the order of its fields
+query I
+SELECT (get_type('127.0.0.1'::INET)::VARIANT::TYPE) = get_type('1.2.3.4'::INET)
 ----
 true
 
@@ -74,6 +164,11 @@ SELECT MAP {'k': make_type('DOUBLE')}::VARIANT
 [{'key': k, 'value': DOUBLE}]
 
 query I
+SELECT [get_type([{'a': 1}]), get_type(MAP {1: [2]})]::VARIANT::VARCHAR
+----
+['STRUCT(a INTEGER)[]', 'MAP(INTEGER, INTEGER[])']
+
+query I
 SELECT CAST([NULL::TYPE] AS VARIANT)
 ----
 [NULL]
@@ -88,6 +183,23 @@ SELECT CAST(union_value(t := make_type('INTEGER'))::UNION(i INTEGER, t TYPE) AS 
 ----
 INTEGER
 
+# a TYPE value is a scalar to the readers of a VARIANT
+query IIIII
+SELECT variant_extract(v, 1), variant_extract(v, 'a'), v.a, variant_array_length(v), variant_keys(v)
+FROM (SELECT get_type([1])::VARIANT v)
+----
+NULL	NULL	NULL	0	[]
+
+query II
+SELECT variant_array_length(1::VARIANT), variant_keys(1::VARIANT)
+----
+0	[]
+
+query I
+SELECT variant_exists(get_type({'a': 1})::VARIANT, 'a')
+----
+false
+
 # only TYPE values cast to TYPE
 statement error
 SELECT 1::VARIANT::TYPE
@@ -96,6 +208,11 @@ Conversion Error: Can't convert VARIANT(INT32) value '1' to 'TYPE'
 
 statement error
 SELECT 'INTEGER'::VARIANT::TYPE
+----
+Conversion Error
+
+statement error
+SELECT [1]::VARIANT::TYPE
 ----
 Conversion Error
 
@@ -119,12 +236,20 @@ UNION ALL SELECT 3, NULL
 UNION ALL SELECT 4, 'INTEGER'::VARIANT
 UNION ALL SELECT 5, 42::VARIANT
 UNION ALL SELECT 6, make_type('LIST', make_type('INTEGER'))::VARIANT
+UNION ALL SELECT 7, make_type('LIST', make_type('BIGINT'))::VARIANT
+UNION ALL SELECT 8, make_type('DECIMAL', width := 10, scale := 2)::VARIANT
+UNION ALL SELECT 9, make_type('DECIMAL', width := 10, scale := 3)::VARIANT
+UNION ALL SELECT 10, make_type('DECIMAL', width := 9, scale := 5)::VARIANT
 
 # the VARCHAR 'INTEGER' and the TYPE INTEGER print the same, but are different values
 query III
 SELECT variant_typeof(v), v::VARCHAR, count(*) FROM tbl GROUP BY v ORDER BY ALL
 ----
 INT32	42	1
+TYPE	BIGINT[]	1
+TYPE	DECIMAL(10,2)	1
+TYPE	DECIMAL(10,3)	1
+TYPE	DECIMAL(9,5)	1
 TYPE	INTEGER	2
 TYPE	INTEGER[]	1
 TYPE	VARCHAR	1
@@ -134,7 +259,7 @@ VARIANT_NULL	NULL	1
 query I
 SELECT count(DISTINCT v) FROM tbl
 ----
-5
+9
 
 # TYPE values are not equal to a VARCHAR holding the same text
 query II
@@ -143,44 +268,50 @@ SELECT id, v = make_type('INTEGER')::VARIANT FROM tbl ORDER BY id
 0	true
 1	false
 2	true
-3	VARIANT_NULL
+3	NULL
 4	false
 5	false
 6	false
+7	false
+8	false
+9	false
+10	false
 
 query I
 SELECT id FROM tbl WHERE v = (SELECT v FROM tbl WHERE id = 6) ORDER BY id
 ----
 6
 
-# TYPE values sort after the other values, equal types sort together
-query I
-SELECT variant_typeof(v) FROM tbl ORDER BY v, id
+# TYPE values sort after the other values, by their name, then their modifiers
+query II
+SELECT id, v::VARCHAR FROM tbl ORDER BY v, id
 ----
-INT32
-VARCHAR
-TYPE
-TYPE
-TYPE
-TYPE
-VARIANT_NULL
+5	42
+4	INTEGER
+10	DECIMAL(9,5)
+8	DECIMAL(10,2)
+9	DECIMAL(10,3)
+0	INTEGER
+2	INTEGER
+7	BIGINT[]
+6	INTEGER[]
+1	VARCHAR
+3	NULL
 
 query I
-SELECT variant_typeof(v) FROM tbl ORDER BY v DESC, id
+SELECT id FROM tbl ORDER BY v DESC, id
 ----
-TYPE
-TYPE
-TYPE
-TYPE
-VARCHAR
-INT32
-VARIANT_NULL
-
-query I
-SELECT id FROM tbl WHERE variant_typeof(v) = 'TYPE' ORDER BY v, id LIMIT 2
-----
+1
+6
+7
 0
 2
+9
+8
+10
+4
+5
+3
 
 query II
 SELECT id, variant_typeof(v) FROM tbl ORDER BY id
@@ -192,18 +323,23 @@ SELECT id, variant_typeof(v) FROM tbl ORDER BY id
 4	VARCHAR
 5	INT32
 6	TYPE
+7	TYPE
+8	TYPE
+9	TYPE
+10	TYPE
 
-# variant_contains only matches TYPE values with TYPE values
+# variant_contains only matches TYPE values with TYPE values, and does not look into them
 query II
-SELECT id, variant_contains(v, make_type('INTEGER')::VARIANT) FROM tbl ORDER BY id
+SELECT id, variant_contains(v, make_type('INTEGER')::VARIANT) FROM tbl WHERE id < 8 ORDER BY id
 ----
 0	true
 1	false
 2	true
-3	VARIANT_NULL
+3	NULL
 4	false
 5	false
 6	false
+7	false
 
 query I
 SELECT variant_contains([make_type('INTEGER'), make_type('DOUBLE')]::VARIANT, make_type('DOUBLE')::VARIANT)
@@ -212,6 +348,16 @@ true
 
 query I
 SELECT variant_contains(['DOUBLE']::VARIANT, make_type('DOUBLE')::VARIANT)
+----
+false
+
+query I
+SELECT variant_contains({'a': make_type('LIST', make_type('INTEGER'))}::VARIANT, make_type('LIST', make_type('INTEGER'))::VARIANT)
+----
+true
+
+query I
+SELECT variant_contains({'a': make_type('LIST', make_type('INTEGER'))}::VARIANT, make_type('INTEGER')::VARIANT)
 ----
 false
 
@@ -232,6 +378,11 @@ SELECT v::VARIANT::TYPE::VARCHAR FROM tbl WHERE id = 1
 ----
 VARCHAR
 
+query I
+SELECT [v, v]::VARIANT::VARCHAR FROM tbl WHERE id = 7
+----
+['BIGINT[]', 'BIGINT[]']
+
 # JSON
 query I
 SELECT v::JSON FROM tbl WHERE id IN (0, 6) ORDER BY id
@@ -245,8 +396,6 @@ SELECT {'a': make_type('INTEGER')}::VARIANT::JSON
 {"a":"INTEGER"}
 
 # parquet has no TYPE
-require parquet
-
 statement error
 COPY tbl TO '{TEST_DIR}/variant_type_values.parquet'
 ----

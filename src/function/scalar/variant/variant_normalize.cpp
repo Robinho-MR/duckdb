@@ -115,8 +115,10 @@ void VariantNormalizer::VisitGeometry(const string_t &geom, VariantNormalizerSta
 void VariantNormalizer::VisitGeography(const string_t &geog, VariantNormalizerState &state) {
 	return VisitString(geog, state);
 }
-void VariantNormalizer::VisitType(const string_t &type, VariantNormalizerState &state) {
-	return VisitString(type, state);
+void VariantNormalizer::VisitType(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx, idx_t depth,
+                                  VariantNormalizerState &state) {
+	//! The children of a type are in a fixed order, like the elements of an ARRAY
+	VisitArray(variant, row, VariantUtils::DecodeNestedData(variant, row, values_idx), depth, state);
 }
 void VariantNormalizer::VisitBitstring(const string_t &bits, VariantNormalizerState &state) {
 	return VisitString(bits, state);

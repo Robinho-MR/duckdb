@@ -100,7 +100,8 @@ private:
 		D_ASSERT(current_idx < count);
 		auto &builder = GetState().builder;
 		builder.BeginRow();
-		if (type_id == VariantLogicalType::OBJECT || type_id == VariantLogicalType::ARRAY) {
+		if (type_id == VariantLogicalType::OBJECT || type_id == VariantLogicalType::ARRAY ||
+		    type_id == VariantLogicalType::TYPE) {
 			EmitContainer(node, builder);
 		} else {
 			builder.EmitPrimitiveNode(node, type_id);

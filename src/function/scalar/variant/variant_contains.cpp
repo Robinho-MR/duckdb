@@ -3,6 +3,7 @@
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/types/variant_iterator.hpp"
+#include "duckdb/common/types/variant/variant_type_encoding.hpp"
 #include "duckdb/common/types/variant_comparison.hpp"
 #include "duckdb/function/scalar/variant_functions.hpp"
 
@@ -60,11 +61,12 @@ bool IsPrimitiveEqual(const VariantNode &haystack, LogicalTypeId haystack_type, 
 		       VariantGetTimestampTZValue(needle.type_id, needle.node);
 	case VariantComparisonType::INTERVAL:
 		return haystack.GetData<interval_t>() == needle.node.GetData<interval_t>();
+	case VariantComparisonType::TYPE:
+		return VariantTypeEncoding::Read(haystack) == VariantTypeEncoding::Read(needle.node);
 	case VariantComparisonType::BLOB:
 	case VariantComparisonType::BITSTRING:
 	case VariantComparisonType::GEOMETRY:
 	case VariantComparisonType::GEOGRAPHY:
-	case VariantComparisonType::TYPE:
 	case VariantComparisonType::VARCHAR:
 		return haystack.GetString() == needle.node.GetString();
 	default:

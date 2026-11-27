@@ -93,7 +93,6 @@ public:
 		case VariantLogicalType::BIGNUM:
 		case VariantLogicalType::GEOMETRY:
 		case VariantLogicalType::GEOGRAPHY:
-		case VariantLogicalType::TYPE:
 			return VisitString(VariantTypeToLogicalTypeId(type_id), variant, row, values_idx,
 			                   std::forward<Args>(args)...);
 		case VariantLogicalType::DECIMAL:
@@ -106,6 +105,8 @@ public:
 			auto nested_data = VariantUtils::DecodeNestedData(variant, row, values_idx);
 			return Visitor::VisitObject(variant, row, nested_data, depth, std::forward<Args>(args)...);
 		}
+		case VariantLogicalType::TYPE:
+			return Visitor::VisitType(variant, row, values_idx, depth, std::forward<Args>(args)...);
 		case VariantLogicalType::TIME_MICROS:
 			return Visitor::VisitTime(Load<dtime_t>(ptr), std::forward<Args>(args)...);
 		case VariantLogicalType::TIME_NANOS:
@@ -179,7 +180,6 @@ public:
 		case LogicalTypeId::BIGNUM:
 		case LogicalTypeId::GEOMETRY:
 		case LogicalTypeId::GEOGRAPHY:
-		case LogicalTypeId::TYPE:
 			return VisitString(type_id, node.GetString(), std::forward<Args>(args)...);
 		case LogicalTypeId::DECIMAL:
 			return VisitDecimal(node, std::forward<Args>(args)...);
@@ -187,6 +187,8 @@ public:
 			return Visitor::VisitArray(node, depth, std::forward<Args>(args)...);
 		case LogicalTypeId::STRUCT:
 			return Visitor::VisitObject(node, depth, std::forward<Args>(args)...);
+		case LogicalTypeId::TYPE:
+			return Visitor::VisitType(node, depth, std::forward<Args>(args)...);
 		case LogicalTypeId::TIME:
 			return Visitor::VisitTime(node.GetData<dtime_t>(), std::forward<Args>(args)...);
 		case LogicalTypeId::TIME_NS:
@@ -326,9 +328,6 @@ private:
 		if (type_id == LogicalTypeId::GEOGRAPHY) {
 			return Visitor::VisitGeography(decoded_string, std::forward<Args>(args)...);
 		}
-		if (type_id == LogicalTypeId::TYPE) {
-			return Visitor::VisitType(decoded_string, std::forward<Args>(args)...);
-		}
 		if (type_id == LogicalTypeId::BIT) {
 			return Visitor::VisitBitstring(decoded_string, std::forward<Args>(args)...);
 		}
@@ -351,9 +350,6 @@ private:
 		}
 		if (type_id == LogicalTypeId::GEOGRAPHY) {
 			return Visitor::VisitGeography(value, std::forward<Args>(args)...);
-		}
-		if (type_id == LogicalTypeId::TYPE) {
-			return Visitor::VisitType(value, std::forward<Args>(args)...);
 		}
 		if (type_id == LogicalTypeId::BIT) {
 			return Visitor::VisitBitstring(value, std::forward<Args>(args)...);

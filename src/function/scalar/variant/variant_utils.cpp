@@ -86,7 +86,8 @@ string_t VariantUtils::DecodeStringData(const UnifiedVariantVectorData &variant,
 
 VariantNestedData VariantUtils::DecodeNestedData(const UnifiedVariantVectorData &variant, idx_t row,
                                                  uint32_t value_index) {
-	D_ASSERT(IsNestedType(variant, row, value_index));
+	D_ASSERT(IsNestedType(variant, row, value_index) ||
+	         variant.GetTypeId(row, value_index) == VariantLogicalType::TYPE);
 	auto byte_offset = variant.GetByteOffset(row, value_index);
 	auto &blob = variant.GetData(row);
 	auto blob_size = blob.GetSize();
@@ -399,7 +400,8 @@ bool VariantUtils::Verify(const Vector &variant, const SelectionVector &sel_p, i
 			auto blob_data = const_data_ptr_cast(blob.GetData()) + value_byte_offset;
 			switch (static_cast<VariantLogicalType>(value_type_id)) {
 			case VariantLogicalType::OBJECT:
-			case VariantLogicalType::ARRAY: {
+			case VariantLogicalType::ARRAY:
+			case VariantLogicalType::TYPE: {
 				auto length = VarintDecode<uint32_t>(blob_data);
 				if (!length) {
 					break;

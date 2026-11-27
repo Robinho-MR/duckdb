@@ -4,6 +4,7 @@ add_library_unity(
   variant.cpp
   variant_comparison.cpp
   variant_iterator.cpp
+  variant_type_encoding.cpp
   variant_value_convert.cpp
   variant_writer.cpp
   variant_binary_decoder.cpp

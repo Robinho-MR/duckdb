@@ -660,6 +660,14 @@ static bool IntToBoundedCast(Vector &source, Vector &result, idx_t count, CastPa
 	return true;
 }
 
+//! A type with properties, which a TYPE value in a VARIANT can't hold
+static void TypeWithPropertiesFunc(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto info = make_uniq<ExtensionTypeInfo>();
+	info->properties.emplace("tag", Value("x"));
+	auto type = LogicalType(LogicalTypeId::INTEGER).WithAlias("TAGGED").WithExtensionInfo(std::move(info));
+	result.Reference(Value::TYPE(type), count_t(args.size()));
+}
+
 //===--------------------------------------------------------------------===//
 //  MINMAX type
 //===--------------------------------------------------------------------===//
@@ -1506,6 +1514,9 @@ DUCKDB_CPP_EXTENSION_ENTRY(loadable_extension_demo, loader) {
 	ScalarFunction bounded_to_ascii("bounded_ascii", {bounded_specialized_type}, LogicalType::VARCHAR,
 	                                BoundedToAsciiFunc);
 	loader.RegisterFunction(bounded_to_ascii);
+
+	// Example of a function returning a type with properties
+	loader.RegisterFunction(ScalarFunction("type_with_properties", {}, LogicalType::TYPE(), TypeWithPropertiesFunc));
 
 	// Example of a window function
 	DuckWeedFunction duckweed;

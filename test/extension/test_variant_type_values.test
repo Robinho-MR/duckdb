@@ -1,0 +1,85 @@
+# name: test/extension/test_variant_type_values.test
+# description: TYPE values of extension types in VARIANT
+# group: [extension]
+
+require skip_reload
+
+require notmingw
+
+require allow_unsigned_extensions
+
+statement ok
+LOAD '{BUILD_DIRECTORY}/test/extension/loadable_extension_demo.duckdb_extension';
+
+# the modifiers of an extension type are stored with it
+query II
+SELECT v::VARIANT::TYPE::VARCHAR, v::VARIANT::TYPE = v
+FROM (VALUES (get_type(1::BOUNDED(10))), (get_type(1::BOUNDED(255))), (get_type(1::MINMAX(1, 5)))) t(v)
+----
+BOUNDED(10)	true
+BOUNDED(255)	true
+MINMAX(1, 5)	true
+
+query I
+SELECT get_type(1::BOUNDED(10))::VARIANT::TYPE = get_type(1::BOUNDED(11))
+----
+false
+
+query I
+SELECT bounded_max(5::BOUNDED(77)) = bounded_max(5::INTEGER::BOUNDED(77))
+----
+true
+
+# the modifiers are part of the value, so it matters for comparisons
+query II
+SELECT v::TYPE::VARCHAR, count(*)
+FROM (
+	SELECT get_type(1::BOUNDED(10))::VARIANT AS v FROM range(3)
+	UNION ALL SELECT get_type(1::BOUNDED(20))::VARIANT FROM range(2)
+	UNION ALL SELECT get_type(1::MINMAX(1, 5))::VARIANT
+	UNION ALL SELECT get_type(1::INTEGER)::VARIANT
+) GROUP BY v ORDER BY ALL
+----
+BOUNDED(10)	3
+BOUNDED(20)	2
+INTEGER	1
+MINMAX(1, 5)	1
+
+query I
+SELECT v::TYPE::VARCHAR
+FROM (
+	SELECT get_type(1::BOUNDED(20))::VARIANT AS v
+	UNION ALL SELECT get_type(1::BOUNDED(10))::VARIANT
+	UNION ALL SELECT get_type(1::MINMAX(1, 5))::VARIANT
+	UNION ALL SELECT get_type(1::MINMAX(1, 4))::VARIANT
+	UNION ALL SELECT get_type(1::INTEGER)::VARIANT
+) ORDER BY v
+----
+BOUNDED(10)
+BOUNDED(20)
+INTEGER
+MINMAX(1, 4)
+MINMAX(1, 5)
+
+# types in an object and a list
+query I
+SELECT {'a': get_type(1::BOUNDED(10)), 'b': [get_type(1::MINMAX(1, 5))]}::VARIANT::VARCHAR
+----
+{'a': 'BOUNDED(10)', 'b': ['MINMAX(1, 5)']}
+
+# types with properties are not supported
+statement error
+SELECT type_with_properties()::VARIANT
+----
+Not implemented Error: Type TAGGED can't be stored in a VARIANT: types with properties are not supported
+
+statement error
+SELECT [type_with_properties()]::VARIANT
+----
+Not implemented Error: Type TAGGED can't be stored in a VARIANT: types with properties are not supported
+
+# TRY_CAST does not turn it into a NULL either
+statement error
+SELECT TRY_CAST(type_with_properties() AS VARIANT)
+----
+Not implemented Error: Type TAGGED can't be stored in a VARIANT: types with properties are not supported

@@ -5,6 +5,7 @@
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/types/variant.hpp"
 #include "duckdb/common/types/variant_iterator.hpp"
+#include "duckdb/common/types/variant/variant_type_encoding.hpp"
 #include "duckdb/common/types/variant_visitor.hpp"
 
 using namespace duckdb_yyjson; // NOLINT
@@ -132,8 +133,14 @@ struct JSONConverterBase {
 		return yyjson_mut_strncpy(doc, val_str.c_str(), val_str.size());
 	}
 
-	static yyjson_mut_val *VisitType(const string_t &str, yyjson_mut_doc *doc) {
-		auto val_str = Value::TYPE(str).ToString();
+	static yyjson_mut_val *VisitType(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx,
+	                                 idx_t depth, yyjson_mut_doc *doc) {
+		auto val_str = VariantTypeEncoding::Read(variant, row, values_idx).ToString();
+		return yyjson_mut_strncpy(doc, val_str.c_str(), val_str.size());
+	}
+
+	static yyjson_mut_val *VisitType(const VariantNode &node, idx_t depth, yyjson_mut_doc *doc) {
+		auto val_str = VariantTypeEncoding::Read(node).ToString();
 		return yyjson_mut_strncpy(doc, val_str.c_str(), val_str.size());
 	}
 

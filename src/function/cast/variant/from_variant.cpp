@@ -1,4 +1,5 @@
 #include "duckdb/common/vector/array_vector.hpp"
+#include "duckdb/common/types/variant/variant_type_encoding.hpp"
 #include "duckdb/common/vector/constant_vector.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/list_vector.hpp"
@@ -239,6 +240,22 @@ static bool CastVariantRows(FromVariantConversionData &conversion_data, Vector &
 		}
 	}
 	return all_valid;
+}
+
+//! Casts the TYPE values, the values of the other types go through the Value conversion
+static bool CastVariantToType(FromVariantConversionData &conversion_data, Vector &result, const SelectionVector &sel,
+                              idx_t offset, idx_t count, optional_idx row) {
+	auto &variant = conversion_data.variant;
+	auto result_data = FlatVector::GetDataMutable<string_t>(result);
+	auto convert = [&](idx_t row_index, uint32_t values_index, idx_t result_index) {
+		if (variant.GetTypeId(row_index, values_index) != VariantLogicalType::TYPE) {
+			return false;
+		}
+		auto type = VariantTypeEncoding::Read(variant, row_index, values_index);
+		result_data[result_index] = StringVector::AddString(result, VariantTypeEncoding::Serialize(type));
+		return true;
+	};
+	return CastVariantRows(conversion_data, result, sel, offset, count, row, convert);
 }
 
 template <class OP, class T = typename OP::type, class PAYLOAD_CLASS>
@@ -525,7 +542,7 @@ public:
 	static bool VisitGeography(const string_t &, VariantVarcharSerializer &, bool) {
 		return false;
 	}
-	static bool VisitType(const string_t &, VariantVarcharSerializer &, bool) {
+	static bool VisitType(const UnifiedVariantVectorData &, idx_t, uint32_t, idx_t, VariantVarcharSerializer &, bool) {
 		return false;
 	}
 	static bool VisitBitstring(const string_t &, VariantVarcharSerializer &, bool) {
@@ -1202,11 +1219,8 @@ static bool CastVariant(FromVariantConversionData &conversion_data, Vector &resu
 			return CastVariantToPrimitive<VariantDirectConversion<string_t, VariantLogicalType::GEOGRAPHY>>(
 			    conversion_data, result, sel, offset, count, row, string_payload);
 		}
-		case LogicalTypeId::TYPE: {
-			StringConversionPayload string_payload(result);
-			return CastVariantToPrimitive<VariantDirectConversion<string_t, VariantLogicalType::TYPE>>(
-			    conversion_data, result, sel, offset, count, row, string_payload);
-		}
+		case LogicalTypeId::TYPE:
+			return CastVariantToType(conversion_data, result, sel, offset, count, row);
 		case LogicalTypeId::VARCHAR: {
 			if (target_type.IsJSONType()) {
 				return CastVariantToJSON(conversion_data, result, sel, offset, count, row);

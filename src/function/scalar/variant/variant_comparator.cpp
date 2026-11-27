@@ -194,7 +194,6 @@ bool EncodeVariantNode(const VariantNode &it, SINK &sink, vector<VariantEncodeFr
 	case VariantComparisonType::BLOB:
 	case VariantComparisonType::GEOMETRY:
 	case VariantComparisonType::GEOGRAPHY:
-	case VariantComparisonType::TYPE:
 		VariantEncodeString(sink, it.GetString(), false);
 		break;
 	case VariantComparisonType::BITSTRING: {
@@ -210,6 +209,8 @@ bool EncodeVariantNode(const VariantNode &it, SINK &sink, vector<VariantEncodeFr
 		break;
 	}
 	case VariantComparisonType::ARRAY:
+	case VariantComparisonType::TYPE:
+		// the children of a type are in a fixed order, like the elements of an ARRAY
 		frames.emplace_back(it);
 		return true;
 	case VariantComparisonType::OBJECT:

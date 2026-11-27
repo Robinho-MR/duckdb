@@ -3,6 +3,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/variant_visitor.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "duckdb/common/types/variant/variant_type_encoding.hpp"
 
 namespace duckdb {
 
@@ -89,8 +90,8 @@ struct ValueConverter {
 	static Value VisitGeography(const string_t &str) {
 		return Value::GEOGRAPHY(const_data_ptr_cast(str.GetData()), str.GetSize());
 	}
-	static Value VisitType(const string_t &str) {
-		return Value::TYPE(str);
+	static Value VisitType(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx, idx_t depth) {
+		return Value::TYPE(VariantTypeEncoding::Read(variant, row, values_idx));
 	}
 	static Value VisitBitstring(const string_t &str) {
 		return Value::BIT(const_data_ptr_cast(str.GetData()), str.GetSize());

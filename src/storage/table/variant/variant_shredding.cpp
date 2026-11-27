@@ -77,7 +77,8 @@ struct VariantStatsVisitor {
 	}
 	static void VisitGeography(const string_t &geog, VariantShreddingStats &stats, idx_t stats_column_index) {
 	}
-	static void VisitType(const string_t &type, VariantShreddingStats &stats, idx_t stats_column_index) {
+	static void VisitType(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx, idx_t depth,
+	                      VariantShreddingStats &stats, idx_t stats_column_index) {
 	}
 	static void VisitBitstring(const string_t &bits, VariantShreddingStats &stats, idx_t stats_column_index) {
 	}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/function/cast/variant/to_variant_fwd.hpp"
+#include "duckdb/function/cast/variant/type_to_variant.hpp"
 #include "duckdb/common/types.hpp"
 
 namespace duckdb {
@@ -400,8 +401,8 @@ bool ConvertPrimitiveToVariant(ToVariantSourceData &source, ToVariantGlobalResul
 		return ConvertPrimitiveTemplated<WRITE_DATA, IGNORE_NULLS, VariantLogicalType::GEOGRAPHY, string_t>(
 		    source, result, count, selvec, values_index_selvec, empty_payload, is_root);
 	case LogicalTypeId::TYPE:
-		return ConvertPrimitiveTemplated<WRITE_DATA, IGNORE_NULLS, VariantLogicalType::TYPE, string_t>(
-		    source, result, count, selvec, values_index_selvec, empty_payload, is_root);
+		return ConvertTypeToVariant<WRITE_DATA, IGNORE_NULLS>(source, result, count, selvec, values_index_selvec,
+		                                                      is_root);
 	case LogicalTypeId::BLOB:
 		return ConvertPrimitiveTemplated<WRITE_DATA, IGNORE_NULLS, VariantLogicalType::BLOB, string_t>(
 		    source, result, count, selvec, values_index_selvec, empty_payload, is_root);
