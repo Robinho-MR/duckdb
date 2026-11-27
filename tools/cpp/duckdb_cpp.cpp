@@ -1423,6 +1423,12 @@ auto Factory::ParseType(std::string_view text) const -> LogicalType {
 	return detail::HandleFactory::Make<LogicalType>(type);
 }
 
+auto Context::ConnectInTransaction() const -> Connection {
+	duckdb_v2_connection_handle conn = nullptr;
+	CheckedAPICall(duckdb_v2_connection_create_in_transaction, handle(), &conn);
+	return detail::HandleFactory::Make<Connection>(conn, true);
+}
+
 auto Context::Log(LogLevel level, std::string_view message, std::string_view log_type) const -> void {
 	auto log_type_str = ToStr(log_type);
 	auto message_str = ToStr(message);
@@ -4470,6 +4476,12 @@ auto TableFunction::SetName(const std::string &name) & -> TableFunction & {
 	return *this;
 }
 
+auto TableFunction::SetStability(FunctionStability value) & -> TableFunction & {
+	CheckedAPICall(duckdb_v2_table_function_set_property, handle(), DUCKDB_V2_FUNCTION_PROPERTY_STABILITY,
+	               ToCValue(value));
+	return *this;
+}
+
 auto TableFunction::GetDocs() -> FunctionDocs {
 	duckdb_v2_function_docs_handle docs = nullptr;
 	CheckedAPICall(duckdb_v2_table_function_get_docs, handle(), &docs);
@@ -5027,6 +5039,45 @@ auto TableFunction::ExecInput::GetOutputChunk() const -> DataChunk {
 	// Borrowed: the engine owns the chunk and reuses it across invocations.
 	return detail::HandleFactory::Make<DataChunk>(chunk, false);
 }
+
+namespace {
+
+auto ToCValue(ScanResult result) -> DUCKDB_V2_DATA_SOURCE_RESULT {
+	switch (result) {
+	case ScanResult::IMPLICIT:
+		return DUCKDB_V2_DATA_SOURCE_RESULT_IMPLICIT;
+	case ScanResult::HAVE_MORE_OUTPUT:
+		return DUCKDB_V2_DATA_SOURCE_RESULT_HAVE_MORE_OUTPUT;
+	case ScanResult::FINISHED:
+		return DUCKDB_V2_DATA_SOURCE_RESULT_FINISHED;
+	case ScanResult::BLOCKED:
+		return DUCKDB_V2_DATA_SOURCE_RESULT_BLOCKED;
+	}
+	throw InvalidInputException("unknown scan result " + std::to_string(static_cast<int>(result)));
+}
+
+void RunScanTask(void *data, duckdb_v2_error_info_handle *err) {
+	auto &task = *static_cast<std::function<void()> *>(data);
+	WithExceptionGuard(err, [&]() { task(); });
+}
+
+} // namespace
+
+namespace detail {
+
+auto SetScanResult(void *exec_info, ScanResult result) -> void {
+	CheckedAPICall(duckdb_v2_data_source_exec_set_result,
+	               static_cast<duckdb_v2_data_source_exec_info_handle>(exec_info), ToCValue(result));
+}
+
+auto AddScanTask(void *exec_info, std::function<void()> task) -> void {
+	duckdb_v2_opaque data {new std::function<void()>(std::move(task)), TypedDelete<std::function<void()>>, nullptr};
+	// the call takes the data over, also when it fails
+	CheckedAPICall(duckdb_v2_data_source_exec_add_task, static_cast<duckdb_v2_data_source_exec_info_handle>(exec_info),
+	               RunScanTask, &data);
+}
+
+} // namespace detail
 
 auto TableFunction::ExecInput::GetContext() -> Context & {
 	return context;
