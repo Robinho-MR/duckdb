@@ -1,6 +1,8 @@
 #include "duckdb/main/capi_v2/capi_v2_internal.hpp"
 #include "duckdb/main/capi_v2/capi_v2_function_internal.hpp"
 #include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
+#include "duckdb/function/function_binder.hpp"
 #include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 
@@ -56,6 +58,15 @@ class CV2BindInfo {
 public:
 	//! The bind data the callback set, or nullptr
 	shared_ptr<CV2UserData> out_bind_data;
+	//! The stability the callback set for this call, if any
+	optional<FunctionStability> stability;
+	//! The monotonicity the callback set for this call, per argument
+	vector<pair<idx_t, Monotonicity>> monotonicity;
+	//! The function the callback replaced the call with, if any
+	optional<string> replacement_name;
+	vector<idx_t> replacement_args;
+	//! Whether the callback replaced the call with the overload the function overrode
+	bool call_overridden = false;
 };
 
 static auto Convert(duckdb_v2_scalar_function_bind_info_handle info) -> CV2BindInfo * {
@@ -144,6 +155,10 @@ public:
 	duckdb_v2_scalar_function_exec_callback_fn exec_cb = nullptr;
 	duckdb_v2_scalar_function_stats_callback_fn stats_cb = nullptr;
 	shared_ptr<CV2UserData> user_data = nullptr;
+	//! The schema the function is registered in, where a replacement call is looked up
+	Identifier schema = Identifier::DefaultSchema();
+	//! The overload the function replaced when it was registered, if any
+	shared_ptr<const ScalarFunction> overridden;
 };
 
 static auto CV2ScalarResolveTypes(ResolveScalarFunctionTypesInput &input) -> void {
@@ -161,6 +176,56 @@ static auto CV2ScalarResolveTypes(ResolveScalarFunctionTypesInput &input) -> voi
 	if (err.HasError()) {
 		err.ThrowAsException();
 	}
+}
+
+//! Moves a bound replacement call into the call being bound
+static auto CV2ScalarTakeReplacement(BindScalarFunctionInput &input, unique_ptr<Expression> expression)
+    -> unique_ptr<FunctionData> {
+	if (expression->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		throw InternalException("The replacement call of a scalar function did not bind to a function call");
+	}
+	auto &replacement = expression->Cast<BoundFunctionExpression>();
+	input.GetBoundFunction() = std::move(replacement.FunctionMutable());
+	input.GetArguments() = std::move(replacement.GetChildrenMutable());
+	return replacement.BindInfo() ? replacement.BindInfo()->Copy() : nullptr;
+}
+
+//! Binds the overload the function overrode to the arguments of the call
+static auto CV2ScalarCallOverridden(BindScalarFunctionInput &input, const shared_ptr<const ScalarFunction> &overridden)
+    -> unique_ptr<FunctionData> {
+	if (!overridden) {
+		throw InvalidInputException("The scalar function did not override an overload when it was registered");
+	}
+	vector<unique_ptr<Expression>> children;
+	for (auto &argument : input.GetArguments()) {
+		children.push_back(argument->Copy());
+	}
+	auto binder = input.NestedFunctionBinder();
+	return CV2ScalarTakeReplacement(input, binder.BindScalarFunction(overridden, std::move(children)));
+}
+
+//! Binds the replacement call and moves it into the call being bound
+static auto CV2ScalarReplaceCall(BindScalarFunctionInput &input, const Identifier &schema, const string &name,
+                                 const vector<idx_t> &arg_indices) -> unique_ptr<FunctionData> {
+	auto &context = input.GetClientContext();
+	auto &arguments = input.GetArguments();
+	vector<unique_ptr<Expression>> children;
+	for (auto index : arg_indices) {
+		if (index >= arguments.size()) {
+			throw InvalidInputException("Argument index %llu of the replacement call is out of range", index);
+		}
+		children.push_back(arguments[index]->Copy());
+	}
+	auto &catalog = Catalog::GetSystemCatalog(context);
+	QualifiedName qualified_name(catalog.GetName(), schema, Identifier(name));
+	auto &entry = catalog.GetEntry<ScalarFunctionCatalogEntry>(context, qualified_name);
+	auto binder = input.NestedFunctionBinder();
+	ErrorData error;
+	auto expression = binder.BindScalarFunction(entry, std::move(children), error);
+	if (!expression) {
+		error.Throw();
+	}
+	return CV2ScalarTakeReplacement(input, std::move(expression));
 }
 
 static auto CV2ScalarBind(BindScalarFunctionInput &input) -> unique_ptr<FunctionData> {
@@ -185,6 +250,21 @@ static auto CV2ScalarBind(BindScalarFunctionInput &input) -> unique_ptr<Function
 
 	if (err.HasError()) {
 		err.ThrowAsException();
+	}
+
+	if (result_info.stability) {
+		bound_function.SetStability(*result_info.stability);
+	}
+	for (auto &entry : result_info.monotonicity) {
+		auto props = bound_function.GetArgProperties(entry.first);
+		props.monotonicity = entry.second;
+		bound_function.SetArgProperties(entry.first, props);
+	}
+	if (result_info.call_overridden) {
+		return CV2ScalarCallOverridden(input, info.overridden);
+	}
+	if (result_info.replacement_name) {
+		return CV2ScalarReplaceCall(input, info.schema, *result_info.replacement_name, result_info.replacement_args);
 	}
 
 	return result;
@@ -290,8 +370,9 @@ public:
 		properties.SetFallible();
 	}
 
-	//! Validates the configuration and builds the scalar function to register on `target`.
-	ScalarFunction Build(DatabaseInstance &target) {
+	//! Validates the configuration and builds the scalar function to register on `target`, which replaces the
+	//! overload `overridden` of the function of its name, if any.
+	ScalarFunction Build(DatabaseInstance &target, shared_ptr<const ScalarFunction> overridden = nullptr) {
 		CheckRegistrationTarget(db, target, "scalar function");
 		if (name.empty()) {
 			throw InvalidInputException("Function name cannot be empty.");
@@ -323,6 +404,9 @@ public:
 		ScalarFunction function(name, {}, return_type, CV2ScalarExec);
 		function.SetProperties(properties);
 		function.GetSignature() = signature;
+		if (!arg_properties.empty()) {
+			function.SetArgProperties(arg_properties);
+		}
 
 		if (info.resolve_types_cb) {
 			function.SetResolveTypesCallback(CV2ScalarResolveTypes);
@@ -336,6 +420,8 @@ public:
 		if (info.stats_cb) {
 			function.SetStatisticsCallback(CV2ScalarStats);
 		}
+		info.schema = schema;
+		info.overridden = std::move(overridden);
 		function.SetExtraFunctionInfo<CV2ScalarFunctionInfo>(std::move(info));
 
 		return function;
@@ -351,7 +437,41 @@ public:
 	//! The schema of the system catalog the function is registered in
 	Identifier schema = Identifier::DefaultSchema();
 	FunctionProperties properties;
+	vector<ArgProperties> arg_properties;
 };
+
+//! The overload of an existing function that a function with `signature` replaces, if any
+static auto FindOverridden(optional_ptr<CatalogEntry> entry, const FunctionSignature &signature)
+    -> shared_ptr<const ScalarFunction> {
+	if (!entry || entry->type != CatalogType::SCALAR_FUNCTION_ENTRY) {
+		return nullptr;
+	}
+	for (auto &function : entry->Cast<ScalarFunctionCatalogEntry>().functions.functions) {
+		if (function->GetSignature().IsSameOverload(signature)) {
+			return function;
+		}
+	}
+	return nullptr;
+}
+
+static auto ConvertMonotonicity(DUCKDB_V2_FUNCTION_MONOTONICITY monotonicity) -> Monotonicity {
+	switch (monotonicity) {
+	case DUCKDB_V2_FUNCTION_MONOTONICITY_UNKNOWN:
+		return Monotonicity::UNKNOWN;
+	case DUCKDB_V2_FUNCTION_MONOTONICITY_CONSTANT:
+		return Monotonicity::CONSTANT;
+	case DUCKDB_V2_FUNCTION_MONOTONICITY_NON_DECREASING:
+		return Monotonicity::NON_DECREASING;
+	case DUCKDB_V2_FUNCTION_MONOTONICITY_STRICTLY_INCREASING:
+		return Monotonicity::STRICTLY_INCREASING;
+	case DUCKDB_V2_FUNCTION_MONOTONICITY_NON_INCREASING:
+		return Monotonicity::NON_INCREASING;
+	case DUCKDB_V2_FUNCTION_MONOTONICITY_STRICTLY_DECREASING:
+		return Monotonicity::STRICTLY_DECREASING;
+	default:
+		throw InvalidInputException("Unknown function monotonicity %d", static_cast<int>(monotonicity));
+	}
+}
 
 static auto Convert(duckdb_v2_scalar_function_handle func) -> CV2ScalarFunction * {
 	return reinterpret_cast<CV2ScalarFunction *>(func);
@@ -513,6 +633,70 @@ DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_set_bind_data(duckdb_v2_scalar_fu
 	return WithErrorHandler(err, [&]() {
 		Convert(info)->out_bind_data =
 		    data->ptr ? duckdb::make_shared_ptr<CV2UserData>(data->ptr, data->destroy, data->equals) : nullptr;
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_scalar_function_set_argument_monotonicity(duckdb_v2_scalar_function_handle function,
+                                                                    idx_t index,
+                                                                    DUCKDB_V2_FUNCTION_MONOTONICITY monotonicity,
+                                                                    duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() {
+		auto value = ConvertMonotonicity(monotonicity);
+		auto &props = Convert(function)->arg_properties;
+		if (props.size() <= index) {
+			props.resize(index + 1);
+		}
+		props[index].monotonicity = value;
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_set_property(duckdb_v2_scalar_function_bind_info_handle info,
+                                                            DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
+                                                            DUCKDB_V2_FUNCTION_PROPERTY_VALUE value,
+                                                            duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	return WithErrorHandler(err, [&]() {
+		if (key != DUCKDB_V2_FUNCTION_PROPERTY_STABILITY) {
+			throw duckdb::InvalidInputException("Only the stability of a scalar function call can be set at bind time");
+		}
+		duckdb::FunctionProperties props;
+		SetScalarFunctionProperty(props, key, value);
+		Convert(info)->stability = props.GetStability();
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_set_argument_monotonicity(
+    duckdb_v2_scalar_function_bind_info_handle info, idx_t index, DUCKDB_V2_FUNCTION_MONOTONICITY monotonicity,
+    duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	return WithErrorHandler(
+	    err, [&]() { Convert(info)->monotonicity.emplace_back(index, ConvertMonotonicity(monotonicity)); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_call_overridden(duckdb_v2_scalar_function_bind_info_handle info,
+                                                               duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	return WithErrorHandler(err, [&]() { Convert(info)->call_overridden = true; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_replace_call(duckdb_v2_scalar_function_bind_info_handle info,
+                                                            const char *name, idx_t name_length,
+                                                            const idx_t *arg_indices, idx_t arg_count,
+                                                            duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_STR_ARG(name, name_length);
+	if (arg_count > 0) {
+		DUCKDB_CHECK_ARG(arg_indices);
+	}
+	return WithErrorHandler(err, [&]() {
+		auto function_name = ConvertIdentifierName(name, name_length);
+		if (function_name.empty()) {
+			throw duckdb::InvalidInputException("The name of the replacement function cannot be empty");
+		}
+		auto &bind_info = *Convert(info);
+		bind_info.replacement_name = duckdb::string(function_name);
+		bind_info.replacement_args.assign(arg_indices, arg_indices + arg_count);
 	});
 }
 
@@ -684,12 +868,14 @@ DUCKDB_V2_ERROR duckdb_v2_connection_register_scalar_function(duckdb_v2_connecti
 		auto &context = *Convert(conn)->context;
 		context.RunFunctionInTransaction([&]() {
 			auto &self = *Convert(function);
-			auto info = duckdb::CreateScalarFunctionInfo(self.Build(*context.db));
+			auto &catalog = duckdb::Catalog::GetSystemCatalog(context);
+			auto existing = catalog.GetEntry(context, duckdb::CatalogType::SCALAR_FUNCTION_ENTRY, self.schema, self.name,
+			                                 duckdb::OnEntryNotFound::RETURN_NULL);
+			auto info = duckdb::CreateScalarFunctionInfo(self.Build(*context.db, FindOverridden(existing, self.signature)));
 			info.SetQualifiedName(
 			    duckdb::QualifiedName(info.GetQualifiedName().Catalog(), self.schema, info.GetFunctionName()));
 			self.docs.AddTo(self.signature, info);
 			info.on_conflict = duckdb::OnCreateConflict::ALTER_ON_CONFLICT;
-			auto &catalog = duckdb::Catalog::GetSystemCatalog(context);
 			catalog.CreateFunction(context, info);
 		});
 	});
@@ -703,7 +889,12 @@ DUCKDB_V2_ERROR duckdb_v2_extension_register_scalar_function(duckdb_v2_extension
 	return WithErrorHandler(err, [&]() {
 		auto &self = *Convert(function);
 		auto &loader = GetExtensionLoader(extension);
-		duckdb::CreateScalarFunctionInfo info(self.Build(loader.GetDatabaseInstance()));
+		duckdb::optional_ptr<duckdb::CatalogEntry> existing;
+		if (self.schema == duckdb::Identifier::DefaultSchema()) {
+			existing = loader.TryGetFunction(self.name);
+		}
+		duckdb::CreateScalarFunctionInfo info(
+		    self.Build(loader.GetDatabaseInstance(), FindOverridden(existing, self.signature)));
 		info.SetQualifiedName(
 		    duckdb::QualifiedName(info.GetQualifiedName().Catalog(), self.schema, info.GetFunctionName()));
 		self.docs.AddTo(self.signature, info);

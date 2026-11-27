@@ -744,6 +744,35 @@ typedef enum DUCKDB_V2_FUNCTION_PROPERTY_VALUE {
 	DUCKDB_V2_FUNCTION_PROPERTY_VALUE_MAX_ENUM = 0x7FFFFFFF,
 } DUCKDB_V2_FUNCTION_PROPERTY_VALUE;
 
+/*!
+ * How the result of a scalar function changes with one of its arguments while the other arguments stay the same. The
+ * optimizer uses it, for example, to turn a filter on the result into a filter on the argument that can skip row groups
+ * by their statistics, or to keep an order through the function. Declared per argument with
+ * `duckdb_v2_scalar_function_set_argument_monotonicity()`, and changed for one call with
+ * `duckdb_v2_scalar_function_bind_set_argument_monotonicity()`. Declaring a monotonicity the function does not have
+ * produces wrong query results. A NULL argument or result is outside the claim.
+ */
+typedef enum DUCKDB_V2_FUNCTION_MONOTONICITY {
+	//! Nothing is known about how the result changes with the argument (default).
+	DUCKDB_V2_FUNCTION_MONOTONICITY_UNKNOWN = 0,
+
+	//! The result does not change with the argument.
+	DUCKDB_V2_FUNCTION_MONOTONICITY_CONSTANT = 1,
+
+	//! A greater argument never gives a smaller result.
+	DUCKDB_V2_FUNCTION_MONOTONICITY_NON_DECREASING = 2,
+
+	//! A greater argument always gives a greater result.
+	DUCKDB_V2_FUNCTION_MONOTONICITY_STRICTLY_INCREASING = 3,
+
+	//! A greater argument never gives a greater result.
+	DUCKDB_V2_FUNCTION_MONOTONICITY_NON_INCREASING = 4,
+
+	//! A greater argument always gives a smaller result.
+	DUCKDB_V2_FUNCTION_MONOTONICITY_STRICTLY_DECREASING = 5,
+	DUCKDB_V2_FUNCTION_MONOTONICITY_MAX_ENUM = 0x7FFFFFFF,
+} DUCKDB_V2_FUNCTION_MONOTONICITY;
+
 /* --- Struct forward declarations for function properties --- */
 
 /* --- Types for function properties --- */
@@ -844,11 +873,36 @@ typedef struct _duckdb_v2_cast_function_exec_info {
 	void *internal_ptr;
 } * duckdb_v2_cast_function_exec_info_handle;
 
+/*!
+ * A borrowed opaque handle to the cast being bound, given to the "bind" callback. It gives access to the user data and
+ * the source and target type of the cast, and is used to set the bind data of the bound cast.
+ */
+typedef struct _duckdb_v2_cast_function_bind_info {
+	void *internal_ptr;
+} * duckdb_v2_cast_function_bind_info_handle;
+
+/*!
+ * A borrowed opaque handle to the arguments supplied to a cast function during the local state initialization "init"
+ * phase. The "init" callback receives this handle once per execution thread, and uses it to set "init data" for that
+ * thread, retrievable from the exec callbacks of the thread.
+ */
+typedef struct _duckdb_v2_cast_function_init_info {
+	void *internal_ptr;
+} * duckdb_v2_cast_function_init_info_handle;
+
 /* --- Constants for cast --- */
 
 /* --- Function pointer typedefs for cast --- */
 
 typedef void (*duckdb_v2_cast_function_exec_callback_fn)(duckdb_v2_cast_function_exec_info_handle info,
+                                                         duckdb_v2_context_handle context,
+                                                         duckdb_v2_error_info_handle *err);
+
+typedef void (*duckdb_v2_cast_function_bind_callback_fn)(duckdb_v2_cast_function_bind_info_handle info,
+                                                         duckdb_v2_context_handle context,
+                                                         duckdb_v2_error_info_handle *err);
+
+typedef void (*duckdb_v2_cast_function_init_callback_fn)(duckdb_v2_cast_function_init_info_handle info,
                                                          duckdb_v2_context_handle context,
                                                          duckdb_v2_error_info_handle *err);
 
@@ -970,6 +1024,76 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_set_user_data(duckdb_v2_cas
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
+ * Sets a property of the cast function.
+ *
+ * Only `FUNCTION_PROPERTY_STABILITY` can be set. A cast whose result depends on a setting, such as the time zone,
+ * declares `FUNCTION_PROPERTY_STABILITY_CONSISTENT_WITHIN_QUERY`, so that the engine does not fold it into a constant
+ * of a prepared statement or accept it in an index expression. Any other key, or a value that does not belong to the
+ * key, results in an error. Defaults to `FUNCTION_PROPERTY_STABILITY_CONSISTENT`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the property of.
+ * @param key The property to set. Must be `FUNCTION_PROPERTY_STABILITY`.
+ * @param value The value to set for the property. Must belong to `key`.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_set_property(duckdb_v2_cast_function_handle function,
+                                                                  DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
+                                                                  DUCKDB_V2_FUNCTION_PROPERTY_VALUE value,
+                                                                  duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the optional bind callback of the cast function.
+ *
+ * The bind callback is called every time the cast is bound for a query, before it runs. It can read the source and
+ * target type, set "bind data" the init and exec callbacks read, and refuse the cast by reporting an error, which then
+ * is the error of the statement being bound. It may be called without a context, see
+ * `duckdb_v2_cast_function_bind_callback_fn`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the bind callback of.
+ * @param callback The bind callback to set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_set_bind_callback(
+    duckdb_v2_cast_function_handle function, duckdb_v2_cast_function_bind_callback_fn callback,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the optional init callback of the cast function.
+ *
+ * The init callback is called once per execution thread before the thread first runs the exec callback. It sets "init
+ * data" for the thread, e.g. a cache the exec callback fills, which the exec callback reads with
+ * `duckdb_v2_cast_function_exec_get_init_data()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the init callback of.
+ * @param callback The init callback to set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_set_init_callback(
+    duckdb_v2_cast_function_handle function, duckdb_v2_cast_function_init_callback_fn callback,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
  * Sets the exec callback of the cast function.
  *
  * The exec callback implements the conversion: it is invoked during query execution with a batch of input values and
@@ -996,6 +1120,140 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_set_exec_callback(
  * history:
  * - unstable: v2.0.0
  *
+ * @param info The bind info handle.
+ * @param data Receives the user data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_bind_get_user_data(duckdb_v2_cast_function_bind_info_handle info,
+                                                                        void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the type the cast is bound to convert from.
+ *
+ * The returned type is owned by the caller and must be destroyed via `duckdb_v2_logical_type_destroy()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind info handle.
+ * @param type Receives the source type. Owned by the caller; destroy via `duckdb_v2_logical_type_destroy()`.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_bind_get_source_type(duckdb_v2_cast_function_bind_info_handle info,
+                                                                          duckdb_v2_logical_type_handle *type,
+                                                                          duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the type the cast is bound to convert to.
+ *
+ * The returned type is owned by the caller and must be destroyed via `duckdb_v2_logical_type_destroy()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind info handle.
+ * @param type Receives the target type. Owned by the caller; destroy via `duckdb_v2_logical_type_destroy()`.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_bind_get_target_type(duckdb_v2_cast_function_bind_info_handle info,
+                                                                          duckdb_v2_logical_type_handle *type,
+                                                                          duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the "bind data" of the bound cast from the bind callback.
+ *
+ * The bind data is stored with the bound cast and read by the init and exec callbacks. The opaque handle bundles the
+ * pointer with an optional destructor, called when the bound cast is destroyed, and an optional equality callback;
+ * without one, pointer equality is used. Calling this again replaces the bind data.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind info handle.
+ * @param data Opaque handle bundling the bind data pointer plus optional destructor and equality callbacks.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_bind_set_bind_data(duckdb_v2_cast_function_bind_info_handle info,
+                                                                        duckdb_v2_opaque *data,
+                                                                        duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the user data set via `duckdb_v2_cast_function_set_user_data()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The init info handle.
+ * @param data Receives the user data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_init_get_user_data(duckdb_v2_cast_function_init_info_handle info,
+                                                                        void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the bind data set by the bind callback.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The init info handle.
+ * @param data Receives the bind data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_init_get_bind_data(duckdb_v2_cast_function_init_info_handle info,
+                                                                        void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets the "init data" of the execution thread from the init callback.
+ *
+ * The init data is read by the exec callbacks of the thread with `duckdb_v2_cast_function_exec_get_init_data()`. The
+ * opaque handle bundles the pointer with an optional destructor, called when the thread is done with the cast.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The init info handle.
+ * @param data Opaque handle bundling the init data pointer plus an optional destructor.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_init_set_init_data(duckdb_v2_cast_function_init_info_handle info,
+                                                                        duckdb_v2_opaque *data,
+                                                                        duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the user data set via `duckdb_v2_cast_function_set_user_data()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
  * @param info The exec info handle.
  * @param data Receives the user data pointer, or null if none was set.
  * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
@@ -1003,6 +1261,40 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_set_exec_callback(
  * @return DUCKDB_V2_ERROR
  */
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_exec_get_user_data(duckdb_v2_cast_function_exec_info_handle info,
+                                                                        void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the bind data set by the bind callback.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The exec info handle.
+ * @param data Receives the bind data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_exec_get_bind_data(duckdb_v2_cast_function_exec_info_handle info,
+                                                                        void **data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the init data set by the init callback of the thread running the cast.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The exec info handle.
+ * @param data Receives the init data pointer, or null if none was set.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_exec_get_init_data(duckdb_v2_cast_function_exec_info_handle info,
                                                                         void **data, duckdb_v2_error_info_handle *err);
 #endif
 
@@ -1993,6 +2285,49 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_connection_create(duckdb_v2_instance_hand
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_connection_create_in_transaction(duckdb_v2_context_handle ctx,
                                                                         duckdb_v2_connection_handle *out_conn,
                                                                         duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Retrieves the time the transaction of a context started, as microseconds since 1970-01-01 00:00:00 UTC.
+ *
+ * This is the instant SQL's `current_timestamp` and `now()` return: it is the same for every statement of the
+ * transaction, so a function that reads it is `FUNCTION_PROPERTY_STABILITY_CONSISTENT_WITHIN_QUERY`. Fails when the
+ * context has no active transaction.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param context The context whose transaction to read.
+ * @param micros Receives the start time of the transaction, in microseconds since the epoch.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_context_get_transaction_start_time(duckdb_v2_context_handle context,
+                                                                          int64_t *micros,
+                                                                          duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Checks whether the query of a context was interrupted, e.g. by `duckdb_v2_connection_interrupt()` or because it ran
+ * past the `max_execution_time` setting.
+ *
+ * A callback that runs for a long time without returning, such as one that generates many rows for a single input,
+ * calls this now and then so that the query can be canceled. Returns `ERROR_RUNTIME_INTERRUPT` when the query was
+ * interrupted: the callback then reports that error and returns. The check is cheap and does not block.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param context The context of the query to check.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_context_interrupt_check(duckdb_v2_context_handle context,
+                                                               duckdb_v2_error_info_handle *err);
 #endif
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
@@ -2995,6 +3330,432 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_data_chunk_get_vector(duckdb_v2_data_chun
 #endif
 
 /* --- Struct definitions for data_chunk --- */
+
+/* ============================================================================
+ * MODULE: datetime
+ * ============================================================================ */
+
+/* --- Enums for datetime --- */
+
+//! What a strptime format contains, as bits of the flags `duckdb_v2_strptime_format_get_flags()` reports.
+typedef enum DUCKDB_V2_TIME_FORMAT_FLAG {
+	//! The format has a UTC offset, `%z`.
+	DUCKDB_V2_TIME_FORMAT_FLAG_UTC_OFFSET = 1,
+
+	//! The format has a time zone name, `%Z`.
+	DUCKDB_V2_TIME_FORMAT_FLAG_TZ_NAME = 2,
+
+	//! The format has nanoseconds, `%n`.
+	DUCKDB_V2_TIME_FORMAT_FLAG_NANOSECONDS = 4,
+	DUCKDB_V2_TIME_FORMAT_FLAG_MAX_ENUM = 0x7FFFFFFF,
+} DUCKDB_V2_TIME_FORMAT_FLAG;
+
+//! What `duckdb_v2_timestamp_tz_parse_text()` made of a text.
+typedef enum DUCKDB_V2_TIMESTAMP_TEXT_RESULT {
+	//! The text is a timestamp.
+	DUCKDB_V2_TIMESTAMP_TEXT_SUCCESS = 0,
+
+	//! The text is not in the format of a timestamp.
+	DUCKDB_V2_TIMESTAMP_TEXT_ERROR_FORMAT = 1,
+
+	//! The text is in the format of a timestamp, but the timestamp is out of range.
+	DUCKDB_V2_TIMESTAMP_TEXT_ERROR_RANGE = 2,
+	DUCKDB_V2_TIMESTAMP_TEXT_RESULT_MAX_ENUM = 0x7FFFFFFF,
+} DUCKDB_V2_TIMESTAMP_TEXT_RESULT;
+
+/* --- Struct forward declarations for datetime --- */
+
+typedef struct duckdb_v2_time_parts duckdb_v2_time_parts;
+
+typedef struct duckdb_v2_strptime_parts duckdb_v2_strptime_parts;
+
+typedef struct duckdb_v2_timestamp_text duckdb_v2_timestamp_text;
+
+/* --- Types for datetime --- */
+
+/*!
+ * An owned opaque handle to a parsed strptime format string, e.g. `%Y-%m-%d %H:%M:%S %Z`. Created with
+ * `duckdb_v2_strptime_format_create()`, used to parse texts with `duckdb_v2_strptime_format_parse()`, and destroyed
+ * with `duckdb_v2_strptime_format_destroy()`. Immutable: several threads may parse with it at once.
+ */
+typedef struct _duckdb_v2_strptime_format {
+	void *internal_ptr;
+} * duckdb_v2_strptime_format_handle;
+
+/*!
+ * An owned opaque handle to what a strptime format last parsed from a text. Created with
+ * `duckdb_v2_strptime_result_create()`, filled by `duckdb_v2_strptime_format_parse()`, read with
+ * `duckdb_v2_strptime_result_get_parts()` and `duckdb_v2_strptime_result_get_error()`, and destroyed with
+ * `duckdb_v2_strptime_result_destroy()`. A thread reuses one result for every text it parses; it is not safe to use
+ * from several threads at once.
+ */
+typedef struct _duckdb_v2_strptime_result {
+	void *internal_ptr;
+} * duckdb_v2_strptime_result_handle;
+
+/*!
+ * An owned opaque handle to a parsed strftime format string, e.g. `%A, %-d %B %Y`. Created with
+ * `duckdb_v2_strftime_format_create()`, used to write dates and times with `duckdb_v2_strftime_format_write()`, and
+ * destroyed with `duckdb_v2_strftime_format_destroy()`. Immutable: several threads may write with it at once.
+ */
+typedef struct _duckdb_v2_strftime_format {
+	void *internal_ptr;
+} * duckdb_v2_strftime_format_handle;
+
+/* --- Constants for datetime --- */
+
+/* --- Function pointer typedefs for datetime --- */
+
+/* --- Functions for datetime --- */
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Parses a strptime format string, as the SQL function `strptime` takes it.
+ *
+ * Fails with `ERROR_INPUT_INVALID` when the format string is not valid, with the message of `strptime`, e.g. "Failed to
+ * parse format specifier %Q: Unrecognized format for strftime/strptime: %Q". The caller owns the returned handle and
+ * must destroy it with `duckdb_v2_strptime_format_destroy()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param format The format string. Not necessarily null-terminated.
+ * @param format_length The length of `format` in bytes.
+ * @param out_format On success, receives the parsed format. Owned by the caller.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_strptime_format_create(const char *format, idx_t format_length,
+                                                              duckdb_v2_strptime_format_handle *out_format,
+                                                              duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Reports what the format contains, as a combination of `DUCKDB_V2_TIME_FORMAT_FLAG` bits.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param format The format to inspect.
+ * @param flags Receives the `TIME_FORMAT_FLAG_*` bits of what the format contains.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_strptime_format_get_flags(duckdb_v2_strptime_format_handle format,
+                                                                 uint32_t *flags, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Parses a text with the format, as `strptime` does.
+ *
+ * On a match, `*matched` is set to true and `result` holds the parts the text gives, read with
+ * `duckdb_v2_strptime_result_get_parts()`. Otherwise `*matched` is set to false and `result` holds why the text does
+ * not match, read with `duckdb_v2_strptime_result_get_error()`. A text that does not match is not a failure of the
+ * call: it returns `ERROR_NONE`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param format The format to parse with.
+ * @param text The text to parse. Not necessarily null-terminated.
+ * @param text_length The length of `text` in bytes.
+ * @param result Receives what was parsed, replacing what it held.
+ * @param matched Receives whether the text matches the format.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_strptime_format_parse(duckdb_v2_strptime_format_handle format, const char *text,
+                                                             idx_t text_length, duckdb_v2_strptime_result_handle result,
+                                                             bool *matched, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Destroys a strptime format and sets the handle to null. Does nothing for a null handle.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param format The format to destroy.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_strptime_format_destroy(duckdb_v2_strptime_format_handle *format);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Creates an empty strptime result, to pass to `duckdb_v2_strptime_format_parse()`. The caller owns the returned handle
+ * and must destroy it with `duckdb_v2_strptime_result_destroy()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param out_result On success, receives the new result. Owned by the caller.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_strptime_result_create(duckdb_v2_strptime_result_handle *out_result,
+                                                              duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Reads what the last `duckdb_v2_strptime_format_parse()` into the result parsed from a matching text.
+ *
+ * The time zone name is borrowed from the result: it stays valid until the result parses again or is destroyed.
+ * Undefined after a parse that did not match.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param result The result to read.
+ * @param parts Receives the parts.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_strptime_result_get_parts(duckdb_v2_strptime_result_handle result,
+                                                                 duckdb_v2_strptime_parts *parts,
+                                                                 duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Writes the error message of `strptime` for a text the last `duckdb_v2_strptime_format_parse()` into the result did
+ * not match, e.g. "Could not parse string "x" according to format specifier "%Y"" followed by where and why.
+ *
+ * `strptime` with several formats reports the reason of the last format it tried with the format string of the first,
+ * so the format string is passed separately. Writes at most `buffer_size` bytes into `buffer`, without a terminating
+ * null, and sets `*length` to the length of the whole message: when it exceeds `buffer_size`, the caller calls again
+ * with a buffer of that size.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param result The result of the parse that did not match.
+ * @param text The text that did not match. Not necessarily null-terminated.
+ * @param text_length The length of `text` in bytes.
+ * @param format_string The format string to name in the message. Not necessarily null-terminated.
+ * @param format_string_length The length of `format_string` in bytes.
+ * @param buffer A caller-owned buffer of at least `buffer_size` bytes, receiving the message. May be null when
+ * `buffer_size` is 0.
+ * @param buffer_size The size of `buffer` in bytes.
+ * @param length Receives the length of the whole message in bytes.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_strptime_result_get_error(duckdb_v2_strptime_result_handle result,
+                                                                 const char *text, idx_t text_length,
+                                                                 const char *format_string, idx_t format_string_length,
+                                                                 char *buffer, idx_t buffer_size, idx_t *length,
+                                                                 duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Destroys a strptime result and sets the handle to null. Does nothing for a null handle.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param result The result to destroy.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_strptime_result_destroy(duckdb_v2_strptime_result_handle *result);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Parses a strftime format string, as the SQL function `strftime` takes it.
+ *
+ * Fails with `ERROR_INPUT_INVALID` when the format string is not valid, with the message of `strftime`. The caller owns
+ * the returned handle and must destroy it with `duckdb_v2_strftime_format_destroy()`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param format The format string. Not necessarily null-terminated.
+ * @param format_length The length of `format` in bytes.
+ * @param out_format On success, receives the parsed format. Owned by the caller.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_strftime_format_create(const char *format, idx_t format_length,
+                                                              duckdb_v2_strftime_format_handle *out_format,
+                                                              duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Writes a date and time with the format, as `strftime` does.
+ *
+ * The parts are those of a valid date and time of day. The day of the week, the day of the year and the week numbers
+ * are computed from the date. `%z` writes `parts.utc_offset`, and `%Z` writes `tz_name`. Writes at most `buffer_size`
+ * bytes into `buffer`, without a terminating null, and sets `*length` to the length of the whole text: when it exceeds
+ * `buffer_size`, the caller calls again with a buffer of that size.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param format The format to write with.
+ * @param parts The parts of the date and time to write.
+ * @param nanoseconds Whether `parts.fraction` is in nanoseconds, rather than microseconds.
+ * @param tz_name The time zone name `%Z` writes. Not necessarily null-terminated. May be null when `tz_name_length` is
+ * 0.
+ * @param tz_name_length The length of `tz_name` in bytes.
+ * @param buffer A caller-owned buffer of at least `buffer_size` bytes, receiving the text. May be null when
+ * `buffer_size` is 0.
+ * @param buffer_size The size of `buffer` in bytes.
+ * @param length Receives the length of the whole text in bytes.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_strftime_format_write(duckdb_v2_strftime_format_handle format,
+                                                             const duckdb_v2_time_parts *parts, bool nanoseconds,
+                                                             const char *tz_name, idx_t tz_name_length, char *buffer,
+                                                             idx_t buffer_size, idx_t *length,
+                                                             duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Destroys a strftime format and sets the handle to null. Does nothing for a null handle.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param format The format to destroy.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_strftime_format_destroy(duckdb_v2_strftime_format_handle *format);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Parses a text in the grammar of the `VARCHAR` to `TIMESTAMP WITH TIME ZONE` cast, e.g. `2026-11-27
+ * 10:30:00.123456789+01:00` or `2026-11-27 10:30 Europe/Amsterdam`.
+ *
+ * A text with a UTC offset gives an instant; one without gives a local date and time, followed by the name of the time
+ * zone it is in, if any: see `duckdb_v2_timestamp_text`. Special values such as `infinity` parse to the timestamp they
+ * stand for, as an instant. A text that is not a timestamp is not a failure of the call: it sets `*result` and returns
+ * `ERROR_NONE`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param text The text to parse. Not necessarily null-terminated.
+ * @param text_length The length of `text` in bytes.
+ * @param parsed On `TIMESTAMP_TEXT_SUCCESS`, receives the timestamp. The time zone name points into `text`.
+ * @param result Receives whether the text is a timestamp.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_timestamp_tz_parse_text(const char *text, idx_t text_length,
+                                                               duckdb_v2_timestamp_text *parsed,
+                                                               DUCKDB_V2_TIMESTAMP_TEXT_RESULT *result,
+                                                               duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Parses a text in the grammar of the `VARCHAR` to `TIME WITH TIME ZONE` cast, e.g. `10:30:00+01`.
+ *
+ * On success, `*micros` receives the time of day in microseconds since midnight, and `*has_offset` whether the text
+ * gives a UTC offset, which `*offset` then receives in seconds, east positive. A text that is not a time is not a
+ * failure of the call: it sets `*success` to false and returns `ERROR_NONE`.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param text The text to parse. Not necessarily null-terminated.
+ * @param text_length The length of `text` in bytes.
+ * @param micros Receives the time of day in microseconds.
+ * @param offset Receives the UTC offset in seconds, 0 when the text gives none.
+ * @param has_offset Receives whether the text gives a UTC offset.
+ * @param success Receives whether the text is a time.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_time_tz_parse_text(const char *text, idx_t text_length, int64_t *micros,
+                                                          int32_t *offset, bool *has_offset, bool *success,
+                                                          duckdb_v2_error_info_handle *err);
+#endif
+
+/* --- Struct definitions for datetime --- */
+
+/*!
+ * The parts of a date and time of day, as a strptime format parses them from text and a strftime format writes them.
+ * The month and day count from 1. A year is the proleptic Gregorian year, which counts 1 BC as 0, -1 BC as -1, and so
+ * on.
+ */
+struct duckdb_v2_time_parts {
+	int32_t year;
+	int32_t month;
+	int32_t day;
+	int32_t hour;
+	int32_t minute;
+	int32_t second;
+
+	//! The fraction of the second, in nanoseconds when parsed, and in the unit the formatter is told otherwise.
+	int32_t fraction;
+
+	//! The offset from UTC in seconds, east positive. 0 when the text has none.
+	int32_t utc_offset;
+};
+
+//! What a strptime format parsed from a text, read with `duckdb_v2_strptime_result_get_parts()`.
+struct duckdb_v2_strptime_parts {
+	//! The parts of the date and time. Not set when `is_special` is true.
+	duckdb_v2_time_parts parts;
+
+	//! Whether the text is a special date, such as `infinity`, rather than parts.
+	bool is_special;
+
+	//! For a special date, its days since 1970-01-01, e.g. `INT32_MAX` for `infinity`.
+	int32_t special_days;
+
+	/*!
+	 * The time zone name the text gives for `%Z`. Borrowed from the result, valid until it parses again or is
+	 * destroyed. Not null-terminated.
+	 */
+	const char *tz_name;
+
+	//! The length of `tz_name` in bytes, 0 when the text gives no time zone name.
+	idx_t tz_name_length;
+};
+
+//! A TIMESTAMP WITH TIME ZONE as `duckdb_v2_timestamp_tz_parse_text()` parsed it from text.
+struct duckdb_v2_timestamp_text {
+	/*!
+	 * With an offset, the instant in microseconds since 1970-01-01 00:00:00 UTC. Without one, the local date and time
+	 * the text gives, in microseconds since 1970-01-01 00:00:00, to be placed in the time zone `tz_name` or the
+	 * session's.
+	 */
+	int64_t micros;
+
+	//! The nanoseconds of the text beyond the microseconds, in [0, 1000).
+	int32_t nanos;
+
+	//! Whether the text gives a UTC offset, e.g. `+02:00`, which `micros` has applied.
+	bool has_offset;
+
+	//! The time zone name that follows the time, if any. Borrowed from the parsed text. Not null-terminated.
+	const char *tz_name;
+
+	//! The length of `tz_name` in bytes, 0 when the text gives no time zone name.
+	idx_t tz_name_length;
+};
 
 /* ============================================================================
  * MODULE: environment
@@ -13762,6 +14523,31 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_get_generic_property(duck
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
+ * Declares how the function's result changes with one of its arguments, see `DUCKDB_V2_FUNCTION_MONOTONICITY`.
+ *
+ * The optimizer relies on the declaration: a filter on the result of a non-decreasing function of a column, for
+ * example, can skip the row groups whose statistics rule the argument out. Declaring a monotonicity the function does
+ * not have produces wrong query results. A call can withdraw or change the declaration for itself from the bind
+ * callback with `duckdb_v2_scalar_function_bind_set_argument_monotonicity()`. Defaults to
+ * `FUNCTION_MONOTONICITY_UNKNOWN` for every argument.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to declare the monotonicity of.
+ * @param index The index of the argument, in the order the arguments are passed.
+ * @param monotonicity How the result changes with the argument.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_set_argument_monotonicity(
+    duckdb_v2_scalar_function_handle function, idx_t index, DUCKDB_V2_FUNCTION_MONOTONICITY monotonicity,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
  * Sets the optional resolve types callback of the scalar function.
  *
  * The resolve types callback is invoked during query planning for each call site of the function, before the arguments
@@ -13916,6 +14702,108 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_resolve_types_set_return_
  */
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_set_bind_data(
     duckdb_v2_scalar_function_bind_info_handle info, duckdb_v2_opaque *data, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets a property of the call being bound, overriding the one the function was registered with
+ * (`duckdb_v2_scalar_function_set_property()`) for this call only.
+ *
+ * Only `FUNCTION_PROPERTY_STABILITY` can be set: a function whose result depends on a setting for some arguments only,
+ * e.g. on the time zone for some formats, declares `FUNCTION_PROPERTY_STABILITY_CONSISTENT` at registration and
+ * `FUNCTION_PROPERTY_STABILITY_CONSISTENT_WITHIN_QUERY` for the calls that read the setting, or the other way around.
+ * Any other key, or a value that does not belong to the key, results in an error.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind info handle.
+ * @param key The property to set. Must be `FUNCTION_PROPERTY_STABILITY`.
+ * @param value The value to set for the property. Must belong to `key`.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_set_property(
+    duckdb_v2_scalar_function_bind_info_handle info, DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
+    DUCKDB_V2_FUNCTION_PROPERTY_VALUE value, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Changes the monotonicity of the call being bound in one of its arguments, overriding the declaration of
+ * `duckdb_v2_scalar_function_set_argument_monotonicity()` for this call only.
+ *
+ * A function that is monotone for most of its constant arguments declares the monotonicity at registration, and
+ * withdraws it with `FUNCTION_MONOTONICITY_UNKNOWN` for the calls whose constant arguments make it not monotone.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind info handle.
+ * @param index The index of the argument, in the order the arguments are passed.
+ * @param monotonicity How the result changes with the argument in this call.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_set_argument_monotonicity(
+    duckdb_v2_scalar_function_bind_info_handle info, idx_t index, DUCKDB_V2_FUNCTION_MONOTONICITY monotonicity,
+    duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Replaces the call being bound with a call of the overload the function overrode when it was registered, on the same
+ * arguments.
+ *
+ * A function registered with the name and parameter types of an existing overload replaces that overload, e.g. an
+ * extension that handles more cases of a built-in function. It can hand the calls it does not handle back to the
+ * overload it replaced: once the bind callback returns, the engine binds that overload to the arguments of the call,
+ * and the query runs it in place of this one, with its return type, bind data and properties. The bind data the
+ * callback set is discarded. Fails when the function replaced no overload when it was registered.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind info handle.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_call_overridden(
+    duckdb_v2_scalar_function_bind_info_handle info, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Replaces the call being bound with a call of another scalar function, on some of its arguments.
+ *
+ * Once the bind callback returns, the engine binds the function named `name`, from the schema the function being bound
+ * was registered in, to the arguments at `arg_indices`, in that order, and the query runs that call in place of this
+ * one: its return type, bind data, properties and statistics are the replacement's. A function with one constant
+ * argument that selects a cheaper or better described function uses it, e.g. `date_part` with a constant part replacing
+ * itself with the function of that part. The bind data the callback set is discarded.
+ *
+ * The replacement is bound like a call written in SQL, so its overload is chosen by the types of the arguments, and it
+ * may itself replace its call. Binding it fails like such a call when no function of that name takes those arguments.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The bind info handle.
+ * @param name The name of the function to call instead. Not necessarily null-terminated.
+ * @param name_length The length of `name` in bytes.
+ * @param arg_indices The indices of the arguments of the call being bound to pass to the replacement, in order. May be
+ * null when `arg_count` is 0.
+ * @param arg_count The number of entries in `arg_indices`.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_replace_call(
+    duckdb_v2_scalar_function_bind_info_handle info, const char *name, idx_t name_length, const idx_t *arg_indices,
+    idx_t arg_count, duckdb_v2_error_info_handle *err);
 #endif
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE

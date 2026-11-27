@@ -155,9 +155,15 @@ struct MapCastNode {
 	MapCastNode(bind_cast_function_t func, int64_t implicit_cast_cost)
 	    : cast_info(nullptr), bind_function(func), implicit_cast_cost(implicit_cast_cost) {
 	}
+	MapCastNode(BindCastFunction func, int64_t implicit_cast_cost)
+	    : cast_info(nullptr), bind_function(func.function), bind_info(std::move(func.info)),
+	      implicit_cast_cost(implicit_cast_cost) {
+	}
 
 	BoundCastInfo cast_info;
 	bind_cast_function_t bind_function;
+	//! The info the bind function is called with, if any
+	shared_ptr<BindCastInfo> bind_info;
 	int64_t implicit_cast_cost;
 };
 
@@ -342,7 +348,14 @@ static BoundCastInfo MapCastFunction(BindCastInput &input, const LogicalType &so
 	auto entry = map_info.GetEntry(source, target);
 	if (entry) {
 		if (entry->bind_function) {
-			return entry->bind_function(input, source, target);
+			if (!entry->bind_info) {
+				return entry->bind_function(input, source, target);
+			}
+			auto map_bind_info = input.info;
+			input.info = entry->bind_info.get();
+			auto result = entry->bind_function(input, source, target);
+			input.info = map_bind_info;
+			return result;
 		}
 		return entry->cast_info.Copy();
 	}
@@ -357,6 +370,11 @@ void CastFunctionSet::RegisterCastFunction(const LogicalType &source, const Logi
 void CastFunctionSet::RegisterCastFunction(const LogicalType &source, const LogicalType &target,
                                            bind_cast_function_t bind_function, int64_t implicit_cast_cost) {
 	RegisterCastFunction(source, target, MapCastNode(bind_function, implicit_cast_cost));
+}
+
+void CastFunctionSet::RegisterCastFunction(const LogicalType &source, const LogicalType &target,
+                                           BindCastFunction bind_function, int64_t implicit_cast_cost) {
+	RegisterCastFunction(source, target, MapCastNode(std::move(bind_function), implicit_cast_cost));
 }
 
 void CastFunctionSet::RegisterCastFunction(const LogicalType &source, const LogicalType &target, MapCastNode node) {

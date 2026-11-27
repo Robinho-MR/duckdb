@@ -96,6 +96,7 @@ class ArrowImporter;
 class ArrowExporter;
 
 struct TypeParam;
+struct timestamp_tz_t;
 struct NamedParam;
 struct ArrowFormat;
 
@@ -111,6 +112,10 @@ class LogSink;
 class MacroFunction;
 class ReplacementScan;
 class QualifiedName;
+class Operator;
+class StrpTimeFormat;
+class StrpTimeResult;
+class StrfTimeFormat;
 class TableDescription;
 class ColumnDescription;
 class QueryMetrics;
@@ -342,6 +347,42 @@ public:
 	explicit InterruptException(const std::string &message, std::string raw_message = {});
 };
 
+/// A value could not be converted, e.g. a text that is not a date, or a date outside the range of a type.
+class ConversionException : public Exception {
+public:
+	explicit ConversionException(const std::string &message, std::string raw_message = {});
+};
+
+/// A value is out of the range an operation accepts or can produce.
+class OutOfRangeException : public Exception {
+public:
+	explicit OutOfRangeException(const std::string &message, std::string raw_message = {});
+};
+
+/// An operation or a value is not supported, e.g. an unknown time zone.
+class NotImplementedException : public Exception {
+public:
+	explicit NotImplementedException(const std::string &message, std::string raw_message = {});
+};
+
+/// A query cannot be bound, e.g. a function called with arguments it refuses.
+class BinderException : public Exception {
+public:
+	explicit BinderException(const std::string &message, std::string raw_message = {});
+};
+
+/// Memory could not be allocated.
+class OutOfMemoryException : public Exception {
+public:
+	explicit OutOfMemoryException(const std::string &message, std::string raw_message = {});
+};
+
+/// An internal error: a state that should never be reached.
+class InternalException : public Exception {
+public:
+	explicit InternalException(const std::string &message, std::string raw_message = {});
+};
+
 //----------------------------------------------------------------------------------------------------------------------
 // Instance Option
 //----------------------------------------------------------------------------------------------------------------------
@@ -558,6 +599,15 @@ public:
 	/// callback returns: a commit while it is still open rolls the transaction back.
 	/// @throws Exception When the context has no active transaction or the transaction was aborted.
 	auto ConnectInTransaction() const -> Connection;
+
+	/// The time the transaction of this context started, which SQL's `current_timestamp` returns: the same for every
+	/// statement of the transaction.
+	/// @throws Exception When the context has no active transaction.
+	auto GetTransactionStartTime() const -> timestamp_tz_t;
+
+	/// Throws `InterruptException` when the query of this context was interrupted, e.g. canceled or past the
+	/// `max_execution_time` setting. A callback that runs long without returning calls it now and then. Cheap.
+	auto InterruptCheck() const -> void;
 
 	/// Writes a message to DuckDB's log, readable through `SELECT * FROM duckdb_logs`.
 	/// Whether the entry is recorded is up to the database's log configuration; a message it filters out is dropped
@@ -3651,6 +3701,24 @@ enum class FunctionCollationHandling : uint8_t {
 	IGNORE = 2,
 };
 
+/// How the result of a scalar function changes with one of its arguments while the others stay the same. The optimizer
+/// relies on it, e.g. to filter row groups by the statistics of the argument: declaring a monotonicity the function
+/// does not have produces wrong query results.
+enum class FunctionMonotonicity : uint8_t {
+	/// Nothing is known (default).
+	UNKNOWN = 0,
+	/// The result does not change with the argument.
+	CONSTANT = 1,
+	/// A greater argument never gives a smaller result.
+	NON_DECREASING = 2,
+	/// A greater argument always gives a greater result.
+	STRICTLY_INCREASING = 3,
+	/// A greater argument never gives a greater result.
+	NON_INCREASING = 4,
+	/// A greater argument always gives a smaller result.
+	STRICTLY_DECREASING = 5,
+};
+
 /// The order guarantee a producer of rows makes about its output.
 enum class OrderPreservation : uint8_t {
 	/// The rows have no meaningful order and may be reordered freely.
@@ -3817,6 +3885,9 @@ public:
 	auto SetFallibility(FunctionFallibility value) & -> ScalarFunction &;
 	/// How the function interacts with collations on its arguments. Defaults to `PROPAGATE`.
 	auto SetCollationHandling(FunctionCollationHandling value) & -> ScalarFunction &;
+	/// How the result changes with the argument at `index`. Defaults to `UNKNOWN`; a call can change it from the bind
+	/// callback with `BindInput::SetArgumentMonotonicity`.
+	auto SetArgumentMonotonicity(idx_t index, FunctionMonotonicity value) & -> ScalarFunction &;
 
 private:
 	explicit ScalarFunction(void *impl);
@@ -3883,6 +3954,22 @@ public:
 		auto GetUserData() const -> T & {
 			return *static_cast<T *>(GetUserDataInternal());
 		}
+
+		/// Overrides the stability the function was registered with, for this call: e.g. a call whose constant
+		/// arguments make it read a setting is `CONSISTENT_WITHIN_QUERY`.
+		auto SetStability(FunctionStability value) -> void;
+		/// Overrides the monotonicity the function was registered with in the argument at `index`, for this call.
+		auto SetArgumentMonotonicity(idx_t index, FunctionMonotonicity value) -> void;
+
+		/// Replaces this call, once the callback returns, with a call of the function `name` of the function's schema
+		/// on the arguments at `arg_indices`, in that order. The replacement's overload is chosen by the argument
+		/// types, and its return type, bind data and properties replace this call's. The bind data set here is
+		/// discarded.
+		auto ReplaceCall(const std::string &name, const std::vector<idx_t> &arg_indices) -> void;
+		/// Replaces this call, once the callback returns, with a call of the overload this function replaced when it
+		/// was registered under the name and parameter types of an existing overload, on the same arguments. Lets a
+		/// function that extends a built-in hand back the calls it does not handle.
+		auto CallOverridden() -> void;
 
 	private:
 		BindInput(void *args, void *result, void *context) : FunctionBindInput(args, context), result(result) {
@@ -4621,6 +4708,227 @@ private:
 };
 
 //----------------------------------------------------------------------------------------------------------------------
+// Operator
+//----------------------------------------------------------------------------------------------------------------------
+
+/// What an operator's execute callback reports about its input chunk, with `Operator::ExecuteInput::SetResult`.
+enum class OperatorResult : uint8_t {
+	/// Done with the input chunk: the next call receives the next one (default).
+	NEED_MORE_INPUT = 0,
+	/// The output chunk is full but the input chunk is not done: the next call receives the same input chunk.
+	HAVE_MORE_OUTPUT = 1,
+	/// No more input is needed at all.
+	FINISHED = 2,
+};
+
+/// Where the input of a table function's operator comes from, see `TableFunction::SetOperator`.
+enum class TableOperatorInput : uint8_t {
+	/// The positional arguments of a call are the operator's input columns, one row per set of arguments: a call with
+	/// constant arguments gives a single row, a call on the columns of a preceding table, e.g. `FROM t, f(t.x)`, one
+	/// row per row of `t`, each row produced joined to the row it was produced for.
+	ARGUMENTS = 0,
+	/// The function takes a table as its first argument, written as a subquery, and the operator receives its rows.
+	TABLE = 1,
+};
+
+/// A streaming operator: transforms a stream of input chunks into output chunks, possibly on several threads, each
+/// with a local state of its own next to a global state they share. Create one through a `Factory`, set its callbacks,
+/// and hand it to `TableFunction::SetOperator`, which copies it, to make a table in-out function.
+///
+/// The callbacks reach the table function's bind data through `GetBindData`. A callback reports failure by throwing.
+class Operator final : public detail::Handle<Operator> {
+	friend detail::HandleFactory;
+	friend class TableFunction;
+
+public:
+	class InitGlobalInput;
+	class InitLocalInput;
+	class ExecuteInput;
+	class FinalizeInput;
+
+	/// Called once before any thread runs the operator. Optional.
+	using InitGlobalCallback = void (*)(InitGlobalInput &input);
+	/// Called once per thread before it first runs the execute callback. Optional.
+	using InitLocalCallback = void (*)(InitLocalInput &input);
+	/// Called for every input chunk, and again for the same chunk while it reports `HAVE_MORE_OUTPUT`. Required.
+	using ExecuteCallback = void (*)(ExecuteInput &input);
+	/// Called once per thread after its input is exhausted, to write the output it held back. Optional.
+	using FinalizeCallback = void (*)(FinalizeInput &input);
+
+	Operator(Operator &&) noexcept = default;
+	Operator &operator=(Operator &&) noexcept = default;
+	~Operator() override;
+
+	/// Creates an operator without callbacks through `factory`.
+	static auto Create(Factory &factory) -> Operator;
+
+	/// Constructs user data of type `T`, carried by the operator and readable from every callback via
+	/// `GetUserData<T>`. Consumed when the operator is handed to a function: set it again before handing it to another.
+	template <class T, class... ARGS>
+	auto SetUserData(ARGS &&...args) & -> Operator & {
+		auto ptr = new T(std::forward<ARGS>(args)...);
+		user_data = detail::UserData(ptr, detail::TypedDelete<T>);
+		return *this;
+	}
+
+	auto SetInitGlobalCallback(InitGlobalCallback callback) & -> Operator &;
+	auto SetInitLocalCallback(InitLocalCallback callback) & -> Operator &;
+	auto SetExecuteCallback(ExecuteCallback callback) & -> Operator &;
+	auto SetFinalizeCallback(FinalizeCallback callback) & -> Operator &;
+
+private:
+	explicit Operator(void *impl);
+	//! Moves what the callbacks need into the C handle, right before it is handed to a function.
+	auto PrepareRegistration() -> void;
+
+	InitGlobalCallback init_global_callback = nullptr;
+	InitLocalCallback init_local_callback = nullptr;
+	ExecuteCallback execute_callback = nullptr;
+	FinalizeCallback finalize_callback = nullptr;
+	detail::UserData user_data;
+
+	/// @internal What every callback input shares.
+	class InputBase {
+	public:
+		/// The user data set via `Operator::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+		/// The bind data of the table function running the operator.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetBindData() const -> const T & {
+			return *static_cast<const T *>(GetBindDataInternal());
+		}
+		/// The context of the query. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context & {
+			return context;
+		}
+
+	protected:
+		InputBase(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+		virtual ~InputBase() = default;
+
+		void *args;
+		Context context;
+
+		virtual void *GetUserDataInternal() const = 0;
+		virtual void *GetBindDataInternal() const = 0;
+	};
+
+	/// @internal What the inputs after the global init share.
+	class StateInputBase : public InputBase {
+	public:
+		/// The global state set via `InitGlobalInput::SetGlobalState`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetGlobalState() const -> T & {
+			return *static_cast<T *>(GetGlobalStateInternal());
+		}
+
+	protected:
+		using InputBase::InputBase;
+		virtual void *GetGlobalStateInternal() const = 0;
+	};
+
+public:
+	/// What the global init callback works with. Borrowed, valid only for the callback duration.
+	class InitGlobalInput final : public InputBase {
+		friend detail::HandleFactory;
+
+	public:
+		/// Constructs the global state of type `T`, shared by every thread: synchronize access to it.
+		template <class T, class... ARGS>
+		void SetGlobalState(ARGS &&...args) {
+			auto ptr = new T(std::forward<ARGS>(args)...);
+			SetGlobalStateInternal(ptr, detail::TypedDelete<T>);
+		}
+		/// The most threads that may run the operator at once; at least 1.
+		auto SetMaxThreads(idx_t max_threads) -> void;
+
+	private:
+		using InputBase::InputBase;
+		void SetGlobalStateInternal(void *data, void (*destructor)(void *));
+		void *GetUserDataInternal() const override;
+		void *GetBindDataInternal() const override;
+	};
+
+	/// What the local init callback works with. Borrowed, valid only for the callback duration.
+	class InitLocalInput final : public StateInputBase {
+		friend detail::HandleFactory;
+
+	public:
+		/// Constructs the local state of type `T` of this thread.
+		template <class T, class... ARGS>
+		void SetLocalState(ARGS &&...args) {
+			auto ptr = new T(std::forward<ARGS>(args)...);
+			SetLocalStateInternal(ptr, detail::TypedDelete<T>);
+		}
+
+	private:
+		using StateInputBase::StateInputBase;
+		void SetLocalStateInternal(void *data, void (*destructor)(void *));
+		void *GetUserDataInternal() const override;
+		void *GetBindDataInternal() const override;
+		void *GetGlobalStateInternal() const override;
+	};
+
+	/// What the execute callback works with. Borrowed, valid only for the callback duration.
+	class ExecuteInput final : public StateInputBase {
+		friend detail::HandleFactory;
+
+	public:
+		/// The local state set via `InitLocalInput::SetLocalState` on this thread.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetLocalState() const -> T & {
+			return *static_cast<T *>(GetLocalStateInternal());
+		}
+		/// The input chunk. Borrowed; do not modify it other than flattening its vectors.
+		auto GetInput() const -> DataChunk;
+		/// The output chunk to write into, empty on every call; set its row count with `Vector::SetSize` on its first
+		/// vector. Holds at most a vector's worth of rows.
+		auto GetOutput() const -> DataChunk;
+		/// Whether the operator is done with the input chunk. Defaults to `NEED_MORE_INPUT`.
+		auto SetResult(OperatorResult result) -> void;
+
+	private:
+		using StateInputBase::StateInputBase;
+		void *GetUserDataInternal() const override;
+		void *GetBindDataInternal() const override;
+		void *GetGlobalStateInternal() const override;
+		void *GetLocalStateInternal() const;
+	};
+
+	/// What the finalize callback works with. Borrowed, valid only for the callback duration.
+	class FinalizeInput final : public StateInputBase {
+		friend detail::HandleFactory;
+
+	public:
+		/// The local state set via `InitLocalInput::SetLocalState` on this thread.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetLocalState() const -> T & {
+			return *static_cast<T *>(GetLocalStateInternal());
+		}
+		/// The output chunk to write the held-back rows into.
+		auto GetOutput() const -> DataChunk;
+		/// Whether finalize has more output, so that it is called again.
+		auto SetHaveMoreOutput(bool have_more_output) -> void;
+
+	private:
+		using StateInputBase::StateInputBase;
+		void *GetUserDataInternal() const override;
+		void *GetBindDataInternal() const override;
+		void *GetGlobalStateInternal() const override;
+		void *GetLocalStateInternal() const;
+	};
+};
+
+//----------------------------------------------------------------------------------------------------------------------
 // Table Function
 //----------------------------------------------------------------------------------------------------------------------
 
@@ -4811,6 +5119,12 @@ public:
 
 	/// Lets the function describe a bound call in query plans: see `ToStringCallback`. Unstable API.
 	auto SetToStringCallback(ToStringCallback callback) & -> TableFunction &;
+
+	/// Makes this a table in-out function, whose rows `op` produces from its input, see `TableOperatorInput`. The bind
+	/// callback still declares the result columns; the operator replaces the exec callback and the callbacks of a scan
+	/// (init global and local, progress, partitioning, filter pushdown, ...). The operator is copied: `op` may be
+	/// destroyed or handed to other functions, but its user data moves to this function.
+	auto SetOperator(Operator &op, TableOperatorInput input) & -> TableFunction &;
 
 private:
 	explicit TableFunction(void *impl);
@@ -6432,8 +6746,15 @@ class CastFunction final : public detail::Handle<CastFunction> {
 	friend class Extension;
 
 public:
+	class BindInput;
+	class InitInput;
 	class ExecInput;
 
+	/// Called every time the cast is bound for a query, before it runs. Optional. It may set bind data, and refuse
+	/// the cast by throwing, which fails the statement.
+	using BindCallback = void (*)(BindInput &input);
+	/// Called once per execution thread before the first `ExecCallback` on it. Optional.
+	using InitCallback = void (*)(InitInput &input);
 	/// Called for every batch of values; must fill the output vector. Required.
 	using ExecCallback = void (*)(ExecInput &input);
 
@@ -6469,7 +6790,14 @@ public:
 		return *this;
 	}
 
+	auto SetBindCallback(BindCallback callback) & -> CastFunction &;
+	auto SetInitCallback(InitCallback callback) & -> CastFunction &;
 	auto SetExecCallback(ExecCallback callback) & -> CastFunction &;
+
+	/// How stable the cast's result is across queries. Defaults to `CONSISTENT`. A cast whose result depends on a
+	/// setting, e.g. the time zone, is `CONSISTENT_WITHIN_QUERY`: the engine then does not fold it into a constant of a
+	/// prepared statement, nor accept it in an index expression. `VOLATILE` is not supported.
+	auto SetStability(FunctionStability value) & -> CastFunction &;
 
 private:
 	explicit CastFunction(void *impl);
@@ -6478,10 +6806,98 @@ private:
 
 	auto SetUserDataInternal(void *data, void (*destructor)(void *)) -> void;
 
+	BindCallback bind_callback = nullptr;
+	InitCallback init_callback = nullptr;
 	ExecCallback exec_callback = nullptr;
 	detail::UserData user_data;
 
 public:
+	/// What the bind callback works with. Borrowed, valid only for the callback duration.
+	class BindInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// Constructs bind data of type `T`, owned by the bound cast and readable from the init and exec callbacks
+		/// via `GetBindData<T>`. The engine compares bound casts by `operator==` of `T` when it has one.
+		template <class T, class... ARGS>
+		void SetBindData(ARGS &&...args) {
+			auto ptr = new T(std::forward<ARGS>(args)...);
+			SetBindDataInternal(ptr, detail::SelectEquals<T>(), detail::TypedDelete<T>);
+		}
+
+		/// The user data set via `CastFunction::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// The type the cast is bound to convert from.
+		auto GetSourceType() const -> LogicalType;
+		/// The type the cast is bound to convert to.
+		auto GetTargetType() const -> LogicalType;
+
+		/// Whether the cast is bound for a query, with a context. The engine also binds casts without one, e.g. to
+		/// cast a constant while it loads a database.
+		auto HasContext() const -> bool {
+			return context.has_value();
+		}
+		/// The context of the query binding the cast. Borrowed, valid only for the callback duration.
+		/// @throws InvalidInputException When the cast is bound without a context, see `HasContext`.
+		auto GetContext() -> Context &;
+
+	private:
+		BindInput(void *args, void *context);
+
+		void *args;
+		std::optional<Context> context;
+
+		void SetBindDataInternal(void *data, bool (*equals)(void *a, void *b), void (*destructor)(void *));
+		void *GetUserDataInternal() const;
+	};
+
+	/// What the init callback works with. Borrowed, valid only for the callback duration.
+	class InitInput {
+		friend detail::HandleFactory;
+
+	public:
+		/// Constructs init data of type `T`, owned by this execution thread and readable from its exec callbacks via
+		/// `GetInitData<T>`.
+		template <class T, class... ARGS>
+		void SetInitData(ARGS &&...args) {
+			auto ptr = new T(std::forward<ARGS>(args)...);
+			SetInitDataInternal(ptr, detail::TypedDelete<T>);
+		}
+
+		/// The bind data set via `BindInput::SetBindData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetBindData() const -> const T & {
+			return *static_cast<const T *>(GetBindDataInternal());
+		}
+
+		/// The user data set via `CastFunction::SetUserData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetUserData() const -> T & {
+			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// The context the cast runs in. Borrowed, valid only for the callback duration.
+		auto GetContext() -> Context &;
+
+	private:
+		InitInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
+		}
+
+		void *args;
+		Context context;
+
+		void SetInitDataInternal(void *data, void (*destructor)(void *));
+		void *GetBindDataInternal() const;
+		void *GetUserDataInternal() const;
+	};
+
 	/// What the exec callback works with. Borrowed, valid only for the callback duration.
 	class ExecInput {
 		friend detail::HandleFactory;
@@ -6492,6 +6908,20 @@ public:
 		template <class T>
 		auto GetUserData() const -> T & {
 			return *static_cast<T *>(GetUserDataInternal());
+		}
+
+		/// The bind data set via `BindInput::SetBindData`.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetBindData() const -> const T & {
+			return *static_cast<const T *>(GetBindDataInternal());
+		}
+
+		/// The init data set via `InitInput::SetInitData` on this thread.
+		/// @throws InvalidInputException When none was set.
+		template <class T>
+		auto GetInitData() const -> T & {
+			return *static_cast<T *>(GetInitDataInternal());
 		}
 
 		/// How many rows this execution must convert: the callback writes exactly this many entries to the output
@@ -6520,6 +6950,8 @@ public:
 		Context context;
 
 		void *GetUserDataInternal() const;
+		void *GetBindDataInternal() const;
+		void *GetInitDataInternal() const;
 	};
 };
 
@@ -7038,6 +7470,154 @@ public:
 private:
 	explicit FileSystem(void *impl);
 };
+
+//----------------------------------------------------------------------------------------------------------------------
+// Date and Time Text
+//----------------------------------------------------------------------------------------------------------------------
+
+/// The parts of a date and time of day, as a `StrpTimeFormat` parses them and a `StrfTimeFormat` writes them. The month
+/// and day count from 1; the year is the proleptic Gregorian year, in which 1 BC is 0.
+struct TimeParts {
+	int32_t year = 0;
+	int32_t month = 1;
+	int32_t day = 1;
+	int32_t hour = 0;
+	int32_t minute = 0;
+	int32_t second = 0;
+	/// The fraction of the second: nanoseconds when parsed, and in the unit `StrfTimeFormat::Write` is told otherwise.
+	int32_t fraction = 0;
+	/// The offset from UTC in seconds, east positive.
+	int32_t utc_offset = 0;
+};
+
+class StrpTimeResult;
+
+/// A parsed strptime format string, e.g. `%Y-%m-%d %H:%M:%S %Z`, parsing text exactly as the SQL function `strptime`
+/// does. Immutable: several threads may parse with one format at once, each into a `StrpTimeResult` of its own.
+class StrpTimeFormat final : public detail::Handle<StrpTimeFormat> {
+	friend detail::HandleFactory;
+
+public:
+	StrpTimeFormat(StrpTimeFormat &&) noexcept = default;
+	StrpTimeFormat &operator=(StrpTimeFormat &&) noexcept = default;
+	~StrpTimeFormat() override;
+
+	/// Parses a format string.
+	/// @throws InvalidInputException When it is not a valid format, with the message of `strptime`.
+	static auto Create(std::string_view format) -> StrpTimeFormat;
+
+	/// Whether the format has a UTC offset, `%z`.
+	auto HasUtcOffset() const -> bool;
+	/// Whether the format has a time zone name, `%Z`.
+	auto HasTimeZoneName() const -> bool;
+	/// Whether the format has nanoseconds, `%n`.
+	auto HasNanoseconds() const -> bool;
+
+	/// Parses `text` into `result`. On a match, returns true and `result` holds the parts; otherwise returns false and
+	/// `result` holds why, for `StrpTimeResult::GetError`.
+	auto Parse(std::string_view text, StrpTimeResult &result) const -> bool;
+
+private:
+	explicit StrpTimeFormat(void *impl);
+	auto GetFlags() const -> uint32_t;
+};
+
+/// What a `StrpTimeFormat` last parsed. A thread reuses one result for every text it parses; not thread-safe.
+class StrpTimeResult final : public detail::Handle<StrpTimeResult> {
+	friend detail::HandleFactory;
+	friend class StrpTimeFormat;
+
+public:
+	/// Creates an empty result.
+	StrpTimeResult();
+	StrpTimeResult(StrpTimeResult &&) noexcept = default;
+	StrpTimeResult &operator=(StrpTimeResult &&) noexcept = default;
+	~StrpTimeResult() override;
+
+	/// The parts of the matched text. Not set for a special date, see `IsSpecial`.
+	auto GetParts() const -> const TimeParts & {
+		return parts;
+	}
+	/// Whether the text was a special date such as `infinity`, rather than parts.
+	auto IsSpecial() const -> bool {
+		return is_special;
+	}
+	/// The special date the text was, see `IsSpecial`.
+	auto GetSpecialDate() const -> date_t {
+		return date_t {special_days};
+	}
+	/// The time zone name the text gave for `%Z`, empty when none. Valid until the result parses again.
+	auto GetTimeZoneName() const -> std::string_view {
+		return tz_name;
+	}
+
+	/// The error message of `strptime` for a text the last parse did not match, naming `format_string`.
+	auto GetError(std::string_view text, std::string_view format_string) const -> std::string;
+
+private:
+	explicit StrpTimeResult(void *impl);
+	//! Reads what a matching parse produced
+	auto Read() -> void;
+
+	TimeParts parts;
+	bool is_special = false;
+	int32_t special_days = 0;
+	std::string_view tz_name;
+};
+
+/// A parsed strftime format string, e.g. `%A, %-d %B %Y`, writing dates and times exactly as the SQL function
+/// `strftime` does. Immutable: several threads may write with one format at once.
+class StrfTimeFormat final : public detail::Handle<StrfTimeFormat> {
+	friend detail::HandleFactory;
+
+public:
+	StrfTimeFormat(StrfTimeFormat &&) noexcept = default;
+	StrfTimeFormat &operator=(StrfTimeFormat &&) noexcept = default;
+	~StrfTimeFormat() override;
+
+	/// Parses a format string.
+	/// @throws InvalidInputException When it is not a valid format, with the message of `strftime`.
+	static auto Create(std::string_view format) -> StrfTimeFormat;
+
+	/// Writes a valid date and time into `out`, replacing its content. `%z` writes `parts.utc_offset`, `%Z` writes
+	/// `tz_name`.
+	/// @param nanoseconds Whether `parts.fraction` is in nanoseconds, rather than microseconds.
+	auto Write(const TimeParts &parts, bool nanoseconds, std::string_view tz_name, std::string &out) const -> void;
+
+private:
+	explicit StrfTimeFormat(void *impl);
+};
+
+/// A TIMESTAMP WITH TIME ZONE as `ParseTimestampTzText` parsed it.
+struct TimestampText {
+	/// With an offset, the instant in microseconds since the epoch, in UTC. Without one, the local date and time, in
+	/// microseconds since 1970-01-01 00:00:00, to place in the time zone `tz_name` or the session's.
+	int64_t micros = 0;
+	/// The nanoseconds beyond the microseconds, in [0, 1000).
+	int32_t nanos = 0;
+	/// Whether the text gave a UTC offset, which `micros` has applied.
+	bool has_offset = false;
+	/// The time zone name that follows the time, empty when none. Points into the parsed text.
+	std::string_view tz_name;
+};
+
+/// What `ParseTimestampTzText` made of a text.
+enum class TimestampTextResult : uint8_t {
+	SUCCESS = 0,
+	/// Not in the format of a timestamp.
+	ERROR_FORMAT = 1,
+	/// In the format of a timestamp, but out of range.
+	ERROR_RANGE = 2,
+};
+
+/// Parses text in the grammar of the `VARCHAR` to `TIMESTAMP WITH TIME ZONE` cast, e.g. `2026-11-27 10:30+01` or
+/// `2026-11-27 10:30 Europe/Amsterdam`.
+auto ParseTimestampTzText(std::string_view text, TimestampText &result) -> TimestampTextResult;
+
+/// Parses text in the grammar of the `VARCHAR` to `TIME WITH TIME ZONE` cast, e.g. `10:30:00+01`. Returns false when
+/// it is not a time; otherwise sets the time of day in microseconds, and the UTC offset in seconds if the text gives
+/// one.
+auto ParseTimeTzText(std::string_view text, int64_t &micros, int32_t &offset, bool &has_offset) -> bool;
 
 //----------------------------------------------------------------------------------------------------------------------
 // Qualified Name

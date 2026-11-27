@@ -71,6 +71,50 @@ functions:
         kind: OUT
         description: "Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`."
     return_type: ERROR
+  context_get_transaction_start_time:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Retrieves the time the transaction of a context started, as microseconds since 1970-01-01 00:00:00 UTC.
+
+      This is the instant SQL's `current_timestamp` and `now()` return: it is the same for every statement of the
+      transaction, so a function that reads it is `FUNCTION_PROPERTY_STABILITY_CONSISTENT_WITHIN_QUERY`. Fails when
+      the context has no active transaction.
+    parameters:
+      context:
+        type: context
+        description: The context whose transaction to read.
+      micros:
+        type: i64
+        indirection: 1
+        kind: OUT
+        description: Receives the start time of the transaction, in microseconds since the epoch.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  context_interrupt_check:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Checks whether the query of a context was interrupted, e.g. by `[[connection_interrupt]]` or because it ran past
+      the `max_execution_time` setting.
+
+      A callback that runs for a long time without returning, such as one that generates many rows for a single
+      input, calls this now and then so that the query can be canceled. Returns `ERROR_RUNTIME_INTERRUPT` when the
+      query was interrupted: the callback then reports that error and returns. The check is cheap and does not block.
+    parameters:
+      context:
+        type: context
+        description: The context of the query to check.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
   connection_destroy:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-08-04" ]

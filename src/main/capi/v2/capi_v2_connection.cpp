@@ -1,4 +1,6 @@
 #include "duckdb/main/capi_v2/capi_v2_internal.hpp"
+#include "duckdb/common/exception/transaction_exception.hpp"
+#include "duckdb/transaction/meta_transaction.hpp"
 
 using namespace duckdb::capiv2;
 
@@ -25,6 +27,24 @@ DUCKDB_V2_ERROR duckdb_v2_connection_create_in_transaction(duckdb_v2_context_han
 		auto connection = duckdb::make_uniq<CV2Connection>(duckdb::Connection::CreateInTransaction(context));
 		*out_conn = Convert(connection.release());
 	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_context_get_transaction_start_time(duckdb_v2_context_handle context, int64_t *micros,
+                                                             duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(context);
+	DUCKDB_CHECK_ARG(micros);
+	return WithErrorHandler(err, [&]() {
+		auto &client = Convert(context)->context;
+		if (!client.transaction.HasActiveTransaction()) {
+			throw duckdb::TransactionException("The context has no active transaction");
+		}
+		*micros = duckdb::MetaTransaction::Get(client).start_timestamp.value;
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_context_interrupt_check(duckdb_v2_context_handle context, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(context);
+	return WithErrorHandler(err, [&]() { Convert(context)->context.FastInterruptCheck(); });
 }
 
 DUCKDB_V2_ERROR duckdb_v2_connection_destroy(duckdb_v2_connection_handle *conn) {
