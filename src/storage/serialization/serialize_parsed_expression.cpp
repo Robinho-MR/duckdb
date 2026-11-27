@@ -17,9 +17,6 @@ void ParsedExpression::Serialize(Serializer &serializer) const {
 	if (serializer.ShouldSerialize(StorageVersion::V2_0_0)) {
 		serializer.WritePropertyWithDefault<uint32_t>(104, "query_location_length", query_location.length, 0);
 	}
-	if (serializer.ShouldSerialize(StorageVersion::V2_1_0) || (HasEmptyAlias())) {
-		serializer.WritePropertyWithDefault<bool>(105, "has_empty_alias", HasEmptyAlias(), false);
-	}
 }
 
 unique_ptr<ParsedExpression> ParsedExpression::Deserialize(Deserializer &deserializer) {
@@ -28,7 +25,6 @@ unique_ptr<ParsedExpression> ParsedExpression::Deserialize(Deserializer &deseria
 	auto alias = deserializer.ReadPropertyWithDefault<Identifier>(102, "alias");
 	auto query_location = deserializer.ReadPropertyWithExplicitDefault<optional_idx>(103, "query_location", optional_idx());
 	auto query_location_length = deserializer.ReadPropertyWithExplicitDefault<uint32_t>(104, "query_location_length", 0);
-	auto has_empty_alias = deserializer.ReadPropertyWithExplicitDefault<bool>(105, "has_empty_alias", false);
 	deserializer.Set<ExpressionType>(type);
 	unique_ptr<ParsedExpression> result;
 	switch (expression_class) {
@@ -99,7 +95,6 @@ unique_ptr<ParsedExpression> ParsedExpression::Deserialize(Deserializer &deseria
 	result->alias = std::move(alias);
 	result->query_location = query_location;
 	result->query_location.length = query_location_length;
-	result->FinalizeDeserializedAlias(has_empty_alias);
 	result->VerifyDeserialized();
 	return result;
 }

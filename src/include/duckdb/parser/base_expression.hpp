@@ -83,18 +83,6 @@ public:
 		alias.clear();
 	}
 
-	//! Whether the alias is set to the empty identifier (serialized separately, as an empty alias otherwise means none)
-	bool HasEmptyAlias() const {
-		return alias.IsSet() && alias.empty();
-	}
-
-	//! A deserialized empty alias is only an alias if it was serialized as one
-	void FinalizeDeserializedAlias(bool has_empty_alias) {
-		if (alias.empty() && !has_empty_alias) {
-			alias.clear();
-		}
-	}
-
 protected:
 	//! Type of the expression
 	ExpressionType type;

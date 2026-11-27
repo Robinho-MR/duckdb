@@ -351,6 +351,12 @@ struct SerializationDefaultValue {
 		return !value.IsSet();
 	}
 
+	//! Whether a default value is skipped even when default values are serialized (an unset Identifier stays absent)
+	template <typename T>
+	static inline bool AlwaysSkipDefault() {
+		return std::is_same<T, Identifier>::value;
+	}
+
 	template <typename T = void>
 	static inline typename std::enable_if<std::is_same<T, optional_idx>::value, T>::type GetDefault() {
 		return optional_idx();

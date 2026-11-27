@@ -37,18 +37,6 @@ public:
 		return name.IsSet();
 	}
 
-	//! Whether the argument is named with the empty identifier
-	bool HasEmptyName() const {
-		return name.IsSet() && name.empty();
-	}
-
-	//! A deserialized empty name only names the argument if it was serialized as one
-	void FinalizeDeserializedName(bool has_empty_name) {
-		if (name.empty() && !has_empty_name) {
-			name.clear();
-		}
-	}
-
 	unique_ptr<ParsedExpression> &GetExpressionMutable() {
 		return expression;
 	}

@@ -13,9 +13,3 @@ query I
 SELECT json_deserialize_sql(json_serialize_sql('SELECT 1 AS "", 2, struct_pack("" := 4, b := 5)', skip_default := true));
 ----
 SELECT 1 AS "", 2, struct_pack("" := 4, b := 5)
-
-# without the marker (JSON from older versions) an empty alias means no alias
-query I
-SELECT json_deserialize_sql(regexp_replace(json_serialize_sql('SELECT 1 AS "", 2'), ',"has_empty_alias":true', '', 'g'));
-----
-SELECT 1, 2
