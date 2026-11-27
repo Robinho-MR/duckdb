@@ -144,6 +144,13 @@ struct VariantToVariantSizeAnalyzer {
 		return VisitArray(variant, row, nested_data, depth, state);
 	}
 
+	//! Only the header: the child value is copied separately, like the children of an ARRAY
+	static uint32_t VisitAliased(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx,
+	                             const VariantAliasedData &aliased_data, idx_t depth, AnalyzeState &state) {
+		return VisitString(aliased_data.alias, state) + VisitString(aliased_data.extension_info, state) +
+		       GetVarintSize(aliased_data.children_idx + state.children_offset);
+	}
+
 	static uint32_t VisitDefault(const LogicalType &type, const_data_ptr_t, AnalyzeState &) {
 		throw InternalException("Unrecognized VariantLogicalType: %s", type.ToString());
 	}
@@ -255,6 +262,14 @@ struct VariantToVariantDataWriter {
 	static void VisitObject(const UnifiedVariantVectorData &variant, idx_t row, const VariantNestedData &nested_data,
 	                        idx_t depth, WriteState &state) {
 		return VisitArray(variant, row, nested_data, depth, state);
+	}
+
+	//! Only the header: the child value is copied separately, like the children of an ARRAY
+	static void VisitAliased(const UnifiedVariantVectorData &variant, idx_t row, uint32_t values_idx,
+	                         const VariantAliasedData &aliased_data, idx_t depth, WriteState &state) {
+		VisitString(aliased_data.alias, state);
+		VisitString(aliased_data.extension_info, state);
+		state.blob_size += VarintEncode(aliased_data.children_idx + state.children_offset, state.GetDestination());
 	}
 
 	static void VisitDefault(const LogicalType &type, const_data_ptr_t, WriteState &) {

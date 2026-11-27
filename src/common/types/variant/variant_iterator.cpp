@@ -117,6 +117,10 @@ void ShreddedVariantIterator::Build(const Vector &vec) {
 	logical_type = vec.GetType();
 	type_size = GetTypeIdSize(unified.physical_type);
 	type_id = ResolveShreddedTypeId(logical_type, has_fixed_type_id);
+	if (VariantUtils::IsAliasedType(logical_type)) {
+		alias = logical_type.GetAlias();
+		extension_info = VariantUtils::SerializeExtensionInfo(logical_type);
+	}
 
 	switch (vec.GetType().InternalType()) {
 	case PhysicalType::LIST:
@@ -240,6 +244,17 @@ VariantNode VariantNode::MakeUnshredded(const VariantIterator &state, idx_t row,
 	result.kind = Kind::UNSHREDDED;
 	result.row = row;
 	result.value_index = value_index;
+	auto &unshredded = state.unshredded;
+	if (unshredded.GetTypeId(row, value_index) == VariantLogicalType::ALIASED) {
+		//! Point at the underlying value, the wrapper only contributes the alias
+		auto aliased =
+		    VariantUtils::DecodeAliasedData(unshredded.GetBlob(row), unshredded.GetByteOffset(row, value_index));
+		result.alias_value_index = value_index + 1;
+		result.value_index = unshredded.GetValuesIndex(row, aliased.children_idx);
+		if (unshredded.GetTypeId(row, result.value_index) == VariantLogicalType::ALIASED) {
+			throw InvalidInputException("VARIANT contains an ALIASED value that directly wraps another ALIASED value");
+		}
+	}
 	return result;
 }
 
@@ -332,11 +347,43 @@ LogicalTypeId VariantNode::GetTypeId() const {
 
 LogicalType VariantNode::GetType() const {
 	auto type_id = GetTypeId();
+	LogicalType result;
 	if (type_id == LogicalTypeId::DECIMAL) {
 		auto properties = GetDecimalProperties();
-		return LogicalType::DECIMAL(properties.width, properties.scale);
+		result = LogicalType::DECIMAL(properties.width, properties.scale);
+	} else {
+		result = VariantDefaultType(type_id);
 	}
-	return VariantDefaultType(type_id);
+	if (!HasAlias()) {
+		return result;
+	}
+	auto aliased = GetAliasedData();
+	return VariantUtils::ApplyAlias(result, aliased.alias, aliased.extension_info);
+}
+
+bool VariantNode::HasAlias() const {
+	switch (kind) {
+	case Kind::UNSHREDDED:
+		return alias_value_index != 0;
+	case Kind::SHREDDED:
+		return !shredded_format->alias.empty();
+	default:
+		return false;
+	}
+}
+
+VariantAliasedData VariantNode::GetAliasedData() const {
+	D_ASSERT(HasAlias());
+	if (kind == Kind::SHREDDED) {
+		VariantAliasedData result;
+		result.alias = string_t(shredded_format->alias);
+		result.extension_info = string_t(shredded_format->extension_info);
+		result.children_idx = 0;
+		return result;
+	}
+	auto &unshredded = state->unshredded;
+	return VariantUtils::DecodeAliasedData(unshredded.GetBlob(row),
+	                                       unshredded.GetByteOffset(row, alias_value_index - 1));
 }
 
 bool VariantNode::GetBool() const {

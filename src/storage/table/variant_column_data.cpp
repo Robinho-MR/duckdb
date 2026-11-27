@@ -385,18 +385,27 @@ struct VariantShreddedAppendInput {
 
 } // namespace
 
-//! Whether a VARIANT value holds a decimal wider than 38 digits, which engines before wide decimals cannot read
-static bool ContainsWideDecimal(const VariantNode &root) {
+//! Checks that a VARIANT value can be stored in the given storage version: wide decimals cannot be read by engines that
+//! predate them. Returns whether the value contains ALIASED values.
+static bool CheckVariantValue(StorageManager &storage_manager, StorageVersion storage_version,
+                              const VariantNode &root) {
+	bool has_aliased = false;
 	// an explicit work list, deeply nested values must not consume stack
 	vector<VariantNode> pending;
 	pending.push_back(root);
 	while (!pending.empty()) {
 		auto node = pending.back();
 		pending.pop_back();
+		has_aliased = has_aliased || node.HasAlias();
 		switch (node.GetTypeId()) {
 		case LogicalTypeId::DECIMAL:
-			if (Decimal::IsWide(node.GetDecimalProperties().width)) {
-				return true;
+			if (storage_version < Decimal::WIDE_VERSION_ADDED && Decimal::IsWide(node.GetDecimalProperties().width)) {
+				auto required = GetStorageVersionName(Decimal::WIDE_VERSION_ADDED, false);
+				auto current = GetStorageVersionName(storage_version, false);
+				throw InvalidInputException(
+				    "DECIMAL values wider than %d digits cannot be stored in a VARIANT column in "
+				    "storage versions prior to %s (database %s is using storage version %s)",
+				    Decimal::MAX_WIDTH_INT128, required, storage_manager.GetAttached().GetName(), current);
 			}
 			break;
 		case LogicalTypeId::STRUCT:
@@ -413,27 +422,25 @@ static bool ContainsWideDecimal(const VariantNode &root) {
 			break;
 		}
 	}
-	return false;
+	return has_aliased;
 }
 
-//! The unshredded payload of a wide decimal is stored as it is, so a storage version before wide decimals refuses it
-static void CheckWideDecimals(StorageManager &storage_manager, const Vector &vector, idx_t count) {
+//! Checks that the values can be stored in the storage version. Returns whether the ALIASED values have to be stored
+//! as their underlying value, as the storage version predates them.
+static bool CheckVariantStorageVersion(StorageManager &storage_manager, const Vector &vector, idx_t count) {
 	const auto storage_version = storage_manager.GetStorageVersion();
-	if (storage_version >= Decimal::WIDE_VERSION_ADDED) {
-		return;
+	if (storage_version >= Decimal::WIDE_VERSION_ADDED && storage_version >= Variant::ALIASED_VERSION_ADDED) {
+		return false;
 	}
+	bool has_aliased = false;
 	VariantIterator iterator(vector);
 	for (idx_t row = 0; row < count; row++) {
-		if (!iterator.RowIsValid(row) || !ContainsWideDecimal(iterator.Root(row))) {
+		if (!iterator.RowIsValid(row)) {
 			continue;
 		}
-		auto required = GetStorageVersionName(Decimal::WIDE_VERSION_ADDED, false);
-		auto current = GetStorageVersionName(storage_version, false);
-		throw InvalidInputException("DECIMAL values wider than %d digits cannot be stored in a VARIANT column in "
-		                            "storage versions prior to %s (database %s is using storage version %s)",
-		                            Decimal::MAX_WIDTH_INT128, required, storage_manager.GetAttached().GetName(),
-		                            current);
+		has_aliased = CheckVariantValue(storage_manager, storage_version, iterator.Root(row)) || has_aliased;
 	}
+	return has_aliased && storage_version < Variant::ALIASED_VERSION_ADDED;
 }
 
 void VariantColumnData::Append(ColumnAppendState &state, const Vector &vector, idx_t count) {
@@ -443,7 +450,13 @@ void VariantColumnData::Append(ColumnAppendState &state, const Vector &vector, i
 		Append(state, append_vector, count);
 		return;
 	}
-	CheckWideDecimals(GetStorageManager(), vector, count);
+	if (CheckVariantStorageVersion(GetStorageManager(), vector, count)) {
+		// the storage version predates ALIASED values: store their underlying value instead
+		Vector unaliased(LogicalType::VARIANT(), count);
+		VariantUtils::ToVariant(VariantIterator(vector), count, unaliased, false);
+		Append(state, unaliased, count);
+		return;
+	}
 
 	// append the null values
 	validity->Append(state.child_appends[0], vector, count);

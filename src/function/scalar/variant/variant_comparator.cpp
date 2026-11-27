@@ -144,6 +144,12 @@ struct VariantEncodeFrame {
 //! Encodes a single value, or opens the frame of an ARRAY or OBJECT and returns true
 template <class SINK>
 bool EncodeVariantNode(const VariantNode &it, SINK &sink, vector<VariantEncodeFrame> &frames) {
+	if (it.HasAlias()) {
+		// a value of an aliased type is ordered by the name of its type first, and then by its value
+		sink.Write(static_cast<data_t>(VariantComparisonType::ALIASED));
+		auto type_name = it.GetType().ToString();
+		VariantEncodeString(sink, string_t(type_name), true);
+	}
 	const auto type_id = it.GetTypeId();
 	const auto comparison_type = GetVariantComparisonType(type_id);
 	// write the type rank - this guarantees values are ordered by type first

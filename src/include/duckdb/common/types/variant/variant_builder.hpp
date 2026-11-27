@@ -41,6 +41,22 @@ struct VariantNodeStorageAccess {
 	static VariantLogicalType GetStorageType(const NODE &node) {
 		return node.GetVariantType();
 	}
+	template <class NODE>
+	static bool HasAlias(const NODE &node) {
+		if constexpr (std::is_same<NODE, VariantNode>::value) {
+			return node.HasAlias();
+		} else {
+			return false;
+		}
+	}
+	template <class NODE>
+	static VariantAliasedData GetAliasedData(const NODE &node) {
+		if constexpr (std::is_same<NODE, VariantNode>::value) {
+			return node.GetAliasedData();
+		} else {
+			throw InternalException("Only a VariantNode can have an alias");
+		}
+	}
 };
 
 //===--------------------------------------------------------------------===//
@@ -519,6 +535,25 @@ struct VariantBuilder {
 		return optional_idx(block);
 	}
 
+	//! Emit an ALIASED value. Returns the block of its single child, which must be assigned (AssignArrayChild(block,
+	//! 0)) and emitted next.
+	idx_t BeginAliased(const VariantAliasedData &aliased) {
+		//! 'blob' may already exceed uint32_t mid-row; this offset is only read once the row is known to fit
+		//! (checked in BuildVariant once the row is fully emitted), so a narrowing wrap here is harmless.
+		auto byte_offset = static_cast<uint32_t>(blob.size());
+		type_ids.push_back(static_cast<uint8_t>(VariantLogicalType::ALIASED));
+		byte_offsets.push_back(byte_offset);
+		for (auto &str : {aliased.alias, aliased.extension_info}) {
+			VariantBuilderAppendVarint(blob, NumericCast<uint32_t>(str.GetSize()));
+			VariantBuilderAppendBytes(blob, const_data_ptr_cast(str.GetData()), str.GetSize());
+		}
+		VariantBuilderAppendVarint(blob, LocalChild());
+		auto block = child_value_ids.size();
+		child_value_ids.resize(block + 1);
+		child_key_ids.resize(block + 1);
+		return block;
+	}
+
 	void AssignObjectChild(idx_t block, idx_t i, string_t key) {
 		child_value_ids[block + i] = LocalValue();
 		child_key_ids[block + i] = LocalKey();
@@ -548,8 +583,9 @@ auto CollectObjectChildren(const NODE &it) {
 }
 
 //! Traverse a VariantNode-like cursor 'it' (any type exposing the node concept) into the builder.
+//! Without 'keep_aliased', ALIASED values are emitted as their underlying value.
 template <class NODE>
-void EmitIterator(const NODE &root, VariantBuilder &builder) {
+void EmitIterator(const NODE &root, VariantBuilder &builder, bool keep_aliased = true) {
 	using EntryT = typename decltype(CollectObjectChildren(root))::value_type;
 	using ArrayIterT = decltype(std::declval<NODE>().GetArrayChildren());
 
@@ -568,6 +604,11 @@ void EmitIterator(const NODE &root, VariantBuilder &builder) {
 		if (node.IsNull() || node.IsMissing()) {
 			builder.EmitNull();
 			return;
+		}
+		if (keep_aliased && VariantNodeStorageAccess::HasAlias(node)) {
+			//! an ALIASED value has exactly one child, which directly follows it
+			auto block = builder.BeginAliased(VariantNodeStorageAccess::GetAliasedData(node));
+			builder.AssignArrayChild(block, 0);
 		}
 		auto type_id = VariantNodeStorageAccess::GetStorageType(node);
 		switch (type_id) {

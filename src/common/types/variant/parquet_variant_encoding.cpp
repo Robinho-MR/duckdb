@@ -357,6 +357,8 @@ static idx_t AnalyzeValueData(const UnifiedVariantVectorData &variant, idx_t row
 		//! Measure 'current', entering it when it is nested
 		VariantLogicalType type_id = VariantLogicalType::VARIANT_NULL;
 		if (variant.RowIsValid(row)) {
+			//! Parquet has no named types, ALIASED values are written as their underlying value
+			current = VariantUtils::ResolveAliased(variant, row, current);
 			type_id = variant.GetTypeId(row, current);
 		}
 		if (type_id == VariantLogicalType::OBJECT || type_id == VariantLogicalType::ARRAY) {
@@ -762,6 +764,8 @@ static void WriteValueData(const UnifiedVariantVectorData &variant, idx_t row, u
 		//! Write 'current' at 'cursor', entering it when it is nested
 		VariantLogicalType type_id = VariantLogicalType::VARIANT_NULL;
 		if (variant.RowIsValid(row)) {
+			//! Parquet has no named types, ALIASED values are written as their underlying value
+			current = VariantUtils::ResolveAliased(variant, row, current);
 			type_id = variant.GetTypeId(row, current);
 		}
 		if (type_id == VariantLogicalType::OBJECT || type_id == VariantLogicalType::ARRAY) {
@@ -832,6 +836,10 @@ static void CreateValues(UnifiedVariantVectorData &variant, Vector &value, optio
 		auto result_index = NumericCast<uint32_t>(i);
 		if (result_sel) {
 			result_index = NumericCast<uint32_t>(result_sel->get_index(i));
+		}
+
+		if (variant.RowIsValid(row)) {
+			value_index = VariantUtils::ResolveAliased(variant, row, value_index);
 		}
 
 		bool is_shredded = false;

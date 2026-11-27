@@ -715,6 +715,25 @@ struct MinMaxType {
 	}
 };
 
+//===--------------------------------------------------------------------===//
+// HexInt type (an INTEGER with its own VARCHAR cast)
+//===--------------------------------------------------------------------===//
+static LogicalType HexIntType() {
+	return LogicalType(LogicalTypeId::INTEGER).WithAlias("HEXINT");
+}
+
+static bool IntToHexIntCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	result.Reinterpret(source);
+	return true;
+}
+
+static bool HexIntToVarcharCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	UnaryExecutor::Execute<int32_t, string_t>(source, result, count, [&](int32_t input) {
+		return StringVector::AddString(result, StringUtil::Format("0x%x", input));
+	});
+	return true;
+}
+
 static bool IntToMinMaxCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
 	auto &ty = result.GetType();
 	auto min_val = MinMaxType::GetMinValue(ty);
@@ -1521,6 +1540,11 @@ DUCKDB_CPP_EXTENSION_ENTRY(loadable_extension_demo, loader) {
 	loader.RegisterType("MINMAX", minmax_type, MinMaxType::Constructors());
 	loader.RegisterCastFunction(LogicalType::INTEGER, minmax_type, BoundCastInfo(IntToMinMaxCast), 0);
 	loader.RegisterFunction(ScalarFunction("minmax_range", {minmax_type}, LogicalType::INTEGER, MinMaxRangeFunc));
+
+	// HexInt Type
+	loader.RegisterType("HEXINT", HexIntType());
+	loader.RegisterCastFunction(LogicalType::INTEGER, HexIntType(), BoundCastInfo(IntToHexIntCast), 0);
+	loader.RegisterCastFunction(HexIntType(), LogicalType::VARCHAR, BoundCastInfo(HexIntToVarcharCast), 0);
 
 	// Register the RowId optimizer extension (extensible table filter demo)
 	config.GetCallbackManager().Register(RowIdOptimizerExtension());

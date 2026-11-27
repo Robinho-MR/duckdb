@@ -161,6 +161,10 @@ unique_ptr<FunctionLocalState> CastToVariantLocalState(CastLocalStateParameters 
 }
 
 static bool SupportsShreddedCast(const LogicalType &type) {
+	if (VariantUtils::IsAliasedType(type)) {
+		// the type of the shredded value keeps the alias
+		return SupportsShreddedCast(VariantUtils::GetUnaliasedType(type));
+	}
 	if (type.id() == LogicalTypeId::STRUCT) {
 		// for struct types recurse into the child types
 		auto &child_types = StructType::GetChildTypes(type);

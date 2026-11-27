@@ -355,6 +355,10 @@ void VariantShredding::WriteTypedValues(UnifiedVariantVectorData &variant, Vecto
 
 VariantShreddingState::VariantShreddingState(const LogicalType &type, idx_t total_count)
     : type(type), shredded_sel(total_count), values_index_sel(total_count), result_sel(total_count) {
+	if (VariantUtils::IsAliasedType(type)) {
+		alias = type.GetAlias();
+		extension_info = VariantUtils::SerializeExtensionInfo(type);
+	}
 	if (type.id() != LogicalTypeId::STRUCT) {
 		return;
 	}
@@ -364,17 +368,32 @@ VariantShreddingState::VariantShreddingState(const LogicalType &type, idx_t tota
 	}
 }
 
-bool VariantShreddingState::ValueIsShredded(UnifiedVariantVectorData &variant, idx_t row, uint32_t values_index) {
+bool VariantShreddingState::ValueIsShredded(UnifiedVariantVectorData &variant, idx_t row, uint32_t &values_index) {
 	auto type_id = variant.GetTypeId(row, values_index);
-	if (!GetVariantTypes().count(VariantTypeToLogicalTypeId(type_id))) {
+	auto shredded_index = values_index;
+	if (type_id == VariantLogicalType::ALIASED) {
+		//! Only an aliased type with the same alias and extension info holds the (underlying) value
+		auto aliased = VariantUtils::DecodeAliasedData(variant, row, values_index);
+		if (alias.empty() || aliased.alias != string_t(alias) || aliased.extension_info != string_t(extension_info)) {
+			return false;
+		}
+		shredded_index = variant.GetValuesIndex(row, aliased.children_idx);
+		type_id = variant.GetTypeId(row, shredded_index);
+	} else if (!alias.empty()) {
+		return false;
+	}
+	if (type_id == VariantLogicalType::ALIASED || !GetVariantTypes().count(VariantTypeToLogicalTypeId(type_id))) {
 		return false;
 	}
 	if (type_id == VariantLogicalType::DECIMAL) {
 		// the shredded column stores the unscaled value, so it only holds decimals of its scale that fit its width
-		auto decimal_data = VariantUtils::DecodeDecimalData(variant, row, values_index);
-		return type.InternalType() == decimal_data.GetPhysicalType() &&
-		       decimal_data.scale == DecimalType::GetScale(type) && decimal_data.width <= DecimalType::GetWidth(type);
+		auto decimal_data = VariantUtils::DecodeDecimalData(variant, row, shredded_index);
+		if (type.InternalType() != decimal_data.GetPhysicalType() ||
+		    decimal_data.scale != DecimalType::GetScale(type) || decimal_data.width > DecimalType::GetWidth(type)) {
+			return false;
+		}
 	}
+	values_index = shredded_index;
 	return true;
 }
 

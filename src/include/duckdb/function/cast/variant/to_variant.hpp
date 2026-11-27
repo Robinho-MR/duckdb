@@ -1,5 +1,6 @@
 #pragma once
 
+#include "duckdb/function/cast/variant/aliased_to_variant.hpp"
 #include "duckdb/function/cast/variant/list_to_variant.hpp"
 #include "duckdb/function/cast/variant/array_to_variant.hpp"
 #include "duckdb/function/cast/variant/json_to_variant.hpp"
@@ -26,6 +27,10 @@ bool ConvertToVariant(ToVariantSourceData &source, ToVariantGlobalResultData &re
 	auto &type = source.vec.GetType();
 
 	auto logical_type = type.id();
+	if (VariantUtils::IsAliasedType(type)) {
+		return ConvertAliasedToVariant<WRITE_DATA, IGNORE_NULLS>(source, result, count, selvec, values_index_selvec,
+		                                                         is_root);
+	}
 	if (type.IsNested()) {
 		switch (logical_type) {
 		case LogicalTypeId::MAP:

@@ -128,6 +128,21 @@ struct VariantUtils {
 	                                                     uint32_t value_index);
 	DUCKDB_API static string_t DecodeStringData(const UnifiedVariantVectorData &variant, idx_t row,
 	                                            uint32_t value_index);
+	DUCKDB_API static VariantAliasedData DecodeAliasedData(const UnifiedVariantVectorData &variant, idx_t row,
+	                                                       uint32_t value_index);
+	//! Decodes the payload of an ALIASED value at the given byte offset of a blob
+	DUCKDB_API static VariantAliasedData DecodeAliasedData(const string_t &blob, uint32_t byte_offset);
+	//! The serialized ExtensionTypeInfo of a type, as stored in an ALIASED value (empty if it has none)
+	DUCKDB_API static string SerializeExtensionInfo(const LogicalType &type);
+	//! The type with the alias and extension info of an ALIASED value
+	DUCKDB_API static LogicalType ApplyAlias(const LogicalType &type, const string_t &alias,
+	                                         const string_t &extension_info);
+	//! Follows ALIASED values to the underlying (non-aliased) value index
+	DUCKDB_API static uint32_t ResolveAliased(const UnifiedVariantVectorData &variant, idx_t row, uint32_t value_index);
+	//! The VARIANT representation of a named (aliased) type is ALIASED, if the type is not natively supported
+	DUCKDB_API static bool IsAliasedType(const LogicalType &type);
+	//! The type with its alias and extension info removed
+	DUCKDB_API static LogicalType GetUnaliasedType(const LogicalType &type);
 	DUCKDB_API static vector<string> GetObjectKeys(const UnifiedVariantVectorData &variant, idx_t row,
 	                                               const VariantNestedData &nested_data);
 	DUCKDB_API static void FindChildValues(const UnifiedVariantVectorData &variant,
@@ -164,7 +179,9 @@ struct VariantUtils {
 
 	//! Build a canonical (unshredded) VARIANT vector by traversing a variant directly through a
 	//! VariantIterator - avoids materializing the intermediate vector<VariantValue> tree
-	DUCKDB_API static void ToVariant(const VariantIterator &state, idx_t count, Vector &result);
+	//! Without 'keep_aliased', ALIASED values are written as their underlying value
+	DUCKDB_API static void ToVariant(const VariantIterator &state, idx_t count, Vector &result,
+	                                 bool keep_aliased = true);
 };
 
 struct VariantBindUtils {
