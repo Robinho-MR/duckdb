@@ -66,17 +66,17 @@ SELECT column_name, column_type FROM (DESCRIBE SELECT unnest(row(row(42))));
 ----
 element1	TUPLE(INTEGER)
 
-# Check empty names
+# A struct whose field names are all empty is rejected - it would be indistinguishable from a TUPLE
 
 statement error
 SELECT column_name, column_type FROM (DESCRIBE SELECT unnest([{'a': 12, 'b': {'': {'': 12}}}], max_depth := 3));
 ----
-<REGEX>:.*Binder Error.*No function matches.*struct_pack\(INTEGER_LITERAL\).*
+Binder Error: A STRUCT needs at least one non-empty field name
 
 statement error
 SELECT column_name, column_type FROM (DESCRIBE SELECT unnest([{'': {'': 12}}], recursive := true, keep_parent_names := true));
 ----
-<REGEX>:.*Binder Error.*No function matches.*struct_pack\(INTEGER_LITERAL\).*
+Binder Error: A STRUCT needs at least one non-empty field name
 
 # Test empty structs or lists
 

@@ -1,0 +1,15 @@
+# name: test/sql/json/test_serialize_empty_alias.test
+# description: Empty aliases and argument names survive a JSON round trip
+# group: [json]
+
+require json
+
+query I
+SELECT json_deserialize_sql(json_serialize_sql('SELECT 1 AS "", 2, 3 AS b, struct_pack("" := 4, b := 5)'));
+----
+SELECT 1 AS "", 2, 3 AS b, struct_pack("" := 4, b := 5)
+
+query I
+SELECT json_deserialize_sql(json_serialize_sql('SELECT 1 AS "", 2, struct_pack("" := 4, b := 5)', skip_default := true));
+----
+SELECT 1 AS "", 2, struct_pack("" := 4, b := 5)

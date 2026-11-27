@@ -1,44 +1,63 @@
 # name: test/sql/binder/empty_column_alias.test
-# description: Empty column aliases in table and CTE alias lists
+# description: Empty column aliases in table and CTE alias lists are regular (empty) column names
 # group: [binder]
 
-statement error
-WITH x('') AS (SELECT 1) SELECT * FROM x;
+query T
+SELECT column_name FROM (DESCRIBE WITH x('') AS (SELECT 1) SELECT * FROM x);
 ----
-column alias cannot be empty
+(empty)
 
-statement error
-SELECT * FROM (SELECT 1) t('');
+query I
+WITH x('') AS (SELECT 42) SELECT "" FROM x;
 ----
-column alias cannot be empty
+42
 
-statement error
-SELECT * FROM (SELECT 1, 2) t(a, '');
+query II
+SELECT "", a FROM (SELECT 1, 2) t(a, '');
 ----
-column alias cannot be empty
+2	1
 
-statement error
-WITH RECURSIVE r('') AS (SELECT 1 UNION ALL SELECT 2) SELECT * FROM r;
+query I
+WITH RECURSIVE r('') AS (SELECT 1 UNION ALL SELECT "" + 1 FROM r WHERE "" < 3) SELECT "" FROM r ORDER BY 1;
 ----
-column alias cannot be empty
+1
+2
+3
 
 statement ok
 CREATE TABLE tbl(i INT);
 
-statement error
-SELECT * FROM tbl t('');
-----
-column alias cannot be empty
+statement ok
+INSERT INTO tbl VALUES (7);
 
-statement error
-SELECT * FROM range(3) t('');
+query I
+SELECT "" FROM tbl t('');
 ----
-column alias cannot be empty
+7
 
+query T
+SELECT column_name FROM (DESCRIBE SELECT * FROM range(3) t(''));
+----
+(empty)
+
+query I
+SELECT sum("") FROM range(3) t('');
+----
+3
+
+# a string literal is not a column name in a CREATE VIEW alias list
 statement error
 CREATE VIEW v('') AS SELECT 1;
 ----
 <REGEX>:Parser Error: syntax error.*
+
+statement ok
+CREATE VIEW v("") AS SELECT 1;
+
+query I
+SELECT "" FROM v;
+----
+1
 
 query II
 SELECT * FROM (SELECT 1, 2) t(a, "b c");

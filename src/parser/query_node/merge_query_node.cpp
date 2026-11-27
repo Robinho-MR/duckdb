@@ -56,7 +56,7 @@ string MergeQueryNode::ToString() const {
 				result += ", ";
 			}
 			auto column = returning_list[i]->ToString();
-			if (!returning_list[i]->GetAlias().empty()) {
+			if (returning_list[i]->HasAlias()) {
 				column += StringUtil::Format(" AS %s", SQLIdentifier(returning_list[i]->GetAlias()));
 			}
 			result += column;

@@ -676,7 +676,7 @@ LogicalPlanSQLExportResult SQLExportDMLHelpers::ExportReturning(LogicalPlanSQLEx
 		}
 		if (output_names && output_names->size() == root.expressions.size()) {
 			expression.GetValue()->SetAlias((*output_names)[i]);
-		} else if (!root.expressions[i]->GetAlias().empty()) {
+		} else if (root.expressions[i]->HasAlias()) {
 			expression.GetValue()->SetAlias(root.expressions[i]->GetAlias());
 		}
 		returning_list.push_back(std::move(expression.GetValue()));

@@ -31,8 +31,8 @@ enum class StructExtractKey : uint8_t { NAME, INDEX, INDEX_AT };
 //! Looks up the entry with the given name, returns its index and sets the type of the entry
 static idx_t ResolveStructEntryByName(const LogicalType &struct_type, const string &key_str, LogicalType &entry_type) {
 	auto &struct_children = StructType::GetChildTypes(struct_type);
-	if (key_str.empty()) {
-		throw BinderException("Key name for struct_extract must not be empty");
+	if (key_str.empty() && StructType::IsUnnamed(struct_type)) {
+		throw BinderException("Key name for struct_extract must not be empty for an unnamed struct");
 	}
 	auto key = Identifier(key_str);
 	for (idx_t i = 0; i < struct_children.size(); i++) {

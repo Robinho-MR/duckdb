@@ -83,7 +83,7 @@ string SQLIdentifier::ToString(const string &identifier) {
 }
 
 string SQLIdentifier::ToString(const Identifier &identifier) {
-	return ToString(identifier.GetIdentifierName());
+	return ToString(identifier.GetIdentifierNameOrEmpty());
 }
 
 string SQLIdentifier::ToString(const char *identifier) {
@@ -98,7 +98,7 @@ string SQLQuotedIdentifier::ToString(const string &identifier) {
 }
 
 string SQLQuotedIdentifier::ToString(const Identifier &identifier) {
-	return ToString(identifier.GetIdentifierName());
+	return ToString(identifier.GetIdentifierNameOrEmpty());
 }
 
 string SQLQuotedIdentifier::ToString(const char *identifier) {

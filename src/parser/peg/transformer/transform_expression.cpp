@@ -259,6 +259,7 @@ unique_ptr<ColumnRefExpression> PEGTransformerFactory::TransformSchemaReservedTa
 
 Identifier PEGTransformerFactory::TransformReservedTableQualification(PEGTransformer &transformer,
                                                                       const Identifier &reserved_table_name) {
+	VerifyNonEmptyName(reserved_table_name, "table");
 	return reserved_table_name;
 }
 
@@ -314,8 +315,7 @@ unique_ptr<ParsedExpression> PEGTransformerFactory::TransformFunctionExpression(
 
 		transformer.in_window_definition = true;
 		auto expr = std::move(*over_clause);
-		expr->SetQualifiedName(qualified_function.WithName(Identifier()));
-		expr->SetFunctionName(lowercase_name);
+		expr->SetQualifiedName(qualified_function.WithName(Identifier(lowercase_name)));
 
 		for (auto &arg : function_children) {
 			expr->GetArgumentsMutable().push_back(std::move(arg));
@@ -2167,6 +2167,7 @@ unique_ptr<ColumnRefExpression> PEGTransformerFactory::TransformTableReservedCol
 
 Identifier PEGTransformerFactory::TransformTableQualification(PEGTransformer &transformer,
                                                               const Identifier &table_name) {
+	VerifyNonEmptyName(table_name, "table");
 	return table_name;
 }
 

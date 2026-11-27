@@ -57,10 +57,13 @@ public:
 	static LogicalPlanVerificationFunctionIdentity DefinitionFunctionIdentity(const FUNCTION &definition,
 	                                                                          const vector<LogicalType> &arguments,
 	                                                                          const LogicalType &return_type) {
+		auto name_or_empty = [](const Identifier &id) {
+			return id.GetIdentifierNameOrEmpty();
+		};
 		LogicalPlanVerificationFunctionIdentity identity;
-		identity.catalog = definition.GetCatalogName().GetIdentifierName();
-		identity.schema = definition.GetSchemaName().GetIdentifierName();
-		identity.name = definition.GetName().GetIdentifierName();
+		identity.catalog = name_or_empty(definition.GetCatalogName());
+		identity.schema = name_or_empty(definition.GetSchemaName());
+		identity.name = name_or_empty(definition.GetName());
 		identity.arguments = arguments;
 		identity.return_type = return_type;
 		return identity;

@@ -91,6 +91,10 @@ unique_ptr<ParsedExpression> ColumnQualifier::CreateStructExtract(unique_ptr<Par
 static vector<BindingAlias> GetTableQualifications(const vector<Identifier> &names, idx_t table_index) {
 	vector<BindingAlias> result;
 	auto &table = names[table_index];
+	if (table.empty()) {
+		// tables cannot have an empty name
+		return result;
+	}
 	if (table_index >= 1) {
 		// interpret names[0] as the catalog and names[1..table_index-1] as the schema path
 		vector<Identifier> schema_path;
@@ -208,7 +212,7 @@ void ColumnQualifier::QualifyColumnNames(unique_ptr<ParsedExpression> &expr, vec
 		auto new_expr = QualifyColumnName(col_ref, error);
 
 		if (new_expr) {
-			if (!expr->GetAlias().empty()) {
+			if (expr->HasAlias()) {
 				// Pre-existing aliases are added to the qualified column reference
 				new_expr->SetAlias(expr->GetAlias());
 			} else if (within_function_expression) {
@@ -225,7 +229,7 @@ void ColumnQualifier::QualifyColumnNames(unique_ptr<ParsedExpression> &expr, vec
 	}
 	case ExpressionType::POSITIONAL_REFERENCE: {
 		auto &ref = expr->Cast<PositionalReferenceExpression>();
-		if (ref.GetAlias().empty() && !within_function_expression) {
+		if (!ref.HasAlias() && !within_function_expression) {
 			Identifier table_name, column_name;
 			auto error = binder.bind_context.BindColumn(ref, table_name, column_name);
 			if (error.empty()) {

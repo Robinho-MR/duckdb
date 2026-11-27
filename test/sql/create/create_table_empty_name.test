@@ -12,4 +12,14 @@ create schema s1;
 statement error
 CREATE TABLE s1.""(i INTEGER);
 ----
-Parser Error: zero-length delimited identifier
+Empty table name not supported
+
+statement error
+CREATE TABLE ""(i INTEGER);
+----
+Empty table name not supported
+
+statement error
+CREATE TABLE "".t(i INTEGER);
+----
+Empty schema name not supported

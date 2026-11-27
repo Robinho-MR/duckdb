@@ -1,18 +1,105 @@
 # name: test/sql/parser/empty_quoted_identifier.test
-# description: Empty quoted identifiers should fail during parsing
+# description: Empty quoted identifiers are regular (empty) column names
 # group: [parser]
+
+query I
+SELECT 42 AS "";
+----
+42
+
+query T
+SELECT column_name FROM (DESCRIBE SELECT 42 AS "");
+----
+(empty)
+
+query T
+SELECT column_name FROM (DESCRIBE SELECT 42 AS ``);
+----
+(empty)
+
+query I
+SELECT "" FROM (SELECT 42 AS "");
+----
+42
+
+query I
+SELECT t."" FROM (SELECT 42 AS "") t;
+----
+42
+
+query I
+SELECT "" FROM (SELECT 42) t("");
+----
+42
+
+query I
+WITH x("") AS (SELECT 42) SELECT "" FROM x;
+----
+42
+
+statement ok
+CREATE TABLE t("" INTEGER, a INTEGER);
+
+statement ok
+INSERT INTO t VALUES (1, 2);
+
+query II
+SELECT "", a FROM t;
+----
+1	2
+
+query T
+SELECT name FROM pragma_table_info('t') ORDER BY cid;
+----
+(empty)
+a
+
+# an empty column name is still a name: duplicates are rejected
+statement error
+CREATE TABLE dup("" INTEGER, "" INTEGER);
+----
+<REGEX>:.*Column with name .* already exists.*
 
 statement error
 SELECT a."";
 ----
-Parser Error: zero-length delimited identifier
+<REGEX>:.*Binder Error.*
+
+# tables and CTEs cannot have an empty name
+statement error
+WITH "" AS (SELECT 1 AS a) SELECT * FROM "";
+----
+Empty CTE name not supported
 
 statement error
-SELECT "";
+SELECT * FROM range(1) AS "";
 ----
-Parser Error: zero-length delimited identifier
+Empty table alias name not supported
 
 statement error
-CREATE TABLE t("");
+SELECT * FROM range(1) "";
 ----
-Parser Error: zero-length delimited identifier
+Empty table alias name not supported
+
+statement error
+SELECT * FROM "": range(1);
+----
+Empty table alias name not supported
+
+statement ok
+CREATE TABLE alias_target(i INTEGER);
+
+statement error
+INSERT INTO alias_target AS "" VALUES (1);
+----
+Empty table alias name not supported
+
+statement error
+UPDATE alias_target AS "" SET i = 1;
+----
+Empty table alias name not supported
+
+statement error
+DELETE FROM alias_target AS "";
+----
+Empty table alias name not supported

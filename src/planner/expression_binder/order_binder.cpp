@@ -31,7 +31,7 @@ unique_ptr<Expression> OrderBinder::CreateProjectionReference(ParsedExpression &
 	if (extra_list && index < extra_list->size()) {
 		alias = Identifier(extra_list->at(index)->ToString());
 	} else {
-		if (!expr.GetAlias().empty()) {
+		if (expr.HasAlias()) {
 			alias = expr.GetAlias();
 		}
 	}

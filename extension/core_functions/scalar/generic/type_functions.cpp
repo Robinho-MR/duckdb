@@ -82,11 +82,11 @@ static void MakeTypeFunction(DataChunk &args, ExpressionState &state, Vector &re
 }
 
 static unique_ptr<Expression> BindMakeTypeFunctionExpression(FunctionBindExpressionInput &input) {
-	vector<pair<string, Value>> args;
+	vector<pair<Identifier, Value>> args;
 
 	// Evaluate all arguments to constant values
 	for (auto &child : input.children) {
-		string name = child->GetAlias().GetIdentifierName();
+		auto name = child->GetAlias();
 		if (!child->IsFoldable()) {
 			throw BinderException("make_type function arguments must be constant expressions");
 		}
@@ -106,7 +106,7 @@ static unique_ptr<Expression> BindMakeTypeFunctionExpression(FunctionBindExpress
 	for (idx_t i = 1; i < args.size(); i++) {
 		auto &arg = args[i];
 		auto result = ConstantExpression::FromValue(arg.second);
-		result->SetAlias(Identifier(arg.first));
+		result->SetAlias(arg.first);
 
 		type_args.push_back(std::move(result));
 	}

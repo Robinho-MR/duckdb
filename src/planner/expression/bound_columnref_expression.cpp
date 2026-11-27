@@ -71,7 +71,7 @@ string BoundColumnRefExpression::ToString() const {
 		return binding.ToString();
 	}
 #endif
-	if (!alias.empty()) {
+	if (HasAlias()) {
 		return alias.GetIdentifierName();
 	}
 	return binding.ToString();

@@ -753,6 +753,8 @@ public:
 	static vector<reference<ParseResult>> ExtractParseResultsFromList(ParseResult &parse_result);
 	static bool ExpressionIsEmptyStar(const ParsedExpression &expr);
 	static QualifiedName StringToQualifiedName(vector<string> input);
+	//! Throws if a catalog/schema/table name is empty - empty names are only allowed for columns
+	static void VerifyNonEmptyName(const Identifier &name, const char *kind);
 	static QualifiedColumnName StringToQualifiedColumnName(const vector<string> &input);
 	static LogicalType GetIntervalTargetType(DatePartSpecifier date_part);
 	static LogicalType ApplyColumnCollation(const optional<LogicalType> &type, unique_ptr<ParsedExpression> collation);

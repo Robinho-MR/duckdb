@@ -66,7 +66,7 @@ static unique_ptr<Expression> ReplaceProjectionBindings(LogicalProjection &proj,
 		    // replace the binding with a copy to the expression at the referenced index
 		    auto &proj_expr = proj.GetExpression(colref.Binding());
 		    auto copy = proj_expr.Copy();
-		    if (!colref.GetAlias().empty()) {
+		    if (colref.HasAlias()) {
 			    copy->SetAlias(colref.GetAlias());
 		    }
 		    expr = std::move(copy);

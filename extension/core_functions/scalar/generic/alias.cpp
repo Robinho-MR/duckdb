@@ -39,11 +39,11 @@ unique_ptr<FunctionData> AliasDeserialize(Deserializer &deserializer, BoundScala
 }
 unique_ptr<ParsedExpression> AliasUnbind(FunctionUnbindInput &input) {
 	auto &expression = input.expression;
-	if (input.children.size() != 1 || (expression.GetAlias().empty() && !expression.BindInfo())) {
+	if (input.children.size() != 1 || (!expression.HasAlias() && !expression.BindInfo())) {
 		return nullptr;
 	}
-	auto value = Value(expression.GetAlias().empty() ? expression.BindInfo()->Cast<AliasBindData>().alias
-	                                                 : expression.GetAlias());
+	auto value =
+	    Value(!expression.HasAlias() ? expression.BindInfo()->Cast<AliasBindData>().alias : expression.GetAlias());
 	auto call = make_uniq<FunctionExpression>(expression.Function().GetDefinition()->GetQualifiedName(),
 	                                          std::move(input.children));
 	auto result = make_uniq<CaseExpression>();
@@ -58,7 +58,7 @@ unique_ptr<ParsedExpression> AliasUnbind(FunctionUnbindInput &input) {
 static void AliasFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
 	auto &bind_data = func_expr.BindInfo()->Cast<AliasBindData>();
-	Value v(state.expr.GetAlias().empty() ? bind_data.alias : state.expr.GetAlias());
+	Value v(!state.expr.HasAlias() ? bind_data.alias : state.expr.GetAlias());
 	result.Reference(v, count_t(args.size()));
 }
 

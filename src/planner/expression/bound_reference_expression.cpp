@@ -20,7 +20,7 @@ string BoundReferenceExpression::ToString() const {
 		return StringUtil::Format("#%llu (%s)", index, return_type.ToString());
 	}
 #endif
-	if (!alias.empty()) {
+	if (HasAlias()) {
 		return alias.GetIdentifierName();
 	}
 	return "#" + to_string(index);

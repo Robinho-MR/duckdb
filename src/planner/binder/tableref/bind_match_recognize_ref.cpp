@@ -1131,7 +1131,7 @@ BoundStatement Binder::Bind(MatchRecognizeRef &ref) {
 		                                                      *ref.config, measure_symbols, input_refs.universal,
 		                                                      all_rows);
 		for (auto &expr : ref.config->measures_expression_list) {
-			D_ASSERT(!expr->GetAlias().empty());
+			D_ASSERT(expr->HasAlias());
 			measure_names.aliases.push_back(expr->GetAlias());
 			measure_names.columns.push_back(names.Reserve("__mr_measure_" + to_string(measure_names.columns.size())));
 			auto bound = measure_expression_binder.Bind(expr);

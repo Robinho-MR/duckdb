@@ -155,7 +155,7 @@ namespace {
 
 unique_ptr<ParsedExpression> TypeChild(const LogicalType &type, const Identifier &name) {
 	auto child = TypeExpression::FromLogicalType(type);
-	if (!name.empty()) {
+	if (name.IsSet()) {
 		child->SetAlias(name);
 	}
 	return std::move(child);

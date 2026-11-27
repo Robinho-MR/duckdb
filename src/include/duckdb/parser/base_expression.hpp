@@ -63,9 +63,9 @@ public:
 		return query_location.IsValid();
 	}
 
-	//! Returns true if the expression has a non-empty alias
+	//! Returns true if the expression has an alias (which can be the empty identifier)
 	bool HasAlias() const {
-		return !alias.empty();
+		return alias.IsSet();
 	}
 
 	//! Returns the alias of the expression
@@ -90,7 +90,7 @@ protected:
 	//! The expression class of the node
 	ExpressionClass expression_class;
 
-	//! The alias of the expression,
+	//! The alias of the expression (unset if the expression has no alias)
 	Identifier alias;
 
 	//! The source location in the query (if any)

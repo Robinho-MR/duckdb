@@ -54,11 +54,11 @@ SHOW ''
 ----
 <REGEX>:.*Expected a table name, but got an empty string.*
 
-# the empty name reaches the binder; statement verification renders it as "" which the parser rejects
+# the empty name reaches the binder, which finds no table with that name
 statement error
 DESCRIBE ''
 ----
-<REGEX>:.*(Table with name .*does not exist|zero-length delimited identifier).*
+<REGEX>:.*(Table with name .*does not exist|Empty table name not supported).*
 
 statement error
 SUMMARIZE ''

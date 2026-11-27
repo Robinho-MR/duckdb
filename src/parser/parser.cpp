@@ -397,15 +397,10 @@ public:
 	//! The input ended inside a block comment or dollar-quoted string - the token itself may be
 	//! dropped from the stream (comments), so the flag has to be recorded here
 	bool unterminated_input = false;
-	//! The input holds a token the parser tokenizer rejects outright - no continuation can repair it
-	bool fatal_token = false;
 
 	void PushToken(idx_t start, idx_t end, TokenType type, bool unterminated = false) override {
 		if (unterminated) {
 			unterminated_input = true;
-		}
-		if (ParserTokenizerBehavior::IsEmptyQuotedIdentifier(sql, start, end, type)) {
-			fatal_token = true;
 		}
 		TokenizerBehavior::PushToken(start, end, type, unterminated);
 	}
@@ -426,10 +421,6 @@ bool Parser::IsQueryComplete(const string &query_p) {
 	auto &grammar = GetGrammar();
 	CompletenessTokenizerBehavior behavior(query);
 	grammar.GetTokenizer().TokenizeInput(behavior);
-	if (behavior.fatal_token) {
-		// no continuation can repair the input - submit it so the error surfaces
-		return true;
-	}
 	if (behavior.unterminated_input) {
 		return false;
 	}

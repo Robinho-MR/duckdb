@@ -8,6 +8,12 @@
 
 namespace duckdb {
 
+void PEGTransformerFactory::VerifyNonEmptyName(const Identifier &name, const char *kind) {
+	if (name.empty()) {
+		throw ParserException("Empty %s name not supported", kind);
+	}
+}
+
 Identifier PEGTransformerFactory::TransformAnalyzeKeyword(PEGTransformer &transformer) {
 	return Identifier("analyze");
 }

@@ -99,7 +99,8 @@ public:
 	template <class T>
 	void WritePropertyWithDefault(const field_id_t field_id, const char *tag, const T &value) {
 		// If current value is default, don't write it
-		if (!options.serialize_default_values && SerializationDefaultValue::IsDefault<T>(value)) {
+		if ((!options.serialize_default_values || SerializationDefaultValue::AlwaysSkipDefault<T>()) &&
+		    SerializationDefaultValue::IsDefault<T>(value)) {
 			OnOptionalPropertyBegin(field_id, tag, false);
 			OnOptionalPropertyEnd(false);
 			return;
@@ -391,7 +392,7 @@ protected:
 	virtual void WriteDataPtr(const_data_ptr_t ptr, idx_t count) = 0;
 	//! Identifiers are serialized identically to a plain string (preserving the original casing)
 	void WriteValue(const Identifier &value) {
-		WriteValue(value.GetIdentifierName());
+		WriteValue(value.GetIdentifierNameOrEmpty());
 	}
 	void WriteValue(LogicalIndex value) {
 		WriteValue(value.index);

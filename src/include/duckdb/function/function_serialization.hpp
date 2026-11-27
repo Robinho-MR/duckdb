@@ -368,7 +368,7 @@ public:
 			return;
 		}
 		idx_t named_offset = children.size();
-		while (named_offset > standard_count && !children[named_offset - 1]->GetAlias().empty()) {
+		while (named_offset > standard_count && children[named_offset - 1]->HasAlias()) {
 			named_offset--;
 		}
 		for (idx_t i = named_offset; i < children.size(); i++) {

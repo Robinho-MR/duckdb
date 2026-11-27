@@ -34,7 +34,7 @@ public:
 	}
 
 	bool HasName() const {
-		return !name.empty();
+		return name.IsSet();
 	}
 
 	unique_ptr<ParsedExpression> &GetExpressionMutable() {
@@ -61,7 +61,7 @@ public:
 	hash_t Hash() const;
 
 	string ToString() const {
-		if (name.empty()) {
+		if (!name.IsSet()) {
 			return expression->ToString();
 		}
 		return StringUtil::Format("%s := %s", SQLIdentifier(name), expression->ToString());

@@ -389,7 +389,7 @@ BindResult ExpressionBinder::BindFunction(FunctionExpression &function, ScalarFu
 	vector<FunctionArgument> named_fallback;
 	if (function.IsLegacyFunctionCall()) {
 		for (auto &arg : function.GetArguments()) {
-			if (!arg.GetName().empty()) {
+			if (arg.HasName()) {
 				for (auto &fallback_arg : function.GetArguments()) {
 					named_fallback.push_back(fallback_arg.Copy());
 				}
@@ -428,7 +428,7 @@ BindResult ExpressionBinder::BindFunction(FunctionExpression &function, ScalarFu
 		auto &arg = function.GetArgumentsMutable()[i];
 		auto bound_arg = std::move(bound_children[i]);
 		if (function.IsLegacyFunctionCall()) {
-			arguments.emplace_back(string(), std::move(bound_arg));
+			arguments.emplace_back(Identifier(), std::move(bound_arg));
 		} else {
 			arguments.emplace_back(arg.GetName(), std::move(bound_arg));
 		}

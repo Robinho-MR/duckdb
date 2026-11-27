@@ -133,6 +133,10 @@ static bool IsDependencyEntry(CatalogEntry &entry) {
 }
 
 void CatalogSet::CheckCatalogEntryInvariants(CatalogEntry &value, const Identifier &name) {
+	if (name.empty()) {
+		// only columns can have an empty name
+		throw CatalogException("Empty %s name not supported", CatalogTypeToString(value.type));
+	}
 	if (value.internal && !catalog.IsSystemCatalog() && name != DEFAULT_SCHEMA) {
 		throw InternalException("Attempting to create internal entry %s in non-system catalog - internal entries "
 		                        "can only be created in the system catalog",

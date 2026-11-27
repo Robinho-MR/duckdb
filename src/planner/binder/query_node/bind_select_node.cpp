@@ -529,7 +529,7 @@ void Binder::NormalizeFilterStarExpressions(SelectNode &statement) {
 }
 
 Identifier Binder::GetExpressionName(const ParsedExpression &expr) {
-	if (!expr.GetAlias().empty()) {
+	if (expr.HasAlias()) {
 		return expr.GetAlias();
 	}
 	return expr.GetName();
@@ -572,7 +572,7 @@ BoundStatement Binder::BindSelectNode(SelectNode &statement, BoundStatement from
 		auto &expr = statement.select_list[i];
 		result.names.emplace_back(GetExpressionName(*expr));
 		ExpressionBinder::QualifyColumnNames(*this, expr);
-		if (!expr->GetAlias().empty()) {
+		if (expr->HasAlias()) {
 			bind_state.alias_map[expr->GetAlias()] = i;
 			result.names[i] = expr->GetAlias();
 		}

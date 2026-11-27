@@ -33,7 +33,7 @@ static void ConstructPivots(PivotRef &ref, vector<PivotValueElement> &pivot_valu
 	bool last_pivot = pivot_idx + 1 == ref.pivots.size();
 	for (auto &entry : pivot.entries) {
 		PivotValueElement new_value = current_value;
-		string name = entry.alias.GetIdentifierName();
+		string name = entry.alias.GetIdentifierNameOrEmpty();
 		D_ASSERT(entry.values.size() == pivot.pivot_expressions.size());
 		for (idx_t v = 0; v < entry.values.size(); v++) {
 			auto &value = entry.values[v];
@@ -234,7 +234,7 @@ static unique_ptr<SelectNode> PivotInitialAggregate(ClientContext &context, Pivo
 	idx_t group_count = 0;
 	for (auto &expr : subquery_stage1->select_list) {
 		bind_state.group_names.push_back(expr->GetName());
-		if (expr->GetAlias().empty()) {
+		if (!expr->HasAlias()) {
 			expr->SetAlias(Identifier("__internal_pivot_group" + std::to_string(++group_count)));
 		}
 		bind_state.internal_group_names.emplace_back(expr->GetAlias());
@@ -243,7 +243,7 @@ static unique_ptr<SelectNode> PivotInitialAggregate(ClientContext &context, Pivo
 	idx_t pivot_count = 0;
 	for (auto &pivot_column : ref.pivots) {
 		for (auto &pivot_expr : pivot_column.pivot_expressions) {
-			if (pivot_expr->GetAlias().empty()) {
+			if (!pivot_expr->HasAlias()) {
 				pivot_expr->SetAlias(Identifier("__internal_pivot_ref" + std::to_string(++pivot_count)));
 			}
 			auto pivot_alias = pivot_expr->GetAlias();
@@ -257,7 +257,7 @@ static unique_ptr<SelectNode> PivotInitialAggregate(ClientContext &context, Pivo
 	// finally add the aggregates
 	for (auto &aggregate : ref.aggregates) {
 		auto aggregate_alias = "__internal_pivot_aggregate" + std::to_string(++aggregate_count);
-		auto aggr_name = aggregate->GetAlias();
+		auto aggr_name = aggregate->HasAlias() ? aggregate->GetAlias() : Identifier("");
 		if (aggr_name.empty() && ref.aggregates.size() > 1) {
 			aggr_name = Identifier(aggregate->ToString());
 		}
@@ -398,7 +398,7 @@ static unique_ptr<SelectNode> PivotFinalOperator(PivotBindState &bind_state, Piv
 		for (idx_t aggr_idx = 0; aggr_idx < ref.aggregates.size(); aggr_idx++) {
 			auto aggr = ref.aggregates[aggr_idx]->Copy();
 			auto &aggr_name = bound_pivot->bound_aggregate_names[aggr_idx];
-			auto pivot_aggr_name = pivot_value.name + aggr_name.GetIdentifierName();
+			auto pivot_aggr_name = pivot_value.name + aggr_name.GetIdentifierNameOrEmpty();
 			aggregate_names.push_back(Identifier(std::move(pivot_aggr_name)));
 		}
 	}
@@ -473,7 +473,7 @@ BoundStatement Binder::BindBoundPivot(PivotRef &ref) {
 		identifier_set_t seen;
 		for (auto &name : ref.bound_aggregate_names) {
 			if (seen.find(name) == seen.end()) {
-				unique_names.push_back(name.GetIdentifierName());
+				unique_names.push_back(name.GetIdentifierNameOrEmpty());
 				seen.insert(name);
 			}
 		}
@@ -801,7 +801,7 @@ void Binder::ExtractUnpivotEntries(Binder &child_binder, PivotColumnEntry &entry
 	if (!entry.expr) {
 		// pivot entry without an expression - generate one
 		UnpivotEntry unpivot_entry;
-		unpivot_entry.alias = Identifier(entry.alias.GetIdentifierName());
+		unpivot_entry.alias = entry.alias;
 		for (auto &val : entry.values) {
 			auto column_name = val.ToString();
 			if (column_name.empty()) {
@@ -816,7 +816,7 @@ void Binder::ExtractUnpivotEntries(Binder &child_binder, PivotColumnEntry &entry
 	vector<Identifier> column_names;
 	if (TryExtractUnpivotList(*entry.expr, column_names)) {
 		UnpivotEntry unpivot_entry;
-		unpivot_entry.alias = Identifier(entry.alias.GetIdentifierName());
+		unpivot_entry.alias = entry.alias;
 		for (auto &column_name : column_names) {
 			if (column_name.empty()) {
 				throw BinderException("UNPIVOT - empty column name not supported");
@@ -835,8 +835,8 @@ void Binder::ExtractUnpivotEntries(Binder &child_binder, PivotColumnEntry &entry
 	for (auto &expr : star_columns) {
 		// create one pivot entry per result column
 		UnpivotEntry unpivot_entry;
-		if (!expr->GetAlias().empty()) {
-			unpivot_entry.alias = Identifier(expr->GetAlias().GetIdentifierName());
+		if (expr->HasAlias()) {
+			unpivot_entry.alias = expr->GetAlias();
 		}
 		unpivot_entry.expressions.push_back(std::move(expr));
 		unpivot_entries.push_back(std::move(unpivot_entry));

@@ -238,7 +238,7 @@ string PivotRef::ToString() const {
 				result += ", ";
 			}
 			result += aggregates[aggr_idx]->ToString();
-			if (!aggregates[aggr_idx]->GetAlias().empty()) {
+			if (aggregates[aggr_idx]->HasAlias()) {
 				result += " AS " + SQLIdentifier(aggregates[aggr_idx]->GetAlias());
 			}
 		}

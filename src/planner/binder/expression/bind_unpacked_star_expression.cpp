@@ -28,7 +28,7 @@ static void AddChild(unique_ptr<ParsedExpression> &child, expression_list_t &new
 			auto expr = Binder::GetResolvedColumnExpression(*replacement);
 			if (expr) {
 				auto &colref = expr->Cast<ColumnRefExpression>();
-				if (new_expr->GetAlias().empty()) {
+				if (!new_expr->HasAlias()) {
 					new_expr->SetAlias(colref.GetColumnName());
 				} else {
 					new_expr->SetAlias(Identifier(Binder::ReplaceColumnsAlias(

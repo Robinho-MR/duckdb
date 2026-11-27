@@ -409,7 +409,7 @@ static void PushTryIntoBareSubqueryItem(SubqueryExpression &subquery_expr) {
 	auto try_item = make_uniq<OperatorExpression>(ExpressionType::OPERATOR_TRY);
 	try_item->SetQueryLocation(select_item->GetQueryLocation());
 	try_item->GetChildrenMutable().push_back(std::move(select_item));
-	if (!alias.empty()) {
+	if (alias.IsSet()) {
 		try_item->SetAlias(alias);
 	}
 	select_item = std::move(try_item);

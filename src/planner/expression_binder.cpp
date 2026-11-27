@@ -308,14 +308,14 @@ unique_ptr<Expression> ExpressionBinder::Bind(unique_ptr<ParsedExpression> &expr
 BindResult ExpressionBinder::Bind(unique_ptr<ParsedExpression> &expr, idx_t depth, bool root_expression,
                                   const Identifier &alias_p) {
 	auto query_location = expr->GetQueryLocation();
-	auto alias = alias_p.empty() ? expr->GetAlias() : alias_p;
+	auto alias = alias_p.IsSet() ? alias_p : expr->GetAlias();
 	BindResult result = BindExpression(expr, depth, root_expression);
 	if (result.HasError()) {
 		return result;
 	}
 	// carry the location and alias of the parsed node over to the bound expression
 	result.expression->SetQueryLocation(query_location);
-	if (!alias.empty()) {
+	if (alias.IsSet()) {
 		result.expression->SetAlias(alias);
 	}
 	return result;

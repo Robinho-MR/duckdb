@@ -248,6 +248,10 @@ LogicalType BindStructType(BindLogicalTypeInput &input) {
 	for (auto &arg : arguments) {
 		children.emplace_back(Identifier(arg.GetName()), TypeValue::GetType(arg.GetValue()));
 	}
+	if (!children.empty() && StructType::AllUnnamed(children)) {
+		// a STRUCT without any non-empty field name is indistinguishable from a TUPLE
+		throw BinderException("A STRUCT needs at least one non-empty field name - use TUPLE for unnamed fields");
+	}
 
 	return LogicalType::STRUCT(std::move(children));
 }

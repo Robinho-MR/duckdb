@@ -38,7 +38,7 @@ static bool NamedArgumentShaped(const FunctionArgument &argument) {
 		return comparison.Left().GetExpressionType() == ExpressionType::COLUMN_REF &&
 		       !comparison.Left().Cast<ColumnRefExpression>().IsQualified();
 	}
-	return !expression.GetAlias().empty();
+	return expression.HasAlias();
 }
 
 //! True when a real table input remains once the named arguments are set aside.
@@ -147,7 +147,7 @@ bool Binder::BindTableFunctionParameters(TableFunctionCatalogEntry &table_functi
 					child = std::move(comp.RightMutable());
 				}
 			}
-		} else if (parameter_name.empty() && !child->GetAlias().empty() &&
+		} else if (parameter_name.empty() && child->HasAlias() &&
 		           !(bind_type == TableFunctionBindType::TABLE_IN_OUT_FUNCTION &&
 		             child->GetExpressionType() == ExpressionType::SUBQUERY)) {
 			// <name> => <expression> will set the alias of <expression> to <name>
@@ -371,14 +371,14 @@ BoundStatement Binder::BindTableFunctionInternal(BoundTableFunction &table_funct
 		                        table_function.GetName());
 	}
 	auto setof_column_name = ApplyPostgresSetofAliasCompatibility(table_function, ref, return_names);
-	// overwrite the names with any supplied aliases
-	for (idx_t i = 0; i < column_name_alias.size() && i < return_names.size(); i++) {
-		return_names[i] = column_name_alias[i];
-	}
 	for (idx_t i = 0; i < return_names.size(); i++) {
 		if (return_names[i].empty()) {
 			return_names[i] = Identifier("C" + to_string(i));
 		}
+	}
+	// overwrite the names with any supplied aliases
+	for (idx_t i = 0; i < column_name_alias.size() && i < return_names.size(); i++) {
+		return_names[i] = column_name_alias[i];
 	}
 	virtual_column_map_t virtual_columns;
 	if (table_function.get_virtual_columns) {

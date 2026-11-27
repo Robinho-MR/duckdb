@@ -162,7 +162,7 @@ void Binder::ReplaceStarExpression(unique_ptr<ParsedExpression> &expr, unique_pt
 		D_ASSERT(replacement);
 		auto alias = expr->GetAlias();
 		expr = replacement->Copy();
-		if (!alias.empty()) {
+		if (alias.IsSet()) {
 			expr->SetAlias(std::move(alias));
 		}
 		return;
@@ -441,7 +441,7 @@ unique_ptr<ParsedExpression> Binder::TryRewriteQualifiedCountStar(const ParsedEx
 		return nullptr;
 	}
 	auto result = expr.Copy();
-	if (result->GetAlias().empty()) {
+	if (!result->HasAlias()) {
 		// the rewrite is an implementation detail - keep the original expression as the name
 		result->SetAlias(Identifier(expr.ToString()));
 	}
@@ -598,7 +598,7 @@ void Binder::ExpandStarExpression(unique_ptr<ParsedExpression> expr,
 			auto expr = GetResolvedColumnExpression(*star_list[i]);
 			if (expr) {
 				auto &colref = expr->Cast<ColumnRefExpression>();
-				if (new_expr->GetAlias().empty()) {
+				if (!new_expr->HasAlias()) {
 					new_expr->SetAlias(colref.GetColumnName());
 				} else {
 					new_expr->SetAlias(
