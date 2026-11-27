@@ -47,6 +47,7 @@
         "serialize_property": "HasEmptyAlias()",
         "default": "false",
         "version": "v2.1.0",
+        "serialize_condition": "HasEmptyAlias()",
         "deserialize_skip_assign": true,
         "equals_skip": true,
         "hash_skip": true

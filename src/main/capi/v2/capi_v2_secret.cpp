@@ -38,7 +38,7 @@ public:
 		result->type = input.type;
 		result->provider = input.provider;
 		result->name = input.name;
-		result->storage = input.storage_type.IsSet() ? input.storage_type.GetIdentifierName() : string();
+		result->storage = input.storage_type.GetIdentifierNameOrEmpty();
 		result->persist_type = input.persist_type;
 		return result;
 	}

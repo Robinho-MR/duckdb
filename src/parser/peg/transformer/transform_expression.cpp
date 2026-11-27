@@ -316,7 +316,6 @@ unique_ptr<ParsedExpression> PEGTransformerFactory::TransformFunctionExpression(
 		transformer.in_window_definition = true;
 		auto expr = std::move(*over_clause);
 		expr->SetQualifiedName(qualified_function.WithName(Identifier(lowercase_name)));
-		expr->SetFunctionName(lowercase_name);
 
 		for (auto &arg : function_children) {
 			expr->GetArgumentsMutable().push_back(std::move(arg));

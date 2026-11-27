@@ -58,7 +58,7 @@ public:
 	                                                                          const vector<LogicalType> &arguments,
 	                                                                          const LogicalType &return_type) {
 		auto name_or_empty = [](const Identifier &id) {
-			return id.IsSet() ? id.GetIdentifierName() : string();
+			return id.GetIdentifierNameOrEmpty();
 		};
 		LogicalPlanVerificationFunctionIdentity identity;
 		identity.catalog = name_or_empty(definition.GetCatalogName());

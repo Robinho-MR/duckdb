@@ -1114,6 +1114,7 @@ PEGTransformerFactory::TransformWithStatement(PEGTransformer &transformer, const
                                               const optional<vector<string>> &column_aliases,
                                               optional<vector<unique_ptr<ParsedExpression>>> using_key,
                                               const optional<bool> &materialized, unique_ptr<TableRef> cte_body) {
+	VerifyNonEmptyName(col_id_or_string, "CTE");
 	auto result = make_uniq<CommonTableExpressionInfo>();
 	auto cte_name = col_id_or_string;
 	if (column_aliases) {
@@ -1436,6 +1437,7 @@ unique_ptr<TableRef> PEGTransformerFactory::TransformBaseTableRef(PEGTransformer
 
 Identifier PEGTransformerFactory::TransformTableAliasColon(PEGTransformer &transformer,
                                                            const Identifier &col_id_or_string) {
+	VerifyNonEmptyName(col_id_or_string, "table alias");
 	return col_id_or_string;
 }
 
@@ -1593,6 +1595,7 @@ TableAlias PEGTransformerFactory::TransformTableAliasAs(PEGTransformer &transfor
                                                         const optional<vector<string>> &column_aliases) {
 	TableAlias result;
 	result.name = identifier_or_string_literal.Name();
+	VerifyNonEmptyName(result.name, "table alias");
 	if (column_aliases) {
 		result.column_name_alias = StringsToIdentifiers(*column_aliases);
 	}
@@ -1602,6 +1605,7 @@ TableAlias PEGTransformerFactory::TransformTableAliasAs(PEGTransformer &transfor
 TableAlias PEGTransformerFactory::TransformTableAliasWithoutAs(PEGTransformer &transformer,
                                                                const Identifier &identifier,
                                                                const optional<vector<string>> &column_aliases) {
+	VerifyNonEmptyName(identifier, "table alias");
 	TableAlias result;
 	result.name = identifier;
 	if (column_aliases) {

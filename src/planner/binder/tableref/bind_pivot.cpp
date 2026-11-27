@@ -33,7 +33,7 @@ static void ConstructPivots(PivotRef &ref, vector<PivotValueElement> &pivot_valu
 	bool last_pivot = pivot_idx + 1 == ref.pivots.size();
 	for (auto &entry : pivot.entries) {
 		PivotValueElement new_value = current_value;
-		string name = entry.alias.IsSet() ? entry.alias.GetIdentifierName() : string();
+		string name = entry.alias.GetIdentifierNameOrEmpty();
 		D_ASSERT(entry.values.size() == pivot.pivot_expressions.size());
 		for (idx_t v = 0; v < entry.values.size(); v++) {
 			auto &value = entry.values[v];
@@ -398,7 +398,7 @@ static unique_ptr<SelectNode> PivotFinalOperator(PivotBindState &bind_state, Piv
 		for (idx_t aggr_idx = 0; aggr_idx < ref.aggregates.size(); aggr_idx++) {
 			auto aggr = ref.aggregates[aggr_idx]->Copy();
 			auto &aggr_name = bound_pivot->bound_aggregate_names[aggr_idx];
-			auto pivot_aggr_name = pivot_value.name + (aggr_name.IsSet() ? aggr_name.GetIdentifierName() : string());
+			auto pivot_aggr_name = pivot_value.name + aggr_name.GetIdentifierNameOrEmpty();
 			aggregate_names.push_back(Identifier(std::move(pivot_aggr_name)));
 		}
 	}
@@ -473,7 +473,7 @@ BoundStatement Binder::BindBoundPivot(PivotRef &ref) {
 		identifier_set_t seen;
 		for (auto &name : ref.bound_aggregate_names) {
 			if (seen.find(name) == seen.end()) {
-				unique_names.push_back(name.IsSet() ? name.GetIdentifierName() : string());
+				unique_names.push_back(name.GetIdentifierNameOrEmpty());
 				seen.insert(name);
 			}
 		}

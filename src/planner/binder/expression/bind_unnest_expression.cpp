@@ -306,8 +306,7 @@ BindResult UnnestBinder::Bind(FunctionExpression &function, idx_t depth, bool ro
 							vector<string> current_key_path;
 							// During recursive expansion, not all expressions are BoundFunctionExpression
 							if (keep_parent_names && expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-								current_key_path.emplace_back(expr->HasAlias() ? expr->GetAlias().GetIdentifierName()
-								                                               : string());
+								current_key_path.emplace_back(expr->GetAlias().GetIdentifierNameOrEmpty());
 							}
 							current_key_path.emplace_back(entry.first);
 							new_expressions.push_back(CreateBoundStructExtract(context, expr->Copy(), entry.second,

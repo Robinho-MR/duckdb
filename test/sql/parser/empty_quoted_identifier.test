@@ -64,3 +64,42 @@ statement error
 SELECT a."";
 ----
 <REGEX>:.*Binder Error.*
+
+# tables and CTEs cannot have an empty name
+statement error
+WITH "" AS (SELECT 1 AS a) SELECT * FROM "";
+----
+Empty CTE name not supported
+
+statement error
+SELECT * FROM range(1) AS "";
+----
+Empty table alias name not supported
+
+statement error
+SELECT * FROM range(1) "";
+----
+Empty table alias name not supported
+
+statement error
+SELECT * FROM "": range(1);
+----
+Empty table alias name not supported
+
+statement ok
+CREATE TABLE alias_target(i INTEGER);
+
+statement error
+INSERT INTO alias_target AS "" VALUES (1);
+----
+Empty table alias name not supported
+
+statement error
+UPDATE alias_target AS "" SET i = 1;
+----
+Empty table alias name not supported
+
+statement error
+DELETE FROM alias_target AS "";
+----
+Empty table alias name not supported

@@ -270,6 +270,7 @@
         "serialize_property": "HasEmptyName()",
         "default": "false",
         "version": "v2.1.0",
+        "serialize_condition": "HasEmptyName()",
         "deserialize_skip_assign": true,
         "equals_skip": true,
         "hash_skip": true

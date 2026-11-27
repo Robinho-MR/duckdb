@@ -13,6 +13,10 @@ INSERT INTO t VALUES (1, 'x', {'': 10, 'b': 20});
 statement ok
 CREATE VIEW v AS SELECT "" AS "", s."" AS f FROM t;
 
+# empty aliases and argument names nested inside a view
+statement ok
+CREATE VIEW nested AS SELECT x, p FROM (SELECT 1 AS "", 2 AS x, struct_pack("" := 3, b := 4) AS p) WHERE "" = 1;
+
 restart
 
 query IIII
@@ -24,6 +28,11 @@ query II
 SELECT "", f FROM v;
 ----
 1	10
+
+query IT
+SELECT x, p FROM nested;
+----
+2	{'': 3, 'b': 4}
 
 query T
 SELECT column_name FROM (DESCRIBE t) ORDER BY ALL;

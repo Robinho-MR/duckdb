@@ -20,7 +20,7 @@ void Expression::Serialize(Serializer &serializer) const {
 	if (serializer.ShouldSerialize(StorageVersion::V2_0_0)) {
 		serializer.WritePropertyWithDefault<uint32_t>(104, "query_location_length", query_location.length, 0);
 	}
-	if (serializer.ShouldSerialize(StorageVersion::V2_1_0)) {
+	if (serializer.ShouldSerialize(StorageVersion::V2_1_0) || (HasEmptyAlias())) {
 		serializer.WritePropertyWithDefault<bool>(105, "has_empty_alias", HasEmptyAlias(), false);
 	}
 }

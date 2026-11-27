@@ -38,6 +38,7 @@ unique_ptr<BaseTableRef> PEGTransformerFactory::TransformTargetOptAlias(PEGTrans
 
 Identifier PEGTransformerFactory::TransformTargetAlias(PEGTransformer &transformer, const bool &has_result,
                                                        const Identifier &col_id) {
+	VerifyNonEmptyName(col_id, "table alias");
 	return col_id;
 }
 

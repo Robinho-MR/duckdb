@@ -45,7 +45,8 @@ unique_ptr<TableRef> PEGTransformerFactory::TransformBaseTableAliasSet(PEGTransf
 
 Identifier PEGTransformerFactory::TransformUpdateAlias(PEGTransformer &transformer, const bool &has_result,
                                                        const Identifier &col_id) {
-	return Identifier(col_id);
+	VerifyNonEmptyName(col_id, "table alias");
+	return col_id;
 }
 
 unique_ptr<UpdateSetInfo> PEGTransformerFactory::TransformUpdateSetTuple(PEGTransformer &transformer,

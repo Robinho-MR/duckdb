@@ -736,8 +736,8 @@ void QueryAppender::FlushInternal(ColumnDataCollection &collection) {
 		throw InvalidInputException("Attempting to flush query appender data on a closed connection");
 	}
 	auto table_ref = GetColumnDataTableRef(collection, table_name, names);
-	auto parsed_statement = ParseStatement(*context_ref, std::move(table_ref), query,
-	                                       table_name.IsSet() ? table_name.GetIdentifierName() : string());
+	auto parsed_statement =
+	    ParseStatement(*context_ref, std::move(table_ref), query, table_name.GetIdentifierNameOrEmpty());
 	context_ref->Append(std::move(parsed_statement));
 }
 

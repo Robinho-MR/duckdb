@@ -75,6 +75,7 @@ unique_ptr<BaseTableRef> PEGTransformerFactory::TransformInsertTarget(PEGTransfo
 }
 
 Identifier PEGTransformerFactory::TransformInsertAlias(PEGTransformer &transformer, const Identifier &identifier) {
+	VerifyNonEmptyName(identifier, "table alias");
 	return identifier;
 }
 

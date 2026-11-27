@@ -33,8 +33,8 @@ public:
 	}
 	//! An unset name makes the argument positional; a set (possibly empty) name makes it named
 	TypeArgument(const Identifier &name_p, Value value_p, QueryLocation query_location_p = QueryLocation())
-	    : name(name_p.IsSet() ? name_p.GetIdentifierName() : string()), has_name(name_p.IsSet()),
-	      value(std::move(value_p)), query_location(query_location_p) {
+	    : name(name_p.GetIdentifierNameOrEmpty()), has_name(name_p.IsSet()), value(std::move(value_p)),
+	      query_location(query_location_p) {
 	}
 	QueryLocation GetQueryLocation() const {
 		return query_location;

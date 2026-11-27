@@ -83,8 +83,7 @@ string SQLIdentifier::ToString(const string &identifier) {
 }
 
 string SQLIdentifier::ToString(const Identifier &identifier) {
-	// an unset identifier is rendered like the empty identifier
-	return ToString(identifier.IsSet() ? identifier.GetIdentifierName() : string());
+	return ToString(identifier.GetIdentifierNameOrEmpty());
 }
 
 string SQLIdentifier::ToString(const char *identifier) {
@@ -99,8 +98,7 @@ string SQLQuotedIdentifier::ToString(const string &identifier) {
 }
 
 string SQLQuotedIdentifier::ToString(const Identifier &identifier) {
-	// an unset identifier is rendered like the empty identifier
-	return ToString(identifier.IsSet() ? identifier.GetIdentifierName() : string());
+	return ToString(identifier.GetIdentifierNameOrEmpty());
 }
 
 string SQLQuotedIdentifier::ToString(const char *identifier) {

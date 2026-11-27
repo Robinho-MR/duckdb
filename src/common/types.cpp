@@ -2331,13 +2331,11 @@ static LogicalType TryDefaultBindTypeExpression(const ParsedExpression &expr) {
 		switch (arg->GetExpressionType()) {
 		case ExpressionType::TYPE: {
 			auto type = TryDefaultBindTypeExpression(*arg);
-			bound_args.emplace_back(arg->HasAlias() ? arg->GetAlias().GetIdentifierName() : string(),
-			                        Value::TYPE(type));
+			bound_args.emplace_back(arg->GetAlias().GetIdentifierNameOrEmpty(), Value::TYPE(type));
 		} break;
 		case ExpressionType::VALUE_CONSTANT: {
 			auto &const_expr = arg->Cast<ConstantExpression>();
-			bound_args.emplace_back(arg->HasAlias() ? arg->GetAlias().GetIdentifierName() : string(),
-			                        const_expr.GetLiteral().ToValue());
+			bound_args.emplace_back(arg->GetAlias().GetIdentifierNameOrEmpty(), const_expr.GetLiteral().ToValue());
 		} break;
 		default:
 			throw InvalidInputException("Cannot default bind unbound type with non-type, non-expression parameter");

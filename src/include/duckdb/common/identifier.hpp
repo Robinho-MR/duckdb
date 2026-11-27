@@ -71,6 +71,10 @@ public:
 		}
 		return value;
 	}
+	//! The raw underlying string, or the empty string if the identifier is unset
+	const string &GetIdentifierNameOrEmpty() const {
+		return value;
+	}
 
 	//! Whether the identifier is set - an unset identifier is absent, which is different from the empty identifier
 	bool IsSet() const {

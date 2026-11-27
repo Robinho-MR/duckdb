@@ -391,7 +391,7 @@ ExtraOperatorInfo ExtraOperatorInfo::Deserialize(Deserializer &deserializer) {
 void FunctionArgument::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<Identifier>(100, "name", name);
 	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(101, "expression", expression);
-	if (serializer.ShouldSerialize(StorageVersion::V2_1_0)) {
+	if (serializer.ShouldSerialize(StorageVersion::V2_1_0) || (HasEmptyName())) {
 		serializer.WritePropertyWithDefault<bool>(102, "has_empty_name", HasEmptyName(), false);
 	}
 }
