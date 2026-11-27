@@ -121,6 +121,29 @@ TEST_CASE("Test a connection that inherits the transaction of another connection
 		RequireValue(other, "SELECT SUM(i) FROM tbl", 10);
 		RequireValue(other, "SELECT SUM(i) FROM tbl2", 100);
 	}
+	SECTION("unqualified names resolve through the search path of the source") {
+		REQUIRE_NO_FAIL(con.Query("ATTACH ':memory:' AS other_db"));
+		REQUIRE_NO_FAIL(con.Query("CREATE SCHEMA other_db.s"));
+		REQUIRE_NO_FAIL(con.Query("CREATE SCHEMA other_db.s.nested"));
+		REQUIRE_NO_FAIL(con.Query("CREATE TABLE other_db.s.nested.tbl AS SELECT 42 AS i"));
+		REQUIRE_NO_FAIL(con.Query("USE other_db.s.nested"));
+		REQUIRE_NO_FAIL(con.Query("BEGIN TRANSACTION"));
+		{
+			auto child = Connection::CreateInTransaction(*con.context);
+			RequireValue(child, "SELECT SUM(i) FROM tbl", 42);
+			auto result = child.Query("SELECT current_database(), current_schema()");
+			REQUIRE(CHECK_COLUMN(result, 0, {"other_db"}));
+			REQUIRE(CHECK_COLUMN(result, 1, {"s.nested"}));
+			REQUIRE_NO_FAIL(child.Query("CREATE TABLE created AS SELECT 7 AS i"));
+			// changing the search path of the inheriting connection leaves the source's alone
+			REQUIRE_NO_FAIL(child.Query("USE memory"));
+			RequireValue(child, "SELECT SUM(i) FROM tbl", 1);
+		}
+		RequireValue(con, "SELECT SUM(i) FROM other_db.s.nested.created", 7);
+		RequireValue(con, "SELECT SUM(i) FROM tbl", 42);
+		REQUIRE_NO_FAIL(con.Query("COMMIT"));
+		REQUIRE_NO_FAIL(con.Query("USE memory"));
+	}
 	SECTION("a rollback undoes the changes of the inheriting connection") {
 		REQUIRE_NO_FAIL(con.Query("BEGIN TRANSACTION"));
 		{

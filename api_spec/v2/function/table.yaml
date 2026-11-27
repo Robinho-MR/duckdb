@@ -447,6 +447,34 @@ functions:
         description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
     return_type: ERROR
 
+  table_function_set_property:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-09" ]
+    description: |
+      Sets a property on the table function.
+
+      Only `FUNCTION_PROPERTY_STABILITY` is supported for table functions; any other key, a key that is not
+      valid for table functions, or a value that does not belong to `key` results in an error. A table function
+      defaults to `FUNCTION_PROPERTY_STABILITY_VOLATILE`. Declaring
+      `FUNCTION_PROPERTY_STABILITY_CONSISTENT_WITHIN_QUERY` promises that repeated executions with the same bound
+      data and input rows return equivalent rows within one query and have no observable side effects, which allows
+      the optimizer to share identical scans.
+    parameters:
+      function:
+        type: table_function
+        description: The function to set the property of.
+      key:
+        type: FUNCTION_PROPERTY_KEY
+        description: The property to set.
+      value:
+        type: FUNCTION_PROPERTY_VALUE
+        description: The value to set for the property. Must belong to `key`.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
   table_function_set_user_data:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-09-01" ]
@@ -1242,6 +1270,27 @@ functions:
         description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
     return_type: ERROR
 
+
+  table_function_exec_yield:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-26" ]
+    description: |
+      Ends this invocation of the exec callback without ending the scan.
+
+      For a function that works for a long time without producing rows, such as one generating data into tables:
+      yielding hands the thread back to DuckDB between steps of that work, which keeps the query's progress
+      observable and lets other work run. An empty batch then does not signal the end of the scan, and the
+      callback is invoked again, possibly on another thread. Producing rows and yielding in the same invocation
+      returns the rows as usual.
+    parameters:
+      info:
+        type: table_function_exec_info
+        description: The exec info handle.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
 
   table_function_exec_get_column_count:
     lifecycle:

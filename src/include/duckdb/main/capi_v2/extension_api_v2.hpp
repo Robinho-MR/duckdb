@@ -1525,6 +1525,9 @@ typedef struct {
 	(duckdb_v2_stats_handle stats, duckdb_v2_value_handle *value, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_stats_set_value)
 	(duckdb_v2_stats_handle stats, duckdb_v2_value_handle value, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_set_property)
+	(duckdb_v2_table_function_handle function, DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
+	 DUCKDB_V2_FUNCTION_PROPERTY_VALUE value, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_aggregate_function_get_generic_property)
 	(duckdb_v2_aggregate_function_handle function, const char *name, idx_t name_length,
 	 duckdb_v2_value_handle *out_value, duckdb_v2_error_info_handle *err);
@@ -1715,6 +1718,8 @@ typedef struct {
 	 void *user_data, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_connection_create_in_transaction)
 	(duckdb_v2_context_handle ctx, duckdb_v2_connection_handle *out_conn, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_exec_yield)
+	(duckdb_v2_table_function_exec_info_handle info, duckdb_v2_error_info_handle *err);
 } duckdb_ext_api_v2;
 
 //===--------------------------------------------------------------------===//
@@ -2409,6 +2414,7 @@ inline duckdb_ext_api_v2 CreateAPIv2(void) {
 	result.duckdb_v2_stats_assign = duckdb_v2_stats_assign;
 	result.duckdb_v2_stats_get_value = duckdb_v2_stats_get_value;
 	result.duckdb_v2_stats_set_value = duckdb_v2_stats_set_value;
+	result.duckdb_v2_table_function_set_property = duckdb_v2_table_function_set_property;
 	result.duckdb_v2_aggregate_function_get_generic_property = duckdb_v2_aggregate_function_get_generic_property;
 	result.duckdb_v2_aggregate_function_set_generic_property = duckdb_v2_aggregate_function_set_generic_property;
 	result.duckdb_v2_scalar_function_get_generic_property = duckdb_v2_scalar_function_get_generic_property;
@@ -2485,6 +2491,7 @@ inline duckdb_ext_api_v2 CreateAPIv2(void) {
 	result.duckdb_v2_instance_open_shared = duckdb_v2_instance_open_shared;
 	result.duckdb_v2_connection_get_profiling_information = duckdb_v2_connection_get_profiling_information;
 	result.duckdb_v2_connection_create_in_transaction = duckdb_v2_connection_create_in_transaction;
+	result.duckdb_v2_table_function_exec_yield = duckdb_v2_table_function_exec_yield;
 	return result;
 }
 
