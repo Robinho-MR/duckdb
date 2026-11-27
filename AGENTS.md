@@ -268,8 +268,8 @@ DUCKDB_EXTENSIONS='json;icu' make
 
 ### Static Lifetimes
 - Queries can still run on other threads while the process exits, so a static with a destructor can be used after it was destroyed
-- First-party code must not need an exit-time destructor or a global constructor (`make static-lifetime-check`, clang `-Wexit-time-destructors -Wglobal-constructors`)
-- Prefer trivially destructible statics (constexpr data, enums, arrays of `const char *`)
+- First-party code must not need an exit-time destructor or a global constructor: clang `-Wexit-time-destructors -Wglobal-constructors`, enabled with `-DSTATIC_LIFETIME_WARNINGS=1` (CI's `tidy-check` does this)
+- Prefer trivially destructible statics: constexpr data, enums, `static constexpr` arrays of `const char *`; `StaticStringSet` / `StaticStringMap` (`duckdb/common/static_string_table.hpp`) look up in them without a static set or map
 - Otherwise use a function-local `static NoDestructor<T>` (`duckdb/common/no_destructor.hpp`)
 - Only where a destructor must run (`thread_local` cleanup) or a constructor must run before `main`, wrap the declaration in `DUCKDB_ALLOW_STATIC_LIFETIME_BEGIN/END` and say why
 

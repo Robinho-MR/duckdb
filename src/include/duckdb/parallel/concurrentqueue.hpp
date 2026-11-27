@@ -9,7 +9,11 @@
 #pragma once
 
 #ifndef DUCKDB_NO_THREADS
+#include "duckdb/common/no_destructor.hpp"
+// vendored code with statics we do not control
+DUCKDB_ALLOW_STATIC_LIFETIME_BEGIN
 #include "concurrentqueue.h"
+DUCKDB_ALLOW_STATIC_LIFETIME_END
 #else
 
 #include <cstddef>

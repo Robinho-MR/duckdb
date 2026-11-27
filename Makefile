@@ -872,7 +872,7 @@ test_benchmark_sql:
 tidy-check:
 	mkdir -p ./build/tidy && \
 	cd build/tidy && \
-	cmake -DCLANG_TIDY=1 -DDISABLE_UNITY=1 -DBUILD_EXTENSIONS=parquet -DBUILD_SHELL=0 ../.. && \
+	cmake -DCLANG_TIDY=1 -DSTATIC_LIFETIME_WARNINGS=1 -DDISABLE_UNITY=1 -DBUILD_EXTENSIONS=parquet -DBUILD_SHELL=0 ../.. && \
 	$(PYTHON) ../../scripts/run-clang-tidy.py -quiet -j $(CI_CPU_COUNT) ${TIDY_BINARY_PARAMETER} ${TIDY_SHARD_PARAMETERS} ${TIDY_PERFORM_CHECKS}
 
 install-clangd-tidy:
@@ -893,14 +893,6 @@ tidy-check-diff:
 	cmake -DCLANG_TIDY=1 -DDISABLE_UNITY=1 -DBUILD_EXTENSIONS=parquet -DBUILD_SHELL=0 ../.. && \
 	cd ../../ && \
 	git diff origin/${GIT_BASE_BRANCH} . ':(exclude)tools' ':(exclude)extension' ':(exclude)test' ':(exclude)benchmark' ':(exclude)third_party' ':(exclude)src/common/adbc' ':(exclude)src/main/capi' ':(exclude)examples/embedded-c' | $(PYTHON) scripts/clang-tidy-diff.py -path build/tidy -quiet -j $(CI_CPU_COUNT) ${TIDY_BINARY_PARAMETER} ${TIDY_PERFORM_CHECKS} -p1
-
-# fails on statics that need a global constructor or an exit-time destructor, see scripts/check_static_lifetimes.py
-static-lifetime-check:
-	mkdir -p ./build/static_lifetimes && \
-	cd build/static_lifetimes && \
-	CC=$(or $(STATIC_LIFETIME_CC),clang) CXX=$(or $(STATIC_LIFETIME_CXX),clang++) cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DDISABLE_UNITY=1 -DBUILD_UNITTESTS=0 -DBUILD_EXTENSIONS="autocomplete;core_functions;icu;tpcds;tpch;json;parquet" ../.. && \
-	cd ../.. && \
-	$(PYTHON) scripts/check_static_lifetimes.py build/static_lifetimes --clang $(or $(STATIC_LIFETIME_CXX),clang++) --jobs $(CI_CPU_COUNT)
 
 tidy-fix:
 	mkdir -p ./build/tidy && \

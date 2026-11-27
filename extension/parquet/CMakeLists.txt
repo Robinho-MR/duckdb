@@ -40,6 +40,13 @@ set(PARQUET_EXTENSION_FILES
     zstd_file_system.cpp)
 
 if(NOT CLANG_TIDY)
+  # the generated thrift code has statics we do not control
+  if(STATIC_LIFETIME_WARNINGS)
+    set_source_files_properties(
+      ../../third_party/parquet/parquet_types.cpp
+      PROPERTIES COMPILE_OPTIONS
+                 "-Wno-exit-time-destructors;-Wno-global-constructors")
+  endif()
   # parquet/thrift/snappy
   set(PARQUET_EXTENSION_FILES
       ${PARQUET_EXTENSION_FILES}

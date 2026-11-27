@@ -1,5 +1,5 @@
 #include "duckdb/function/copy_function.hpp"
-#include "duckdb/common/no_destructor.hpp"
+#include "duckdb/common/static_string_table.hpp"
 #include "duckdb/common/bind_helpers.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
@@ -193,11 +193,12 @@ static void BindJSONCopyToJSONFunction(Binder &binder, BoundStatement &bound, co
 }
 
 static BoundStatement CopyToJSONPlanInternal(Binder &binder, CopyStatement &stmt, const JSONCopyToFormat format) {
-	static const NoDestructor<identifier_set_t> SUPPORTED_BASE_OPTIONS_STORAGE(identifier_set_t {
-	    "compression", "encoding", "use_tmp_file", "overwrite_or_ignore", "overwrite", "append", "filename_pattern",
-	    "file_extension", "per_thread_output", "file_size_bytes", "partition_by", "return_files", "preserve_order",
-	    "return_stats", "write_partition_columns", "write_empty_file", "hive_file_pattern", "return_column_types"});
-	const auto &SUPPORTED_BASE_OPTIONS = *SUPPORTED_BASE_OPTIONS_STORAGE;
+	static constexpr const char *const SUPPORTED_BASE_OPTIONS_ENTRIES[] = {
+	    "compression",      "encoding",          "use_tmp_file",       "overwrite_or_ignore", "overwrite",
+	    "append",           "filename_pattern",  "file_extension",     "per_thread_output",   "file_size_bytes",
+	    "partition_by",     "return_files",      "preserve_order",     "return_stats",        "write_partition_columns",
+	    "write_empty_file", "hive_file_pattern", "return_column_types"};
+	const StaticStringSet SUPPORTED_BASE_OPTIONS(SUPPORTED_BASE_OPTIONS_ENTRIES);
 
 	auto &copy_info = *stmt.info;
 
@@ -283,7 +284,7 @@ static BoundStatement CopyToJSONPlanInternal(Binder &binder, CopyStatement &stmt
 			// Handled below by keeping the partition columns inside the JSON object. We do not forward this to the
 			// CSV writer, as that would write the (separate) partition columns as their own JSON lines.
 			write_partition_columns = GetJSONCopyBoolean(binder, format, option_name, option_values);
-		} else if (SUPPORTED_BASE_OPTIONS.find(option_name) != SUPPORTED_BASE_OPTIONS.end()) {
+		} else if (SUPPORTED_BASE_OPTIONS.Contains(option_name)) {
 			if (!option_values.empty() && option_values.back().IsNull()) {
 				ThrowJSONCopyNullException(format, option_name);
 			}

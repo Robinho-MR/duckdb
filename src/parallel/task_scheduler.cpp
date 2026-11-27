@@ -1,4 +1,5 @@
 #include "duckdb/parallel/task_scheduler.hpp"
+#include "duckdb/common/no_destructor.hpp"
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/numeric_utils.hpp"
@@ -10,7 +11,10 @@
 #include "duckdb/parallel/task_scheduler_queue.hpp"
 #include "duckdb/storage/block_allocator.hpp"
 #ifndef DUCKDB_NO_THREADS
+// vendored code with statics we do not control
+DUCKDB_ALLOW_STATIC_LIFETIME_BEGIN
 #include "concurrentqueue.h"
+DUCKDB_ALLOW_STATIC_LIFETIME_END
 #include "duckdb/common/thread.hpp"
 
 #include <thread>

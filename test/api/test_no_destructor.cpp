@@ -2,6 +2,7 @@
 #include "duckdb/common/enums/file_compression_type.hpp"
 #include "duckdb/common/file_open_flags.hpp"
 #include "duckdb/common/no_destructor.hpp"
+#include "duckdb/common/static_string_table.hpp"
 #include "duckdb/common/types/date.hpp"
 
 #include <type_traits>
@@ -92,4 +93,35 @@ TEST_CASE("Test date names", "[api]") {
 	REQUIRE(Date::DayNames()[0].GetString() == "Sunday");
 	REQUIRE(Date::DayNames()[6].GetString() == "Saturday");
 	REQUIRE(Date::DayNamesAbbreviated()[3].GetString() == "Wed");
+}
+
+TEST_CASE("Test StaticStringSet and StaticStringMap", "[api]") {
+	static constexpr const char *const KEYWORDS[] = {"SELECT", "From", "where"};
+	constexpr StaticStringSet keywords(KEYWORDS);
+	static_assert(std::is_trivially_destructible<StaticStringSet>::value, "must not need a static destructor");
+	REQUIRE(keywords.size() == 3);
+	REQUIRE(keywords.Contains(string("SELECT")));
+	REQUIRE(!keywords.Contains(string("select")));
+	REQUIRE(keywords.ContainsCaseInsensitive("select"));
+	REQUIRE(keywords.ContainsCaseInsensitive("FROM"));
+	REQUIRE(keywords.ContainsCaseInsensitive("Where"));
+	REQUIRE(!keywords.ContainsCaseInsensitive("whe"));
+	REQUIRE(!keywords.ContainsCaseInsensitive("wherex"));
+	REQUIRE(!keywords.ContainsCaseInsensitive(""));
+	idx_t count = 0;
+	for (auto keyword : keywords) {
+		REQUIRE(keyword != nullptr);
+		count++;
+	}
+	REQUIRE(count == 3);
+
+	static constexpr StaticStringMap<int>::Entry ENTRIES[] = {{"one", 1}, {"Two", 2}};
+	constexpr StaticStringMap<int> numbers(ENTRIES);
+	static_assert(std::is_trivially_destructible<StaticStringMap<int>>::value, "must not need a static destructor");
+	REQUIRE(numbers.Find("one"));
+	REQUIRE(*numbers.Find("one") == 1);
+	REQUIRE(!numbers.Find("ONE"));
+	REQUIRE(*numbers.FindCaseInsensitive("ONE") == 1);
+	REQUIRE(*numbers.FindCaseInsensitive("two") == 2);
+	REQUIRE(!numbers.FindCaseInsensitive("three"));
 }

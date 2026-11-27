@@ -1,5 +1,9 @@
 set_extension_version_sources(test)
 
+if(STATIC_LIFETIME_WARNINGS)
+  add_compile_options(-Wno-exit-time-destructors -Wno-global-constructors)
+endif()
+
 include_directories("${PROJECT_SOURCE_DIR}/third_party/catch")
 include_directories("${PROJECT_SOURCE_DIR}/third_party/sqlite/include")
 include_directories("${PROJECT_SOURCE_DIR}/test/include")
