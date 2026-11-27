@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 //===--------------------------------------------------------------------===//
@@ -297,4 +297,4 @@ void IndianCalendar::HandleComputeFields(int32_t julian_day) {
 }
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

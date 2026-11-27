@@ -5,7 +5,7 @@
 
 #include <cmath>
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 static const int32_t ISLAMIC_LIMITS[CAL_FIELD_COUNT][4] = {
@@ -363,4 +363,4 @@ void IslamicUmalquraCalendar::HandleComputeFields(int32_t julian_day) {
 }
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

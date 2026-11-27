@@ -1992,7 +1992,7 @@ def write_collation_data(path, table, builder, stage1, stage2, han_range_list, n
 
     out = [HEADER % ("collation_data.cpp", CLDR_VERSION, UNICODE_VERSION)]
     out.append('#include "collation_data.hpp"\n')
-    out.append("namespace duckdb {")
+    out.append("namespace duckdb_icu {")
     out.append("namespace collation {")
     out.append("")
     out.append("// The tables are compressed with zstd. Every unit is compressed on its own so that")
@@ -2041,7 +2041,7 @@ def write_collation_data(path, table, builder, stage1, stage2, han_range_list, n
     )
     out.append("")
     out.append("} // namespace collation")
-    out.append("} // namespace duckdb")
+    out.append("} // namespace duckdb_icu")
     out.append("")
     with open(path, "w") as f:
         f.write("\n".join(out))

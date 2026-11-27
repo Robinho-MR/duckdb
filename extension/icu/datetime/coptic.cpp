@@ -2,7 +2,7 @@
 
 #include "grego.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 //! The limits of the Coptic and Ethiopic calendar fields. The thirteenth month is only five days
@@ -122,4 +122,4 @@ int32_t EthiopicAmeteAlemCalendar::HandleGetLimit(CalendarField field, LimitType
 }
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

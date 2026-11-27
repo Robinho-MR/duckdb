@@ -1,0 +1,532 @@
+module: datetime
+#
+# The engine's text formats of dates and times: the strptime and strftime format strings, and the grammar of the
+# TIMESTAMP WITH TIME ZONE and TIME WITH TIME ZONE casts. An extension that computes dates in its own calendar or
+# time zones, such as one implementing the time zone conversions, parses and writes text through these, so that its
+# functions accept and produce exactly the text the engine's built-in functions and casts do. The formats are
+# documented at https://duckdb.org/docs/sql/functions/dateformat.
+#
+# Composing these from other functions is not possible: the format grammar, its error messages and the names of
+# months and days are the engine's.
+
+#-----------------------------------------------------------------------------------------------------------------------
+# Enums
+#-----------------------------------------------------------------------------------------------------------------------
+enums:
+  TIME_FORMAT_FLAG:
+    description: |
+      What a strptime format contains, as bits of the flags `[[strptime_format_get_flags]]` reports.
+    values:
+      TIME_FORMAT_FLAG_UTC_OFFSET:
+        value: 1
+        description: "The format has a UTC offset, `%z`."
+      TIME_FORMAT_FLAG_TZ_NAME:
+        value: 2
+        description: "The format has a time zone name, `%Z`."
+      TIME_FORMAT_FLAG_NANOSECONDS:
+        value: 4
+        description: "The format has nanoseconds, `%n`."
+
+  TIMESTAMP_TEXT_RESULT:
+    description: What `[[timestamp_tz_parse_text]]` made of a text.
+    values:
+      TIMESTAMP_TEXT_SUCCESS:
+        value: 0
+        description: The text is a timestamp.
+      TIMESTAMP_TEXT_ERROR_FORMAT:
+        value: 1
+        description: The text is not in the format of a timestamp.
+      TIMESTAMP_TEXT_ERROR_RANGE:
+        value: 2
+        description: The text is in the format of a timestamp, but the timestamp is out of range.
+
+#-----------------------------------------------------------------------------------------------------------------------
+# Structs
+#-----------------------------------------------------------------------------------------------------------------------
+structs:
+  time_parts:
+    description: |
+      The parts of a date and time of day, as a strptime format parses them from text and a strftime format writes
+      them. The month and day count from 1. A year is the proleptic Gregorian year, which counts 1 BC as 0, -1 BC as
+      -1, and so on.
+    fields:
+      - name: year
+        type: i32
+      - name: month
+        type: i32
+      - name: day
+        type: i32
+      - name: hour
+        type: i32
+      - name: minute
+        type: i32
+      - name: second
+        type: i32
+      - name: fraction
+        type: i32
+        description: The fraction of the second, in nanoseconds when parsed, and in the unit the formatter is told otherwise.
+      - name: utc_offset
+        type: i32
+        description: The offset from UTC in seconds, east positive. 0 when the text has none.
+
+  strptime_parts:
+    description: |
+      What a strptime format parsed from a text, read with `[[strptime_result_get_parts]]`.
+    fields:
+      - name: parts
+        type: time_parts
+        description: The parts of the date and time. Not set when `is_special` is true.
+      - name: is_special
+        type: bool
+        description: Whether the text is a special date, such as `infinity`, rather than parts.
+      - name: special_days
+        type: i32
+        description: For a special date, its days since 1970-01-01, e.g. `INT32_MAX` for `infinity`.
+      - name: tz_name
+        type: char
+        pointer: 1
+        const: true
+        description: The time zone name the text gives for `%Z`. Borrowed from the result, valid until it parses again or is destroyed. Not null-terminated.
+      - name: tz_name_length
+        type: idx
+        description: The length of `tz_name` in bytes, 0 when the text gives no time zone name.
+
+  timestamp_text:
+    description: |
+      A TIMESTAMP WITH TIME ZONE as `[[timestamp_tz_parse_text]]` parsed it from text.
+    fields:
+      - name: micros
+        type: i64
+        description: |
+          With an offset, the instant in microseconds since 1970-01-01 00:00:00 UTC. Without one, the local date and
+          time the text gives, in microseconds since 1970-01-01 00:00:00, to be placed in the time zone `tz_name`
+          or the session's.
+      - name: nanos
+        type: i32
+        description: The nanoseconds of the text beyond the microseconds, in [0, 1000), when they were asked for.
+      - name: has_offset
+        type: bool
+        description: Whether the text gives a UTC offset, e.g. `+02:00`, which `micros` has applied.
+      - name: tz_name
+        type: char
+        pointer: 1
+        const: true
+        description: The time zone name that follows the time, if any. Borrowed from the parsed text. Not null-terminated.
+      - name: tz_name_length
+        type: idx
+        description: The length of `tz_name` in bytes, 0 when the text gives no time zone name.
+
+#-----------------------------------------------------------------------------------------------------------------------
+# Handles
+#-----------------------------------------------------------------------------------------------------------------------
+handles:
+  strptime_format:
+    description: |
+      An owned opaque handle to a parsed strptime format string, e.g. `%Y-%m-%d %H:%M:%S %Z`. Created with
+      `[[strptime_format_create]]`, used to parse texts with `[[strptime_format_parse]]`, and destroyed with
+      `[[strptime_format_destroy]]`. Immutable: several threads may parse with it at once.
+
+  strptime_result:
+    description: |
+      An owned opaque handle to what a strptime format last parsed from a text. Created with
+      `[[strptime_result_create]]`, filled by `[[strptime_format_parse]]`, read with `[[strptime_result_get_parts]]`
+      and `[[strptime_result_get_error]]`, and destroyed with `[[strptime_result_destroy]]`. A thread reuses one
+      result for every text it parses; it is not safe to use from several threads at once.
+
+  strftime_format:
+    description: |
+      An owned opaque handle to a parsed strftime format string, e.g. `%A, %-d %B %Y`. Created with
+      `[[strftime_format_create]]`, used to write dates and times with `[[strftime_format_write]]`, and destroyed with
+      `[[strftime_format_destroy]]`. Immutable: several threads may write with it at once.
+
+#-----------------------------------------------------------------------------------------------------------------------
+# Functions
+#-----------------------------------------------------------------------------------------------------------------------
+functions:
+  #---------------------------------------------------------------------------------------------------------------------
+  # strptime
+  #---------------------------------------------------------------------------------------------------------------------
+  strptime_format_create:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Parses a strptime format string, as the SQL function `strptime` takes it.
+
+      Fails with `ERROR_INPUT_INVALID` when the format string is not valid, with the message of `strptime`, e.g.
+      "Failed to parse format specifier %Q: Unrecognized format for strftime/strptime: %Q". The caller owns the
+      returned handle and must destroy it with `[[strptime_format_destroy]]`.
+    role: constructor
+    belongs_to: strptime_format
+    parameters:
+      format:
+        type: char
+        indirection: 1
+        const: true
+        description: The format string. Not necessarily null-terminated.
+      format_length:
+        type: idx
+        description: The length of `format` in bytes.
+      out_format:
+        type: strptime_format
+        indirection: 1
+        kind: OUT
+        description: On success, receives the parsed format. Owned by the caller.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  strptime_format_get_flags:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Reports what the format contains, as a combination of `[[TIME_FORMAT_FLAG]]` bits.
+    parameters:
+      format:
+        type: strptime_format
+        description: The format to inspect.
+      flags:
+        type: u32
+        indirection: 1
+        kind: OUT
+        description: Receives the `TIME_FORMAT_FLAG_*` bits of what the format contains.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  strptime_format_parse:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Parses a text with the format, as `strptime` does.
+
+      On a match, `*matched` is set to true and `result` holds the parts the text gives, read with
+      `[[strptime_result_get_parts]]`. Otherwise `*matched` is set to false and `result` holds why the text does
+      not match, read with `[[strptime_result_get_error]]`. A text that does not match is not a failure of the
+      call: it returns `ERROR_NONE`.
+    parameters:
+      format:
+        type: strptime_format
+        description: The format to parse with.
+      text:
+        type: char
+        indirection: 1
+        const: true
+        description: The text to parse. Not necessarily null-terminated.
+      text_length:
+        type: idx
+        description: The length of `text` in bytes.
+      result:
+        type: strptime_result
+        description: Receives what was parsed, replacing what it held.
+      matched:
+        type: bool
+        indirection: 1
+        kind: OUT
+        description: Receives whether the text matches the format.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  strptime_format_destroy:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Destroys a strptime format and sets the handle to null. Does nothing for a null handle.
+    parameters:
+      format:
+        type: strptime_format
+        indirection: 1
+        description: The format to destroy.
+    return_type: ERROR
+
+  strptime_result_create:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Creates an empty strptime result, to pass to `[[strptime_format_parse]]`. The caller owns the returned handle
+      and must destroy it with `[[strptime_result_destroy]]`.
+    role: constructor
+    belongs_to: strptime_result
+    parameters:
+      out_result:
+        type: strptime_result
+        indirection: 1
+        kind: OUT
+        description: On success, receives the new result. Owned by the caller.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  strptime_result_get_parts:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Reads what the last `[[strptime_format_parse]]` into the result parsed from a matching text.
+
+      The time zone name is borrowed from the result: it stays valid until the result parses again or is destroyed.
+      Undefined after a parse that did not match.
+    parameters:
+      result:
+        type: strptime_result
+        description: The result to read.
+      parts:
+        type: strptime_parts
+        indirection: 1
+        kind: OUT
+        description: Receives the parts.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  strptime_result_get_error:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Writes the error message of `strptime` for a text the last `[[strptime_format_parse]]` into the result did not
+      match, e.g. "Could not parse string "x" according to format specifier "%Y"" followed by where and why.
+
+      `strptime` with several formats reports the reason of the last format it tried with the format string of the
+      first, so the format string is passed separately. Writes at most `buffer_size` bytes into `buffer`, without a
+      terminating null, and sets `*length` to the length of the whole message: when it exceeds `buffer_size`, the
+      caller calls again with a buffer of that size.
+    parameters:
+      result:
+        type: strptime_result
+        description: The result of the parse that did not match.
+      text:
+        type: char
+        indirection: 1
+        const: true
+        description: The text that did not match. Not necessarily null-terminated.
+      text_length:
+        type: idx
+        description: The length of `text` in bytes.
+      format_string:
+        type: char
+        indirection: 1
+        const: true
+        description: The format string to name in the message. Not necessarily null-terminated.
+      format_string_length:
+        type: idx
+        description: The length of `format_string` in bytes.
+      buffer:
+        type: char
+        indirection: 1
+        description: A caller-owned buffer of at least `buffer_size` bytes, receiving the message. May be null when `buffer_size` is 0.
+      buffer_size:
+        type: idx
+        description: The size of `buffer` in bytes.
+      length:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the length of the whole message in bytes.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  strptime_result_destroy:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Destroys a strptime result and sets the handle to null. Does nothing for a null handle.
+    parameters:
+      result:
+        type: strptime_result
+        indirection: 1
+        description: The result to destroy.
+    return_type: ERROR
+
+  #---------------------------------------------------------------------------------------------------------------------
+  # strftime
+  #---------------------------------------------------------------------------------------------------------------------
+  strftime_format_create:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Parses a strftime format string, as the SQL function `strftime` takes it.
+
+      Fails with `ERROR_INPUT_INVALID` when the format string is not valid, with the message of `strftime`. The
+      caller owns the returned handle and must destroy it with `[[strftime_format_destroy]]`.
+    role: constructor
+    belongs_to: strftime_format
+    parameters:
+      format:
+        type: char
+        indirection: 1
+        const: true
+        description: The format string. Not necessarily null-terminated.
+      format_length:
+        type: idx
+        description: The length of `format` in bytes.
+      out_format:
+        type: strftime_format
+        indirection: 1
+        kind: OUT
+        description: On success, receives the parsed format. Owned by the caller.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  strftime_format_write:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Writes a date and time with the format, as `strftime` does.
+
+      The parts are those of a valid date and time of day. The day of the week, the day of the year and the week
+      numbers are computed from the date. `%z` writes `parts.utc_offset`, and `%Z` writes `tz_name`. Writes at most
+      `buffer_size` bytes into `buffer`, without a terminating null, and sets `*length` to the length of the whole
+      text: when it exceeds `buffer_size`, the caller calls again with a buffer of that size.
+    parameters:
+      format:
+        type: strftime_format
+        description: The format to write with.
+      parts:
+        type: time_parts
+        indirection: 1
+        const: true
+        description: The parts of the date and time to write.
+      nanoseconds:
+        type: bool
+        description: Whether `parts.fraction` is in nanoseconds, rather than microseconds.
+      tz_name:
+        type: char
+        indirection: 1
+        const: true
+        description: The time zone name `%Z` writes. Not necessarily null-terminated. May be null when `tz_name_length` is 0.
+      tz_name_length:
+        type: idx
+        description: The length of `tz_name` in bytes.
+      buffer:
+        type: char
+        indirection: 1
+        description: A caller-owned buffer of at least `buffer_size` bytes, receiving the text. May be null when `buffer_size` is 0.
+      buffer_size:
+        type: idx
+        description: The size of `buffer` in bytes.
+      length:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the length of the whole text in bytes.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  strftime_format_destroy:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Destroys a strftime format and sets the handle to null. Does nothing for a null handle.
+    parameters:
+      format:
+        type: strftime_format
+        indirection: 1
+        description: The format to destroy.
+    return_type: ERROR
+
+  #---------------------------------------------------------------------------------------------------------------------
+  # Text of the time zone casts
+  #---------------------------------------------------------------------------------------------------------------------
+  timestamp_tz_parse_text:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Parses a text in the grammar of the `VARCHAR` to `TIMESTAMP WITH TIME ZONE` cast, e.g.
+      `2026-11-27 10:30:00.123456789+01:00` or `2026-11-27 10:30 Europe/Amsterdam`.
+
+      A text with a UTC offset gives an instant; one without gives a local date and time, followed by the name of
+      the time zone it is in, if any: see `[[timestamp_text]]`. Special values such as `infinity` parse to the
+      timestamp they stand for, as an instant. A text that is not a timestamp is not a failure of the call: it sets
+      `*result` and returns `ERROR_NONE`.
+    parameters:
+      text:
+        type: char
+        indirection: 1
+        const: true
+        description: The text to parse. Not necessarily null-terminated.
+      text_length:
+        type: idx
+        description: The length of `text` in bytes.
+      nanoseconds:
+        type: bool
+        description: |
+          Whether to keep the nanoseconds of the text in `parsed->nanos`. Otherwise the fraction of a second is
+          rounded to microseconds as the cast to TIMESTAMP WITH TIME ZONE rounds it, half to even, and
+          `parsed->nanos` is 0.
+      parsed:
+        type: timestamp_text
+        indirection: 1
+        kind: OUT
+        description: On `TIMESTAMP_TEXT_SUCCESS`, receives the timestamp. The time zone name points into `text`.
+      result:
+        type: TIMESTAMP_TEXT_RESULT
+        indirection: 1
+        kind: OUT
+        description: Receives whether the text is a timestamp.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  time_tz_parse_text:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Parses a text in the grammar of the `VARCHAR` to `TIME WITH TIME ZONE` cast, e.g. `10:30:00+01`.
+
+      On success, `*micros` receives the time of day in microseconds since midnight, and `*has_offset` whether the
+      text gives a UTC offset, which `*offset` then receives in seconds, east positive. A text that is not a time is
+      not a failure of the call: it sets `*success` to false and returns `ERROR_NONE`.
+    parameters:
+      text:
+        type: char
+        indirection: 1
+        const: true
+        description: The text to parse. Not necessarily null-terminated.
+      text_length:
+        type: idx
+        description: The length of `text` in bytes.
+      micros:
+        type: i64
+        indirection: 1
+        kind: OUT
+        description: Receives the time of day in microseconds.
+      offset:
+        type: i32
+        indirection: 1
+        kind: OUT
+        description: Receives the UTC offset in seconds, 0 when the text gives none.
+      has_offset:
+        type: bool
+        indirection: 1
+        kind: OUT
+        description: Receives whether the text gives a UTC offset.
+      success:
+        type: bool
+        indirection: 1
+        kind: OUT
+        description: Receives whether the text is a time.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR

@@ -1,45 +1,30 @@
-#include "include/icu-dateadd.hpp"
+#include "icu-datefunc.hpp"
+#include "icu-vector.hpp"
 
-#include "duckdb/main/extension/extension_loader.hpp"
-#include "duckdb/common/operator/multiply.hpp"
-#include "duckdb/common/types/time.hpp"
-#include "duckdb/common/types/timestamp.hpp"
-#include "duckdb/planner/expression/bound_function_expression.hpp"
-#include "include/icu-datefunc.hpp"
-#include "icu-helpers.hpp"
+namespace duckdb_icu {
 
-namespace duckdb {
-
-static duckdb::unique_ptr<FunctionData> ICUBindIntervalMonths(BindScalarFunctionInput &input) {
-	auto result = ICUDateFunc::Bind(input);
-
-	auto &info = result->Cast<ICUDateFunc::BindData>();
-	TZCalendar calendar(*info.calendar, info.cal_setting);
+static void ICUBindIntervalMonths(cxx::ScalarFunction::BindInput &input) {
+	ICUDateFunc::BindData data(input.GetContext());
+	TZCalendar calendar(*data.calendar, data.cal_setting);
 	if (!calendar.SupportsIntervals()) {
 		throw NotImplementedException("INTERVALs do not work with 13 month calendars. Try using DATE_DIFF instead.");
 	}
-	return std::move(result);
+	input.SetBindData<ICUDateFunc::BindData>(std::move(data));
 }
 
 struct ICUCalendarAdd {
 	template <class TA, class TB, class TR>
-	static inline TR Operation(TA left, TB right, TZCalendar &calendar_p) {
-		throw InternalException("Unimplemented type for ICUCalendarAdd");
-	}
+	static inline TR Operation(TA left, TB right, TZCalendar &calendar_p);
 };
 
 struct ICUCalendarSub : public ICUDateFunc {
 	template <class TA, class TB, class TR>
-	static inline TR Operation(TA left, TB right, TZCalendar &calendar_p) {
-		throw InternalException("Unimplemented type for ICUCalendarSub");
-	}
+	static inline TR Operation(TA left, TB right, TZCalendar &calendar_p);
 };
 
 struct ICUCalendarAge : public ICUDateFunc {
 	template <class TA, class TB, class TR>
-	static inline TR Operation(TA left, TB right, TZCalendar &calendar_p) {
-		throw InternalException("Unimplemented type for ICUCalendarAge");
-	}
+	static inline TR Operation(TA left, TB right, TZCalendar &calendar_p);
 };
 
 static inline void CalendarAddHour(Calendar *calendar, int64_t interval_hour) {
@@ -62,13 +47,13 @@ static inline void CalendarAddHour(Calendar *calendar, int64_t interval_hour) {
 
 template <>
 timestamp_tz_t ICUCalendarAdd::Operation(timestamp_tz_t timestamp, interval_t interval, TZCalendar &calendar_p) {
-	if (!timestamp.IsFinite()) {
+	if (!IsFinite(timestamp)) {
 		return timestamp;
 	}
 	auto calendar = calendar_p.GetCalendar();
 
-	int64_t millis = timestamp.value / Interval::MICROS_PER_MSEC;
-	int64_t micros = timestamp.value % Interval::MICROS_PER_MSEC;
+	int64_t millis = timestamp.micros / Interval::MICROS_PER_MSEC;
+	int64_t micros = timestamp.micros % Interval::MICROS_PER_MSEC;
 
 	// Manually move the µs
 	micros += interval.micros % Interval::MICROS_PER_MSEC;
@@ -117,7 +102,7 @@ timestamp_tz_t ICUCalendarAdd::Operation(timestamp_tz_t timestamp, interval_t in
 		calendar->Add(CAL_MILLISECOND, interval_ms);
 	}
 
-	return ICUDateFunc::GetTime(calendar, micros);
+	return ICUDateFunc::GetTime(calendar, uint64_t(micros));
 }
 
 template <>
@@ -127,15 +112,15 @@ timestamp_tz_t ICUCalendarAdd::Operation(interval_t interval, timestamp_tz_t tim
 
 template <>
 timestamp_tz_ns_t ICUCalendarAdd::Operation(timestamp_tz_ns_t ns, interval_t interval, TZCalendar &calendar) {
-	if (!ns.IsFinite()) {
+	if (!IsFinite(ns)) {
 		return ns;
 	}
 	timestamp_tz_t us;
 	int64_t nanos;
-	const auto precision = ns.PRECISION / us.PRECISION;
-	Timestamp::SplitTime(ns.value, precision, us.value, nanos);
+	const auto precision = Interval::NANOS_PER_MICRO;
+	Timestamp::SplitTime(ns.nanos, precision, us.micros, nanos);
 	us = Operation<timestamp_tz_t, interval_t, timestamp_tz_t>(us, interval, calendar);
-	if (!Timestamp::TryCombineUnits(us.value, nanos, precision, ns.value)) {
+	if (!Timestamp::TryCombineUnits(us.micros, nanos, precision, ns.nanos)) {
 		throw OutOfRangeException("Cannot add interval to timestamp_tz_ns");
 	}
 	return ns;
@@ -160,22 +145,22 @@ timestamp_tz_ns_t ICUCalendarSub::Operation(timestamp_tz_ns_t ns, interval_t int
 
 template <>
 interval_t ICUCalendarSub::Operation(timestamp_tz_t end_date, timestamp_tz_t start_date, TZCalendar &calendar_p) {
-	if (!end_date.IsFinite() || !start_date.IsFinite()) {
+	if (!IsFinite(end_date) || !IsFinite(start_date)) {
 		throw InvalidInputException("Cannot subtract infinite timestamps");
 	}
-	if (start_date > end_date) {
+	if (start_date.micros > end_date.micros) {
 		auto negated = Operation<timestamp_tz_t, timestamp_tz_t, interval_t>(start_date, end_date, calendar_p);
-		return {-negated.months, -negated.days, -negated.micros};
+		return Interval::Make(-negated.months, -negated.days, -negated.micros);
 	}
 	auto calendar = calendar_p.GetCalendar();
 
 	auto start_micros = ICUDateFunc::SetTime(calendar, start_date);
-	auto end_micros = (uint64_t)(end_date.value % Interval::MICROS_PER_MSEC);
+	auto end_micros = (uint64_t)(end_date.micros % Interval::MICROS_PER_MSEC);
 
 	// Borrow 1ms from end_date if we wrap. This works because start_date <= end_date
 	// and if the µs are out of order, then there must be an extra ms.
 	if (start_micros > (idx_t)end_micros) {
-		end_date.value -= Interval::MICROS_PER_MSEC;
+		end_date.micros -= Interval::MICROS_PER_MSEC;
 		end_micros += Interval::MICROS_PER_MSEC;
 	}
 
@@ -188,8 +173,8 @@ interval_t ICUCalendarSub::Operation(timestamp_tz_t end_date, timestamp_tz_t sta
 	auto min_diff = SubtractField(calendar, CAL_MINUTE, end_date);
 	auto sec_diff = SubtractField(calendar, CAL_SECOND, end_date);
 	auto ms_diff = SubtractField(calendar, CAL_MILLISECOND, end_date);
-	auto micros_diff = UnsafeNumericCast<int32_t>(ms_diff * Interval::MICROS_PER_MSEC + (end_micros - start_micros));
-	result.micros = Time::FromTime(hour_diff, min_diff, sec_diff, micros_diff).value;
+	auto micros_diff = int32_t(ms_diff * Interval::MICROS_PER_MSEC + int64_t(end_micros - start_micros));
+	result.micros = Time::FromTime(hour_diff, min_diff, sec_diff, micros_diff).micros;
 
 	return result;
 }
@@ -200,21 +185,21 @@ interval_t ICUCalendarAge::Operation(timestamp_tz_t end_date, timestamp_tz_t sta
 	if (calendar_p.IsGregorian()) {
 		auto start_data = ICUHelpers::GetComponents(start_date, calendar);
 		auto end_data = ICUHelpers::GetComponents(end_date, calendar);
-		return Interval::GetAge(end_data, start_data, start_date > end_date);
+		return GetAge(end_data, start_data, start_date.micros > end_date.micros);
 	}
 	// fallback for non-gregorian calendars, since Interval::GetAge does not handle
-	if (start_date > end_date) {
+	if (start_date.micros > end_date.micros) {
 		auto negated = Operation<timestamp_tz_t, timestamp_tz_t, interval_t>(start_date, end_date, calendar_p);
-		return {-negated.months, -negated.days, -negated.micros};
+		return Interval::Make(-negated.months, -negated.days, -negated.micros);
 	}
 
 	auto start_micros = ICUDateFunc::SetTime(calendar, start_date);
-	auto end_micros = (uint64_t)(end_date.value % Interval::MICROS_PER_MSEC);
+	auto end_micros = (uint64_t)(end_date.micros % Interval::MICROS_PER_MSEC);
 
 	// Borrow 1ms from end_date if we wrap. This works because start_date <= end_date
 	// and if the µs are out of order, then there must be an extra ms.
 	if (start_micros > (idx_t)end_micros) {
-		end_date.value -= Interval::MICROS_PER_MSEC;
+		end_date.micros -= Interval::MICROS_PER_MSEC;
 		end_micros += Interval::MICROS_PER_MSEC;
 	}
 
@@ -227,142 +212,84 @@ interval_t ICUCalendarAge::Operation(timestamp_tz_t end_date, timestamp_tz_t sta
 	auto min_diff = SubtractField(calendar, CAL_MINUTE, end_date);
 	auto sec_diff = SubtractField(calendar, CAL_SECOND, end_date);
 	auto ms_diff = SubtractField(calendar, CAL_MILLISECOND, end_date);
-	auto micros_diff = UnsafeNumericCast<int32_t>(ms_diff * Interval::MICROS_PER_MSEC + (end_micros - start_micros));
-	result.micros = Time::FromTime(hour_diff, min_diff, sec_diff, micros_diff).value;
+	auto micros_diff = int32_t(ms_diff * Interval::MICROS_PER_MSEC + int64_t(end_micros - start_micros));
+	result.micros = Time::FromTime(hour_diff, min_diff, sec_diff, micros_diff).micros;
 
 	return result;
 }
 
 struct ICUDateAdd : public ICUDateFunc {
 	template <typename TA, typename TR, typename OP>
-	static void ExecuteUnary(DataChunk &args, ExpressionState &state, Vector &result) {
-		D_ASSERT(args.ColumnCount() == 1);
-
-		auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
-		auto &info = func_expr.BindInfo()->Cast<BindData>();
+	static void ExecuteUnary(cxx::ScalarFunction::ExecInput &input) {
+		auto &info = input.GetBindData<BindData>();
 		TZCalendar calendar(*info.calendar, info.cal_setting);
 
 		//	Subtract argument from current_date (at midnight)
-		const auto end_date = CurrentMidnight(calendar.GetCalendar(), state);
+		const auto end_date = CurrentMidnight(calendar.GetCalendar(), input.GetContext());
 
-		UnaryExecutor::Execute<TA, TR>(args.data[0], result, [&](TA start_date) {
+		ExecuteRows<TR, TA>(input, [&](TA start_date) -> std::optional<TR> {
 			return OP::template Operation<timestamp_tz_t, TA, TR>(end_date, start_date, calendar);
 		});
 	}
 
-	template <typename TA, typename TR, typename OP>
-	inline static ScalarFunction GetUnaryDateFunction(const LogicalTypeId &left_type,
-	                                                  const LogicalTypeId &result_type) {
-		return ScalarFunction({left_type}, result_type, ExecuteUnary<TA, TR, OP>, ICUBindIntervalMonths);
-	}
-
 	template <typename TA, typename TB, typename TR, typename OP>
-	static void ExecuteBinary(DataChunk &args, ExpressionState &state, Vector &result) {
-		D_ASSERT(args.ColumnCount() == 2);
-
-		auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
-		auto &info = func_expr.BindInfo()->Cast<BindData>();
+	static void ExecuteBinary(cxx::ScalarFunction::ExecInput &input) {
+		auto &info = input.GetBindData<BindData>();
 		TZCalendar calendar(*info.calendar, info.cal_setting);
 
-		BinaryExecutor::Execute<TA, TB, TR>(args.data[0], args.data[1], result, [&](TA left, TB right) {
+		ExecuteRows<TR, TA, TB>(input, [&](TA left, TB right) -> std::optional<TR> {
 			return OP::template Operation<TA, TB, TR>(left, right, calendar);
 		});
 	}
 
-	template <typename TA, typename TB, typename TR, typename OP>
-	inline static ScalarFunction GetBinaryDateFunction(const LogicalTypeId &left_type, const LogicalTypeId &right_type,
-	                                                   const LogicalTypeId &result_type) {
-		return ScalarFunction({left_type, right_type}, result_type, ExecuteBinary<TA, TB, TR, OP>,
-		                      ICUBindIntervalMonths);
-	}
-
-	template <typename TA, typename TB, typename TR, typename OP>
-	static ScalarFunction GetDateAddFunction(const LogicalTypeId &left_type, const LogicalTypeId &right_type,
-	                                         const LogicalTypeId &result_type) {
-		return GetBinaryDateFunction<TA, TB, TR, OP>(left_type, right_type, result_type);
+	static void Register(const ICURegistration &reg, cxx::ScalarFunction &function) {
+		function.SetBindCallback(ICUBindIntervalMonths);
+		// throws for dates that overflow the timestamp range
+		function.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+		reg.extension.Register(function);
 	}
 
 	template <typename T>
-	static void AddDateAddFunctions(ScalarFunctionSet &set, const LogicalTypeId &type) {
+	static void AddDateAddFunctions(const ICURegistration &reg, const string &name, const string &type) {
 		//	temporal + interval
-		auto tstz_interval_fun =
-		    GetDateAddFunction<T, interval_t, T, ICUCalendarAdd>(type, LogicalType::INTERVAL, type);
-		tstz_interval_fun.GetSignature().GetParameter(0).SetName("left");
-		tstz_interval_fun.GetSignature().GetParameter(1).SetName("right");
-		set.AddFunction(tstz_interval_fun);
+		auto tstz_interval = reg.Scalar(name, {{"left", type}, {"right", "INTERVAL"}}, type);
+		tstz_interval.SetExecCallback(ExecuteBinary<T, interval_t, T, ICUCalendarAdd>);
+		Register(reg, tstz_interval);
 
 		//	interval + temporal
-		auto interval_tstz_fun =
-		    GetDateAddFunction<interval_t, T, T, ICUCalendarAdd>(LogicalType::INTERVAL, type, type);
-		interval_tstz_fun.GetSignature().GetParameter(0).SetName("left");
-		interval_tstz_fun.GetSignature().GetParameter(1).SetName("right");
-		set.AddFunction(interval_tstz_fun);
-	}
-
-	static void AddDateAddOperators(const Identifier &name, ExtensionLoader &loader) {
-		ScalarFunctionSet set {name};
-		AddDateAddFunctions<timestamp_tz_t>(set, LogicalType::TIMESTAMP_TZ);
-		AddDateAddFunctions<timestamp_tz_ns_t>(set, LogicalType::TIMESTAMP_TZ_NS);
-		// throws for dates that overflow the timestamp range
-		set.SetFallible();
-		set.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
-		loader.RegisterFunction(set);
-	}
-
-	template <typename TA, typename OP>
-	static ScalarFunction GetUnaryAgeFunction(const LogicalTypeId &left_type) {
-		return GetUnaryDateFunction<TA, interval_t, OP>(left_type, LogicalType::INTERVAL);
-	}
-
-	template <typename TA, typename TB, typename OP>
-	static ScalarFunction GetBinaryAgeFunction(const LogicalTypeId &left_type, const LogicalTypeId &right_type) {
-		return GetBinaryDateFunction<TA, TB, interval_t, OP>(left_type, right_type, LogicalType::INTERVAL);
+		auto interval_tstz = reg.Scalar(name, {{"left", "INTERVAL"}, {"right", type}}, type);
+		interval_tstz.SetExecCallback(ExecuteBinary<interval_t, T, T, ICUCalendarAdd>);
+		Register(reg, interval_tstz);
 	}
 
 	template <typename T>
-	static void AddDateSubFunction(ScalarFunctionSet &set, const LogicalTypeId &type) {
+	static void AddDateSubFunction(const ICURegistration &reg, const string &name, const string &type) {
 		//	temporal - interval
-		auto tstz_interval_fun =
-		    GetDateAddFunction<T, interval_t, T, ICUCalendarSub>(type, LogicalType::INTERVAL, type);
-		tstz_interval_fun.GetSignature().GetParameter(0).SetName("left");
-		tstz_interval_fun.GetSignature().GetParameter(1).SetName("right");
-		set.AddFunction(tstz_interval_fun);
+		auto tstz_interval = reg.Scalar(name, {{"left", type}, {"right", "INTERVAL"}}, type);
+		tstz_interval.SetExecCallback(ExecuteBinary<T, interval_t, T, ICUCalendarSub>);
+		Register(reg, tstz_interval);
 	}
 
-	static void AddDateSubOperators(const Identifier &name, ExtensionLoader &loader) {
-		ScalarFunctionSet set {name};
-		AddDateSubFunction<timestamp_tz_t>(set, LogicalType::TIMESTAMP_TZ);
-		AddDateSubFunction<timestamp_tz_ns_t>(set, LogicalType::TIMESTAMP_TZ_NS);
+	static void AddDateSubOperators(const ICURegistration &reg, const string &name) {
+		AddDateSubFunction<timestamp_tz_t>(reg, name, "TIMESTAMPTZ");
+		AddDateSubFunction<timestamp_tz_ns_t>(reg, name, "TIMESTAMPTZ_NS");
 
 		//	temporal - temporal
-		auto tstz_tstz_fun = GetBinaryAgeFunction<timestamp_tz_t, timestamp_tz_t, ICUCalendarSub>(
-		    LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP_TZ);
-		tstz_tstz_fun.GetSignature().GetParameter(0).SetName("left");
-		tstz_tstz_fun.GetSignature().GetParameter(1).SetName("right");
-		set.AddFunction(tstz_tstz_fun);
-		// throws for dates that overflow the timestamp range
-		set.SetFallible();
-		set.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
-		loader.RegisterFunction(set);
+		auto tstz_tstz = reg.Scalar(name, {{"left", "TIMESTAMPTZ"}, {"right", "TIMESTAMPTZ"}}, "INTERVAL");
+		tstz_tstz.SetExecCallback(ExecuteBinary<timestamp_tz_t, timestamp_tz_t, interval_t, ICUCalendarSub>);
+		Register(reg, tstz_tstz);
 	}
 
-	static void AddDateAgeFunctions(const Identifier &name, ExtensionLoader &loader) {
+	static void AddDateAgeFunctions(const ICURegistration &reg, const string &name) {
 		//	age(temporal, temporal)
-		ScalarFunctionSet set {name};
-		auto binary_fun = GetBinaryAgeFunction<timestamp_tz_t, timestamp_tz_t, ICUCalendarAge>(
-		    LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP_TZ);
-		binary_fun.GetSignature().GetParameter(0).SetName("timestamp1");
-		binary_fun.GetSignature().GetParameter(1).SetName("timestamp2");
-		binary_fun.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
-		set.AddFunction(binary_fun);
-		auto unary_fun = GetUnaryAgeFunction<timestamp_tz_t, ICUCalendarAge>(LogicalType::TIMESTAMP_TZ);
-		unary_fun.GetSignature().GetParameter(0).SetName("timestamp");
-		// the age is taken at the start of the transaction
-		unary_fun.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
-		set.AddFunction(unary_fun);
-		// throws for dates that overflow the timestamp range
-		set.SetFallible();
-		loader.RegisterFunction(set);
+		auto binary = reg.Scalar(name, {{"timestamp1", "TIMESTAMPTZ"}, {"timestamp2", "TIMESTAMPTZ"}}, "INTERVAL");
+		binary.SetExecCallback(ExecuteBinary<timestamp_tz_t, timestamp_tz_t, interval_t, ICUCalendarAge>);
+		Register(reg, binary);
+
+		// age(temporal): the age is taken at the start of the transaction
+		auto unary = reg.Scalar(name, {{"timestamp", "TIMESTAMPTZ"}}, "INTERVAL");
+		unary.SetExecCallback(ExecuteUnary<timestamp_tz_t, interval_t, ICUCalendarAge>);
+		Register(reg, unary);
 	}
 };
 
@@ -378,10 +305,11 @@ interval_t ICUDateFunc::Sub(TZCalendar &calendar, timestamp_tz_t end_date, times
 	return ICUCalendarSub::Operation<timestamp_tz_t, timestamp_tz_t, interval_t>(end_date, start_date, calendar);
 }
 
-void RegisterICUDateAddFunctions(ExtensionLoader &loader) {
-	ICUDateAdd::AddDateAddOperators("+", loader);
-	ICUDateAdd::AddDateSubOperators("-", loader);
-	ICUDateAdd::AddDateAgeFunctions("age", loader);
+void RegisterICUDateAddFunctions(const ICURegistration &reg) {
+	ICUDateAdd::AddDateAddFunctions<timestamp_tz_t>(reg, "+", "TIMESTAMPTZ");
+	ICUDateAdd::AddDateAddFunctions<timestamp_tz_ns_t>(reg, "+", "TIMESTAMPTZ_NS");
+	ICUDateAdd::AddDateSubOperators(reg, "-");
+	ICUDateAdd::AddDateAgeFunctions(reg, "age");
 }
 
-} // namespace duckdb
+} // namespace duckdb_icu

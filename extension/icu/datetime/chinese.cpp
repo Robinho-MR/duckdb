@@ -5,7 +5,7 @@
 
 #include <cmath>
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 static const int32_t CHINESE_LIMITS[CAL_FIELD_COUNT][4] = {
@@ -472,4 +472,4 @@ void ChineseCalendar::AddChecked(CalendarField field, int32_t amount) {
 }
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

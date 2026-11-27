@@ -9,9 +9,9 @@
 #pragma once
 
 #include "calendar.hpp"
-#include "duckdb/common/string_util.hpp"
+#include "icu_common.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 
 using datetime::Calendar;
 using datetime::CalendarField;
@@ -48,7 +48,7 @@ using datetime::CAL_SUNDAY;
 //! The first month of the year, which is 0-based like all months
 static constexpr int32_t CAL_JANUARY = 0;
 
-using CalendarPtr = duckdb::unique_ptr<Calendar>;
+using CalendarPtr = unique_ptr<Calendar>;
 
 struct TZCalendar {
 	TZCalendar(Calendar &calendar_p, const string &cal_setting)
@@ -72,4 +72,4 @@ struct TZCalendar {
 	const bool supports_intervals;
 };
 
-} // namespace duckdb
+} // namespace duckdb_icu

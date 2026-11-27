@@ -10,7 +10,7 @@
 
 #include "calendar.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 //! The calendar that the Coptic and the Ethiopic calendars share: twelve months of thirty days
@@ -131,4 +131,4 @@ protected:
 };
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

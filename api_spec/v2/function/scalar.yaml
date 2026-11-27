@@ -88,7 +88,9 @@ callbacks:
         description: Borrowed opaque handle providing access to the information available to the callback.
       context:
         type: context
-        description: Borrowed handle to the context of the query currently executing the callback.
+        description: |
+          Borrowed handle to the context of the query currently executing the callback. Null when the function
+          runs without a client context, for example to maintain the keys of an index.
       err:
         type: error_info
         indirection: 1
@@ -102,7 +104,9 @@ callbacks:
         description: Borrowed opaque handle providing access to the information available to the callback.
       context:
         type: context
-        description: Borrowed handle to the context of the query currently executing the callback.
+        description: |
+          Borrowed handle to the context of the query currently executing the callback. Null when the function
+          runs without a client context, for example to maintain the keys of an index.
       err:
         type: error_info
         indirection: 1
@@ -385,6 +389,33 @@ functions:
         description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
     return_type: ERROR
 
+  scalar_function_set_argument_monotonicity:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Declares how the function's result changes with one of its arguments, see `[[FUNCTION_MONOTONICITY]]`.
+
+      The optimizer relies on the declaration: a filter on the result of a non-decreasing function of a column, for
+      example, can skip the row groups whose statistics rule the argument out. Declaring a monotonicity the function
+      does not have produces wrong query results. A call can withdraw or change the declaration for itself from the
+      bind callback with `[[scalar_function_bind_set_argument_monotonicity]]`. Defaults to
+      `FUNCTION_MONOTONICITY_UNKNOWN` for every argument.
+    parameters:
+      function:
+        type: scalar_function
+        description: The function to declare the monotonicity of.
+      index:
+        type: idx
+        description: The index of the argument, in the order the arguments are passed.
+      monotonicity:
+        type: FUNCTION_MONOTONICITY
+        description: How the result changes with the argument.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
   scalar_function_set_resolve_types_callback:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-10-05" ]
@@ -546,6 +577,121 @@ functions:
         type: opaque
         indirection: 1
         description: Opaque handle bundling the bind data pointer plus optional destructor and equality callbacks.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  scalar_function_bind_set_property:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Sets a property of the call being bound, overriding the one the function was registered with
+      (`[[scalar_function_set_property]]`) for this call only.
+
+      Only `FUNCTION_PROPERTY_STABILITY` can be set: a function whose result depends on a setting for some
+      arguments only, e.g. on the time zone for some formats, declares `FUNCTION_PROPERTY_STABILITY_CONSISTENT` at
+      registration and `FUNCTION_PROPERTY_STABILITY_CONSISTENT_WITHIN_QUERY` for the calls that read the setting, or
+      the other way around. Any other key, or a value that does not belong to the key, results in an error.
+    parameters:
+      info:
+        type: scalar_function_bind_info
+        description: The bind info handle.
+      key:
+        type: FUNCTION_PROPERTY_KEY
+        description: The property to set. Must be `FUNCTION_PROPERTY_STABILITY`.
+      value:
+        type: FUNCTION_PROPERTY_VALUE
+        description: The value to set for the property. Must belong to `key`.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  scalar_function_bind_set_argument_monotonicity:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Changes the monotonicity of the call being bound in one of its arguments, overriding the declaration of
+      `[[scalar_function_set_argument_monotonicity]]` for this call only.
+
+      A function that is monotone for most of its constant arguments declares the monotonicity at registration, and
+      withdraws it with `FUNCTION_MONOTONICITY_UNKNOWN` for the calls whose constant arguments make it not monotone.
+    parameters:
+      info:
+        type: scalar_function_bind_info
+        description: The bind info handle.
+      index:
+        type: idx
+        description: The index of the argument, in the order the arguments are passed.
+      monotonicity:
+        type: FUNCTION_MONOTONICITY
+        description: How the result changes with the argument in this call.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  scalar_function_bind_call_overridden:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Replaces the call being bound with a call of the overload the function overrode when it was registered, on the
+      same arguments.
+
+      A function registered with the name and parameter types of an existing overload replaces that overload, e.g. an
+      extension that handles more cases of a built-in function. It can hand the calls it does not handle back to the
+      overload it replaced: once the bind callback returns, the engine binds that overload to the arguments of the call,
+      and the query runs it in place of this one, with its return type, bind data and properties. The bind data the
+      callback set is discarded. Fails when the function replaced no overload when it was registered.
+    parameters:
+      info:
+        type: scalar_function_bind_info
+        description: The bind info handle.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  scalar_function_bind_replace_call:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Replaces the call being bound with a call of another scalar function, on some of its arguments.
+
+      Once the bind callback returns, the engine binds the function named `name`, from the schema the function being
+      bound was registered in, to the arguments at `arg_indices`, in that order, and the query runs that call in
+      place of this one: its return type, bind data, properties and statistics are the replacement's. A function
+      with one constant argument that selects a cheaper or better described function uses it, e.g. `date_part` with
+      a constant part replacing itself with the function of that part. The bind data the callback set is discarded.
+
+      The replacement is bound like a call written in SQL, so its overload is chosen by the types of the arguments,
+      and it may itself replace its call. Binding it fails like such a call when no function of that name takes those
+      arguments.
+    parameters:
+      info:
+        type: scalar_function_bind_info
+        description: The bind info handle.
+      name:
+        type: char
+        indirection: 1
+        const: true
+        description: The name of the function to call instead. Not necessarily null-terminated.
+      name_length:
+        type: idx
+        description: The length of `name` in bytes.
+      arg_indices:
+        type: idx
+        indirection: 1
+        const: true
+        description: The indices of the arguments of the call being bound to pass to the replacement, in order. May be null when `arg_count` is 0.
+      arg_count:
+        type: idx
+        description: The number of entries in `arg_indices`.
       err:
         type: error_info
         indirection: 1
@@ -919,6 +1065,32 @@ functions:
         description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
     return_type: ERROR
 
+
+  scalar_function_stats_propagate_monotone_bounds:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Narrows the statistics of the result as the engine does for a function without a stats callback: from the bounds
+      of the arguments, through the monotonicity declared with `[[scalar_function_set_argument_monotonicity]]`.
+
+      The engine evaluates the function at the corners of the arguments' bounds. A stats callback that knows when that
+      is wrong, e.g. for a function whose result is NULL for an argument that can lie between the bounds, checks the
+      arguments first and calls this otherwise. `*propagated` is set to whether the result statistics were narrowed:
+      not when an argument has no bounds, its monotonicity is unknown, or a corner evaluates to NULL.
+    parameters:
+      info:
+        type: scalar_function_stats_info
+        description: The stats info handle.
+      propagated:
+        type: bool
+        indirection: 1
+        kind: OUT
+        description: Receives whether the result statistics were narrowed.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
 
   #---------------------------------------------------------------------------------------------------------------------
   # Register

@@ -1,6 +1,6 @@
 #include "calendar.hpp"
 
-#include "duckdb/common/string_util.hpp"
+#include "icu_common.hpp"
 #include "grego.hpp"
 #include "coptic.hpp"
 #include "gregorian.hpp"
@@ -13,7 +13,7 @@
 #include <chrono>
 #include <cmath>
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 //===--------------------------------------------------------------------===//
@@ -1400,4 +1400,4 @@ const vector<string> &Calendar::GetAvailableTypes() {
 }
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

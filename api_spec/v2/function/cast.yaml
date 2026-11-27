@@ -49,6 +49,17 @@ handles:
       The "exec" callback receives this handle and can use it to access the input vector, the output vector to
       write into, the number of rows to convert, and the mode the cast is running in.
 
+  cast_function_bind_info:
+    description: |
+      A borrowed opaque handle to the cast being bound, given to the "bind" callback. It gives access to the user
+      data and the source and target type of the cast, and is used to set the bind data of the bound cast.
+
+  cast_function_init_info:
+    description: |
+      A borrowed opaque handle to the arguments supplied to a cast function during the local state initialization
+      "init" phase. The "init" callback receives this handle once per execution thread, and uses it to set "init
+      data" for that thread, retrievable from the exec callbacks of the thread.
+
 #-----------------------------------------------------------------------------------------------------------------------
 # Callbacks
 #-----------------------------------------------------------------------------------------------------------------------
@@ -61,6 +72,36 @@ callbacks:
       context:
         type: context
         description: Borrowed handle to the context of the query currently executing the callback.
+      err:
+        type: error_info
+        indirection: 1
+        description: Borrowed error info handle to use to report errors that occur during the callback.
+    return_type: void
+
+  cast_function_bind_callback:
+    parameters:
+      info:
+        type: cast_function_bind_info
+        description: Borrowed opaque handle providing access to the cast being bound.
+      context:
+        type: context
+        description: |
+          Borrowed handle to the context of the query binding the cast. Null when the engine binds the cast without a
+          client context, for example to cast a constant while it loads a database.
+      err:
+        type: error_info
+        indirection: 1
+        description: Borrowed error info handle to use to report errors that occur during the callback. An error aborts the binding with that error.
+    return_type: void
+
+  cast_function_init_callback:
+    parameters:
+      info:
+        type: cast_function_init_info
+        description: Borrowed opaque handle providing access to the information available to the callback.
+      context:
+        type: context
+        description: Borrowed handle to the context of the query the cast runs in.
       err:
         type: error_info
         indirection: 1
@@ -170,6 +211,38 @@ functions:
         description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
     return_type: ERROR
 
+  cast_get_implicit_cast_cost:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Retrieves the cost the binder assigns to converting `source_type` to `target_type` on its own, or -1 when it
+      does not convert them implicitly.
+
+      A cast that implements a conversion the engine already knows, e.g. one that applies a time zone, passes this to
+      `[[cast_function_set_implicit_cast_cost]]` to keep the binder's choices between implicit casts as they are. The
+      rules of the engine are not part of the API: they change between versions, which is why they are read rather than
+      copied. The cost includes the casts registered on the factory's database so far.
+    parameters:
+      factory:
+        type: factory
+        description: The factory of the database to read the cost from.
+      source_type:
+        type: logical_type
+        description: The type to cast from. Borrowed for the call only.
+      target_type:
+        type: logical_type
+        description: The type to cast to. Borrowed for the call only.
+      cost:
+        type: i64
+        indirection: 1
+        kind: OUT
+        description: Receives the cost, or -1.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
   cast_function_set_user_data:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-09-02" ]
@@ -188,6 +261,78 @@ functions:
         type: opaque
         indirection: 1
         description: Opaque handle bundling the user data pointer plus an optional destructor.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  cast_function_set_property:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Sets a property of the cast function.
+
+      Only `FUNCTION_PROPERTY_STABILITY` can be set. A cast whose result depends on a setting, such as the time zone,
+      declares `FUNCTION_PROPERTY_STABILITY_CONSISTENT_WITHIN_QUERY`, so that the engine does not fold it into a constant
+      of a prepared statement or accept it in an index expression. A cast cannot be
+      `FUNCTION_PROPERTY_STABILITY_VOLATILE`. Any other key, or a value that does not belong to the key, results in an
+      error. Defaults to `FUNCTION_PROPERTY_STABILITY_CONSISTENT`.
+    parameters:
+      function:
+        type: cast_function
+        description: The function to set the property of.
+      key:
+        type: FUNCTION_PROPERTY_KEY
+        description: The property to set. Must be `FUNCTION_PROPERTY_STABILITY`.
+      value:
+        type: FUNCTION_PROPERTY_VALUE
+        description: The value to set for the property. Must belong to `key`.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  cast_function_set_bind_callback:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Sets the optional bind callback of the cast function.
+
+      The bind callback is called every time the cast is bound for a query, before it runs. It can read the source and
+      target type, set "bind data" the init and exec callbacks read, and refuse the cast by reporting an error, which
+      then is the error of the statement being bound. It may be called without a context, see
+      `[[cast_function_bind_callback]]`.
+    parameters:
+      function:
+        type: cast_function
+        description: The function to set the bind callback of.
+      callback:
+        type: cast_function_bind_callback
+        description: The bind callback to set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  cast_function_set_init_callback:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Sets the optional init callback of the cast function.
+
+      The init callback is called once per execution thread before the thread first runs the exec callback. It sets
+      "init data" for the thread, e.g. a cache the exec callback fills, which the exec callback reads with
+      `[[cast_function_exec_get_init_data]]`.
+    parameters:
+      function:
+        type: cast_function
+        description: The function to set the init callback of.
+      callback:
+        type: cast_function_init_callback
+        description: The init callback to set.
       err:
         type: error_info
         indirection: 1
@@ -216,6 +361,161 @@ functions:
     return_type: ERROR
 
   #---------------------------------------------------------------------------------------------------------------------
+  # Bind Callback Functions
+  #---------------------------------------------------------------------------------------------------------------------
+  cast_function_bind_get_user_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Retrieves the user data set via `[[cast_function_set_user_data]]`.
+    parameters:
+      info:
+        type: cast_function_bind_info
+        description: The bind info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the user data pointer, or null if none was set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  cast_function_bind_get_source_type:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Retrieves the type the cast is bound to convert from.
+
+      The returned type is owned by the caller and must be destroyed via `[[logical_type_destroy]]`.
+    parameters:
+      info:
+        type: cast_function_bind_info
+        description: The bind info handle.
+      type:
+        type: logical_type
+        indirection: 1
+        kind: OUT
+        description: Receives the source type. Owned by the caller; destroy via `[[logical_type_destroy]]`.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  cast_function_bind_get_target_type:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Retrieves the type the cast is bound to convert to.
+
+      The returned type is owned by the caller and must be destroyed via `[[logical_type_destroy]]`.
+    parameters:
+      info:
+        type: cast_function_bind_info
+        description: The bind info handle.
+      type:
+        type: logical_type
+        indirection: 1
+        kind: OUT
+        description: Receives the target type. Owned by the caller; destroy via `[[logical_type_destroy]]`.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  cast_function_bind_set_bind_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Sets the "bind data" of the bound cast from the bind callback.
+
+      The bind data is stored with the bound cast and read by the init and exec callbacks. The opaque handle bundles the
+      pointer with an optional destructor, called when the bound cast is destroyed, and an optional equality callback;
+      without one, pointer equality is used. Calling this again replaces the bind data.
+    parameters:
+      info:
+        type: cast_function_bind_info
+        description: The bind info handle.
+      data:
+        type: opaque
+        indirection: 1
+        description: Opaque handle bundling the bind data pointer plus optional destructor and equality callbacks.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  #---------------------------------------------------------------------------------------------------------------------
+  # Init Callback Functions
+  #---------------------------------------------------------------------------------------------------------------------
+  cast_function_init_get_user_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Retrieves the user data set via `[[cast_function_set_user_data]]`.
+    parameters:
+      info:
+        type: cast_function_init_info
+        description: The init info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the user data pointer, or null if none was set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  cast_function_init_get_bind_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Retrieves the bind data set by the bind callback.
+    parameters:
+      info:
+        type: cast_function_init_info
+        description: The init info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the bind data pointer, or null if none was set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  cast_function_init_set_init_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Sets the "init data" of the execution thread from the init callback.
+
+      The init data is read by the exec callbacks of the thread with `[[cast_function_exec_get_init_data]]`. The opaque
+      handle bundles the pointer with an optional destructor, called when the thread is done with the cast.
+    parameters:
+      info:
+        type: cast_function_init_info
+        description: The init info handle.
+      data:
+        type: opaque
+        indirection: 1
+        description: Opaque handle bundling the init data pointer plus an optional destructor.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  #---------------------------------------------------------------------------------------------------------------------
   # Exec Callback Functions
   #---------------------------------------------------------------------------------------------------------------------
   cast_function_exec_get_user_data:
@@ -231,6 +531,46 @@ functions:
         indirection: 2
         kind: OUT
         description: Receives the user data pointer, or null if none was set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  cast_function_exec_get_bind_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Retrieves the bind data set by the bind callback.
+    parameters:
+      info:
+        type: cast_function_exec_info
+        description: The exec info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the bind data pointer, or null if none was set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  cast_function_exec_get_init_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Retrieves the init data set by the init callback of the thread running the cast.
+    parameters:
+      info:
+        type: cast_function_exec_info
+        description: The exec info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the init data pointer, or null if none was set.
       err:
         type: error_info
         indirection: 1

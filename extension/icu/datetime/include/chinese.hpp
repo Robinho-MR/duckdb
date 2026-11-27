@@ -10,7 +10,7 @@
 
 #include "calendar.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 //! The Chinese calendar: a lunisolar calendar in which a month starts on the day of a new moon
@@ -114,4 +114,4 @@ protected:
 };
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

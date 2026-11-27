@@ -1,24 +1,14 @@
-#include "duckdb/common/operator/add.hpp"
-#include "duckdb/common/operator/cast_operators.hpp"
-#include "duckdb/common/operator/subtract.hpp"
-#include "duckdb/common/types/date.hpp"
-#include "duckdb/common/types/timestamp.hpp"
-#include "duckdb/common/vector_operations/variadic_executor.hpp"
-#include "duckdb/main/extension/extension_loader.hpp"
-#include "duckdb/main/settings.hpp"
-#include "duckdb/main/context.hpp"
-#include "duckdb/planner/expression/bound_function_expression.hpp"
-#include "include/icu-casts.hpp"
-#include "include/icu-datefunc.hpp"
-#include "include/icu-datetrunc.hpp"
+#include "icu-casts.hpp"
+#include "icu-datefunc.hpp"
+#include "icu-vector.hpp"
 
 #include <cmath>
 
-namespace duckdb {
+namespace duckdb_icu {
 
 date_t ICUMakeDate::Operation(Calendar *calendar, timestamp_tz_t instant) {
-	if (!instant.IsFinite()) {
-		return Timestamp::GetDate(timestamp_t(instant));
+	if (!IsFinite(instant)) {
+		return Timestamp::GetDate(timestamp_t {instant.micros});
 	}
 
 	// Extract the time zone parts
@@ -33,84 +23,89 @@ date_t ICUMakeDate::Operation(Calendar *calendar, timestamp_tz_t instant) {
 	if (!Date::TryFromDate(yyyy, mm, dd, result)) {
 		throw ConversionException("Unable to convert TIMESTAMPTZ to DATE");
 	}
-
 	return result;
 }
 
-date_t ICUMakeDate::ToDate(Context &context, timestamp_tz_t instant) {
+date_t ICUMakeDate::ToDate(cxx::Context &context, timestamp_tz_t instant) {
 	ICUDateFunc::BindData data(context);
 	return Operation(data.calendar.get(), instant);
 }
 
-bool ICUMakeDate::CastToDate(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
-	auto &cast_data = parameters.cast_data->Cast<CastData>();
-	auto &info = cast_data.info->Cast<BindData>();
+static void CastToDate(cxx::CastFunction::ExecInput &input) {
+	auto &info = input.GetBindData<ICUDateFunc::BindData>();
 	CalendarPtr calendar(info.calendar->Copy());
-
-	UnaryExecutor::Execute<timestamp_tz_t, date_t>(
-	    source, result, count, [&](timestamp_tz_t input) { return Operation(calendar.get(), input); });
-	return true;
+	ExecuteCast<timestamp_tz_t, date_t>(input, [&](timestamp_tz_t value, date_t &result, string &error) {
+		result = ICUMakeDate::Operation(calendar.get(), value);
+		return true;
+	});
 }
 
-bool ICUMakeDate::CastNsToDate(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
-	auto &cast_data = parameters.cast_data->Cast<CastData>();
-	auto &info = cast_data.info->Cast<BindData>();
+static void CastNsToDate(cxx::CastFunction::ExecInput &input) {
+	auto &info = input.GetBindData<ICUDateFunc::BindData>();
 	CalendarPtr calendar(info.calendar->Copy());
-
-	UnaryExecutor::Execute<timestamp_tz_ns_t, date_t>(source, result, count, [&](timestamp_tz_ns_t input) {
-		if (!input.IsFinite()) {
-			return Timestamp::GetDate(timestamp_t(input.value));
+	ExecuteCast<timestamp_tz_ns_t, date_t>(input, [&](timestamp_tz_ns_t value, date_t &result, string &error) {
+		if (!IsFinite(value)) {
+			result = Timestamp::GetDate(timestamp_t {value.nanos});
+			return true;
 		}
 		// the date only needs the microsecond instant: floor the nanoseconds so no instant moves past midnight
-		const auto nanos = input.value;
+		const auto nanos = value.nanos;
 		auto micros = nanos / Interval::NANOS_PER_MICRO;
 		if (nanos % Interval::NANOS_PER_MICRO < 0) {
 			micros--;
 		}
-		return Operation(calendar.get(), timestamp_tz_t(micros));
+		result = ICUMakeDate::Operation(calendar.get(), timestamp_tz_t {micros});
+		return true;
 	});
-	return true;
 }
 
-static unique_ptr<ICUDateFunc::CastData> BindCastToDateData(BindCastInput &input) {
-	if (!input.context) {
-		throw InternalException("Missing context for TIMESTAMPTZ to DATE cast.");
-	}
-	if (Settings::Get<DisableTimestamptzCastsSetting>(*input.context)) {
-		throw BinderException("Casting from TIMESTAMP WITH TIME ZONE to DATE without an explicit time zone "
-		                      "has been disabled  - use \"AT TIME ZONE ...\"");
-	}
-	return ICUDateFunc::BindCastData(input);
+static void BindCastToDate(cxx::CastFunction::BindInput &input) {
+	ICUCasts::BindCastData(input, "TIMESTAMPTZ to DATE",
+	                       "Casting from TIMESTAMP WITH TIME ZONE to DATE without an explicit time zone "
+	                       "has been disabled  - use \"AT TIME ZONE ...\"");
 }
 
-BoundCastInfo ICUMakeDate::BindCastToDate(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
-	return BoundCastInfo(CastToDate, BindCastToDateData(input));
-}
-
-BoundCastInfo ICUMakeDate::BindCastNsToDate(BindCastInput &input, const LogicalType &source,
-                                            const LogicalType &target) {
-	return BoundCastInfo(CastNsToDate, BindCastToDateData(input));
-}
-
-void ICUMakeDate::AddCasts(ExtensionLoader &loader) {
-	loader.RegisterCastFunction(LogicalType::TIMESTAMP_TZ, LogicalType::DATE, BindCastToDate);
-	loader.RegisterCastFunction(LogicalType::TIMESTAMP_TZ_NS, LogicalType::DATE, BindCastNsToDate);
+void ICUMakeDate::AddCasts(const ICURegistration &reg) {
+	ICUCasts::Register(reg, "TIMESTAMPTZ", "DATE", false, BindCastToDate, CastToDate);
+	ICUCasts::Register(reg, "TIMESTAMPTZ_NS", "DATE", false, BindCastToDate, CastNsToDate);
 }
 
 struct ICUMakeTimestampTZFunc : public ICUDateFunc {
-	template <typename T>
-	static inline timestamp_tz_t Operation(Calendar *calendar, T yyyy, T mm, T dd, T hr, T mn, double ss) {
-		const auto year = Cast::Operation<T, int32_t>(AddOperator::Operation<T, T, T>(yyyy, (yyyy < 0)));
-		const auto month = Cast::Operation<T, int32_t>(SubtractOperatorOverflowCheck::Operation<T, T, T>(mm, 1));
-		const auto day = Cast::Operation<T, int32_t>(dd);
-		const auto hour = Cast::Operation<T, int32_t>(hr);
-		const auto min = Cast::Operation<T, int32_t>(mn);
+	//! The engine's cast of a BIGINT to an INTEGER
+	static int32_t CastToInt32(int64_t value) {
+		if (value < NumericLimits<int32_t>::Minimum() || value > NumericLimits<int32_t>::Maximum()) {
+			throw InvalidInputException("Type INT64 with value " + std::to_string(value) +
+			                            " can't be cast because the value is out of range for the destination type "
+			                            "INT32");
+		}
+		return int32_t(value);
+	}
 
-		const auto secs = Cast::Operation<double, int32_t>(ss);
+	//! The engine's cast of a DOUBLE to an INTEGER: it rounds, and the rounded value must fit
+	static int32_t CastToInt32(cxx::Context &context, double value) {
+		auto rounded = std::nearbyint(value);
+		if (!std::isfinite(value) || !(rounded >= -2147483648.0 && rounded < 2147483648.0)) {
+			auto text = cxx::Value::Create(context.GetFactory(), value).ToText();
+			throw InvalidInputException("Type DOUBLE with value " + text +
+			                            " can't be cast because the value is out of range for the destination type "
+			                            "INT32");
+		}
+		return int32_t(rounded);
+	}
+
+	static inline timestamp_tz_t Operation(cxx::Context &context, Calendar *calendar, int64_t yyyy, int64_t mm,
+	                                       int64_t dd, int64_t hr, int64_t mn, double ss) {
+		const auto year = CastToInt32(yyyy + (yyyy < 0));
+		const auto month = CastToInt32(SubtractOverflowCheck(mm, int64_t(1)));
+		const auto day = CastToInt32(dd);
+		const auto hour = CastToInt32(hr);
+		const auto min = CastToInt32(mn);
+
+		const auto secs = CastToInt32(context, ss);
 		ss -= secs;
 		ss *= Interval::MSECS_PER_SEC;
 		const auto millis = int32_t(ss);
-		int64_t micros = LossyNumericCast<int64_t, double>(std::round((ss - millis) * Interval::MICROS_PER_MSEC));
+		int64_t micros = int64_t(std::round((ss - millis) * Interval::MICROS_PER_MSEC));
 
 		calendar->Set(CAL_YEAR, year);
 		calendar->Set(CAL_MONTH, month);
@@ -120,100 +115,95 @@ struct ICUMakeTimestampTZFunc : public ICUDateFunc {
 		calendar->Set(CAL_SECOND, secs);
 		calendar->Set(CAL_MILLISECOND, millis);
 
-		return GetTime(calendar, micros);
+		return GetTime(calendar, uint64_t(micros));
 	}
 
-	template <typename T>
-	static void FromMicros(DataChunk &input, ExpressionState &state, Vector &result) {
-		UnaryExecutor::Execute<T, timestamp_t>(input.data[0], result, [&](T micros) {
-			const auto result = timestamp_t(micros);
-			if (!result.IsFinite()) {
+	static void FromMicros(cxx::ScalarFunction::ExecInput &input) {
+		ExecuteRows<timestamp_tz_t, int64_t>(input, [&](int64_t micros) -> std::optional<timestamp_tz_t> {
+			const timestamp_tz_t result {micros};
+			if (!IsFinite(result)) {
 				throw ConversionException("Timestamp microseconds out of range: %ld", micros);
 			}
 			return result;
 		});
 	}
 
-	template <typename T>
-	static void Execute(DataChunk &input, ExpressionState &state, Vector &result) {
-		auto &cache = ExecuteFunctionState::GetFunctionState(state)->Cast<CalendarCacheState>();
-
-		// Three cases: no TZ, constant TZ, variable TZ
-		if (input.ColumnCount() == 6) {
-			auto calendar = cache.GetBaseCalendar();
-			VariadicExecutor::Execute<timestamp_tz_t, T, T, T, T, T, double>(
-			    input, result, [&](T yyyy, T mm, T dd, T hr, T mn, double ss) {
-				    return Operation<T>(calendar, yyyy, mm, dd, hr, mn, ss);
-			    });
-		} else {
-			D_ASSERT(input.ColumnCount() == 7);
-			auto &tz_vec = input.data.back();
-			if (tz_vec.GetVectorType() == VectorType::CONSTANT_VECTOR) {
-				if (ConstantVector::IsNull(tz_vec)) {
-					throw InternalException("ICUMakeTimestamp called with constant NULL tz");
-				}
-				auto calendar = cache.GetCalendar(*ConstantVector::GetData<string_t>(tz_vec));
-				VariadicExecutor::Execute<timestamp_tz_t, T, T, T, T, T, double>(
-				    input, result, [&](T yyyy, T mm, T dd, T hr, T mn, double ss) {
-					    return Operation<T>(calendar, yyyy, mm, dd, hr, mn, ss);
-				    });
-			} else {
-				VariadicExecutor::Execute<timestamp_tz_t, T, T, T, T, T, double, string_t>(
-				    input, result, [&](T yyyy, T mm, T dd, T hr, T mn, double ss, string_t tz_id) {
-					    return Operation<T>(cache.GetCalendar(tz_id), yyyy, mm, dd, hr, mn, ss);
-				    });
-			}
-		}
+	static void Execute(cxx::ScalarFunction::ExecInput &input) {
+		auto &cache = input.GetInitData<CalendarCacheState>();
+		auto &context = input.GetContext();
+		auto calendar = cache.GetBaseCalendar();
+		ExecuteRows<timestamp_tz_t, int64_t, int64_t, int64_t, int64_t, int64_t, double>(
+		    input, [&](int64_t yyyy, int64_t mm, int64_t dd, int64_t hr, int64_t mn, double ss) {
+			    return std::optional<timestamp_tz_t>(Operation(context, calendar, yyyy, mm, dd, hr, mn, ss));
+		    });
 	}
 
-	template <typename TA>
-	static ScalarFunction GetSenaryFunction(const LogicalTypeId &type) {
-		ScalarFunction function({}, LogicalType::TIMESTAMP_TZ, Execute<TA>, Bind);
-		function.GetSignature()
-		    .AddParameter("year", type)
-		    .AddParameter("month", type)
-		    .AddParameter("day", type)
-		    .AddParameter("hour", type)
-		    .AddParameter("minute", type)
-		    .AddParameter("seconds", LogicalType::DOUBLE);
-		function.SetFallible();
-		function.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
-		function.SetInitStateCallback(InitCalendarCache);
-		return function;
+	static void ExecuteZone(cxx::ScalarFunction::ExecInput &input) {
+		auto &cache = input.GetInitData<CalendarCacheState>();
+		auto &context = input.GetContext();
+		ExecuteRows<timestamp_tz_t, int64_t, int64_t, int64_t, int64_t, int64_t, double, std::string_view>(
+		    input, [&](int64_t yyyy, int64_t mm, int64_t dd, int64_t hr, int64_t mn, double ss, std::string_view tz) {
+			    return std::optional<timestamp_tz_t>(
+			        Operation(context, cache.GetCalendar(tz), yyyy, mm, dd, hr, mn, ss));
+		    });
 	}
 
-	template <typename TA>
-	static ScalarFunction GetSeptenaryFunction(const LogicalTypeId &type) {
-		ScalarFunction function({}, LogicalType::TIMESTAMP_TZ, Execute<TA>, Bind);
-		function.GetSignature()
-		    .AddParameter("year", type)
-		    .AddParameter("month", type)
-		    .AddParameter("day", type)
-		    .AddParameter("hour", type)
-		    .AddParameter("minute", type)
-		    .AddParameter("seconds", LogicalType::DOUBLE)
-		    .AddParameter("timezone", LogicalType::VARCHAR);
-		function.SetFallible();
-		function.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
-		function.SetInitStateCallback(InitCalendarCache);
-		return function;
-	}
+	static void AddFunction(const ICURegistration &reg, const string &name) {
+		vector<pair<string, string>> parameters {{"year", "BIGINT"}, {"month", "BIGINT"},  {"day", "BIGINT"},
+		                                         {"hour", "BIGINT"}, {"minute", "BIGINT"}, {"seconds", "DOUBLE"}};
+		auto senary = reg.Scalar(name, parameters, "TIMESTAMPTZ");
+		senary.SetBindCallback(Bind).SetInitCallback(InitCalendarCache).SetExecCallback(Execute);
+		senary.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+		reg.extension.Register(senary);
 
-	static void AddFunction(const Identifier &name, ExtensionLoader &loader) {
-		ScalarFunctionSet set {name};
-		set.AddFunction(GetSenaryFunction<int64_t>(LogicalType::BIGINT));
-		set.AddFunction(GetSeptenaryFunction<int64_t>(LogicalType::BIGINT));
-		ScalarFunction function({}, LogicalType::TIMESTAMP_TZ, FromMicros<int64_t>);
-		function.GetSignature().AddParameter("micros", LogicalType::BIGINT);
-		function.SetFallible();
-		set.AddFunction(function);
-		loader.RegisterFunction(set);
+		parameters.emplace_back("timezone", "VARCHAR");
+		auto septenary = reg.Scalar(name, parameters, "TIMESTAMPTZ");
+		septenary.SetBindCallback(Bind).SetInitCallback(InitCalendarCache).SetExecCallback(ExecuteZone);
+		septenary.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+		reg.extension.Register(septenary);
+
+		auto from_micros = reg.Scalar(name, {{"micros", "BIGINT"}}, "TIMESTAMPTZ");
+		from_micros.SetExecCallback(FromMicros);
+		reg.extension.Register(from_micros);
 	}
 };
 
-void RegisterICUMakeDateFunctions(ExtensionLoader &loader) {
-	ICUMakeTimestampTZFunc::AddFunction("make_timestamptz", loader);
-	ICUMakeDate::AddCasts(loader);
+void RegisterICUMakeDateFunctions(const ICURegistration &reg) {
+	ICUMakeTimestampTZFunc::AddFunction(reg, "make_timestamptz");
+	ICUMakeDate::AddCasts(reg);
 }
 
-} // namespace duckdb
+//===--------------------------------------------------------------------===//
+// get_current_time, current_date, today
+//===--------------------------------------------------------------------===//
+static void CurrentTimeFunction(cxx::ScalarFunction::ExecInput &input) {
+	auto &context = input.GetContext();
+	const auto instant = context.GetTransactionStartTime();
+	ICUDateFunc::BindData data(context);
+	dtime_tz_t result_time(0, 0);
+	ICUToTimeTZ::ToTimeTZ(data.calendar.get(), instant, result_time);
+	const auto bits = result_time.GetBits();
+	ExecuteRows<uint64_t>(input, [&]() -> std::optional<uint64_t> { return bits; });
+}
+
+static void CurrentDateFunction(cxx::ScalarFunction::ExecInput &input) {
+	auto &context = input.GetContext();
+	const auto date = ICUMakeDate::ToDate(context, context.GetTransactionStartTime());
+	ExecuteRows<date_t>(input, [&]() -> std::optional<date_t> { return date; });
+}
+
+void RegisterICUCurrentFunctions(const ICURegistration &reg) {
+	auto current_time = reg.Scalar("get_current_time", {}, "TIMETZ");
+	current_time.SetExecCallback(CurrentTimeFunction);
+	current_time.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+	reg.extension.Register(current_time);
+
+	for (auto name : {"current_date", "today"}) {
+		auto current_date = reg.Scalar(name, {}, "DATE");
+		current_date.SetExecCallback(CurrentDateFunction);
+		current_date.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+		reg.extension.Register(current_date);
+	}
+}
+
+} // namespace duckdb_icu

@@ -204,6 +204,22 @@ struct HandleTraits<QualifiedName> {
 	using handle = duckdb_v2_qname_handle;
 };
 template <>
+struct HandleTraits<Operator> {
+	using handle = duckdb_v2_operator_handle;
+};
+template <>
+struct HandleTraits<StrpTimeFormat> {
+	using handle = duckdb_v2_strptime_format_handle;
+};
+template <>
+struct HandleTraits<StrpTimeResult> {
+	using handle = duckdb_v2_strptime_result_handle;
+};
+template <>
+struct HandleTraits<StrfTimeFormat> {
+	using handle = duckdb_v2_strftime_format_handle;
+};
+template <>
 struct HandleTraits<TableDescription> {
 	using handle = duckdb_v2_table_description_handle;
 };
@@ -250,6 +266,34 @@ InterruptException::InterruptException(const std::string &message, std::string r
     : Exception(DUCKDB_V2_ERROR_RUNTIME_INTERRUPT, message, std::move(raw_message)) {
 }
 
+ConversionException::ConversionException(const std::string &message, std::string raw_message)
+    : Exception(DUCKDB_V2_ERROR_TYPE_CONVERSION, message, std::move(raw_message)) {
+}
+
+OutOfRangeException::OutOfRangeException(const std::string &message, std::string raw_message)
+    : Exception(DUCKDB_V2_ERROR_INPUT_OUT_OF_RANGE, message, std::move(raw_message)) {
+}
+
+NotImplementedException::NotImplementedException(const std::string &message, std::string raw_message)
+    : Exception(DUCKDB_V2_ERROR_QUERY_NOT_IMPLEMENTED, message, std::move(raw_message)) {
+}
+
+BinderException::BinderException(const std::string &message, std::string raw_message)
+    : Exception(DUCKDB_V2_ERROR_QUERY_BINDER, message, std::move(raw_message)) {
+}
+
+OutOfMemoryException::OutOfMemoryException(const std::string &message, std::string raw_message)
+    : Exception(DUCKDB_V2_ERROR_RESOURCE_OUT_OF_MEMORY, message, std::move(raw_message)) {
+}
+
+DataCorruptionException::DataCorruptionException(const std::string &message, std::string raw_message)
+    : Exception(DUCKDB_V2_ERROR_DATABASE_CORRUPTION, message, std::move(raw_message)) {
+}
+
+InternalException::InternalException(const std::string &message, std::string raw_message)
+    : Exception(DUCKDB_V2_ERROR_RUNTIME_INTERNAL, message, std::move(raw_message)) {
+}
+
 //----------------------------------------------------------------------------------------------------------------------
 // Error Handling Helpers
 //----------------------------------------------------------------------------------------------------------------------
@@ -276,6 +320,20 @@ namespace {
 		throw InvalidInputException(message, std::move(raw));
 	case DUCKDB_V2_ERROR_RUNTIME_INTERRUPT:
 		throw InterruptException(message, std::move(raw));
+	case DUCKDB_V2_ERROR_TYPE_CONVERSION:
+		throw ConversionException(message, std::move(raw));
+	case DUCKDB_V2_ERROR_INPUT_OUT_OF_RANGE:
+		throw OutOfRangeException(message, std::move(raw));
+	case DUCKDB_V2_ERROR_QUERY_NOT_IMPLEMENTED:
+		throw NotImplementedException(message, std::move(raw));
+	case DUCKDB_V2_ERROR_QUERY_BINDER:
+		throw BinderException(message, std::move(raw));
+	case DUCKDB_V2_ERROR_RESOURCE_OUT_OF_MEMORY:
+		throw OutOfMemoryException(message, std::move(raw));
+	case DUCKDB_V2_ERROR_DATABASE_CORRUPTION:
+		throw DataCorruptionException(message, std::move(raw));
+	case DUCKDB_V2_ERROR_RUNTIME_INTERNAL:
+		throw InternalException(message, std::move(raw));
 	default:
 		throw Exception(code, message, std::move(raw));
 	}
@@ -1270,6 +1328,16 @@ Context::Context(void *impl)
 
 Context::~Context() {
 	// Context lifetime is managed by DuckDB, so we don't destroy the handle here
+}
+
+auto Context::GetTransactionStartTime() const -> timestamp_tz_t {
+	int64_t micros = 0;
+	CheckedAPICall(duckdb_v2_context_get_transaction_start_time, handle(), &micros);
+	return timestamp_tz_t {micros};
+}
+
+auto Context::InterruptCheck() const -> void {
+	CheckedAPICall(duckdb_v2_context_interrupt_check, handle());
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -3557,6 +3625,51 @@ auto ScalarFunction::SetStatsCallback(StatsCallback callback) & -> ScalarFunctio
 	return *this;
 }
 
+static_assert(static_cast<int>(FunctionMonotonicity::UNKNOWN) == DUCKDB_V2_FUNCTION_MONOTONICITY_UNKNOWN &&
+                  static_cast<int>(FunctionMonotonicity::CONSTANT) == DUCKDB_V2_FUNCTION_MONOTONICITY_CONSTANT &&
+                  static_cast<int>(FunctionMonotonicity::NON_DECREASING) ==
+                      DUCKDB_V2_FUNCTION_MONOTONICITY_NON_DECREASING &&
+                  static_cast<int>(FunctionMonotonicity::STRICTLY_INCREASING) ==
+                      DUCKDB_V2_FUNCTION_MONOTONICITY_STRICTLY_INCREASING &&
+                  static_cast<int>(FunctionMonotonicity::NON_INCREASING) ==
+                      DUCKDB_V2_FUNCTION_MONOTONICITY_NON_INCREASING &&
+                  static_cast<int>(FunctionMonotonicity::STRICTLY_DECREASING) ==
+                      DUCKDB_V2_FUNCTION_MONOTONICITY_STRICTLY_DECREASING,
+              "FunctionMonotonicity must match DUCKDB_V2_FUNCTION_MONOTONICITY");
+
+namespace {
+auto ToCValue(FunctionMonotonicity value) -> DUCKDB_V2_FUNCTION_MONOTONICITY {
+	return static_cast<DUCKDB_V2_FUNCTION_MONOTONICITY>(value);
+}
+} // namespace
+
+auto ScalarFunction::SetArgumentMonotonicity(idx_t index, FunctionMonotonicity value) & -> ScalarFunction & {
+	CheckedAPICall(duckdb_v2_scalar_function_set_argument_monotonicity, handle(), index, ToCValue(value));
+	return *this;
+}
+
+auto ScalarFunction::BindInput::SetStability(FunctionStability value) -> void {
+	CheckedAPICall(duckdb_v2_scalar_function_bind_set_property,
+	               static_cast<duckdb_v2_scalar_function_bind_info_handle>(result),
+	               DUCKDB_V2_FUNCTION_PROPERTY_STABILITY, ToCValue(value));
+}
+
+auto ScalarFunction::BindInput::SetArgumentMonotonicity(idx_t index, FunctionMonotonicity value) -> void {
+	CheckedAPICall(duckdb_v2_scalar_function_bind_set_argument_monotonicity,
+	               static_cast<duckdb_v2_scalar_function_bind_info_handle>(result), index, ToCValue(value));
+}
+
+auto ScalarFunction::BindInput::ReplaceCall(const std::string &name, const std::vector<idx_t> &arg_indices) -> void {
+	CheckedAPICall(duckdb_v2_scalar_function_bind_replace_call,
+	               static_cast<duckdb_v2_scalar_function_bind_info_handle>(result), name.data(), name.size(),
+	               arg_indices.data(), arg_indices.size());
+}
+
+auto ScalarFunction::BindInput::CallOverridden() -> void {
+	CheckedAPICall(duckdb_v2_scalar_function_bind_call_overridden,
+	               static_cast<duckdb_v2_scalar_function_bind_info_handle>(result));
+}
+
 auto ScalarFunction::SetStability(FunctionStability value) & -> ScalarFunction & {
 	CheckedAPICall(duckdb_v2_scalar_function_set_property, handle(), DUCKDB_V2_FUNCTION_PROPERTY_STABILITY,
 	               ToCValue(value));
@@ -3636,8 +3749,17 @@ void *ScalarFunction::InitInput::GetUserDataInternal() const {
 	return RequireUserData(function.user_data);
 }
 
+ScalarFunction::InitInput::InitInput(void *args, void *context) : args(args) {
+	if (context) {
+		this->context.emplace(detail::HandleFactory::Make<Context>(context));
+	}
+}
+
 auto ScalarFunction::InitInput::GetContext() -> Context & {
-	return context;
+	if (!context) {
+		throw InvalidInputException("the function runs without a context");
+	}
+	return *context;
 }
 
 void *ScalarFunction::ExecInput::GetBindDataInternal() const {
@@ -3695,8 +3817,17 @@ auto ScalarFunction::ExecInput::GetResult() const -> Vector {
 	return detail::HandleFactory::Make<Vector>(vector);
 }
 
+ScalarFunction::ExecInput::ExecInput(void *args, void *context) : args(args) {
+	if (context) {
+		this->context.emplace(detail::HandleFactory::Make<Context>(context));
+	}
+}
+
 auto ScalarFunction::ExecInput::GetContext() -> Context & {
-	return context;
+	if (!context) {
+		throw InvalidInputException("the function runs without a context");
+	}
+	return *context;
 }
 
 void *ScalarFunction::StatsInput::GetBindDataInternal() const {
@@ -3738,6 +3869,13 @@ auto ScalarFunction::StatsInput::GetResultStats() const -> Stats {
 	CheckedAPICall(duckdb_v2_scalar_function_stats_get_result_stats,
 	               static_cast<duckdb_v2_scalar_function_stats_info_handle>(args), &stats);
 	return detail::HandleFactory::Make<Stats>(stats);
+}
+
+auto ScalarFunction::StatsInput::PropagateMonotoneBounds() -> bool {
+	bool propagated = false;
+	CheckedAPICall(duckdb_v2_scalar_function_stats_propagate_monotone_bounds,
+	               static_cast<duckdb_v2_scalar_function_stats_info_handle>(args), &propagated);
+	return propagated;
 }
 
 auto ScalarFunction::StatsInput::GetContext() -> Context & {
@@ -4456,6 +4594,12 @@ auto TableFunction::Create(Factory &factory) -> TableFunction {
 auto TableFunction::SetName(const std::string &name) & -> TableFunction & {
 	auto view = ToStr(name);
 	CheckedAPICall(duckdb_v2_table_function_set_name, handle(), view.data(), view.size());
+	return *this;
+}
+
+auto TableFunction::SetStability(FunctionStability value) & -> TableFunction & {
+	CheckedAPICall(duckdb_v2_table_function_set_property, handle(), DUCKDB_V2_FUNCTION_PROPERTY_STABILITY,
+	               ToCValue(value));
 	return *this;
 }
 
@@ -6476,17 +6620,38 @@ namespace {
 // the trampoline can find it; the user's own slot (SetUserData) rides inside
 // it. Owned by the registered cast, freed at engine teardown.
 struct CastFunctionInfo {
+	CastFunction::BindCallback bind_callback = nullptr;
+	CastFunction::InitCallback init_callback = nullptr;
 	CastFunction::ExecCallback exec_callback = nullptr;
 	detail::UserData user_data;
 
-	CastFunctionInfo(CastFunction::ExecCallback exec_callback, detail::UserData user_data)
-	    : exec_callback(exec_callback), user_data(std::move(user_data)) {
+	CastFunctionInfo(CastFunction::BindCallback bind_callback, CastFunction::InitCallback init_callback,
+	                 CastFunction::ExecCallback exec_callback, detail::UserData user_data)
+	    : bind_callback(bind_callback), init_callback(init_callback), exec_callback(exec_callback),
+	      user_data(std::move(user_data)) {
 	}
 
 	bool operator==(const CastFunctionInfo &other) const {
-		return exec_callback == other.exec_callback && user_data.get() == other.user_data.get();
+		return bind_callback == other.bind_callback && init_callback == other.init_callback &&
+		       exec_callback == other.exec_callback && user_data.get() == other.user_data.get();
 	}
 };
+
+void *RequireCastBindData(void *bind_data) {
+	if (!bind_data) {
+		throw InvalidInputException(
+		    "no bind data was set; call CastFunction::BindInput::SetBindData in the bind callback");
+	}
+	return bind_data;
+}
+
+void *RequireCastInitData(void *init_data) {
+	if (!init_data) {
+		throw InvalidInputException(
+		    "no init data was set; call CastFunction::InitInput::SetInitData in the init callback");
+	}
+	return init_data;
+}
 
 // Guard for ExecInput::GetUserData: a clear error instead of a null deref.
 void *RequireCastUserData(const detail::UserData &user_data) {
@@ -6528,6 +6693,13 @@ auto CastFunction::SetImplicitCastCost(int64_t cost) & -> CastFunction & {
 	return *this;
 }
 
+auto CastFunction::GetImplicitCastCost(Factory &factory, const LogicalType &source, const LogicalType &target)
+    -> int64_t {
+	int64_t cost = -1;
+	CheckedAPICall(duckdb_v2_cast_get_implicit_cast_cost, factory.handle(), source.handle(), target.handle(), &cost);
+	return cost;
+}
+
 auto CastFunction::SetUserDataInternal(void *data, void (*destructor)(void *)) -> void {
 	user_data = detail::UserData(data, destructor);
 }
@@ -6559,10 +6731,63 @@ auto CastFunction::SetExecCallback(ExecCallback callback) & -> CastFunction & {
 	return *this;
 }
 
+auto CastFunction::SetBindCallback(BindCallback callback) & -> CastFunction & {
+	if (!callback) {
+		CheckedAPICall(duckdb_v2_cast_function_set_bind_callback, handle(), nullptr);
+		bind_callback = nullptr;
+		return *this;
+	}
+	static auto trampoline = [](duckdb_v2_cast_function_bind_info_handle info, duckdb_v2_context_handle context,
+	                            duckdb_v2_error_info_handle *err) {
+		WithExceptionGuard(err, [&]() {
+			void *user_data = nullptr;
+			CheckedAPICall(duckdb_v2_cast_function_bind_get_user_data, info, &user_data);
+			const auto &function = *static_cast<CastFunctionInfo *>(user_data);
+
+			auto input =
+			    detail::HandleFactory::Make<BindInput>(static_cast<void *>(info), static_cast<void *>(context));
+			function.bind_callback(input);
+		});
+	};
+	CheckedAPICall(duckdb_v2_cast_function_set_bind_callback, handle(), trampoline);
+	bind_callback = callback;
+	return *this;
+}
+
+auto CastFunction::SetInitCallback(InitCallback callback) & -> CastFunction & {
+	if (!callback) {
+		CheckedAPICall(duckdb_v2_cast_function_set_init_callback, handle(), nullptr);
+		init_callback = nullptr;
+		return *this;
+	}
+	static auto trampoline = [](duckdb_v2_cast_function_init_info_handle info, duckdb_v2_context_handle context,
+	                            duckdb_v2_error_info_handle *err) {
+		WithExceptionGuard(err, [&]() {
+			void *user_data = nullptr;
+			CheckedAPICall(duckdb_v2_cast_function_init_get_user_data, info, &user_data);
+			const auto &function = *static_cast<CastFunctionInfo *>(user_data);
+
+			auto input =
+			    detail::HandleFactory::Make<InitInput>(static_cast<void *>(info), static_cast<void *>(context));
+			function.init_callback(input);
+		});
+	};
+	CheckedAPICall(duckdb_v2_cast_function_set_init_callback, handle(), trampoline);
+	init_callback = callback;
+	return *this;
+}
+
+auto CastFunction::SetStability(FunctionStability value) & -> CastFunction & {
+	CheckedAPICall(duckdb_v2_cast_function_set_property, handle(), DUCKDB_V2_FUNCTION_PROPERTY_STABILITY,
+	               ToCValue(value));
+	return *this;
+}
+
 auto CastFunction::PrepareRegistration() -> void {
 	// The callback table rides the C user_data slot so the trampoline can find
 	// it; the user's own data (SetUserData, moved out here) rides inside it.
-	auto info = std::unique_ptr<CastFunctionInfo>(new CastFunctionInfo(exec_callback, std::move(user_data)));
+	auto info = std::unique_ptr<CastFunctionInfo>(
+	    new CastFunctionInfo(bind_callback, init_callback, exec_callback, std::move(user_data)));
 	duckdb_v2_opaque opaque {info.get(), detail::TypedDelete<CastFunctionInfo>, detail::TypedEquals<CastFunctionInfo>};
 	CheckedAPICall(duckdb_v2_cast_function_set_user_data, handle(), &opaque);
 	// The cast owns the table now.
@@ -6606,6 +6831,87 @@ auto CastFunction::ExecInput::GetMode() const -> CastMode {
 }
 
 auto CastFunction::ExecInput::GetContext() -> Context & {
+	return context;
+}
+
+void *CastFunction::ExecInput::GetBindDataInternal() const {
+	void *bind_data = nullptr;
+	CheckedAPICall(duckdb_v2_cast_function_exec_get_bind_data,
+	               static_cast<duckdb_v2_cast_function_exec_info_handle>(args), &bind_data);
+	return RequireCastBindData(bind_data);
+}
+
+void *CastFunction::ExecInput::GetInitDataInternal() const {
+	void *init_data = nullptr;
+	CheckedAPICall(duckdb_v2_cast_function_exec_get_init_data,
+	               static_cast<duckdb_v2_cast_function_exec_info_handle>(args), &init_data);
+	return RequireCastInitData(init_data);
+}
+
+CastFunction::BindInput::BindInput(void *args, void *context) : args(args) {
+	if (context) {
+		this->context.emplace(detail::HandleFactory::Make<Context>(context));
+	}
+}
+
+auto CastFunction::BindInput::GetSourceType() const -> LogicalType {
+	duckdb_v2_logical_type_handle type = nullptr;
+	CheckedAPICall(duckdb_v2_cast_function_bind_get_source_type,
+	               static_cast<duckdb_v2_cast_function_bind_info_handle>(args), &type);
+	return detail::HandleFactory::Make<LogicalType>(type);
+}
+
+auto CastFunction::BindInput::GetTargetType() const -> LogicalType {
+	duckdb_v2_logical_type_handle type = nullptr;
+	CheckedAPICall(duckdb_v2_cast_function_bind_get_target_type,
+	               static_cast<duckdb_v2_cast_function_bind_info_handle>(args), &type);
+	return detail::HandleFactory::Make<LogicalType>(type);
+}
+
+auto CastFunction::BindInput::GetContext() -> Context & {
+	if (!context) {
+		throw InvalidInputException("the cast is bound without a context");
+	}
+	return *context;
+}
+
+void CastFunction::BindInput::SetBindDataInternal(void *data, bool (*equals)(void *a, void *b),
+                                                  void (*destructor)(void *)) {
+	duckdb_v2_opaque opaque {data, destructor, equals};
+	CheckedAPICall(duckdb_v2_cast_function_bind_set_bind_data,
+	               static_cast<duckdb_v2_cast_function_bind_info_handle>(args), &opaque);
+}
+
+void *CastFunction::BindInput::GetUserDataInternal() const {
+	void *user_data = nullptr;
+	CheckedAPICall(duckdb_v2_cast_function_bind_get_user_data,
+	               static_cast<duckdb_v2_cast_function_bind_info_handle>(args), &user_data);
+	const auto &function = *static_cast<const CastFunctionInfo *>(user_data);
+	return RequireCastUserData(function.user_data);
+}
+
+void CastFunction::InitInput::SetInitDataInternal(void *data, void (*destructor)(void *)) {
+	duckdb_v2_opaque opaque {data, destructor, nullptr};
+	CheckedAPICall(duckdb_v2_cast_function_init_set_init_data,
+	               static_cast<duckdb_v2_cast_function_init_info_handle>(args), &opaque);
+}
+
+void *CastFunction::InitInput::GetBindDataInternal() const {
+	void *bind_data = nullptr;
+	CheckedAPICall(duckdb_v2_cast_function_init_get_bind_data,
+	               static_cast<duckdb_v2_cast_function_init_info_handle>(args), &bind_data);
+	return RequireCastBindData(bind_data);
+}
+
+void *CastFunction::InitInput::GetUserDataInternal() const {
+	void *user_data = nullptr;
+	CheckedAPICall(duckdb_v2_cast_function_init_get_user_data,
+	               static_cast<duckdb_v2_cast_function_init_info_handle>(args), &user_data);
+	const auto &function = *static_cast<const CastFunctionInfo *>(user_data);
+	return RequireCastUserData(function.user_data);
+}
+
+auto CastFunction::InitInput::GetContext() -> Context & {
 	return context;
 }
 
@@ -7202,6 +7508,426 @@ void FileHandle::ReadAt(void *buffer, idx_t size, idx_t location) {
 
 void FileHandle::WriteAt(const void *buffer, idx_t size, idx_t location) {
 	CheckedAPICall(duckdb_v2_file_write_at, handle(), buffer, size, location);
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Operator
+//----------------------------------------------------------------------------------------------------------------------
+
+namespace {
+
+// The callback table of an operator: rides the C user_data slot so the trampolines can find it; the user's own slot
+// (SetUserData) rides inside it.
+struct OperatorInfo {
+	Operator::InitGlobalCallback init_global_callback = nullptr;
+	Operator::InitLocalCallback init_local_callback = nullptr;
+	Operator::ExecuteCallback execute_callback = nullptr;
+	Operator::FinalizeCallback finalize_callback = nullptr;
+	detail::UserData user_data;
+};
+
+void *RequireOperatorPointer(void *ptr, const char *what) {
+	if (!ptr) {
+		throw InvalidInputException(std::string("no ") + what + " was set for the operator");
+	}
+	return ptr;
+}
+
+auto OperatorUserData(void *info) -> void * {
+	return RequireOperatorPointer(static_cast<OperatorInfo *>(info)->user_data.get(), "user data");
+}
+
+} // namespace
+
+Operator::Operator(void *impl) : detail::Handle<Operator>(impl) {
+}
+
+Operator::~Operator() {
+	auto _h = handle();
+	duckdb_v2_operator_destroy(&_h);
+}
+
+auto Operator::Create(Factory &factory) -> Operator {
+	duckdb_v2_operator_handle _h = nullptr;
+	CheckedAPICall(duckdb_v2_operator_create, factory.handle(), &_h);
+	return detail::HandleFactory::Make<Operator>(_h);
+}
+
+auto Operator::SetInitGlobalCallback(InitGlobalCallback callback) & -> Operator & {
+	static auto trampoline = [](duckdb_v2_operator_init_global_info_handle info, duckdb_v2_context_handle context,
+	                            duckdb_v2_error_info_handle *err) {
+		WithExceptionGuard(err, [&]() {
+			void *user_data = nullptr;
+			CheckedAPICall(duckdb_v2_operator_init_global_get_user_data, info, &user_data);
+			auto input =
+			    detail::HandleFactory::Make<InitGlobalInput>(static_cast<void *>(info), static_cast<void *>(context));
+			static_cast<OperatorInfo *>(user_data)->init_global_callback(input);
+		});
+	};
+	CheckedAPICall(duckdb_v2_operator_set_init_global_callback, handle(), callback ? +trampoline : nullptr);
+	init_global_callback = callback;
+	return *this;
+}
+
+auto Operator::SetInitLocalCallback(InitLocalCallback callback) & -> Operator & {
+	static auto trampoline = [](duckdb_v2_operator_init_local_info_handle info, duckdb_v2_context_handle context,
+	                            duckdb_v2_error_info_handle *err) {
+		WithExceptionGuard(err, [&]() {
+			void *user_data = nullptr;
+			CheckedAPICall(duckdb_v2_operator_init_local_get_user_data, info, &user_data);
+			auto input =
+			    detail::HandleFactory::Make<InitLocalInput>(static_cast<void *>(info), static_cast<void *>(context));
+			static_cast<OperatorInfo *>(user_data)->init_local_callback(input);
+		});
+	};
+	CheckedAPICall(duckdb_v2_operator_set_init_local_callback, handle(), callback ? +trampoline : nullptr);
+	init_local_callback = callback;
+	return *this;
+}
+
+auto Operator::SetExecuteCallback(ExecuteCallback callback) & -> Operator & {
+	static auto trampoline = [](duckdb_v2_operator_execute_info_handle info, duckdb_v2_context_handle context,
+	                            duckdb_v2_error_info_handle *err) {
+		WithExceptionGuard(err, [&]() {
+			void *user_data = nullptr;
+			CheckedAPICall(duckdb_v2_operator_execute_get_user_data, info, &user_data);
+			auto input =
+			    detail::HandleFactory::Make<ExecuteInput>(static_cast<void *>(info), static_cast<void *>(context));
+			static_cast<OperatorInfo *>(user_data)->execute_callback(input);
+		});
+	};
+	CheckedAPICall(duckdb_v2_operator_set_execute_callback, handle(), callback ? +trampoline : nullptr);
+	execute_callback = callback;
+	return *this;
+}
+
+auto Operator::SetFinalizeCallback(FinalizeCallback callback) & -> Operator & {
+	static auto trampoline = [](duckdb_v2_operator_finalize_info_handle info, duckdb_v2_context_handle context,
+	                            duckdb_v2_error_info_handle *err) {
+		WithExceptionGuard(err, [&]() {
+			void *user_data = nullptr;
+			CheckedAPICall(duckdb_v2_operator_finalize_get_user_data, info, &user_data);
+			auto input =
+			    detail::HandleFactory::Make<FinalizeInput>(static_cast<void *>(info), static_cast<void *>(context));
+			static_cast<OperatorInfo *>(user_data)->finalize_callback(input);
+		});
+	};
+	CheckedAPICall(duckdb_v2_operator_set_finalize_callback, handle(), callback ? +trampoline : nullptr);
+	finalize_callback = callback;
+	return *this;
+}
+
+auto Operator::PrepareRegistration() -> void {
+	auto info = std::unique_ptr<OperatorInfo>(new OperatorInfo());
+	info->init_global_callback = init_global_callback;
+	info->init_local_callback = init_local_callback;
+	info->execute_callback = execute_callback;
+	info->finalize_callback = finalize_callback;
+	info->user_data = std::move(user_data);
+	duckdb_v2_opaque opaque {info.get(), detail::TypedDelete<OperatorInfo>, nullptr};
+	CheckedAPICall(duckdb_v2_operator_set_user_data, handle(), &opaque);
+	info.release(); // NOLINT(bugprone-unused-return-value)
+}
+
+auto TableFunction::SetOperator(Operator &op, TableOperatorInput input) & -> TableFunction & {
+	op.PrepareRegistration();
+	CheckedAPICall(duckdb_v2_table_function_set_operator, handle(), op.handle(),
+	               static_cast<DUCKDB_V2_TABLE_OPERATOR_INPUT>(input));
+	return *this;
+}
+
+static_assert(static_cast<int>(TableOperatorInput::ARGUMENTS) == DUCKDB_V2_TABLE_OPERATOR_INPUT_ARGUMENTS &&
+                  static_cast<int>(TableOperatorInput::TABLE) == DUCKDB_V2_TABLE_OPERATOR_INPUT_TABLE,
+              "TableOperatorInput must match DUCKDB_V2_TABLE_OPERATOR_INPUT");
+static_assert(static_cast<int>(OperatorResult::NEED_MORE_INPUT) == DUCKDB_V2_OPERATOR_RESULT_NEED_MORE_INPUT &&
+                  static_cast<int>(OperatorResult::HAVE_MORE_OUTPUT) == DUCKDB_V2_OPERATOR_RESULT_HAVE_MORE_OUTPUT &&
+                  static_cast<int>(OperatorResult::FINISHED) == DUCKDB_V2_OPERATOR_RESULT_FINISHED,
+              "OperatorResult must match DUCKDB_V2_OPERATOR_RESULT");
+
+// Init global
+void *Operator::InitGlobalInput::GetUserDataInternal() const {
+	void *user_data = nullptr;
+	CheckedAPICall(duckdb_v2_operator_init_global_get_user_data,
+	               static_cast<duckdb_v2_operator_init_global_info_handle>(args), &user_data);
+	return OperatorUserData(user_data);
+}
+
+void *Operator::InitGlobalInput::GetBindDataInternal() const {
+	void *bind_data = nullptr;
+	CheckedAPICall(duckdb_v2_operator_init_global_get_bind_data,
+	               static_cast<duckdb_v2_operator_init_global_info_handle>(args), &bind_data);
+	return RequireOperatorPointer(bind_data, "bind data");
+}
+
+void Operator::InitGlobalInput::SetGlobalStateInternal(void *data, void (*destructor)(void *)) {
+	duckdb_v2_opaque opaque {data, destructor, nullptr};
+	CheckedAPICall(duckdb_v2_operator_init_global_set_global_state,
+	               static_cast<duckdb_v2_operator_init_global_info_handle>(args), &opaque);
+}
+
+auto Operator::InitGlobalInput::SetMaxThreads(idx_t max_threads) -> void {
+	CheckedAPICall(duckdb_v2_operator_init_global_set_max_threads,
+	               static_cast<duckdb_v2_operator_init_global_info_handle>(args), max_threads);
+}
+
+// Init local
+void *Operator::InitLocalInput::GetUserDataInternal() const {
+	void *user_data = nullptr;
+	CheckedAPICall(duckdb_v2_operator_init_local_get_user_data,
+	               static_cast<duckdb_v2_operator_init_local_info_handle>(args), &user_data);
+	return OperatorUserData(user_data);
+}
+
+void *Operator::InitLocalInput::GetBindDataInternal() const {
+	void *bind_data = nullptr;
+	CheckedAPICall(duckdb_v2_operator_init_local_get_bind_data,
+	               static_cast<duckdb_v2_operator_init_local_info_handle>(args), &bind_data);
+	return RequireOperatorPointer(bind_data, "bind data");
+}
+
+void *Operator::InitLocalInput::GetGlobalStateInternal() const {
+	void *state = nullptr;
+	CheckedAPICall(duckdb_v2_operator_init_local_get_global_state,
+	               static_cast<duckdb_v2_operator_init_local_info_handle>(args), &state);
+	return RequireOperatorPointer(state, "global state");
+}
+
+void Operator::InitLocalInput::SetLocalStateInternal(void *data, void (*destructor)(void *)) {
+	duckdb_v2_opaque opaque {data, destructor, nullptr};
+	CheckedAPICall(duckdb_v2_operator_init_local_set_local_state,
+	               static_cast<duckdb_v2_operator_init_local_info_handle>(args), &opaque);
+}
+
+// Execute
+void *Operator::ExecuteInput::GetUserDataInternal() const {
+	void *user_data = nullptr;
+	CheckedAPICall(duckdb_v2_operator_execute_get_user_data, static_cast<duckdb_v2_operator_execute_info_handle>(args),
+	               &user_data);
+	return OperatorUserData(user_data);
+}
+
+void *Operator::ExecuteInput::GetBindDataInternal() const {
+	void *bind_data = nullptr;
+	CheckedAPICall(duckdb_v2_operator_execute_get_bind_data, static_cast<duckdb_v2_operator_execute_info_handle>(args),
+	               &bind_data);
+	return RequireOperatorPointer(bind_data, "bind data");
+}
+
+void *Operator::ExecuteInput::GetGlobalStateInternal() const {
+	void *state = nullptr;
+	CheckedAPICall(duckdb_v2_operator_execute_get_global_state,
+	               static_cast<duckdb_v2_operator_execute_info_handle>(args), &state);
+	return RequireOperatorPointer(state, "global state");
+}
+
+void *Operator::ExecuteInput::GetLocalStateInternal() const {
+	void *state = nullptr;
+	CheckedAPICall(duckdb_v2_operator_execute_get_local_state,
+	               static_cast<duckdb_v2_operator_execute_info_handle>(args), &state);
+	return RequireOperatorPointer(state, "local state");
+}
+
+auto Operator::ExecuteInput::GetInput() const -> DataChunk {
+	duckdb_v2_data_chunk_handle chunk = nullptr;
+	CheckedAPICall(duckdb_v2_operator_execute_get_input_chunk,
+	               static_cast<duckdb_v2_operator_execute_info_handle>(args), &chunk);
+	return detail::HandleFactory::Make<DataChunk>(chunk, false);
+}
+
+auto Operator::ExecuteInput::GetOutput() const -> DataChunk {
+	duckdb_v2_data_chunk_handle chunk = nullptr;
+	CheckedAPICall(duckdb_v2_operator_execute_get_output_chunk,
+	               static_cast<duckdb_v2_operator_execute_info_handle>(args), &chunk);
+	return detail::HandleFactory::Make<DataChunk>(chunk, false);
+}
+
+auto Operator::ExecuteInput::SetResult(OperatorResult result) -> void {
+	CheckedAPICall(duckdb_v2_operator_execute_set_result, static_cast<duckdb_v2_operator_execute_info_handle>(args),
+	               static_cast<DUCKDB_V2_OPERATOR_RESULT>(result));
+}
+
+// Finalize
+void *Operator::FinalizeInput::GetUserDataInternal() const {
+	void *user_data = nullptr;
+	CheckedAPICall(duckdb_v2_operator_finalize_get_user_data,
+	               static_cast<duckdb_v2_operator_finalize_info_handle>(args), &user_data);
+	return OperatorUserData(user_data);
+}
+
+void *Operator::FinalizeInput::GetBindDataInternal() const {
+	void *bind_data = nullptr;
+	CheckedAPICall(duckdb_v2_operator_finalize_get_bind_data,
+	               static_cast<duckdb_v2_operator_finalize_info_handle>(args), &bind_data);
+	return RequireOperatorPointer(bind_data, "bind data");
+}
+
+void *Operator::FinalizeInput::GetGlobalStateInternal() const {
+	void *state = nullptr;
+	CheckedAPICall(duckdb_v2_operator_finalize_get_global_state,
+	               static_cast<duckdb_v2_operator_finalize_info_handle>(args), &state);
+	return RequireOperatorPointer(state, "global state");
+}
+
+void *Operator::FinalizeInput::GetLocalStateInternal() const {
+	void *state = nullptr;
+	CheckedAPICall(duckdb_v2_operator_finalize_get_local_state,
+	               static_cast<duckdb_v2_operator_finalize_info_handle>(args), &state);
+	return RequireOperatorPointer(state, "local state");
+}
+
+auto Operator::FinalizeInput::GetOutput() const -> DataChunk {
+	duckdb_v2_data_chunk_handle chunk = nullptr;
+	CheckedAPICall(duckdb_v2_operator_finalize_get_output_chunk,
+	               static_cast<duckdb_v2_operator_finalize_info_handle>(args), &chunk);
+	return detail::HandleFactory::Make<DataChunk>(chunk, false);
+}
+
+auto Operator::FinalizeInput::SetHaveMoreOutput(bool have_more_output) -> void {
+	CheckedAPICall(duckdb_v2_operator_finalize_set_have_more_output,
+	               static_cast<duckdb_v2_operator_finalize_info_handle>(args), have_more_output);
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Date and Time Text
+//----------------------------------------------------------------------------------------------------------------------
+
+StrpTimeFormat::StrpTimeFormat(void *impl) : detail::Handle<StrpTimeFormat>(impl) {
+}
+
+StrpTimeFormat::~StrpTimeFormat() {
+	auto _h = handle();
+	duckdb_v2_strptime_format_destroy(&_h);
+}
+
+auto StrpTimeFormat::Create(std::string_view format) -> StrpTimeFormat {
+	duckdb_v2_strptime_format_handle _h = nullptr;
+	CheckedAPICall(duckdb_v2_strptime_format_create, format.data(), format.size(), &_h);
+	return detail::HandleFactory::Make<StrpTimeFormat>(_h);
+}
+
+auto StrpTimeFormat::GetFlags() const -> uint32_t {
+	uint32_t flags = 0;
+	CheckedAPICall(duckdb_v2_strptime_format_get_flags, handle(), &flags);
+	return flags;
+}
+
+auto StrpTimeFormat::HasUtcOffset() const -> bool {
+	return GetFlags() & DUCKDB_V2_TIME_FORMAT_FLAG_UTC_OFFSET;
+}
+
+auto StrpTimeFormat::HasTimeZoneName() const -> bool {
+	return GetFlags() & DUCKDB_V2_TIME_FORMAT_FLAG_TZ_NAME;
+}
+
+auto StrpTimeFormat::HasNanoseconds() const -> bool {
+	return GetFlags() & DUCKDB_V2_TIME_FORMAT_FLAG_NANOSECONDS;
+}
+
+auto StrpTimeFormat::Parse(std::string_view text, StrpTimeResult &result) const -> bool {
+	bool matched = false;
+	CheckedAPICall(duckdb_v2_strptime_format_parse, handle(), text.data(), text.size(), result.handle(), &matched);
+	if (matched) {
+		result.Read();
+	}
+	return matched;
+}
+
+StrpTimeResult::StrpTimeResult() : detail::Handle<StrpTimeResult>(nullptr) {
+	duckdb_v2_strptime_result_handle _h = nullptr;
+	CheckedAPICall(duckdb_v2_strptime_result_create, &_h);
+	impl = _h;
+}
+
+StrpTimeResult::StrpTimeResult(void *impl) : detail::Handle<StrpTimeResult>(impl) {
+}
+
+StrpTimeResult::~StrpTimeResult() {
+	auto _h = handle();
+	duckdb_v2_strptime_result_destroy(&_h);
+}
+
+auto StrpTimeResult::Read() -> void {
+	duckdb_v2_strptime_parts c_parts {};
+	CheckedAPICall(duckdb_v2_strptime_result_get_parts, handle(), &c_parts);
+	parts.year = c_parts.parts.year;
+	parts.month = c_parts.parts.month;
+	parts.day = c_parts.parts.day;
+	parts.hour = c_parts.parts.hour;
+	parts.minute = c_parts.parts.minute;
+	parts.second = c_parts.parts.second;
+	parts.fraction = c_parts.parts.fraction;
+	parts.utc_offset = c_parts.parts.utc_offset;
+	is_special = c_parts.is_special;
+	special_days = c_parts.special_days;
+	tz_name = std::string_view(c_parts.tz_name ? c_parts.tz_name : "", c_parts.tz_name_length);
+}
+
+auto StrpTimeResult::GetError(std::string_view text, std::string_view format_string) const -> std::string {
+	idx_t length = 0;
+	CheckedAPICall(duckdb_v2_strptime_result_get_error, handle(), text.data(), text.size(), format_string.data(),
+	               format_string.size(), nullptr, idx_t(0), &length);
+	std::string result(length, '\0');
+	CheckedAPICall(duckdb_v2_strptime_result_get_error, handle(), text.data(), text.size(), format_string.data(),
+	               format_string.size(), &result[0], length, &length);
+	return result;
+}
+
+StrfTimeFormat::StrfTimeFormat(void *impl) : detail::Handle<StrfTimeFormat>(impl) {
+}
+
+StrfTimeFormat::~StrfTimeFormat() {
+	auto _h = handle();
+	duckdb_v2_strftime_format_destroy(&_h);
+}
+
+auto StrfTimeFormat::Create(std::string_view format) -> StrfTimeFormat {
+	duckdb_v2_strftime_format_handle _h = nullptr;
+	CheckedAPICall(duckdb_v2_strftime_format_create, format.data(), format.size(), &_h);
+	return detail::HandleFactory::Make<StrfTimeFormat>(_h);
+}
+
+auto StrfTimeFormat::Write(const TimeParts &parts, bool nanoseconds, std::string_view tz_name, std::string &out) const
+    -> void {
+	duckdb_v2_time_parts c_parts {parts.year,   parts.month,  parts.day,      parts.hour,
+	                              parts.minute, parts.second, parts.fraction, parts.utc_offset};
+	// a format is mostly short: try the capacity the string already has first
+	if (out.capacity() < 64) {
+		out.reserve(64);
+	}
+	out.resize(out.capacity());
+	idx_t length = 0;
+	CheckedAPICall(duckdb_v2_strftime_format_write, handle(), &c_parts, nanoseconds, tz_name.data(), tz_name.size(),
+	               &out[0], out.size(), &length);
+	if (length > out.size()) {
+		out.resize(length);
+		CheckedAPICall(duckdb_v2_strftime_format_write, handle(), &c_parts, nanoseconds, tz_name.data(), tz_name.size(),
+		               &out[0], out.size(), &length);
+	}
+	out.resize(length);
+}
+
+auto ParseTimestampTzText(std::string_view text, TimestampText &result, bool nanoseconds) -> TimestampTextResult {
+	duckdb_v2_timestamp_text parsed {};
+	auto c_result = DUCKDB_V2_TIMESTAMP_TEXT_SUCCESS;
+	CheckedAPICall(duckdb_v2_timestamp_tz_parse_text, text.data(), text.size(), nanoseconds, &parsed, &c_result);
+	switch (c_result) {
+	case DUCKDB_V2_TIMESTAMP_TEXT_SUCCESS:
+		result.micros = parsed.micros;
+		result.nanos = parsed.nanos;
+		result.has_offset = parsed.has_offset;
+		result.tz_name = std::string_view(parsed.tz_name ? parsed.tz_name : "", parsed.tz_name_length);
+		return TimestampTextResult::SUCCESS;
+	case DUCKDB_V2_TIMESTAMP_TEXT_ERROR_RANGE:
+		return TimestampTextResult::ERROR_RANGE;
+	default:
+		return TimestampTextResult::ERROR_FORMAT;
+	}
+}
+
+auto ParseTimeTzText(std::string_view text, int64_t &micros, int32_t &offset, bool &has_offset) -> bool {
+	bool success = false;
+	CheckedAPICall(duckdb_v2_time_tz_parse_text, text.data(), text.size(), &micros, &offset, &has_offset, &success);
+	return success;
 }
 
 //----------------------------------------------------------------------------------------------------------------------

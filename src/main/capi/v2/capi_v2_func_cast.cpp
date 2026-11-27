@@ -4,31 +4,93 @@
 
 namespace duckdb::capiv2 {
 
+//! The callbacks of a cast, shared by its registration and every cast bound from it
+class CV2CastCallbacks {
+public:
+	duckdb_v2_cast_function_bind_callback_fn bind_cb = nullptr;
+	duckdb_v2_cast_function_init_callback_fn init_cb = nullptr;
+	duckdb_v2_cast_function_exec_callback_fn exec_cb = nullptr;
+	shared_ptr<CV2UserData> user_data = nullptr;
+	FunctionStability stability = FunctionStability::CONSISTENT;
+
+	void *GetUserData() const {
+		return user_data ? user_data->GetData() : nullptr;
+	}
+};
+
 class CV2CastBoundData final : public BoundCastData {
 public:
-	CV2CastBoundData(duckdb_v2_cast_function_exec_callback_fn exec_cb, shared_ptr<CV2UserData> user_data)
-	    : exec_cb(exec_cb), user_data(std::move(user_data)) {
+	CV2CastBoundData(shared_ptr<const CV2CastCallbacks> callbacks, shared_ptr<CV2UserData> bind_data)
+	    : callbacks(std::move(callbacks)), bind_data(std::move(bind_data)) {
 	}
 
 	auto Copy() const -> unique_ptr<BoundCastData> override {
-		return make_uniq<CV2CastBoundData>(exec_cb, user_data);
+		return make_uniq<CV2CastBoundData>(callbacks, bind_data);
+	}
+
+	void *GetBindData() const {
+		return bind_data ? bind_data->GetData() : nullptr;
 	}
 
 public:
-	duckdb_v2_cast_function_exec_callback_fn exec_cb;
-	shared_ptr<CV2UserData> user_data;
+	shared_ptr<const CV2CastCallbacks> callbacks;
+	//! The bind data the bind callback set, or nullptr
+	shared_ptr<CV2UserData> bind_data;
+};
+
+//! The callbacks of a cast with a bind callback, the bind function of its registration is called with
+class CV2CastBindFunctionInfo final : public BindCastInfo {
+public:
+	explicit CV2CastBindFunctionInfo(shared_ptr<const CV2CastCallbacks> callbacks) : callbacks(std::move(callbacks)) {
+	}
+
+	shared_ptr<const CV2CastCallbacks> callbacks;
 };
 
 // CastParameters carries no context, so the only place to pick one up is the local state init, which does receive
-// one. The state exists purely to forward it to the exec callback.
+// one. The state forwards it to the exec callback, next to the init data of the thread.
 class CV2CastLocalState final : public FunctionLocalState {
 public:
 	unique_ptr<CV2CallbackContext> context;
+	CV2UserData init_data;
 };
+
+class CV2CastBindArgs {
+public:
+	void *in_user_data = nullptr;
+	const LogicalType *source = nullptr;
+	const LogicalType *target = nullptr;
+
+	shared_ptr<CV2UserData> out_bind_data;
+};
+
+static auto Convert(duckdb_v2_cast_function_bind_info_handle info) -> CV2CastBindArgs * {
+	return reinterpret_cast<CV2CastBindArgs *>(info);
+}
+static auto Convert(CV2CastBindArgs *info) -> duckdb_v2_cast_function_bind_info_handle {
+	return reinterpret_cast<duckdb_v2_cast_function_bind_info_handle>(info);
+}
+
+class CV2CastInitArgs {
+public:
+	void *in_user_data = nullptr;
+	void *in_bind_data = nullptr;
+
+	duckdb_v2_opaque out_init_data = {};
+};
+
+static auto Convert(duckdb_v2_cast_function_init_info_handle info) -> CV2CastInitArgs * {
+	return reinterpret_cast<CV2CastInitArgs *>(info);
+}
+static auto Convert(CV2CastInitArgs *info) -> duckdb_v2_cast_function_init_info_handle {
+	return reinterpret_cast<duckdb_v2_cast_function_init_info_handle>(info);
+}
 
 class CV2CastExecInfo {
 public:
 	void *in_user_data = nullptr;
+	void *in_bind_data = nullptr;
+	void *in_init_data = nullptr;
 
 	Vector *input = nullptr;
 	Vector *output = nullptr;
@@ -51,17 +113,38 @@ static auto CV2CastInitLocalState(CastLocalStateParameters &parameters) -> uniqu
 	}
 
 	state->context = make_uniq<CV2CallbackContext>(*parameters.context);
+
+	const auto &bound_data = parameters.cast_data->Cast<CV2CastBoundData>();
+	auto &callbacks = *bound_data.callbacks;
+	if (callbacks.init_cb) {
+		CV2CastInitArgs args;
+		args.in_user_data = callbacks.GetUserData();
+		args.in_bind_data = bound_data.GetBindData();
+
+		CV2ErrorInfo err = {};
+		auto err_ptr = Convert(&err);
+		callbacks.init_cb(Convert(&args), Convert(state->context.get()), &err_ptr);
+		// Keep the init data before throwing, so that it is destroyed with the state
+		if (args.out_init_data.ptr) {
+			state->init_data = CV2UserData(args.out_init_data.ptr, args.out_init_data.destroy);
+		}
+		if (err.HasError()) {
+			err.ThrowAsException();
+		}
+	}
 	return std::move(state);
 }
 
 static auto CV2CastExec(Vector &input, Vector &output, idx_t count, CastParameters &parameters) -> bool {
 	const auto &bound_data = parameters.cast_data->Cast<CV2CastBoundData>();
+	auto &callbacks = *bound_data.callbacks;
 
 	// A try cast is exactly the case where the engine handed us a slot to write a message into instead of aborting.
 	const auto is_try_cast = parameters.error_message != nullptr;
 
 	CV2CastExecInfo args = {};
-	args.in_user_data = bound_data.user_data ? bound_data.user_data->GetData() : nullptr;
+	args.in_user_data = callbacks.GetUserData();
+	args.in_bind_data = bound_data.GetBindData();
 	args.input = &input;
 	args.output = &output;
 	args.count = count;
@@ -69,12 +152,14 @@ static auto CV2CastExec(Vector &input, Vector &output, idx_t count, CastParamete
 
 	optional_ptr<CV2Context> context = nullptr;
 	if (parameters.local_state) {
-		context = parameters.local_state->Cast<CV2CastLocalState>().context.get();
+		auto &local_state = parameters.local_state->Cast<CV2CastLocalState>();
+		context = local_state.context.get();
+		args.in_init_data = local_state.init_data.GetData();
 	}
 
 	CV2ErrorInfo err = {};
 	auto err_ptr = Convert(&err);
-	bound_data.exec_cb(Convert(&args), Convert(context.get()), &err_ptr);
+	callbacks.exec_cb(Convert(&args), Convert(context.get()), &err_ptr);
 
 	if (!err.HasError()) {
 		return true;
@@ -87,13 +172,41 @@ static auto CV2CastExec(Vector &input, Vector &output, idx_t count, CastParamete
 	err.ThrowAsException();
 }
 
+static auto CV2CastBind(BindCastInput &input, const LogicalType &source, const LogicalType &target) -> BoundCastInfo {
+	auto &callbacks = input.info->Cast<CV2CastBindFunctionInfo>().callbacks;
+	shared_ptr<CV2UserData> bind_data;
+	if (callbacks->bind_cb) {
+		CV2CastBindArgs args;
+		args.in_user_data = callbacks->GetUserData();
+		args.source = &source;
+		args.target = &target;
+
+		unique_ptr<CV2CallbackContext> context;
+		if (input.context) {
+			context = make_uniq<CV2CallbackContext>(*input.context);
+		}
+		CV2ErrorInfo err = {};
+		auto err_ptr = Convert(&err);
+		callbacks->bind_cb(Convert(&args), Convert(context.get()), &err_ptr);
+		bind_data = std::move(args.out_bind_data);
+		if (err.HasError()) {
+			err.ThrowAsException();
+		}
+	}
+	if (callbacks->stability != FunctionStability::CONSISTENT) {
+		input.stability = callbacks->stability;
+	}
+	return BoundCastInfo(CV2CastExec, make_uniq<CV2CastBoundData>(callbacks, std::move(bind_data)),
+	                     CV2CastInitLocalState);
+}
+
 class CV2CastFunction {
 public:
 	explicit CV2CastFunction(DatabaseInstance &db) : db(db) {
 	}
 
-	//! Validates the configuration and builds the cast to register on `target`.
-	BoundCastInfo Build(DatabaseInstance &target) {
+	//! Validates the configuration and checks that it can be registered on `target`.
+	void Verify(DatabaseInstance &target) const {
 		CheckRegistrationTarget(db, target, "cast function");
 		if (!source_type.IsComplete()) {
 			throw InvalidInputException("Source type must be set to a fully defined concrete type");
@@ -101,12 +214,22 @@ public:
 		if (!target_type.IsComplete()) {
 			throw InvalidInputException("Target type must be set to a fully defined concrete type");
 		}
-		if (!exec_cb) {
+		if (!callbacks.exec_cb) {
 			throw InvalidInputException("Exec callback must be set for the function.");
 		}
+	}
 
-		BoundCastInfo cast_info(CV2CastExec, make_uniq<CV2CastBoundData>(exec_cb, user_data), CV2CastInitLocalState);
-		return cast_info;
+	//! Registers the cast on `casts`: bound when a query uses it if it has to be, and once now otherwise.
+	template <class REGISTER>
+	void Register(DatabaseInstance &target, REGISTER &&register_fn) const {
+		Verify(target);
+		auto shared_callbacks = make_shared_ptr<const CV2CastCallbacks>(callbacks);
+		if (callbacks.bind_cb || callbacks.stability != FunctionStability::CONSISTENT) {
+			register_fn(BindCastFunction(CV2CastBind, make_uniq<CV2CastBindFunctionInfo>(shared_callbacks)));
+			return;
+		}
+		register_fn(
+		    BoundCastInfo(CV2CastExec, make_uniq<CV2CastBoundData>(shared_callbacks, nullptr), CV2CastInitLocalState));
 	}
 
 public:
@@ -115,8 +238,7 @@ public:
 	LogicalType source_type;
 	LogicalType target_type;
 	int64_t implicit_cast_cost = -1;
-	duckdb_v2_cast_function_exec_callback_fn exec_cb = nullptr;
-	shared_ptr<CV2UserData> user_data = nullptr;
+	CV2CastCallbacks callbacks;
 };
 
 static auto Convert(duckdb_v2_cast_function_handle func) -> CV2CastFunction * {
@@ -174,12 +296,29 @@ DUCKDB_V2_ERROR duckdb_v2_cast_function_set_implicit_cast_cost(duckdb_v2_cast_fu
 	return WithErrorHandler(err, [&]() { Convert(function)->implicit_cast_cost = cost; });
 }
 
+DUCKDB_V2_ERROR duckdb_v2_cast_get_implicit_cast_cost(duckdb_v2_factory_handle factory,
+                                                      duckdb_v2_logical_type_handle source_type,
+                                                      duckdb_v2_logical_type_handle target_type, int64_t *cost,
+                                                      duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(factory);
+	DUCKDB_CHECK_ARG(source_type);
+	DUCKDB_CHECK_ARG(target_type);
+	DUCKDB_CHECK_ARG(cost);
+	return WithErrorHandler(err, [&]() {
+		auto &self = *Convert(factory);
+		auto source = Convert(source_type);
+		auto target = Convert(target_type);
+		*cost = duckdb::CastFunctionSet::Get(self.GetDatabase())
+		            .ImplicitCastCost(self.TryGetClientContext(), *source, *target);
+	});
+}
+
 DUCKDB_V2_ERROR duckdb_v2_cast_function_set_user_data(duckdb_v2_cast_function_handle function,
                                                       duckdb_v2_opaque *user_data, duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(function);
 	DUCKDB_CHECK_ARG(user_data);
 	return WithErrorHandler(err, [&]() {
-		Convert(function)->user_data =
+		Convert(function)->callbacks.user_data =
 		    duckdb::make_shared_ptr<CV2UserData>(user_data->ptr, user_data->destroy, user_data->equals);
 	});
 }
@@ -188,7 +327,7 @@ DUCKDB_V2_ERROR duckdb_v2_cast_function_set_exec_callback(duckdb_v2_cast_functio
                                                           duckdb_v2_cast_function_exec_callback_fn callback,
                                                           duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(function);
-	return WithErrorHandler(err, [&]() { Convert(function)->exec_cb = callback; });
+	return WithErrorHandler(err, [&]() { Convert(function)->callbacks.exec_cb = callback; });
 }
 
 DUCKDB_V2_ERROR duckdb_v2_cast_function_exec_get_user_data(duckdb_v2_cast_function_exec_info_handle info, void **data,
@@ -228,6 +367,113 @@ DUCKDB_V2_ERROR duckdb_v2_cast_function_exec_get_mode(duckdb_v2_cast_function_ex
 	return WithErrorHandler(err, [&]() { *mode = Convert(info)->mode; });
 }
 
+DUCKDB_V2_ERROR duckdb_v2_cast_function_set_property(duckdb_v2_cast_function_handle function,
+                                                     DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
+                                                     DUCKDB_V2_FUNCTION_PROPERTY_VALUE value,
+                                                     duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() {
+		if (key != DUCKDB_V2_FUNCTION_PROPERTY_STABILITY) {
+			throw duckdb::InvalidInputException("Only the stability of a cast function can be set");
+		}
+		duckdb::FunctionProperties props;
+		SetScalarFunctionProperty(props, key, value);
+		if (props.GetStability() == duckdb::FunctionStability::VOLATILE) {
+			throw duckdb::InvalidInputException("A cast function cannot be volatile");
+		}
+		Convert(function)->callbacks.stability = props.GetStability();
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_cast_function_set_bind_callback(duckdb_v2_cast_function_handle function,
+                                                          duckdb_v2_cast_function_bind_callback_fn callback,
+                                                          duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() { Convert(function)->callbacks.bind_cb = callback; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_cast_function_set_init_callback(duckdb_v2_cast_function_handle function,
+                                                          duckdb_v2_cast_function_init_callback_fn callback,
+                                                          duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() { Convert(function)->callbacks.init_cb = callback; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_cast_function_bind_get_user_data(duckdb_v2_cast_function_bind_info_handle info, void **data,
+                                                           duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->in_user_data; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_cast_function_bind_get_source_type(duckdb_v2_cast_function_bind_info_handle info,
+                                                             duckdb_v2_logical_type_handle *type,
+                                                             duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(type);
+	*type = nullptr;
+	return WithErrorHandler(err, [&]() { *type = Convert(duckdb::LogicalType(*Convert(info)->source)); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_cast_function_bind_get_target_type(duckdb_v2_cast_function_bind_info_handle info,
+                                                             duckdb_v2_logical_type_handle *type,
+                                                             duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(type);
+	*type = nullptr;
+	return WithErrorHandler(err, [&]() { *type = Convert(duckdb::LogicalType(*Convert(info)->target)); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_cast_function_bind_set_bind_data(duckdb_v2_cast_function_bind_info_handle info,
+                                                           duckdb_v2_opaque *data, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() {
+		Convert(info)->out_bind_data = duckdb::make_shared_ptr<CV2UserData>(data->ptr, data->destroy, data->equals);
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_cast_function_init_get_user_data(duckdb_v2_cast_function_init_info_handle info, void **data,
+                                                           duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->in_user_data; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_cast_function_init_get_bind_data(duckdb_v2_cast_function_init_info_handle info, void **data,
+                                                           duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->in_bind_data; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_cast_function_init_set_init_data(duckdb_v2_cast_function_init_info_handle info,
+                                                           duckdb_v2_opaque *data, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() {
+		auto &args = *Convert(info);
+		if (args.out_init_data.ptr && args.out_init_data.destroy) {
+			args.out_init_data.destroy(args.out_init_data.ptr);
+		}
+		args.out_init_data = *data;
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_cast_function_exec_get_bind_data(duckdb_v2_cast_function_exec_info_handle info, void **data,
+                                                           duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->in_bind_data; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_cast_function_exec_get_init_data(duckdb_v2_cast_function_exec_info_handle info, void **data,
+                                                           duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->in_init_data; });
+}
+
 DUCKDB_V2_ERROR duckdb_v2_connection_register_cast_function(duckdb_v2_connection_handle conn,
                                                             duckdb_v2_cast_function_handle function,
                                                             duckdb_v2_error_info_handle *err) {
@@ -236,9 +482,10 @@ DUCKDB_V2_ERROR duckdb_v2_connection_register_cast_function(duckdb_v2_connection
 	return WithErrorHandler(err, [&]() {
 		auto &self = *Convert(function);
 		auto &db = *Convert(conn)->context->db;
-		auto cast_info = self.Build(db);
-		duckdb::DBConfig::GetConfig(db).GetCastFunctions().RegisterCastFunction(
-		    self.source_type, self.target_type, std::move(cast_info), self.implicit_cast_cost);
+		auto &casts = duckdb::DBConfig::GetConfig(db).GetCastFunctions();
+		self.Register(db, [&](auto cast) {
+			casts.RegisterCastFunction(self.source_type, self.target_type, std::move(cast), self.implicit_cast_cost);
+		});
 	});
 }
 
@@ -250,8 +497,9 @@ DUCKDB_V2_ERROR duckdb_v2_extension_register_cast_function(duckdb_v2_extension_h
 	return WithErrorHandler(err, [&]() {
 		auto &self = *Convert(function);
 		auto &loader = GetExtensionLoader(extension);
-		auto cast_info = self.Build(loader.GetDatabaseInstance());
-		loader.RegisterCastFunction(self.source_type, self.target_type, std::move(cast_info), self.implicit_cast_cost);
+		self.Register(loader.GetDatabaseInstance(), [&](auto cast) {
+			loader.RegisterCastFunction(self.source_type, self.target_type, std::move(cast), self.implicit_cast_cost);
+		});
 	});
 }
 

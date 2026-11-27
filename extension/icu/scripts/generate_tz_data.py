@@ -305,7 +305,7 @@ def generate(version, zones, rules, windows_zones):
     out.append("")
     out.append('#include "tz_data.hpp"')
     out.append("")
-    out.append("namespace duckdb {")
+    out.append("namespace duckdb_icu {")
     out.append("namespace datetime {")
     out.append("")
 
@@ -332,7 +332,7 @@ def generate(version, zones, rules, windows_zones):
     out.append('const char *const TZ_VERSION = "%s";' % version)
     out.append("")
     out.append("} // namespace datetime")
-    out.append("} // namespace duckdb")
+    out.append("} // namespace duckdb_icu")
     out.append("")
     return "\n".join(out)
 

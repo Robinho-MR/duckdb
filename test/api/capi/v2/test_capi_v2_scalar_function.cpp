@@ -1451,4 +1451,160 @@ TEST_CASE("V2 function docs: borrowed from the function, and argument validation
 	duckdb_v2_scalar_function_destroy(&function);
 }
 
+namespace {
+
+// pick(selector, value): a constant selector 10 replaces the call with c_add(value, value)
+void PickBind(duckdb_v2_function_bind_info_handle info, duckdb_v2_scalar_function_bind_info_handle result,
+              duckdb_v2_context_handle, duckdb_v2_error_info_handle *err) {
+	duckdb_v2_value_handle selector = nullptr;
+	if (duckdb_v2_function_bind_get_arg_value(info, 0, &selector, nullptr) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	int32_t value = 0;
+	bool is_null = true;
+	duckdb_v2_value_is_null(selector, &is_null, nullptr);
+	if (!is_null && duckdb_v2_value_get_int(selector, &value, nullptr) == DUCKDB_V2_ERROR_NONE && value == 10) {
+		const idx_t args[] = {1, 1};
+		duckdb_v2_scalar_function_bind_replace_call(result, "c_add", 5, args, 2, err);
+	}
+	duckdb_v2_value_destroy(&selector);
+}
+
+// Hands every call back to the overload the function replaced
+void OverriddenBind(duckdb_v2_function_bind_info_handle, duckdb_v2_scalar_function_bind_info_handle result,
+                    duckdb_v2_context_handle, duckdb_v2_error_info_handle *err) {
+	duckdb_v2_scalar_function_bind_call_overridden(result, err);
+}
+
+// Declares the call consistent within a query and withdraws the monotonicity of its argument
+DUCKDB_V2_ERROR bind_property_rc = DUCKDB_V2_ERROR_API;
+DUCKDB_V2_ERROR bind_bad_property_rc = DUCKDB_V2_ERROR_NONE;
+DUCKDB_V2_ERROR bind_monotonicity_rc = DUCKDB_V2_ERROR_API;
+void PropertyBind(duckdb_v2_function_bind_info_handle, duckdb_v2_scalar_function_bind_info_handle result,
+                  duckdb_v2_context_handle, duckdb_v2_error_info_handle *) {
+	bind_property_rc = duckdb_v2_scalar_function_bind_set_property(
+	    result, DUCKDB_V2_FUNCTION_PROPERTY_STABILITY, DUCKDB_V2_FUNCTION_PROPERTY_STABILITY_CONSISTENT_WITHIN_QUERY,
+	    nullptr);
+	bind_bad_property_rc = duckdb_v2_scalar_function_bind_set_property(
+	    result, DUCKDB_V2_FUNCTION_PROPERTY_FALLIBILITY, DUCKDB_V2_FUNCTION_PROPERTY_FALLIBILITY_FALLIBLE, nullptr);
+	bind_monotonicity_rc = duckdb_v2_scalar_function_bind_set_argument_monotonicity(
+	    result, 0, DUCKDB_V2_FUNCTION_MONOTONICITY_UNKNOWN, nullptr);
+}
+
+// out[i] = a[i] + a[i]
+void DoubleExec(duckdb_v2_scalar_function_exec_info_handle info, duckdb_v2_context_handle,
+                duckdb_v2_error_info_handle *err) {
+	duckdb_v2_vector_handle in = nullptr;
+	duckdb_v2_vector_handle out = nullptr;
+	idx_t count = 0;
+	if (duckdb_v2_scalar_function_exec_get_arg(info, 0, &in, err) != DUCKDB_V2_ERROR_NONE ||
+	    duckdb_v2_scalar_function_exec_get_result(info, &out, err) != DUCKDB_V2_ERROR_NONE ||
+	    duckdb_v2_scalar_function_exec_get_row_count(info, &count, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	duckdb_v2_vector_view view {};
+	void *raw = nullptr;
+	if (duckdb_v2_vector_get_view(in, &view, err) != DUCKDB_V2_ERROR_NONE ||
+	    duckdb_v2_vector_get_data_mutable(out, &raw, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	for (idx_t i = 0; i < count; i++) {
+		static_cast<int32_t *>(raw)[i] = 2 * static_cast<const int32_t *>(view.data)[SelAt(view.sel, i)];
+	}
+}
+
+// Runs a statement to completion, returning the code it failed with: execution is lazy
+DUCKDB_V2_ERROR RunToCompletion(duckdb_v2_connection_handle conn, std::string_view sql) {
+	duckdb_v2_result_handle result = nullptr;
+	auto rc = Query(conn, sql, &result);
+	auto status = DUCKDB_V2_RESULT_STEP_STATUS_WAITING;
+	while (rc == DUCKDB_V2_ERROR_NONE) {
+		duckdb_v2_data_chunk_handle chunk = nullptr;
+		rc = duckdb_v2_result_step(result, &chunk, &status, nullptr);
+		if (chunk) {
+			duckdb_v2_data_chunk_destroy(&chunk);
+		}
+		if (rc != DUCKDB_V2_ERROR_NONE || status == DUCKDB_V2_RESULT_STEP_STATUS_FINISHED ||
+		    status == DUCKDB_V2_RESULT_STEP_STATUS_CANCELLED) {
+			break;
+		}
+		if (status == DUCKDB_V2_RESULT_STEP_STATUS_WAITING) {
+			rc = duckdb_v2_result_wait(result, nullptr);
+		}
+	}
+	duckdb_v2_result_destroy(&result);
+	return rc;
+}
+
+duckdb_v2_scalar_function_handle MakeIntFunction(EnvFixture &fx, std::string_view name, idx_t parameters,
+                                                 duckdb_v2_scalar_function_exec_callback_fn exec,
+                                                 duckdb_v2_scalar_function_bind_callback_fn bind = nullptr) {
+	auto integer = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER);
+	auto function = MakeScalar(fx.conn, name);
+	auto sig = SigOf(function);
+	const char *names[] = {"a", "b"};
+	for (idx_t i = 0; i < parameters; i++) {
+		SigParam(sig, names[i], integer);
+	}
+	REQUIRE(duckdb_v2_function_signature_set_return_type(sig, integer, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_scalar_function_set_exec_callback(function, exec, nullptr) == DUCKDB_V2_ERROR_NONE);
+	if (bind) {
+		REQUIRE(duckdb_v2_scalar_function_set_bind_callback(function, bind, nullptr) == DUCKDB_V2_ERROR_NONE);
+	}
+	duckdb_v2_logical_type_destroy(&integer);
+	return function;
+}
+
+} // namespace
+
+TEST_CASE("V2 scalar: a bind replaces the call with another function", "[capi_v2][scalar_function]") {
+	EnvFixture fx;
+	auto add = MakeIntFunction(fx, "c_add", 2, AddExec);
+	REQUIRE(duckdb_v2_connection_register_scalar_function(fx.conn, add, nullptr) == DUCKDB_V2_ERROR_NONE);
+	duckdb_v2_scalar_function_destroy(&add);
+	auto pick = MakeIntFunction(fx, "c_pick", 2, DoubleExec, PickBind);
+	REQUIRE(duckdb_v2_connection_register_scalar_function(fx.conn, pick, nullptr) == DUCKDB_V2_ERROR_NONE);
+	duckdb_v2_scalar_function_destroy(&pick);
+
+	// replaced: c_add(4, 4); kept: the exec callback doubles the selector
+	REQUIRE(QueryI32(fx.conn, "SELECT c_pick(10, 4)") == 8);
+	REQUIRE(QueryI32(fx.conn, "SELECT c_pick(3, 4)") == 6);
+}
+
+TEST_CASE("V2 scalar: a bind hands the call back to the overload it replaced", "[capi_v2][scalar_function]") {
+	EnvFixture fx;
+	// abs(INTEGER) exists: the registration replaces it, and the bind hands every call back
+	auto abs = MakeIntFunction(fx, "abs", 1, DoubleExec, OverriddenBind);
+	REQUIRE(duckdb_v2_connection_register_scalar_function(fx.conn, abs, nullptr) == DUCKDB_V2_ERROR_NONE);
+	duckdb_v2_scalar_function_destroy(&abs);
+	REQUIRE(QueryI32(fx.conn, "SELECT abs(-5)") == 5);
+
+	// a function that replaced nothing cannot
+	auto fresh = MakeIntFunction(fx, "c_fresh", 1, DoubleExec, OverriddenBind);
+	REQUIRE(duckdb_v2_connection_register_scalar_function(fx.conn, fresh, nullptr) == DUCKDB_V2_ERROR_NONE);
+	duckdb_v2_scalar_function_destroy(&fresh);
+	REQUIRE(RunToCompletion(fx.conn, "SELECT c_fresh(1)") != DUCKDB_V2_ERROR_NONE);
+}
+
+TEST_CASE("V2 scalar: argument monotonicity and bind-time properties", "[capi_v2][scalar_function]") {
+	EnvFixture fx;
+	auto function = MakeIntFunction(fx, "c_double", 1, DoubleExec, PropertyBind);
+	REQUIRE(duckdb_v2_scalar_function_set_argument_monotonicity(
+	            function, 0, DUCKDB_V2_FUNCTION_MONOTONICITY_STRICTLY_INCREASING, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_scalar_function_set_argument_monotonicity(function, 0,
+	                                                            static_cast<DUCKDB_V2_FUNCTION_MONOTONICITY>(77),
+	                                                            nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_connection_register_scalar_function(fx.conn, function, nullptr) == DUCKDB_V2_ERROR_NONE);
+	duckdb_v2_scalar_function_destroy(&function);
+
+	REQUIRE(QueryI32(fx.conn, "SELECT c_double(21)") == 42);
+	REQUIRE(bind_property_rc == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(bind_bad_property_rc == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(bind_monotonicity_rc == DUCKDB_V2_ERROR_NONE);
+
+	// the call is consistent within a query only, which an index expression refuses
+	REQUIRE(RunToCompletion(fx.conn, "CREATE TABLE t (i INTEGER)") == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(RunToCompletion(fx.conn, "CREATE INDEX idx ON t (c_double(i))") != DUCKDB_V2_ERROR_NONE);
+}
+
 } // namespace test_capi_v2

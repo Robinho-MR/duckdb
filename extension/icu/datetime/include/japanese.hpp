@@ -10,7 +10,7 @@
 
 #include "gregorian.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 //! The Gregorian date that a Japanese era starts on
@@ -61,4 +61,4 @@ protected:
 };
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

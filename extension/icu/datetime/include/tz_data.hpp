@@ -8,9 +8,9 @@
 
 #pragma once
 
-#include "duckdb/common/common.hpp"
+#include "icu_common.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 //! A pair of offsets (in seconds) that is in effect over some interval of a zone
@@ -100,4 +100,4 @@ extern const idx_t TZ_UNCOMPRESSED_SIZE;
 extern const char *const TZ_VERSION;
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

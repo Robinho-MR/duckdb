@@ -2,7 +2,7 @@
 
 #include "grego.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 //! The limits of the Gregorian calendar fields. The year limits follow from the range of Julian
@@ -247,4 +247,4 @@ int32_t ROCCalendar::HandleGetLimit(CalendarField field, LimitType type) const {
 }
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

@@ -20,7 +20,9 @@ add_library(
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_copy_function.cpp
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_core.cpp
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_custom_option.cpp
+  ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_datetime.cpp
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_file_system.cpp
+  ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_function_binding.cpp
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_log_sink.cpp
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_query_metrics.cpp
   ${CMAKE_SOURCE_DIR}/tools/cpp/tests/test_cpp_api_pragma_function.cpp

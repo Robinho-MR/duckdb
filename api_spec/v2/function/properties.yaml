@@ -29,7 +29,7 @@ enums:
   FUNCTION_PROPERTY_KEY:
     description: |
       Identifies a configurable function property. Pass one of these to
-      `[[scalar_function_set_property]]` or `[[aggregate_function_set_property]]` together with a
+      `[[scalar_function_set_property]]`, `[[aggregate_function_set_property]]` or `[[table_function_set_property]]` together with a
       matching `[[FUNCTION_PROPERTY_VALUE]]`. The high byte is the function-type
       group: COMMON (`0x01xxxx`) keys apply to all function types, while
       group-specific keys (e.g. aggregate `0x03xxxx`) are only valid for that
@@ -112,3 +112,30 @@ enums:
       FUNCTION_PROPERTY_AGG_DISTINCT_DEPENDENT_NO:
         value: 0x030101
         description: "The aggregate's result is not affected by a DISTINCT modifier."
+  FUNCTION_MONOTONICITY:
+    description: |
+      How the result of a scalar function changes with one of its arguments while the other arguments stay the same.
+      The optimizer uses it, for example, to turn a filter on the result into a filter on the argument that can skip
+      row groups by their statistics, or to keep an order through the function. Declared per argument with
+      `[[scalar_function_set_argument_monotonicity]]`, and changed for one call with
+      `[[scalar_function_bind_set_argument_monotonicity]]`. Declaring a monotonicity the function does not have
+      produces wrong query results. A NULL argument or result is outside the claim.
+    values:
+      FUNCTION_MONOTONICITY_UNKNOWN:
+        value: 0
+        description: "Nothing is known about how the result changes with the argument (default)."
+      FUNCTION_MONOTONICITY_CONSTANT:
+        value: 1
+        description: "The result does not change with the argument."
+      FUNCTION_MONOTONICITY_NON_DECREASING:
+        value: 2
+        description: "A greater argument never gives a smaller result."
+      FUNCTION_MONOTONICITY_STRICTLY_INCREASING:
+        value: 3
+        description: "A greater argument always gives a greater result."
+      FUNCTION_MONOTONICITY_NON_INCREASING:
+        value: 4
+        description: "A greater argument never gives a greater result."
+      FUNCTION_MONOTONICITY_STRICTLY_DECREASING:
+        value: 5
+        description: "A greater argument always gives a smaller result."

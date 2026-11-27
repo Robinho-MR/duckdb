@@ -15,6 +15,7 @@ add_library_unity(
   test_capi_v2_custom_option.cpp
   test_capi_v2_custom_type.cpp
   test_capi_v2_data_chunk.cpp
+  test_capi_v2_datetime.cpp
   test_capi_v2_error_info.cpp
   test_capi_v2_expression.cpp
   test_capi_v2_extension_footer.cpp
@@ -25,6 +26,7 @@ add_library_unity(
   test_capi_v2_query_metrics.cpp
   test_capi_v2_logging.cpp
   test_capi_v2_logical_type.cpp
+  test_capi_v2_operator.cpp
   test_capi_v2_option.cpp
   test_capi_v2_pragma_function.cpp
   test_capi_v2_prepared_statement.cpp

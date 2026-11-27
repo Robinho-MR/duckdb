@@ -9,10 +9,9 @@
 
 #pragma once
 
-#include "duckdb/common/constants.hpp"
-#include "duckdb/common/vector.hpp"
+#include "icu_common.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace collation {
 
 class Normalizer {
@@ -36,4 +35,4 @@ public:
 };
 
 } // namespace collation
-} // namespace duckdb
+} // namespace duckdb_icu

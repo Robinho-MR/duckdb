@@ -1,13 +1,9 @@
 #include "collation_data.hpp"
 
-#include "duckdb/common/exception.hpp"
-#include "duckdb/common/helper.hpp"
-#include "duckdb/common/mutex.hpp"
-#include "duckdb/common/unique_ptr.hpp"
-#include "duckdb/common/unordered_map.hpp"
+#include "icu_common.hpp"
 #include "zstd.h"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace collation {
 
 //! Reads the arrays of a decompressed unit. The unit starts with the number of elements of
@@ -198,4 +194,4 @@ const CollationTailoring &GetCollationTailoring(uint32_t unit) {
 }
 
 } // namespace collation
-} // namespace duckdb
+} // namespace duckdb_icu

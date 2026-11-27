@@ -139,6 +139,9 @@ enums:
       ERROR_DATABASE_SERIALIZATION:
         value: 6007
         description: "Serializing or deserializing a database object failed."
+      ERROR_DATABASE_CORRUPTION:
+        value: 6008
+        description: "Data that should be valid is not, e.g. a stored string that is not valid UTF-8."
       # Configuration: errors related to settings, configuration, and permissions
       ERROR_CONFIGURATION_SETTINGS:
         value: 7001

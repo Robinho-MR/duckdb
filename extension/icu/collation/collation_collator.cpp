@@ -2,10 +2,9 @@
 
 #include "collation_data.hpp"
 #include "collation_normalizer.hpp"
-#include "duckdb/common/algorithm.hpp"
-#include "duckdb/common/string_util.hpp"
+#include "icu_common.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace collation {
 
 //===--------------------------------------------------------------------===//
@@ -1359,4 +1358,4 @@ void Collator::GetSortKey(const char *data, idx_t size, CollationBuffer &buffer)
 }
 
 } // namespace collation
-} // namespace duckdb
+} // namespace duckdb_icu

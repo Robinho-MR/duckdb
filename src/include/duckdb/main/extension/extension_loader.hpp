@@ -130,6 +130,8 @@ public:
 	                                     bind_cast_function_t function, int64_t implicit_cast_cost = -1);
 	DUCKDB_API void RegisterCastFunction(const LogicalType &source, const LogicalType &target, BoundCastInfo function,
 	                                     int64_t implicit_cast_cost = -1);
+	DUCKDB_API void RegisterCastFunction(const LogicalType &source, const LogicalType &target,
+	                                     BindCastFunction function, int64_t implicit_cast_cost = -1);
 
 	//! Registers a rule for combining two types in implicit type resolution (LogicalType::TryGetMaxLogicalType)
 	DUCKDB_API void RegisterCombineTypesRule(CombineTypesRule rule);

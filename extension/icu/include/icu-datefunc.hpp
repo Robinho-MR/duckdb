@@ -8,19 +8,54 @@
 
 #pragma once
 
-#include "duckdb/common/enums/date_part_specifier.hpp"
-#include "duckdb/common/unordered_map.hpp"
-#include "duckdb/execution/expression_executor_state.hpp"
-#include "duckdb/function/cast/default_casts.hpp"
-#include "duckdb/function/function.hpp"
+#include "duckdb_cpp.hpp"
+#include "icu-datetime.hpp"
 #include "tz_calendar.hpp"
 
-namespace duckdb {
+#include <functional>
+
+namespace duckdb_icu {
+
+namespace cxx = duckdb::cxx;
+
+//! What the ICU functions register through: the extension, and the factory of its database
+struct ICURegistration {
+	cxx::Extension &extension;
+	cxx::Factory &factory;
+
+	cxx::LogicalType Type(std::string_view name) const {
+		if (name == "ANY") {
+			return factory.CreateType(cxx::LogicalTypeId::ANY);
+		}
+		return factory.ParseType(name);
+	}
+
+	//! A scalar function with a name and a signature, for the caller to give its callbacks and register
+	cxx::ScalarFunction Scalar(const string &name, const vector<pair<string, string>> &parameters,
+	                           const string &return_type) const {
+		auto function = cxx::ScalarFunction::Create(factory);
+		function.SetName(name);
+		auto signature = function.GetSignature();
+		for (auto &parameter : parameters) {
+			signature.AddParameter(parameter.first, Type(parameter.second));
+		}
+		signature.SetReturnType(Type(return_type));
+		return function;
+	}
+};
+
+struct ICUHelpers {
+	//! Gets a time zone, normalizing its name - throws an error if the time zone is not found, unless `error_message`
+	//! is given, in which case it receives the error and nullptr is returned
+	static unique_ptr<TimeZone> GetTimeZone(string &tz_str, string *error_message = nullptr);
+	static TimestampComponents GetComponents(timestamp_tz_t ts, Calendar *calendar);
+	static TimestampComponents GetComponents(timestamp_tz_ns_t ts, Calendar *calendar);
+};
 
 struct ICUDateFunc {
-	struct BindData : public FunctionData {
-		explicit BindData(Context &context);
-		explicit BindData(ClientContext &context);
+	//! The time zone and calendar settings a call reads when it is bound, and the calendar they make
+	struct BindData {
+		explicit BindData(cxx::Context &context);
 		BindData(const string &tz_setting, const string &cal_setting);
 		BindData(const BindData &other);
 
@@ -28,45 +63,23 @@ struct ICUDateFunc {
 		string cal_setting;
 		CalendarPtr calendar;
 
-		bool Equals(const FunctionData &other_p) const override;
-		duckdb::unique_ptr<FunctionData> Copy() const override;
+		bool operator==(const BindData &other) const {
+			return calendar->Equals(*other.calendar);
+		}
 
 		void InitCalendar();
 	};
 
-	struct CastData : public BoundCastData {
-		explicit CastData(duckdb::unique_ptr<FunctionData> info_p) : info(std::move(info_p)) {
-		}
-
-		duckdb::unique_ptr<BoundCastData> Copy() const override {
-			return make_uniq<CastData>(info->Copy());
-		}
-
-		duckdb::unique_ptr<FunctionData> info;
-	};
-
-	template <typename SRC, typename DST>
-	static inline DST TruncCast(const SRC &src) {
-		DST dst;
-		if (SRC::PRECISION == DST::PRECISION || !src.IsFinite()) {
-			dst.value = src.value;
-		} else {
-			//	Truncate towards -infinity, not epoch.
-			D_ASSERT(SRC::PRECISION > DST::PRECISION);
-			const int64_t scaling = SRC::PRECISION / DST::PRECISION;
-			int64_t frac;
-			Timestamp::SplitTime(src.value, scaling, dst.value, frac);
-		}
-		return dst;
-	}
+	//! The settings of a context: the session's time zone and calendar
+	static void ReadSettings(cxx::Context &context, string &tz_setting, string &cal_setting);
 
 	//! Per-thread cache of resolved time zones. Resolving a time zone name looks the name up and
 	//! then builds a zone and a calendar for it, so functions with per-row time zone arguments
 	//! must resolve each distinct zone only once per thread.
-	struct CalendarCacheState : public FunctionLocalState {
+	struct CalendarCacheState {
 		struct CacheEntry {
 			//! The resolved time zone (nullptr if the name is invalid)
-			duckdb::unique_ptr<TimeZone> tz;
+			unique_ptr<TimeZone> tz;
 			//! Copy of the base calendar with the time zone applied (nullptr if the name is invalid)
 			CalendarPtr calendar;
 			//! The resolution error for invalid time zone names
@@ -77,21 +90,21 @@ struct ICUDateFunc {
 		}
 
 		//! Returns a calendar for the time zone. Throws for unknown zones.
-		Calendar *GetCalendar(const string_t &tz_id);
+		Calendar *GetCalendar(std::string_view tz_id);
 		//! Returns a calendar for the time zone, or nullptr for unknown zones (filling error_message if provided).
-		Calendar *TryGetCalendar(const string_t &tz_id, string *error_message = nullptr);
+		Calendar *TryGetCalendar(std::string_view tz_id, string *error_message = nullptr);
 		//! Sets the time zone for the calendar.
 		//! For unknown zones, fills error_message if provided and throws otherwise.
-		void SetTimeZone(Calendar *calendar, const string_t &tz_id, string *error_message = nullptr);
+		void SetTimeZone(Calendar *calendar, std::string_view tz_id, string *error_message = nullptr);
 		//! Sets the time zone for the calendar and returns false if it is not valid.
-		bool TrySetTimeZone(Calendar *calendar, const string_t &tz_id);
+		bool TrySetTimeZone(Calendar *calendar, std::string_view tz_id);
 
 		Calendar *GetBaseCalendar() {
 			return base_calendar.get();
 		}
 
 	private:
-		const CacheEntry &GetEntry(const string_t &tz_id);
+		const CacheEntry &GetEntry(std::string_view tz_id);
 
 		CalendarPtr base_calendar;
 		unordered_map<string, CacheEntry> cache;
@@ -100,24 +113,21 @@ struct ICUDateFunc {
 	};
 
 	//! Binds a default calendar object for use by the function
-	static duckdb::unique_ptr<FunctionData> Bind(BindScalarFunctionInput &input);
-	//! Binds the calendar of the TimeZone and Calendar settings for a cast, whose result then depends on them
-	static duckdb::unique_ptr<CastData> BindCastData(BindCastInput &input);
+	static void Bind(cxx::ScalarFunction::BindInput &input);
+	//! The statistics of a monotone function, as the engine derives them from the bounds of the arguments, except
+	//! when -infinity lies between the bounds of an argument: the result is NULL for it
+	static void PropagateFiniteMonotoneBounds(cxx::ScalarFunction::StatsInput &input);
 	//! Initializes a CalendarCacheState from the function's BindData
-	static duckdb::unique_ptr<FunctionLocalState> InitCalendarCache(ExpressionState &state,
-	                                                                const BoundFunctionExpression &expr,
-	                                                                optional_ptr<const FunctionData> bind_data);
-	//! Initializes a CalendarCacheState from a cast's CastData
-	static duckdb::unique_ptr<FunctionLocalState> InitCastCalendarCache(CastLocalStateParameters &parameters);
+	static void InitCalendarCache(cxx::ScalarFunction::InitInput &input);
 
-	//! Gets the timestamp from the calendar, throwing if it is not in range.
+	//! Gets the timestamp from the calendar, returning false if it is not in range.
 	static bool TryGetTime(Calendar *calendar, uint64_t micros, timestamp_tz_t &result);
 	//! Gets the timestamp from the calendar, throwing if it is not in range.
 	static timestamp_tz_t GetTime(Calendar *calendar, uint64_t micros = 0);
-	//! Gets the timestamp from the calendar, throwing if it is not in range.
+	//! Gets the timestamp from the calendar, returning false if it is not in range.
 	static bool TryGetTimeNS(Calendar *calendar, uint64_t nanos, timestamp_tz_ns_t &result);
 	//! Gets the timestamp from the calendar, throwing if it is not in range.
-	static timestamp_tz_ns_t GetTimeNS(Calendar *calendar, uint64_t micros = 0);
+	static timestamp_tz_ns_t GetTimeNS(Calendar *calendar, uint64_t nanos = 0);
 	//! Gets the timestamp from the calendar, assuming it is in range.
 	static timestamp_tz_t GetTimeUnsafe(Calendar *calendar, uint64_t micros = 0);
 	//! Sets the calendar to the timestamp, returning the unused µs part
@@ -149,11 +159,27 @@ struct ICUDateFunc {
 	//! Truncates the calendar time to the given part precision
 	typedef void (*part_trunc_t)(Calendar *calendar, uint64_t &micros);
 	static part_trunc_t TruncationFactory(DatePartSpecifier part);
-	static timestamp_tz_t CurrentMidnight(Calendar *calendar, ExpressionState &state);
+	//! Midnight of the start of the context's transaction, in the calendar
+	static timestamp_tz_t CurrentMidnight(Calendar *calendar, cxx::Context &context);
 
 	//! Subtracts the two times at the given part precision
 	typedef int64_t (*part_sub_t)(Calendar *calendar, timestamp_tz_t start_date, timestamp_tz_t end_date);
 	static part_sub_t SubtractFactory(DatePartSpecifier part);
 };
 
-} // namespace duckdb
+//===--------------------------------------------------------------------===//
+// Registration
+//===--------------------------------------------------------------------===//
+void RegisterICUCurrentFunctions(const ICURegistration &reg);
+void RegisterICUDateAddFunctions(const ICURegistration &reg);
+void RegisterICUDatePartFunctions(const ICURegistration &reg);
+void RegisterICUDateSubFunctions(const ICURegistration &reg);
+void RegisterICUDateTruncFunctions(const ICURegistration &reg);
+void RegisterICUMakeDateFunctions(const ICURegistration &reg);
+void RegisterICUTableRangeFunctions(const ICURegistration &reg);
+void RegisterICUListRangeFunctions(const ICURegistration &reg);
+void RegisterICUStrptimeFunctions(const ICURegistration &reg);
+void RegisterICUTimeBucketFunctions(const ICURegistration &reg);
+void RegisterICUTimeZoneFunctions(const ICURegistration &reg);
+
+} // namespace duckdb_icu

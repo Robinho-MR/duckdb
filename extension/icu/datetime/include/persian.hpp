@@ -10,7 +10,7 @@
 
 #include "calendar.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 //! The Persian (Solar Hijri) calendar: six months of 31 days, five of 30, and a last month of
@@ -65,4 +65,4 @@ protected:
 };
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu
