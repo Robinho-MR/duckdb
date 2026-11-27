@@ -1525,6 +1525,9 @@ typedef struct {
 	(duckdb_v2_stats_handle stats, duckdb_v2_value_handle *value, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_stats_set_value)
 	(duckdb_v2_stats_handle stats, duckdb_v2_value_handle value, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_set_property)
+	(duckdb_v2_table_function_handle function, DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
+	 DUCKDB_V2_FUNCTION_PROPERTY_VALUE value, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_aggregate_function_get_generic_property)
 	(duckdb_v2_aggregate_function_handle function, const char *name, idx_t name_length,
 	 duckdb_v2_value_handle *out_value, duckdb_v2_error_info_handle *err);
@@ -2409,6 +2412,7 @@ inline duckdb_ext_api_v2 CreateAPIv2(void) {
 	result.duckdb_v2_stats_assign = duckdb_v2_stats_assign;
 	result.duckdb_v2_stats_get_value = duckdb_v2_stats_get_value;
 	result.duckdb_v2_stats_set_value = duckdb_v2_stats_set_value;
+	result.duckdb_v2_table_function_set_property = duckdb_v2_table_function_set_property;
 	result.duckdb_v2_aggregate_function_get_generic_property = duckdb_v2_aggregate_function_get_generic_property;
 	result.duckdb_v2_aggregate_function_set_generic_property = duckdb_v2_aggregate_function_set_generic_property;
 	result.duckdb_v2_scalar_function_get_generic_property = duckdb_v2_scalar_function_get_generic_property;
