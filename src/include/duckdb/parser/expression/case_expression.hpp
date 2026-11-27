@@ -42,6 +42,14 @@ public:
 	unique_ptr<ParsedExpression> &ElseMutable() {
 		return else_expr;
 	}
+	//! Whether the checks were expanded from a simple CASE (CASE <operand> WHEN ..), i.e. each comparison in the checks
+	//! has the same left-hand side, which is a single operand that must only be evaluated once
+	bool IsSimpleCase() const {
+		return simple_case;
+	}
+	bool &SimpleCaseMutable() {
+		return simple_case;
+	}
 
 public:
 	string ToString() const override;
@@ -69,5 +77,6 @@ public:
 private:
 	vector<CaseCheck> case_checks;
 	unique_ptr<ParsedExpression> else_expr;
+	bool simple_case = false;
 };
 } // namespace duckdb

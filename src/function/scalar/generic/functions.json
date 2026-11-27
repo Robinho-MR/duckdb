@@ -46,6 +46,22 @@
         "type": "scalar_function"
     },
     {
+        "name": "__internal_case_with_operand",
+        "struct": "InternalCaseWithOperandFun",
+        "parameters": "operand,args,...",
+        "description": "A simple CASE expression whose operand is evaluated exactly once",
+        "example": "",
+        "type": "scalar_function"
+    },
+    {
+        "name": "__internal_case_operand",
+        "struct": "InternalCaseOperandFun",
+        "parameters": "",
+        "description": "Refers to the value of the operand of the enclosing CASE with an operand",
+        "example": "",
+        "type": "scalar_function"
+    },
+    {
         "name": "create_sort_key",
         "parameters": "key1,...",
         "description": "Constructs a binary-comparable sort key based on a set of input parameters and sort qualifiers",

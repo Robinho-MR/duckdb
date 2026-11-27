@@ -22,6 +22,7 @@
 namespace duckdb {
 class BaseStatistics;
 class FunctionBinder;
+class LazyExecuteInput;
 struct ScalarFunctionInfo {
 	DUCKDB_API virtual ~ScalarFunctionInfo();
 
@@ -166,6 +167,9 @@ typedef idx_t (*scalar_function_select_t)(DataChunk &args, ExpressionState &stat
                                           optional_ptr<const SelectionVector> sel,
                                           optional_ptr<SelectionVector> true_sel,
                                           optional_ptr<SelectionVector> false_sel);
+//! The type of a scalar function that controls how (and for which rows) its children are executed, see
+//! LazyExecuteInput. The result must hold one row for every row of the input selection.
+typedef void (*scalar_function_lazy_execute_t)(LazyExecuteInput &input, Vector &result);
 //! The type to propagate statistics for this scalar function
 typedef unique_ptr<BaseStatistics> (*function_statistics_t)(ClientContext &context, FunctionStatisticsInput &input);
 
@@ -204,6 +208,9 @@ public:
 	scalar_function_t function = nullptr;
 	//! Direct selection callback (if any)
 	scalar_function_select_t select_function = nullptr;
+	//! Callback that executes the children of the function itself instead of receiving them as evaluated arguments
+	//! (if any). Mutually exclusive with `function` and `select_function`
+	scalar_function_lazy_execute_t lazy_execute = nullptr;
 	//! Resolves the argument / return types (if any)
 	resolve_scalar_types_t resolve_types = nullptr;
 	//! The bind function (if any)
@@ -292,6 +299,10 @@ public: // Callbacks
 	auto GetSelectCallback() const -> scalar_function_select_t { return callbacks.select_function; }
 	auto SetSelectCallback(scalar_function_select_t callback) -> void { callbacks.select_function = callback; }
 
+	auto HasLazyExecuteCallback() const -> bool { return callbacks.lazy_execute != nullptr; }
+	auto GetLazyExecuteCallback() const -> scalar_function_lazy_execute_t { return callbacks.lazy_execute; }
+	auto SetLazyExecuteCallback(scalar_function_lazy_execute_t callback) -> void { callbacks.lazy_execute = callback; }
+
 	auto HasResolveTypesCallback() const -> bool { return callbacks.resolve_types != nullptr; }
 	auto GetResolveTypesCallback() const -> resolve_scalar_types_t { return callbacks.resolve_types; }
 	auto SetResolveTypesCallback(resolve_scalar_types_t callback) -> void { callbacks.resolve_types = callback; }
@@ -360,6 +371,19 @@ public: // Execution
 		}
 		try {
 			callbacks.function(args, state, result);
+		} catch (std::exception &ex) {
+			ThrowNonFallibleFunctionError(Name(), ex);
+		}
+	}
+
+	//! Execute the lazy execute callback of the function, verifying that non-fallible functions do not throw
+	void ExecuteLazy(LazyExecuteInput &input, Vector &result) const {
+		if (properties.errors != FunctionErrors::CANNOT_ERROR) {
+			callbacks.lazy_execute(input, result);
+			return;
+		}
+		try {
+			callbacks.lazy_execute(input, result);
 		} catch (std::exception &ex) {
 			ThrowNonFallibleFunctionError(Name(), ex);
 		}

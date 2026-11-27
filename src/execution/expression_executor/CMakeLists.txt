@@ -7,6 +7,7 @@ add_library_unity(
   execute_constant.cpp
   execute_function.cpp
   execute_lambda.cpp
+  execute_lazy.cpp
   execute_operator.cpp
   execute_parameter.cpp
   execute_reference.cpp)

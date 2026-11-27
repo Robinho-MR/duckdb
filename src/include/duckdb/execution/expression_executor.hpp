@@ -20,10 +20,12 @@ class ClientContext;
 class Context;
 class DatabaseInstance;
 class ExecutionContext;
+class LazyExecuteInput;
 
 //! ExpressionExecutor is responsible for executing a set of expressions and storing the result in a data chunk
 class ExpressionExecutor {
 	friend class BoundIndex;
+	friend class LazyExecuteInput;
 
 public:
 	DUCKDB_API explicit ExpressionExecutor(Context &context);

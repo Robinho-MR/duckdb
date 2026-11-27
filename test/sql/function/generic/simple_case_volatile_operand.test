@@ -1,0 +1,284 @@
+# name: test/sql/function/generic/simple_case_volatile_operand.test
+# description: The operand of a simple CASE is evaluated once, also when it is volatile
+# group: [generic]
+
+statement ok
+CREATE SEQUENCE s;
+
+# the operand is evaluated once: nextval returns 1, so neither 0 nor 2 match
+query I
+SELECT CASE nextval('s') WHEN 0 THEN 'hit' WHEN 2 THEN 'hit' ELSE 'miss' END;
+----
+miss
+
+query I
+SELECT currval('s');
+----
+1
+
+# multiple values in a single WHEN
+statement ok
+CREATE OR REPLACE SEQUENCE s;
+
+query I
+SELECT CASE nextval('s') WHEN 0, 2 THEN 'hit' ELSE 'miss' END;
+----
+miss
+
+query I
+SELECT currval('s');
+----
+1
+
+# many rows: every row evaluates its own operand exactly once
+statement ok
+CREATE OR REPLACE SEQUENCE s;
+
+query II
+SELECT i, CASE nextval('s') WHEN 2 THEN 'two' WHEN 4, 5 THEN 'four-five' WHEN 3 THEN 'three' ELSE 'other' END
+FROM range(1, 7) t(i) ORDER BY i;
+----
+1	other
+2	two
+3	three
+4	four-five
+5	four-five
+6	other
+
+query I
+SELECT currval('s');
+----
+6
+
+# the operand is NULL
+query I
+SELECT CASE (CASE WHEN nextval('s') > 0 THEN NULL::INTEGER END) WHEN 1 THEN 'one' ELSE 'else' END;
+----
+else
+
+# the operand is only evaluated for the rows that are in the selection
+statement ok
+CREATE OR REPLACE SEQUENCE s;
+
+query II
+SELECT i, CASE nextval('s') WHEN 1 THEN 'one' WHEN 2 THEN 'two' ELSE 'other' END
+FROM range(10) t(i) WHERE i % 3 = 0 ORDER BY i;
+----
+0	one
+3	two
+6	other
+9	other
+
+# the branches are only executed for the rows that match
+statement ok
+CREATE OR REPLACE SEQUENCE s;
+
+query II
+SELECT i, CASE nextval('s') % 2 WHEN 0 THEN 100 / (i - 12) WHEN 1 THEN i END
+FROM range(10, 14) t(i) ORDER BY i;
+----
+10	10
+11	-100
+12	12
+13	100
+
+# the comparison values can refer to columns
+statement ok
+CREATE OR REPLACE SEQUENCE s;
+
+query III
+SELECT i, j, CASE nextval('s') WHEN i THEN 'first' WHEN j THEN 'second' ELSE 'none' END
+FROM (VALUES (1, 5), (7, 2), (3, 3), (9, 9)) t(i, j) ORDER BY i;
+----
+1	5	first
+3	3	first
+7	2	second
+9	9	none
+
+# different types
+statement ok
+CREATE OR REPLACE SEQUENCE s;
+
+query I
+SELECT CASE [nextval('s')] WHEN [5] THEN 'five' WHEN [1] THEN 'one' ELSE 'other' END;
+----
+one
+
+query I
+SELECT CASE nextval('s')::VARCHAR WHEN '2' THEN 'ok' ELSE 'other' END;
+----
+ok
+
+query I
+SELECT CASE {'a': nextval('s')} WHEN {'a': 3} THEN 'ok' ELSE 'other' END;
+----
+ok
+
+# the comparison is performed in the type that fits both sides
+query I
+SELECT CASE nextval('s') WHEN 10.0 THEN 'decimal' WHEN 4::DOUBLE THEN 'double' END;
+----
+double
+
+query I
+SELECT currval('s');
+----
+4
+
+# the comparison value is cast to the type of the operand
+statement error
+SELECT CASE nextval('s') WHEN 'not a number' THEN 1 ELSE 2 END;
+----
+Conversion Error
+
+# an incompatible comparison is an error
+statement error
+SELECT CASE nextval('s') WHEN [1] THEN 1 ELSE 2 END;
+----
+Unimplemented type for cast
+
+# nested simple cases with volatile operands
+statement ok
+CREATE OR REPLACE SEQUENCE s;
+
+statement ok
+CREATE OR REPLACE SEQUENCE t START 100;
+
+# the operand of the outer case is 1 and the one of the inner case is 100
+query I
+SELECT CASE nextval('s')
+	WHEN 1 THEN CASE nextval('t') WHEN 100 THEN 'inner hit' ELSE 'inner miss' END
+	ELSE 'outer miss' END;
+----
+inner hit
+
+# a nested case in the comparison value
+query I
+SELECT CASE nextval('s')
+	WHEN CASE nextval('t') WHEN 101 THEN 2 ELSE 0 END THEN 'hit'
+	ELSE 'miss' END;
+----
+hit
+
+query II
+SELECT currval('s'), currval('t');
+----
+2	101
+
+# a volatile operand in a branch
+statement ok
+CREATE OR REPLACE SEQUENCE s;
+
+query I
+SELECT CASE nextval('s') WHEN 1 THEN CASE nextval('s') WHEN 2 THEN 'second' ELSE 'miss' END ELSE 'else' END;
+----
+second
+
+# subqueries in the branches are allowed
+query I
+SELECT CASE random() WHEN -1 THEN 0 WHEN -2 THEN 1 ELSE (SELECT 42) END;
+----
+42
+
+query I
+SELECT CASE random() WHEN -1 THEN (SELECT 1) WHEN -2 THEN (SELECT 2) ELSE (SELECT 3) END;
+----
+3
+
+# correlated subqueries in the branches
+query II
+SELECT i, CASE random() WHEN -1 THEN 0 ELSE (SELECT i * 10) END FROM range(3) t(i) ORDER BY i;
+----
+0	0
+1	10
+2	20
+
+# subqueries in the comparison values
+statement ok
+CREATE OR REPLACE SEQUENCE s;
+
+query I
+SELECT CASE nextval('s') WHEN (SELECT 1) THEN 'one' WHEN (SELECT 2) THEN 'two' ELSE 'other' END;
+----
+one
+
+# the case in other expressions
+statement ok
+CREATE OR REPLACE SEQUENCE s;
+
+query I
+SELECT sum(CASE nextval('s') % 2 WHEN 0 THEN 1 WHEN 1 THEN 10 END) FROM range(100);
+----
+550
+
+statement ok
+CREATE OR REPLACE SEQUENCE s;
+
+query I
+SELECT list(CASE nextval('s') % 3 WHEN 0 THEN 'a' WHEN 1 THEN 'b' ELSE 'c' END) FROM range(4);
+----
+[b, c, a, b]
+
+# a case in a filter
+statement ok
+CREATE OR REPLACE SEQUENCE s;
+
+query I
+SELECT count(*) FROM range(10) t(i) WHERE CASE nextval('s') % 2 WHEN 0 THEN true WHEN 1 THEN false END;
+----
+5
+
+# views and macros
+statement ok
+CREATE OR REPLACE SEQUENCE s;
+
+statement ok
+CREATE VIEW v AS SELECT CASE nextval('s') WHEN 0 THEN 'zero' WHEN 2 THEN 'two' ELSE 'other' END AS c;
+
+query I
+SELECT * FROM v;
+----
+other
+
+statement ok
+CREATE MACRO m(x) AS CASE nextval(x) WHEN 0 THEN 'zero' WHEN 2 THEN 'two' ELSE 'other' END;
+
+statement ok
+CREATE OR REPLACE SEQUENCE s;
+
+query I
+SELECT m('s');
+----
+other
+
+# prepared statements
+statement ok
+CREATE OR REPLACE SEQUENCE s;
+
+statement ok
+PREPARE p1 AS SELECT CASE nextval('s') WHEN $1 THEN 'hit' WHEN $2 THEN 'second hit' ELSE 'miss' END;
+
+query I
+EXECUTE p1(0, 5);
+----
+miss
+
+query I
+EXECUTE p1(2, 5);
+----
+hit
+
+# non-volatile operands are expanded as before
+query I
+SELECT CASE 1 + 1 WHEN 1 THEN 'one' WHEN 2 THEN 'two' END;
+----
+two
+
+# a searched case evaluates every condition
+statement ok
+CREATE OR REPLACE SEQUENCE s;
+
+query I
+SELECT CASE WHEN nextval('s') = 0 THEN 'zero' WHEN nextval('s') = 2 THEN 'hit' ELSE 'miss' END;
+----
+hit
