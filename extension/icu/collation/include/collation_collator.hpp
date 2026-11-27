@@ -10,11 +10,9 @@
 
 #pragma once
 
-#include "duckdb/common/constants.hpp"
-#include "duckdb/common/string.hpp"
-#include "duckdb/common/vector.hpp"
+#include "icu_common.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace collation {
 
 enum class CollationStrength : uint8_t { PRIMARY = 0, SECONDARY = 1, TERTIARY = 2, QUATERNARY = 3, IDENTICAL = 4 };
@@ -148,4 +146,4 @@ private:
 };
 
 } // namespace collation
-} // namespace duckdb
+} // namespace duckdb_icu

@@ -8,9 +8,9 @@
 
 #pragma once
 
-#include "duckdb/common/common.hpp"
+#include "icu_common.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 //! The positions of the sun and the moon at an instant, which the lunisolar calendars use to
@@ -72,4 +72,4 @@ private:
 };
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

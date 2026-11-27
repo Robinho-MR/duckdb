@@ -8,12 +8,11 @@
 
 #pragma once
 
-#include "duckdb/common/common.hpp"
-#include "duckdb/common/limits.hpp"
+#include "icu_common.hpp"
 
 #include <cmath>
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 //! Milliseconds per unit of time
@@ -127,4 +126,4 @@ private:
 };
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

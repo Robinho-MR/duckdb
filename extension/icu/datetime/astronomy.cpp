@@ -5,7 +5,7 @@
 #include <cmath>
 #include <limits>
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 static constexpr double PI = 3.14159265358979323846;
@@ -157,4 +157,4 @@ double Astronomer::GetMoonTime(double desired, bool next) {
 }
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

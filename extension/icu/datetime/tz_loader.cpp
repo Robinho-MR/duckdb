@@ -1,13 +1,10 @@
 #include "tz_data.hpp"
 
-#include "duckdb/common/exception.hpp"
-#include "duckdb/common/helper.hpp"
-#include "duckdb/common/unique_ptr.hpp"
-#include "duckdb/common/vector.hpp"
+#include "icu_common.hpp"
 #include "zstd.h"
 #include "zstd_errors.h"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 //! The counts the block starts with, which say how long each of the sections after it is
@@ -189,4 +186,4 @@ const TZData &GetTZData() {
 }
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

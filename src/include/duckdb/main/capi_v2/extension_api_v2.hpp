@@ -1525,6 +1525,9 @@ typedef struct {
 	(duckdb_v2_stats_handle stats, duckdb_v2_value_handle *value, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_stats_set_value)
 	(duckdb_v2_stats_handle stats, duckdb_v2_value_handle value, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_set_property)
+	(duckdb_v2_table_function_handle function, DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
+	 DUCKDB_V2_FUNCTION_PROPERTY_VALUE value, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_aggregate_function_get_generic_property)
 	(duckdb_v2_aggregate_function_handle function, const char *name, idx_t name_length,
 	 duckdb_v2_value_handle *out_value, duckdb_v2_error_info_handle *err);
@@ -1813,6 +1816,9 @@ typedef struct {
 	DUCKDB_V2_ERROR(*duckdb_v2_cast_function_set_property)
 	(duckdb_v2_cast_function_handle function, DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
 	 DUCKDB_V2_FUNCTION_PROPERTY_VALUE value, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_cast_get_implicit_cast_cost)
+	(duckdb_v2_factory_handle factory, duckdb_v2_logical_type_handle source_type,
+	 duckdb_v2_logical_type_handle target_type, int64_t *cost, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_context_get_transaction_start_time)
 	(duckdb_v2_context_handle context, int64_t *micros, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_context_interrupt_check)
@@ -1831,6 +1837,8 @@ typedef struct {
 	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_set_argument_monotonicity)
 	(duckdb_v2_scalar_function_handle function, idx_t index, DUCKDB_V2_FUNCTION_MONOTONICITY monotonicity,
 	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_stats_propagate_monotone_bounds)
+	(duckdb_v2_scalar_function_stats_info_handle info, bool *propagated, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_strftime_format_create)
 	(const char *format, idx_t format_length, duckdb_v2_strftime_format_handle *out_format,
 	 duckdb_v2_error_info_handle *err);
@@ -1859,8 +1867,8 @@ typedef struct {
 	(const char *text, idx_t text_length, int64_t *micros, int32_t *offset, bool *has_offset, bool *success,
 	 duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_timestamp_tz_parse_text)
-	(const char *text, idx_t text_length, duckdb_v2_timestamp_text *parsed, DUCKDB_V2_TIMESTAMP_TEXT_RESULT *result,
-	 duckdb_v2_error_info_handle *err);
+	(const char *text, idx_t text_length, bool nanoseconds, duckdb_v2_timestamp_text *parsed,
+	 DUCKDB_V2_TIMESTAMP_TEXT_RESULT *result, duckdb_v2_error_info_handle *err);
 } duckdb_ext_api_v2;
 
 //===--------------------------------------------------------------------===//
@@ -2555,6 +2563,7 @@ inline duckdb_ext_api_v2 CreateAPIv2(void) {
 	result.duckdb_v2_stats_assign = duckdb_v2_stats_assign;
 	result.duckdb_v2_stats_get_value = duckdb_v2_stats_get_value;
 	result.duckdb_v2_stats_set_value = duckdb_v2_stats_set_value;
+	result.duckdb_v2_table_function_set_property = duckdb_v2_table_function_set_property;
 	result.duckdb_v2_aggregate_function_get_generic_property = duckdb_v2_aggregate_function_get_generic_property;
 	result.duckdb_v2_aggregate_function_set_generic_property = duckdb_v2_aggregate_function_set_generic_property;
 	result.duckdb_v2_scalar_function_get_generic_property = duckdb_v2_scalar_function_get_generic_property;
@@ -2675,6 +2684,7 @@ inline duckdb_ext_api_v2 CreateAPIv2(void) {
 	result.duckdb_v2_cast_function_set_bind_callback = duckdb_v2_cast_function_set_bind_callback;
 	result.duckdb_v2_cast_function_set_init_callback = duckdb_v2_cast_function_set_init_callback;
 	result.duckdb_v2_cast_function_set_property = duckdb_v2_cast_function_set_property;
+	result.duckdb_v2_cast_get_implicit_cast_cost = duckdb_v2_cast_get_implicit_cast_cost;
 	result.duckdb_v2_context_get_transaction_start_time = duckdb_v2_context_get_transaction_start_time;
 	result.duckdb_v2_context_interrupt_check = duckdb_v2_context_interrupt_check;
 	result.duckdb_v2_scalar_function_bind_call_overridden = duckdb_v2_scalar_function_bind_call_overridden;
@@ -2683,6 +2693,8 @@ inline duckdb_ext_api_v2 CreateAPIv2(void) {
 	    duckdb_v2_scalar_function_bind_set_argument_monotonicity;
 	result.duckdb_v2_scalar_function_bind_set_property = duckdb_v2_scalar_function_bind_set_property;
 	result.duckdb_v2_scalar_function_set_argument_monotonicity = duckdb_v2_scalar_function_set_argument_monotonicity;
+	result.duckdb_v2_scalar_function_stats_propagate_monotone_bounds =
+	    duckdb_v2_scalar_function_stats_propagate_monotone_bounds;
 	result.duckdb_v2_strftime_format_create = duckdb_v2_strftime_format_create;
 	result.duckdb_v2_strftime_format_destroy = duckdb_v2_strftime_format_destroy;
 	result.duckdb_v2_strftime_format_write = duckdb_v2_strftime_format_write;

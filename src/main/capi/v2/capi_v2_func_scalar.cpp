@@ -3,6 +3,7 @@
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
 #include "duckdb/function/function_binder.hpp"
+#include "duckdb/optimizer/statistics_propagator.hpp"
 #include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 
@@ -138,6 +139,9 @@ public:
 	const BoundScalarFunction &function;
 	vector<CV2Stats> arg_stats;
 	CV2Stats result_stats;
+	//! What the engine's own propagation reads
+	optional_ptr<ClientContext> context;
+	optional_ptr<FunctionStatisticsInput> input;
 };
 
 static auto Convert(duckdb_v2_scalar_function_stats_info_handle info) -> CV2ScalarStatsInfo * {
@@ -282,8 +286,12 @@ static auto CV2ScalarInit(ExpressionState &state, const BoundFunctionExpression 
 
 	CV2ErrorInfo err = {};
 	auto err_ptr = Convert(&err);
-	CV2CallbackContext callback_context(state.GetClientContext());
-	info.init_cb(Convert(&args), Convert(&callback_context), &err_ptr);
+	// an index maintains its keys without a client context
+	unique_ptr<CV2CallbackContext> callback_context;
+	if (state.HasClientContext()) {
+		callback_context = make_uniq<CV2CallbackContext>(state.GetClientContext());
+	}
+	info.init_cb(Convert(&args), Convert(callback_context.get()), &err_ptr);
 
 	unique_ptr<FunctionLocalState> result = nullptr;
 	if (args.out_init_data.ptr) {
@@ -326,8 +334,12 @@ static auto CV2ScalarExec(DataChunk &input, ExpressionState &state, Vector &resu
 	CV2ErrorInfo err = {};
 	auto err_ptr = Convert(&err);
 
-	CV2CallbackContext callback_context(state.GetClientContext());
-	info.exec_cb(Convert(&args), Convert(&callback_context), &err_ptr);
+	// an index maintains its keys without a client context
+	unique_ptr<CV2CallbackContext> callback_context;
+	if (state.HasClientContext()) {
+		callback_context = make_uniq<CV2CallbackContext>(state.GetClientContext());
+	}
+	info.exec_cb(Convert(&args), Convert(callback_context.get()), &err_ptr);
 
 	if (err.HasError()) {
 		err.ThrowAsException();
@@ -340,6 +352,8 @@ static auto CV2ScalarStats(ClientContext &context, FunctionStatisticsInput &inpu
 
 	auto result = BaseStatistics::CreateUnknown(input.expr.GetReturnType());
 	CV2ScalarStatsInfo args(function, result);
+	args.context = &context;
+	args.input = &input;
 	args.in_user_data = info.user_data ? info.user_data->GetData() : nullptr;
 	if (input.bind_data) {
 		const auto &bind_data = input.bind_data->Cast<CV2FunctionData>();
@@ -666,9 +680,10 @@ DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_set_property(duckdb_v2_scalar_fun
 	});
 }
 
-DUCKDB_V2_ERROR duckdb_v2_scalar_function_bind_set_argument_monotonicity(
-    duckdb_v2_scalar_function_bind_info_handle info, idx_t index, DUCKDB_V2_FUNCTION_MONOTONICITY monotonicity,
-    duckdb_v2_error_info_handle *err) {
+DUCKDB_V2_ERROR
+duckdb_v2_scalar_function_bind_set_argument_monotonicity(duckdb_v2_scalar_function_bind_info_handle info, idx_t index,
+                                                         DUCKDB_V2_FUNCTION_MONOTONICITY monotonicity,
+                                                         duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(info);
 	return WithErrorHandler(
 	    err, [&]() { Convert(info)->monotonicity.emplace_back(index, ConvertMonotonicity(monotonicity)); });
@@ -859,6 +874,23 @@ DUCKDB_V2_ERROR duckdb_v2_scalar_function_stats_get_result_stats(duckdb_v2_scala
 	return WithErrorHandler(err, [&]() { *stats = Convert(&Convert(info)->result_stats); });
 }
 
+DUCKDB_V2_ERROR
+duckdb_v2_scalar_function_stats_propagate_monotone_bounds(duckdb_v2_scalar_function_stats_info_handle info,
+                                                          bool *propagated, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(propagated);
+	return WithErrorHandler(err, [&]() {
+		auto &stats_info = *Convert(info);
+		auto bounds = duckdb::StatisticsPropagator::PropagateMonotoneBounds(*stats_info.context, stats_info.input->expr,
+		                                                                    stats_info.input->child_stats);
+		*propagated = bounds != nullptr;
+		if (bounds) {
+			stats_info.result_stats.GetMutableStats("duckdb_v2_scalar_function_stats_propagate_monotone_bounds") =
+			    std::move(*bounds);
+		}
+	});
+}
+
 DUCKDB_V2_ERROR duckdb_v2_connection_register_scalar_function(duckdb_v2_connection_handle conn,
                                                               duckdb_v2_scalar_function_handle function,
                                                               duckdb_v2_error_info_handle *err) {
@@ -869,9 +901,10 @@ DUCKDB_V2_ERROR duckdb_v2_connection_register_scalar_function(duckdb_v2_connecti
 		context.RunFunctionInTransaction([&]() {
 			auto &self = *Convert(function);
 			auto &catalog = duckdb::Catalog::GetSystemCatalog(context);
-			auto existing = catalog.GetEntry(context, duckdb::CatalogType::SCALAR_FUNCTION_ENTRY, self.schema, self.name,
-			                                 duckdb::OnEntryNotFound::RETURN_NULL);
-			auto info = duckdb::CreateScalarFunctionInfo(self.Build(*context.db, FindOverridden(existing, self.signature)));
+			auto existing = catalog.GetEntry(context, duckdb::CatalogType::SCALAR_FUNCTION_ENTRY, self.schema,
+			                                 self.name, duckdb::OnEntryNotFound::RETURN_NULL);
+			auto info =
+			    duckdb::CreateScalarFunctionInfo(self.Build(*context.db, FindOverridden(existing, self.signature)));
 			info.SetQualifiedName(
 			    duckdb::QualifiedName(info.GetQualifiedName().Catalog(), self.schema, info.GetFunctionName()));
 			self.docs.AddTo(self.signature, info);

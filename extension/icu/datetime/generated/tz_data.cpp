@@ -9,7 +9,7 @@
 
 #include "tz_data.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 // The zones, their identifiers, the recurring rules and the Windows names are all
@@ -1932,4 +1932,4 @@ const idx_t TZ_UNCOMPRESSED_SIZE = 210013;
 const char *const TZ_VERSION = "2026f";
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

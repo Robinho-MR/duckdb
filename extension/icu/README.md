@@ -5,6 +5,13 @@ its date and time functions. It is named after the ICU library, which it used to
 it no longer depends on it, and instead carries its own implementations together with the
 Unicode data they are generated from.
 
+The extension is written against DuckDB's stable C++ API (`tools/cpp/duckdb_cpp.hpp`) only, and
+includes nothing of the engine. It is built twice from the same sources: as a static archive linked
+into DuckDB, and as a loadable `icu.duckdb_extension` that reaches the engine through the extension
+vtable. The calendar and collation engines (`datetime/`, `collation/`) and the date arithmetic of
+the functions (`icu-datetime.hpp`) use the standard library alone; the text formats of strptime,
+strftime and the time zone casts come from the engine through the `datetime` module of the V2 C API.
+
 ## Updating the Time Zone Data
 
 The time zone data lives in `datetime/generated/tz_data.cpp` and is generated from the Unicode

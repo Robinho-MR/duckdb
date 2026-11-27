@@ -1,202 +1,106 @@
-#include "duckdb/common/vector/flat_vector.hpp"
-#include "duckdb/common/exception.hpp"
-#include "duckdb/common/types/interval.hpp"
-#include "duckdb/common/types/vector.hpp"
-#include "duckdb/function/function_set.hpp"
-#include "duckdb/function/scalar_function.hpp"
-#include "duckdb/main/context.hpp"
-#include "include/icu-datefunc.hpp"
-#include "duckdb/planner/expression/bound_function_expression.hpp"
-#include "duckdb/main/extension/extension_loader.hpp"
+#include "icu-datefunc.hpp"
+#include "icu-vector.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
+
+//! How often a long loop checks whether the query was interrupted
+static constexpr idx_t INTERRUPT_CHECK_INTERVAL = 2048;
 
 struct ICUListRange : public ICUDateFunc {
 	template <bool INCLUSIVE_BOUND>
-	class RangeInfoStruct {
-	public:
-		explicit RangeInfoStruct(DataChunk &args_p)
-		    : args(args_p), start_value_data(args.data[0].template Values<timestamp_tz_t>()),
-		      end_value_data(args.data[1].template Values<timestamp_tz_t>()),
-		      increment_value_data(args.data[2].template Values<interval_t>()) {
+	static uint64_t ListLength(cxx::Context &context, timestamp_tz_t start_value, timestamp_tz_t end_value,
+	                           interval_t increment_value, TZCalendar &calendar) {
+		bool is_positive = increment_value.months > 0 || increment_value.days > 0 || increment_value.micros > 0;
+		bool is_negative = increment_value.months < 0 || increment_value.days < 0 || increment_value.micros < 0;
+		if (!is_negative && !is_positive) {
+			// interval is 0: no result
+			return 0;
+		}
+		// We don't allow infinite bounds because they generate errors or infinite loops
+		if (!IsFinite(start_value) || !IsFinite(end_value)) {
+			throw InvalidInputException("Interval infinite bounds not supported");
 		}
 
-		bool RowIsValid(idx_t row_idx) {
-			if (!start_value_data[row_idx].IsValid()) {
-				return false;
-			}
-			if (!end_value_data[row_idx].IsValid()) {
-				return false;
-			}
-			if (!increment_value_data[row_idx].IsValid()) {
-				return false;
-			}
-			return true;
+		if (is_negative && is_positive) {
+			// we don't allow a mix of
+			throw InvalidInputException("Interval with mix of negative/positive entries not supported");
 		}
-
-		timestamp_tz_t StartListValue(idx_t row_idx) {
-			auto start_val = start_value_data[row_idx];
-			return start_val.GetValue();
+		if (start_value.micros > end_value.micros && is_positive) {
+			return 0;
 		}
-
-		timestamp_tz_t EndListValue(idx_t row_idx) {
-			auto end_val = end_value_data[row_idx];
-			return end_val.GetValue();
+		if (start_value.micros < end_value.micros && is_negative) {
+			return 0;
 		}
-
-		interval_t ListIncrementValue(idx_t row_idx) {
-			auto increment_val = increment_value_data[row_idx];
-			return increment_val.GetValue();
-		}
-
-		void GetListValues(idx_t row_idx, timestamp_tz_t &start_value, timestamp_tz_t &end_value,
-		                   interval_t &increment_value) {
-			start_value = StartListValue(row_idx);
-			end_value = EndListValue(row_idx);
-			increment_value = ListIncrementValue(row_idx);
-		}
-
-		uint64_t ListLength(Context &context, idx_t row_idx, TZCalendar &calendar) {
-			timestamp_tz_t start_value;
-			timestamp_tz_t end_value;
-			interval_t increment_value;
-			GetListValues(row_idx, start_value, end_value, increment_value);
-			return ListLength(context, start_value, end_value, increment_value, INCLUSIVE_BOUND, calendar);
-		}
-
-		void Increment(timestamp_tz_t &input, interval_t increment, TZCalendar &calendar) {
-			input = Add(calendar, input, increment);
-		}
-
-	private:
-		DataChunk &args;
-		VectorIterator<timestamp_tz_t> start_value_data;
-		VectorIterator<timestamp_tz_t> end_value_data;
-		VectorIterator<interval_t> increment_value_data;
-
-		uint64_t ListLength(Context &context, timestamp_tz_t start_value, timestamp_tz_t end_value,
-		                    interval_t increment_value, bool inclusive_bound, TZCalendar &calendar) {
-			bool is_positive = increment_value.months > 0 || increment_value.days > 0 || increment_value.micros > 0;
-			bool is_negative = increment_value.months < 0 || increment_value.days < 0 || increment_value.micros < 0;
-			if (!is_negative && !is_positive) {
-				// interval is 0: no result
-				return 0;
-			}
-			// We don't allow infinite bounds because they generate errors or infinite loops
-			if (!start_value.IsFinite() || !end_value.IsFinite()) {
-				throw InvalidInputException("Interval infinite bounds not supported");
-			}
-
-			if (is_negative && is_positive) {
-				// we don't allow a mix of
-				throw InvalidInputException("Interval with mix of negative/positive entries not supported");
-			}
-			if (start_value > end_value && is_positive) {
-				return 0;
-			}
-			if (start_value < end_value && is_negative) {
-				return 0;
-			}
-			int64_t total_values = 0;
+		int64_t total_values = 0;
+		auto keep_going = [&]() {
 			if (is_negative) {
-				// negative interval, start_value is going down
-				while (inclusive_bound ? start_value >= end_value : start_value > end_value) {
-					start_value = Add(calendar, start_value, increment_value);
-					total_values++;
-					if (total_values > NumericLimits<uint32_t>::Maximum()) {
-						throw InvalidInputException("Lists larger than 2^32 elements are not supported");
-					}
-					// counting the elements can take billions of steps
-					if (UnsafeNumericCast<idx_t>(total_values) % STANDARD_VECTOR_SIZE == 0) {
-						context.FastInterruptCheck();
-					}
-				}
-			} else {
-				// positive interval, start_value is going up
-				while (inclusive_bound ? start_value <= end_value : start_value < end_value) {
-					start_value = Add(calendar, start_value, increment_value);
-					total_values++;
-					if (total_values > NumericLimits<uint32_t>::Maximum()) {
-						throw InvalidInputException("Lists larger than 2^32 elements are not supported");
-					}
-					// counting the elements can take billions of steps
-					if (UnsafeNumericCast<idx_t>(total_values) % STANDARD_VECTOR_SIZE == 0) {
-						context.FastInterruptCheck();
-					}
-				}
+				return INCLUSIVE_BOUND ? start_value.micros >= end_value.micros : start_value.micros > end_value.micros;
 			}
-			return total_values;
-		}
-	};
-
-	template <bool INCLUSIVE_BOUND>
-	static void ICUListRangeFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-		D_ASSERT(result.GetType().id() == LogicalTypeId::LIST);
-		D_ASSERT(args.ColumnCount() == 3);
-
-		auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
-		auto &bind_info = func_expr.BindInfo()->Cast<BindData>();
-		TZCalendar calendar(*bind_info.calendar, bind_info.cal_setting);
-
-		auto &context = state.GetContext();
-		RangeInfoStruct<INCLUSIVE_BOUND> info(args);
-		idx_t args_size = args.size();
-		auto list_writer = FlatVector::Writer<VectorListType<timestamp_tz_t>>(result, args_size);
-		for (idx_t i = 0; i < args_size; i++) {
-			if (!info.RowIsValid(i)) {
-				list_writer.WriteNull();
-				continue;
+			return INCLUSIVE_BOUND ? start_value.micros <= end_value.micros : start_value.micros < end_value.micros;
+		};
+		while (keep_going()) {
+			start_value = Add(calendar, start_value, increment_value);
+			total_values++;
+			if (total_values > int64_t(NumericLimits<uint32_t>::Maximum())) {
+				throw InvalidInputException("Lists larger than 2^32 elements are not supported");
 			}
-			const auto length = info.ListLength(context, i, calendar);
-			auto list = list_writer.WriteDynamicList();
-
-			timestamp_tz_t range_value = info.StartListValue(i);
-			interval_t increment = info.ListIncrementValue(i);
-			for (idx_t range_idx = 0; range_idx < NumericCast<idx_t>(length); range_idx++) {
-				if (range_idx > 0) {
-					info.Increment(range_value, increment, calendar);
-				}
-				list.WriteElement().WriteValue(range_value);
-				if ((range_idx + 1) % STANDARD_VECTOR_SIZE == 0) {
-					context.FastInterruptCheck();
-				}
+			// counting the elements can take billions of steps
+			if (idx_t(total_values) % INTERRUPT_CHECK_INTERVAL == 0) {
+				context.InterruptCheck();
 			}
 		}
-		result.Verify();
+		return uint64_t(total_values);
 	}
 
-	static void AddICUListRangeFunction(ExtensionLoader &loader) {
-		ScalarFunctionSet range("range");
-		ScalarFunction range_fun({}, LogicalType::LIST(LogicalType::TIMESTAMP_TZ), ICUListRangeFunction<false>, Bind);
-		range_fun.GetSignature()
-		    .AddParameter("start", LogicalType::TIMESTAMP_TZ)
-		    .AddParameter("stop", LogicalType::TIMESTAMP_TZ)
-		    .AddParameter("step", LogicalType::INTERVAL);
-		range.AddFunction(range_fun);
-		// throws for infinite or mixed-sign intervals
-		range.SetFallible();
-		range.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
-		loader.RegisterFunction(range);
+	template <bool INCLUSIVE_BOUND>
+	static void ICUListRangeFunction(cxx::ScalarFunction::ExecInput &input) {
+		auto &bind_info = input.GetBindData<BindData>();
+		TZCalendar calendar(*bind_info.calendar, bind_info.cal_setting);
+		auto &context = input.GetContext();
 
-		// generate_series: similar to range, but inclusive instead of exclusive bounds on the RHS
-		ScalarFunctionSet generate_series("generate_series");
-		ScalarFunction generate_series_fun({}, LogicalType::LIST(LogicalType::TIMESTAMP_TZ), ICUListRangeFunction<true>,
-		                                   Bind);
-		generate_series_fun.GetSignature()
-		    .AddParameter("start", LogicalType::TIMESTAMP_TZ)
-		    .AddParameter("stop", LogicalType::TIMESTAMP_TZ)
-		    .AddParameter("step", LogicalType::INTERVAL);
-		generate_series.AddFunction(generate_series_fun);
+		ArgReader<timestamp_tz_t> starts(input.GetArg(0));
+		ArgReader<timestamp_tz_t> ends(input.GetArg(1));
+		ArgReader<interval_t> increments(input.GetArg(2));
 
+		const auto count = input.GetRowCount();
+		auto result = input.GetResult();
+		ListResultWriter<timestamp_tz_t> writer(result, count);
+		for (idx_t i = 0; i < count; i++) {
+			if (!starts.IsValid(i) || !ends.IsValid(i) || !increments.IsValid(i)) {
+				writer.SetNull(i);
+				continue;
+			}
+			auto range_value = starts.Get(i);
+			const auto increment = increments.Get(i);
+			const auto length = ListLength<INCLUSIVE_BOUND>(context, range_value, ends.Get(i), increment, calendar);
+			writer.StartList(i);
+			for (idx_t range_idx = 0; range_idx < length; range_idx++) {
+				if (range_idx > 0) {
+					range_value = Add(calendar, range_value, increment);
+				}
+				writer.Append(range_value);
+				if ((range_idx + 1) % INTERRUPT_CHECK_INTERVAL == 0) {
+					context.InterruptCheck();
+				}
+			}
+		}
+		writer.Finish();
+	}
+
+	static void AddFunction(const ICURegistration &reg, const string &name, cxx::ScalarFunction::ExecCallback exec) {
+		auto function = reg.Scalar(name, {{"start", "TIMESTAMPTZ"}, {"stop", "TIMESTAMPTZ"}, {"step", "INTERVAL"}},
+		                           "TIMESTAMPTZ[]");
+		function.SetBindCallback(Bind).SetExecCallback(exec);
 		// throws for infinite or mixed-sign intervals
-		generate_series.SetFallible();
-		generate_series.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
-		loader.RegisterFunction(generate_series);
+		function.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+		reg.extension.Register(function);
 	}
 };
 
-void RegisterICUListRangeFunctions(ExtensionLoader &loader) {
-	ICUListRange::AddICUListRangeFunction(loader);
+void RegisterICUListRangeFunctions(const ICURegistration &reg) {
+	ICUListRange::AddFunction(reg, "range", ICUListRange::ICUListRangeFunction<false>);
+	// generate_series: similar to range, but inclusive instead of exclusive bounds on the RHS
+	ICUListRange::AddFunction(reg, "generate_series", ICUListRange::ICUListRangeFunction<true>);
 }
 
-} // namespace duckdb
+} // namespace duckdb_icu

@@ -211,6 +211,38 @@ functions:
         description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
     return_type: ERROR
 
+  cast_get_implicit_cast_cost:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Retrieves the cost the binder assigns to converting `source_type` to `target_type` on its own, or -1 when it
+      does not convert them implicitly.
+
+      A cast that implements a conversion the engine already knows, e.g. one that applies a time zone, passes this to
+      `[[cast_function_set_implicit_cast_cost]]` to keep the binder's choices between implicit casts as they are. The
+      rules of the engine are not part of the API: they change between versions, which is why they are read rather than
+      copied. The cost includes the casts registered on the factory's database so far.
+    parameters:
+      factory:
+        type: factory
+        description: The factory of the database to read the cost from.
+      source_type:
+        type: logical_type
+        description: The type to cast from. Borrowed for the call only.
+      target_type:
+        type: logical_type
+        description: The type to cast to. Borrowed for the call only.
+      cost:
+        type: i64
+        indirection: 1
+        kind: OUT
+        description: Receives the cost, or -1.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
   cast_function_set_user_data:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-09-02" ]
@@ -243,8 +275,9 @@ functions:
 
       Only `FUNCTION_PROPERTY_STABILITY` can be set. A cast whose result depends on a setting, such as the time zone,
       declares `FUNCTION_PROPERTY_STABILITY_CONSISTENT_WITHIN_QUERY`, so that the engine does not fold it into a constant
-      of a prepared statement or accept it in an index expression. Any other key, or a value that does not belong to the
-      key, results in an error. Defaults to `FUNCTION_PROPERTY_STABILITY_CONSISTENT`.
+      of a prepared statement or accept it in an index expression. A cast cannot be
+      `FUNCTION_PROPERTY_STABILITY_VOLATILE`. Any other key, or a value that does not belong to the key, results in an
+      error. Defaults to `FUNCTION_PROPERTY_STABILITY_CONSISTENT`.
     parameters:
       function:
         type: cast_function

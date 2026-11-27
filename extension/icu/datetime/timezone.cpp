@@ -1,6 +1,6 @@
 #include "timezone.hpp"
 
-#include "duckdb/common/string_util.hpp"
+#include "icu_common.hpp"
 #include "grego.hpp"
 
 #include <climits>
@@ -13,7 +13,7 @@
 #include <unistd.h>
 #endif
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 //===--------------------------------------------------------------------===//
@@ -551,4 +551,4 @@ unique_ptr<TimeZone> TimeZone::TryCreateDefault() {
 }
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

@@ -1,13 +1,29 @@
-#include "include/icu-datesub.hpp"
-#include "include/icu-datefunc.hpp"
+#include "icu-datefunc.hpp"
+#include "icu-vector.hpp"
 
-#include "duckdb/main/extension/extension_loader.hpp"
-#include "duckdb/common/enums/date_part_specifier.hpp"
-#include "duckdb/common/operator/subtract.hpp"
-#include "duckdb/optimizer/statistics_propagator.hpp"
-#include "duckdb/planner/expression/bound_function_expression.hpp"
+namespace duckdb_icu {
 
-namespace duckdb {
+//! The constant part a call is bound with, if any
+static bool TryGetConstantPart(cxx::ScalarFunction::BindInput &input, DatePartSpecifier &part, bool &valid) {
+	auto part_value = input.TryGetConstantArgument(0);
+	if (!part_value || part_value->IsNull()) {
+		return false;
+	}
+	valid = TryGetDatePartSpecifier(part_value->Get<cxx::varchar_t>().view(), part);
+	return true;
+}
+
+//! Withdraws the monotonicity in both timestamps for a call whose constant part makes it not monotone
+static void ClearTimestampMonotonicity(cxx::ScalarFunction::BindInput &input) {
+	input.SetArgumentMonotonicity(1, cxx::FunctionMonotonicity::UNKNOWN);
+	input.SetArgumentMonotonicity(2, cxx::FunctionMonotonicity::UNKNOWN);
+}
+
+static void DeclareTimestampMonotonicity(cxx::ScalarFunction &function) {
+	function.SetArgumentMonotonicity(1, cxx::FunctionMonotonicity::NON_INCREASING);
+	function.SetArgumentMonotonicity(2, cxx::FunctionMonotonicity::NON_DECREASING);
+	function.SetStatsCallback(ICUDateFunc::PropagateFiniteMonotoneBounds);
+}
 
 struct ICUCalendarSub : public ICUDateFunc {
 	static bool SubtractsElapsedTime(DatePartSpecifier part) {
@@ -24,17 +40,15 @@ struct ICUCalendarSub : public ICUDateFunc {
 		}
 	}
 
-	static unique_ptr<FunctionData> Bind(BindScalarFunctionInput &input) {
-		auto part_value = input.TryGetConstant(0);
-		if (part_value && !part_value->IsNull()) {
-			DatePartSpecifier part;
-			if (!TryGetDatePartSpecifier(part_value->GetValue<string>(), part) || !SubtractsElapsedTime(part)) {
-				// calendar parts count whole local units, so moving one argument can step the result back,
-				// e.g. a month boundary that falls between two timestamps or a local day that repeats
-				input.GetBoundFunction().SetArgProperties({});
-			}
+	static void BindSub(cxx::ScalarFunction::BindInput &input) {
+		DatePartSpecifier part;
+		bool valid;
+		if (TryGetConstantPart(input, part, valid) && (!valid || !SubtractsElapsedTime(part))) {
+			// calendar parts count whole local units, so moving one argument can step the result back,
+			// e.g. a month boundary that falls between two timestamps or a local day that repeats
+			ClearTimestampMonotonicity(input);
 		}
-		return ICUDateFunc::Bind(input);
+		ICUDateFunc::Bind(input);
 	}
 
 	//	ICU only has 32 bit precision for date parts, so it can overflow a high resolution.
@@ -43,16 +57,16 @@ struct ICUCalendarSub : public ICUDateFunc {
 	static int64_t SubtractMicrosecond(Calendar *calendar, timestamp_tz_t start_date, timestamp_tz_t end_date) {
 		// the span of two representable timestamps does not always fit in one, so this needs the same
 		// overflow check the non-timezone date_diff uses
-		return SubtractOperatorOverflowCheck::Operation<int64_t, int64_t, int64_t>(end_date.value, start_date.value);
+		return SubtractOverflowCheck(end_date.micros, start_date.micros);
 	}
 
 	template <int64_t MICROS_PER_UNIT>
 	static int64_t SubtractUnits(timestamp_tz_t start_date, timestamp_tz_t end_date) {
 		int64_t delta_us;
-		if (TrySubtractOperator::Operation(end_date.value, start_date.value, delta_us)) {
+		if (TrySubtract(end_date.micros, start_date.micros, delta_us)) {
 			return delta_us / MICROS_PER_UNIT;
 		}
-		return Interval::GetDifferenceInUnits(start_date.value, end_date.value, MICROS_PER_UNIT);
+		return Interval::GetDifferenceInUnits(start_date.micros, end_date.micros, MICROS_PER_UNIT);
 	}
 
 	static int64_t SubtractMillisecond(Calendar *calendar, timestamp_tz_t start_date, timestamp_tz_t end_date) {
@@ -128,65 +142,37 @@ struct ICUCalendarSub : public ICUDateFunc {
 	}
 
 	template <typename T>
-	static void ICUDateSubFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-		D_ASSERT(args.ColumnCount() == 3);
-		const auto &part_arg = args.data[0];
-		const auto &startdate_arg = args.data[1];
-		const auto &enddate_arg = args.data[2];
-
-		auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
-		auto &info = func_expr.BindInfo()->Cast<BindData>();
+	static void ICUDateSubFunction(cxx::ScalarFunction::ExecInput &input) {
+		auto &info = input.GetBindData<BindData>();
 		CalendarPtr calendar(info.calendar->Copy());
 
-		if (part_arg.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		auto part_arg = input.GetArg(0);
+		part_sub_t constant_func = nullptr;
+		if (IsConstant(part_arg)) {
 			// Common case of constant part.
-			if (ConstantVector::IsNull(part_arg)) {
-				throw InternalException("ICUDateSub called with constant NULL bucket width");
+			StringArgReader part(part_arg);
+			if (part.IsValid(0)) {
+				constant_func = SubtractFactory(GetDatePartSpecifier(part.Get(0)));
 			}
-			const auto specifier = ConstantVector::GetData<string_t>(part_arg)->GetString();
-			auto part_func = SubtractFactory(GetDatePartSpecifier(specifier));
-			BinaryExecutor::Execute<T, T, int64_t>(startdate_arg, enddate_arg, result,
-			                                       [&](T start_date, T end_date) -> optional<int64_t> {
-				                                       if (start_date.IsFinite() && end_date.IsFinite()) {
-					                                       return part_func(calendar.get(), start_date, end_date);
-				                                       } else {
-					                                       return nullopt;
-				                                       }
-			                                       });
-		} else {
-			TernaryExecutor::Execute<string_t, T, T, int64_t>(
-			    part_arg, startdate_arg, enddate_arg, result,
-			    [&](string_t specifier, T start_date, T end_date) -> optional<int64_t> {
-				    if (start_date.IsFinite() && end_date.IsFinite()) {
-					    auto part_func = SubtractFactory(GetDatePartSpecifier(specifier.GetString()));
-					    return part_func(calendar.get(), start_date, end_date);
-				    } else {
-					    return nullopt;
-				    }
-			    });
 		}
+		ExecuteRows<int64_t, std::string_view, T, T>(
+		    input, [&](std::string_view specifier, T start_date, T end_date) -> std::optional<int64_t> {
+			    if (!IsFinite(start_date) || !IsFinite(end_date)) {
+				    return std::nullopt;
+			    }
+			    auto part_func = constant_func ? constant_func : SubtractFactory(GetDatePartSpecifier(specifier));
+			    return part_func(calendar.get(), start_date, end_date);
+		    });
 	}
 
-	template <typename TA>
-	static ScalarFunction GetFunction(const LogicalTypeId &type) {
-		ScalarFunction fun({}, LogicalType::BIGINT, ICUDateSubFunction<TA>, Bind);
-		fun.GetSignature()
-		    .AddParameter("part", LogicalType::VARCHAR)
-		    .AddParameter("startdate", type)
-		    .AddParameter("enddate", type);
-		return fun;
-	}
-
-	static void AddFunctions(const Identifier &name, ExtensionLoader &loader) {
-		ScalarFunctionSet set {name};
-		set.AddFunction(GetFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ));
+	static void AddFunctions(const ICURegistration &reg, const string &name) {
+		auto function =
+		    reg.Scalar(name, {{"part", "VARCHAR"}, {"startdate", "TIMESTAMPTZ"}, {"enddate", "TIMESTAMPTZ"}}, "BIGINT");
+		function.SetBindCallback(BindSub).SetExecCallback(ICUDateSubFunction<timestamp_tz_t>);
 		// throws for unrecognized part specifiers and for dates that overflow the timestamp range
-		set.SetFallible();
-		set.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
-		set.SetArgProperties(1, ArgProperties().NonIncreasing());
-		set.SetArgProperties(2, ArgProperties().NonDecreasing());
-		set.SetStatisticsCallback(StatisticsPropagator::PropagateFiniteMonotoneBounds);
-		loader.RegisterFunction(set);
+		function.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+		DeclareTimestampMonotonicity(function);
+		reg.extension.Register(function);
 	}
 };
 
@@ -248,17 +234,15 @@ struct ICUCalendarDiff : public ICUDateFunc {
 		}
 	}
 
-	static unique_ptr<FunctionData> Bind(BindScalarFunctionInput &input) {
-		auto part_value = input.TryGetConstant(0);
-		if (part_value && !part_value->IsNull()) {
-			DatePartSpecifier part;
-			if (!TryGetDatePartSpecifier(part_value->GetValue<string>(), part) || !TruncatesToSecondOrFiner(part)) {
-				// date_diff truncates both arguments first, and truncating to a coarser part follows the local
-				// time, which repeats or moves backwards when the UTC offset changes
-				input.GetBoundFunction().SetArgProperties({});
-			}
+	static void BindDiff(cxx::ScalarFunction::BindInput &input) {
+		DatePartSpecifier part;
+		bool valid;
+		if (TryGetConstantPart(input, part, valid) && (!valid || !TruncatesToSecondOrFiner(part))) {
+			// date_diff truncates both arguments first, and truncating to a coarser part follows the local
+			// time, which repeats or moves backwards when the UTC offset changes
+			ClearTimestampMonotonicity(input);
 		}
-		return ICUDateFunc::Bind(input);
+		ICUDateFunc::Bind(input);
 	}
 
 	static int64_t DifferenceEra(Calendar *calendar, timestamp_tz_t start_date, timestamp_tz_t end_date) {
@@ -312,87 +296,67 @@ struct ICUCalendarDiff : public ICUDateFunc {
 	}
 
 	template <typename T>
-	static void ICUDateDiffFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-		D_ASSERT(args.ColumnCount() == 3);
-		const auto &part_arg = args.data[0];
-		const auto &startdate_arg = args.data[1];
-		const auto &enddate_arg = args.data[2];
-
-		auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
-		auto &info = func_expr.BindInfo()->Cast<BindData>();
+	static void ICUDateDiffFunction(cxx::ScalarFunction::ExecInput &input) {
+		auto &info = input.GetBindData<BindData>();
 		CalendarPtr calendar_ptr(info.calendar->Copy());
 		auto calendar = calendar_ptr.get();
 
-		if (part_arg.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		auto part_arg = input.GetArg(0);
+		bool constant_part = false;
+		DatePartSpecifier part = DatePartSpecifier::INVALID;
+		part_trunc_t trunc_func = nullptr;
+		part_sub_t sub_func = nullptr;
+		if (IsConstant(part_arg)) {
 			// Common case of constant part.
-			if (ConstantVector::IsNull(part_arg)) {
-				ConstantVector::SetNull(result, true);
-			} else {
-				const auto specifier = ConstantVector::GetData<string_t>(part_arg)->GetString();
-				const auto part = GetDatePartSpecifier(specifier);
-				auto trunc_func = DiffTruncationFactory(part);
-				auto sub_func = SubtractFactory(part);
-				BinaryExecutor::Execute<T, T, int64_t>(
-				    startdate_arg, enddate_arg, result, [&](T start_date, T end_date) -> optional<int64_t> {
-					    if (start_date.IsFinite() && end_date.IsFinite()) {
-						    if (part == DatePartSpecifier::ERA) {
-							    return DifferenceEra(calendar, start_date, end_date);
-						    }
-						    return DifferenceFunc(calendar, start_date, end_date, trunc_func, sub_func);
-					    } else {
-						    return nullopt;
-					    }
-				    });
+			StringArgReader part_reader(part_arg);
+			if (part_reader.IsValid(0)) {
+				constant_part = true;
+				part = GetDatePartSpecifier(part_reader.Get(0));
+				trunc_func = DiffTruncationFactory(part);
+				sub_func = SubtractFactory(part);
 			}
-		} else {
-			TernaryExecutor::Execute<string_t, T, T, int64_t>(
-			    part_arg, startdate_arg, enddate_arg, result,
-			    [&](string_t specifier, T start_date, T end_date) -> optional<int64_t> {
-				    if (start_date.IsFinite() && end_date.IsFinite()) {
-					    const auto part = GetDatePartSpecifier(specifier.GetString());
-					    if (part == DatePartSpecifier::ERA) {
-						    return DifferenceEra(calendar, start_date, end_date);
-					    }
-					    auto trunc_func = DiffTruncationFactory(part);
-					    auto sub_func = SubtractFactory(part);
-					    return DifferenceFunc(calendar, start_date, end_date, trunc_func, sub_func);
-				    } else {
-					    return nullopt;
-				    }
-			    });
 		}
+		ExecuteRows<int64_t, std::string_view, T, T>(
+		    input, [&](std::string_view specifier, T start_date, T end_date) -> std::optional<int64_t> {
+			    if (!IsFinite(start_date) || !IsFinite(end_date)) {
+				    return std::nullopt;
+			    }
+			    if (!constant_part) {
+				    part = GetDatePartSpecifier(specifier);
+			    }
+			    if (part == DatePartSpecifier::ERA) {
+				    return DifferenceEra(calendar, start_date, end_date);
+			    }
+			    if (!constant_part) {
+				    trunc_func = DiffTruncationFactory(part);
+				    sub_func = SubtractFactory(part);
+			    }
+			    return DifferenceFunc(calendar, start_date, end_date, trunc_func, sub_func);
+		    });
 	}
 
-	template <typename TA>
-	static ScalarFunction GetFunction(const LogicalTypeId &type) {
-		ScalarFunction fun({}, LogicalType::BIGINT, ICUDateDiffFunction<TA>, Bind);
-		fun.GetSignature()
-		    .AddParameter("part", LogicalType::VARCHAR)
-		    .AddParameter("startdate", type)
-		    .AddParameter("enddate", type);
-		return fun;
-	}
-
-	static void AddFunctions(const Identifier &name, ExtensionLoader &loader) {
-		ScalarFunctionSet set {name};
-		set.AddFunction(GetFunction<timestamp_tz_t>(LogicalType::TIMESTAMP_TZ));
-		set.AddFunction(GetFunction<timestamp_tz_ns_t>(LogicalType::TIMESTAMP_TZ_NS));
+	template <typename T>
+	static void AddFunction(const ICURegistration &reg, const string &name, const string &type) {
+		auto function = reg.Scalar(name, {{"part", "VARCHAR"}, {"startdate", type}, {"enddate", type}}, "BIGINT");
+		function.SetBindCallback(BindDiff).SetExecCallback(ICUDateDiffFunction<T>);
 		// throws for unrecognized part specifiers and for dates that overflow the timestamp range
-		set.SetFallible();
-		set.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
-		set.SetArgProperties(1, ArgProperties().NonIncreasing());
-		set.SetArgProperties(2, ArgProperties().NonDecreasing());
-		set.SetStatisticsCallback(StatisticsPropagator::PropagateFiniteMonotoneBounds);
-		loader.RegisterFunction(set);
+		function.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+		DeclareTimestampMonotonicity(function);
+		reg.extension.Register(function);
+	}
+
+	static void AddFunctions(const ICURegistration &reg, const string &name) {
+		AddFunction<timestamp_tz_t>(reg, name, "TIMESTAMPTZ");
+		AddFunction<timestamp_tz_ns_t>(reg, name, "TIMESTAMPTZ_NS");
 	}
 };
 
-void RegisterICUDateSubFunctions(ExtensionLoader &loader) {
-	ICUCalendarSub::AddFunctions("date_sub", loader);
-	ICUCalendarSub::AddFunctions("datesub", loader);
+void RegisterICUDateSubFunctions(const ICURegistration &reg) {
+	ICUCalendarSub::AddFunctions(reg, "date_sub");
+	ICUCalendarSub::AddFunctions(reg, "datesub");
 
-	ICUCalendarDiff::AddFunctions("date_diff", loader);
-	ICUCalendarDiff::AddFunctions("datediff", loader);
+	ICUCalendarDiff::AddFunctions(reg, "date_diff");
+	ICUCalendarDiff::AddFunctions(reg, "datediff");
 }
 
-} // namespace duckdb
+} // namespace duckdb_icu

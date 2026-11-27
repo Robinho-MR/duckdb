@@ -136,8 +136,7 @@ DUCKDB_V2_ERROR duckdb_v2_strptime_result_create(duckdb_v2_strptime_result_handl
 }
 
 DUCKDB_V2_ERROR duckdb_v2_strptime_result_get_parts(duckdb_v2_strptime_result_handle result,
-                                                    duckdb_v2_strptime_parts *parts,
-                                                    duckdb_v2_error_info_handle *err) {
+                                                    duckdb_v2_strptime_parts *parts, duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(result);
 	DUCKDB_CHECK_ARG(parts);
 	return WithErrorHandler(err, [&]() {
@@ -168,7 +167,7 @@ DUCKDB_V2_ERROR duckdb_v2_strptime_result_get_error(duckdb_v2_strptime_result_ha
 	DUCKDB_CHECK_ARG(length);
 	return WithErrorHandler(err, [&]() {
 		auto message = Convert(result)->result.FormatError(duckdb::string_t(text ? text : "", text_length),
-		                                                    duckdb::string(format_string, format_string_length));
+		                                                   duckdb::string(format_string, format_string_length));
 		WriteToBuffer(message, buffer, buffer_size, *length);
 	});
 }
@@ -212,8 +211,8 @@ DUCKDB_V2_ERROR duckdb_v2_strftime_format_write(duckdb_v2_strftime_format_handle
 	DUCKDB_CHECK_ARG(length);
 	return WithErrorHandler(err, [&]() {
 		auto &strftime_format = Convert(format)->format;
-		int32_t data[8] = {parts->year,   parts->month,    parts->day, parts->hour, parts->minute, parts->second,
-		                   parts->fraction, parts->utc_offset};
+		int32_t data[8] = {parts->year,   parts->month,  parts->day,      parts->hour,
+		                   parts->minute, parts->second, parts->fraction, parts->utc_offset};
 		if (!nanoseconds) {
 			data[6] *= duckdb::Interval::NANOS_PER_MICRO;
 		}
@@ -251,7 +250,7 @@ DUCKDB_V2_ERROR duckdb_v2_strftime_format_destroy(duckdb_v2_strftime_format_hand
 // Text of the time zone casts
 //----------------------------------------------------------------------------------------------------------------------
 
-DUCKDB_V2_ERROR duckdb_v2_timestamp_tz_parse_text(const char *text, idx_t text_length,
+DUCKDB_V2_ERROR duckdb_v2_timestamp_tz_parse_text(const char *text, idx_t text_length, bool nanoseconds,
                                                   duckdb_v2_timestamp_text *parsed,
                                                   DUCKDB_V2_TIMESTAMP_TEXT_RESULT *result,
                                                   duckdb_v2_error_info_handle *err) {
@@ -264,15 +263,23 @@ DUCKDB_V2_ERROR duckdb_v2_timestamp_tz_parse_text(const char *text, idx_t text_l
 		duckdb::string_t tz(nullptr, 0);
 		int32_t nanos = 0;
 		auto cast_result = duckdb::Timestamp::TryConvertTimestampTZ(text ? text : "", text_length, value, true,
-		                                                            has_offset, tz, &nanos);
+		                                                            has_offset, tz, nanoseconds ? &nanos : nullptr);
 		switch (cast_result) {
 		case duckdb::TimestampCastResult::SUCCESS:
 			*result = DUCKDB_V2_TIMESTAMP_TEXT_SUCCESS;
 			parsed->micros = value.value;
 			parsed->nanos = nanos;
 			parsed->has_offset = has_offset;
-			parsed->tz_name = tz.GetSize() ? tz.GetData() : nullptr;
-			parsed->tz_name_length = tz.GetSize();
+			parsed->tz_name = nullptr;
+			parsed->tz_name_length = 0;
+			if (tz.GetSize()) {
+				// a short name is inlined in the string_t: point into the text, where the name ends the timestamp
+				std::string_view input(text, text_length);
+				auto pos = input.rfind(std::string_view(tz.GetData(), tz.GetSize()));
+				D_ASSERT(pos != std::string_view::npos);
+				parsed->tz_name = text + pos;
+				parsed->tz_name_length = tz.GetSize();
+			}
 			return;
 		case duckdb::TimestampCastResult::ERROR_RANGE:
 			*result = DUCKDB_V2_TIMESTAMP_TEXT_ERROR_RANGE;

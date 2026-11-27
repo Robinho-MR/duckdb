@@ -377,6 +377,12 @@ public:
 	explicit OutOfMemoryException(const std::string &message, std::string raw_message = {});
 };
 
+/// Data that should be valid is not, e.g. a stored string that is not valid UTF-8.
+class DataCorruptionException : public Exception {
+public:
+	explicit DataCorruptionException(const std::string &message, std::string raw_message = {});
+};
+
 /// An internal error: a state that should never be reached.
 class InternalException : public Exception {
 public:
@@ -4008,15 +4014,19 @@ public:
 			return *static_cast<T *>(GetUserDataInternal());
 		}
 
+		/// Whether the function runs with a context. It runs without one e.g. to maintain the keys of an index.
+		auto HasContext() const -> bool {
+			return context.has_value();
+		}
 		/// The context the function is initialized in. Borrowed, valid only for the callback duration.
+		/// @throws InvalidInputException When the function runs without a context, see `HasContext`.
 		auto GetContext() -> Context &;
 
 	private:
-		InitInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
-		}
+		InitInput(void *args, void *context);
 
 		void *args;
-		Context context;
+		std::optional<Context> context;
 
 		void SetInitDataInternal(void *data, void (*destructor)(void *));
 		void *GetBindDataInternal() const;
@@ -4068,15 +4078,19 @@ public:
 		/// The result vector to fill.
 		auto GetResult() const -> Vector;
 
+		/// Whether the function runs with a context. It runs without one e.g. to maintain the keys of an index.
+		auto HasContext() const -> bool {
+			return context.has_value();
+		}
 		/// The execution context. Borrowed, valid only for the callback duration.
+		/// @throws InvalidInputException When the function runs without a context, see `HasContext`.
 		auto GetContext() -> Context &;
 
 	private:
-		ExecInput(void *args, void *context) : args(args), context(detail::HandleFactory::Make<Context>(context)) {
-		}
+		ExecInput(void *args, void *context);
 
 		void *args;
-		Context context;
+		std::optional<Context> context;
 
 		void *GetBindDataInternal() const;
 		void *GetInitDataInternal() const;
@@ -4118,6 +4132,13 @@ public:
 
 		/// The statistics of the result, for the callback to narrow.
 		auto GetResultStats() const -> Stats;
+
+		/// Narrows the statistics of the result as the engine does for a function without a stats callback: from
+		/// the bounds of the arguments, through the monotonicity declared with `SetArgumentMonotonicity`. For a
+		/// callback that rules out the cases where that is wrong, then calls this.
+		/// @return Whether the statistics were narrowed: not when an argument has no bounds, its monotonicity is
+		/// unknown, or a corner of the bounds evaluates to NULL.
+		auto PropagateMonotoneBounds() -> bool;
 
 		/// The query's context. Borrowed, valid only for the callback duration.
 		auto GetContext() -> Context &;
@@ -5052,6 +5073,9 @@ public:
 
 	/// Sets the function's name, as SQL will call it.
 	auto SetName(const std::string &name) & -> TableFunction &;
+	/// How stable the function's results are within and across queries. Defaults to `VOLATILE`; declare
+	/// `CONSISTENT_WITHIN_QUERY` to let the optimizer share identical scans.
+	auto SetStability(FunctionStability value) & -> TableFunction &;
 	/// The documentation of this overload, borrowed for in-place mutation.
 	auto GetDocs() -> FunctionDocs;
 
@@ -6780,6 +6804,11 @@ public:
 	/// @param cost The cost, or a negative value to disable implicit casting.
 	auto SetImplicitCastCost(int64_t cost) & -> CastFunction &;
 
+	/// The cost the binder assigns to converting `source` to `target` on its own, or -1 when it does not convert them
+	/// implicitly. A cast that implements a conversion the engine already knows passes it to `SetImplicitCastCost`, to
+	/// keep the binder's choices between implicit casts as they are.
+	static auto GetImplicitCastCost(Factory &factory, const LogicalType &source, const LogicalType &target) -> int64_t;
+
 	/// Constructs user data of type `T`, carried by the registered cast and freed at engine teardown; read it from the
 	/// exec callback via `ExecInput::GetUserData<T>`. Consumed by registration: set it again before
 	/// re-registering.
@@ -7612,7 +7641,10 @@ enum class TimestampTextResult : uint8_t {
 
 /// Parses text in the grammar of the `VARCHAR` to `TIMESTAMP WITH TIME ZONE` cast, e.g. `2026-11-27 10:30+01` or
 /// `2026-11-27 10:30 Europe/Amsterdam`.
-auto ParseTimestampTzText(std::string_view text, TimestampText &result) -> TimestampTextResult;
+/// @param nanoseconds Whether to keep the nanoseconds of the text in `TimestampText::nanos`. Otherwise the fraction is
+/// rounded to microseconds as the cast rounds it.
+auto ParseTimestampTzText(std::string_view text, TimestampText &result, bool nanoseconds = false)
+    -> TimestampTextResult;
 
 /// Parses text in the grammar of the `VARCHAR` to `TIME WITH TIME ZONE` cast, e.g. `10:30:00+01`. Returns false when
 /// it is not a time; otherwise sets the time of day in microseconds, and the UTC offset in seconds if the text gives

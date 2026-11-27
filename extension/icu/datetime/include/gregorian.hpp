@@ -11,7 +11,7 @@
 #include "calendar.hpp"
 #include "grego.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 //! The proleptic Gregorian calendar: the Gregorian rules are applied to all dates, including the
@@ -144,4 +144,4 @@ protected:
 };
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

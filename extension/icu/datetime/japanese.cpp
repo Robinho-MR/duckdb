@@ -2,7 +2,7 @@
 
 #include "grego.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 //! The Gregorian date that every era starts on, taken from the Unicode calendar data
@@ -176,4 +176,4 @@ int32_t JapaneseCalendar::GetActualMaximum(CalendarField field) {
 }
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

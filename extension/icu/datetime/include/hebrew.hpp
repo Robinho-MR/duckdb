@@ -10,7 +10,7 @@
 
 #include "calendar.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 //! The Hebrew calendar: a lunisolar calendar in which seven years of every nineteen gain a leap
@@ -57,4 +57,4 @@ protected:
 };
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

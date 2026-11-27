@@ -8,10 +8,10 @@
 
 #pragma once
 
-#include "duckdb/common/common.hpp"
+#include "icu_common.hpp"
 #include "timezone.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 //! The fields of a calendar. The order matters: several computations resolve a range of fields.
@@ -325,4 +325,4 @@ private:
 };
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

@@ -226,7 +226,8 @@ def include_package(pkg_name, pkg_dir, include_files, include_list, source_list)
 
     include_files += amalgamation.list_includes_files(ext_include_dirs)
     include_list += ext_include_dirs
-    source_list += ext_source_files
+    # extensions on the stable C++ API share its sources: compile them once
+    source_list += [x for x in ext_source_files if x not in source_list]
 
     sys.path = original_path
 

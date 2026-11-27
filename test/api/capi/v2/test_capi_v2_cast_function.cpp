@@ -461,4 +461,127 @@ TEST_CASE("V2 cast: null arguments and destroy null-safety", "[capi_v2][cast_fun
 	duckdb_v2_logical_type_destroy(&integer);
 }
 
+namespace {
+
+int64_t bound_casts = 0;
+int64_t initialized_threads = 0;
+bool bind_saw_context = false;
+
+void DestroyString(void *data) {
+	delete static_cast<std::string *>(data);
+}
+
+void DestroyCounter(void *data) {
+	delete static_cast<int64_t *>(data);
+}
+
+// Picks the suffix of the bound cast from its target type: the bind data the exec callback reads
+void SuffixBind(duckdb_v2_cast_function_bind_info_handle info, duckdb_v2_context_handle context,
+                duckdb_v2_error_info_handle *err) {
+	bound_casts++;
+	bind_saw_context = context != nullptr;
+	duckdb_v2_logical_type_handle target = nullptr;
+	if (duckdb_v2_cast_function_bind_get_target_type(info, &target, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	DUCKDB_V2_LOGICAL_TYPE_ID id;
+	duckdb_v2_logical_type_get_id(target, &id, nullptr);
+	duckdb_v2_logical_type_destroy(&target);
+	duckdb_v2_opaque data = {new std::string(id == DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR ? " degrees" : "?"), DestroyString,
+	                         nullptr};
+	duckdb_v2_cast_function_bind_set_bind_data(info, &data, err);
+}
+
+void SuffixInit(duckdb_v2_cast_function_init_info_handle info, duckdb_v2_context_handle,
+                duckdb_v2_error_info_handle *err) {
+	void *bind_data = nullptr;
+	if (duckdb_v2_cast_function_init_get_bind_data(info, &bind_data, err) != DUCKDB_V2_ERROR_NONE || !bind_data) {
+		FailCast(err, DUCKDB_V2_ERROR_RUNTIME_INTERNAL, "init without bind data");
+		return;
+	}
+	initialized_threads++;
+	duckdb_v2_opaque data = {new int64_t(0), DestroyCounter, nullptr};
+	duckdb_v2_cast_function_init_set_init_data(info, &data, err);
+}
+
+void SuffixExec(duckdb_v2_cast_function_exec_info_handle info, duckdb_v2_context_handle,
+                duckdb_v2_error_info_handle *err) {
+	CastArgs args;
+	if (!ReadCastArgs(info, args, err)) {
+		return;
+	}
+	void *bind_data = nullptr;
+	void *init_data = nullptr;
+	if (duckdb_v2_cast_function_exec_get_bind_data(info, &bind_data, err) != DUCKDB_V2_ERROR_NONE ||
+	    duckdb_v2_cast_function_exec_get_init_data(info, &init_data, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	auto &suffix = *static_cast<std::string *>(bind_data);
+	auto &rows = *static_cast<int64_t *>(init_data);
+	const auto *in = static_cast<const int32_t *>(args.view.data);
+	for (idx_t i = 0; i < args.count; i++) {
+		rows++;
+		auto formatted = std::to_string(in[SelAt(args.view.sel, i)]) + suffix;
+		if (V2VectorAssignString(args.output, i, formatted.data(), formatted.size(), err) != DUCKDB_V2_ERROR_NONE) {
+			return;
+		}
+	}
+}
+
+} // namespace
+
+TEST_CASE("V2 cast: bind data, init data and stability", "[capi_v2][cast_function]") {
+	EnvFixture fx;
+	auto integer = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER);
+	auto varchar = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR);
+	auto temperature = RegisterTemperatureType(fx, integer);
+
+	auto cast = MakeCast(fx.conn, temperature, varchar, SuffixExec);
+	REQUIRE(duckdb_v2_cast_function_set_bind_callback(cast, SuffixBind, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_cast_function_set_init_callback(cast, SuffixInit, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_cast_function_set_property(cast, DUCKDB_V2_FUNCTION_PROPERTY_STABILITY,
+	                                             DUCKDB_V2_FUNCTION_PROPERTY_STABILITY_CONSISTENT_WITHIN_QUERY,
+	                                             nullptr) == DUCKDB_V2_ERROR_NONE);
+	// only the stability can be set, and with a value of its own
+	REQUIRE(duckdb_v2_cast_function_set_property(cast, DUCKDB_V2_FUNCTION_PROPERTY_FALLIBILITY,
+	                                             DUCKDB_V2_FUNCTION_PROPERTY_FALLIBILITY_FALLIBLE,
+	                                             nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_cast_function_set_property(cast, DUCKDB_V2_FUNCTION_PROPERTY_STABILITY,
+	                                             DUCKDB_V2_FUNCTION_PROPERTY_FALLIBILITY_FALLIBLE,
+	                                             nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_connection_register_cast_function(fx.conn, cast, nullptr) == DUCKDB_V2_ERROR_NONE);
+	duckdb_v2_cast_function_destroy(&cast);
+
+	bound_casts = 0;
+	initialized_threads = 0;
+	REQUIRE(CastQueryText(fx.conn, "SELECT CAST(CAST(21 AS TEMPERATURE) AS VARCHAR)") == "21 degrees");
+	REQUIRE(bound_casts >= 1);
+	REQUIRE(bind_saw_context);
+	REQUIRE(initialized_threads >= 1);
+
+	// a cast that is consistent within a query only cannot be in an index expression
+	REQUIRE(CastQueryError(fx.conn, "CREATE TABLE t (i TEMPERATURE)") == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(CastQueryError(fx.conn, "CREATE INDEX idx ON t ((i::VARCHAR))") != DUCKDB_V2_ERROR_NONE);
+
+	duckdb_v2_logical_type_destroy(&temperature);
+	duckdb_v2_logical_type_destroy(&varchar);
+	duckdb_v2_logical_type_destroy(&integer);
+}
+
+TEST_CASE("V2 cast: the implicit cast cost of the binder", "[capi_v2][cast_function]") {
+	EnvFixture fx;
+	auto integer = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER);
+	auto bigint = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_BIGINT);
+	auto varchar = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR);
+	int64_t cost = -2;
+	REQUIRE(duckdb_v2_cast_get_implicit_cast_cost(fx.factory, integer, bigint, &cost, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(cost >= 0);
+	REQUIRE(duckdb_v2_cast_get_implicit_cast_cost(fx.factory, varchar, integer, &cost, nullptr) ==
+	        DUCKDB_V2_ERROR_NONE);
+	REQUIRE(cost == -1);
+	duckdb_v2_logical_type_destroy(&varchar);
+	duckdb_v2_logical_type_destroy(&bigint);
+	duckdb_v2_logical_type_destroy(&integer);
+}
+
 } // namespace test_capi_v2

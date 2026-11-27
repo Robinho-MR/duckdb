@@ -1,9 +1,9 @@
 #include "collation_normalizer.hpp"
 
 #include "collation_data.hpp"
-#include "duckdb/common/exception.hpp"
+#include "icu_common.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace collation {
 
 //! No character below these limits has a combining class or a canonical decomposition,
@@ -223,4 +223,4 @@ void Normalizer::Decompose(vector<uint32_t> &text) {
 }
 
 } // namespace collation
-} // namespace duckdb
+} // namespace duckdb_icu

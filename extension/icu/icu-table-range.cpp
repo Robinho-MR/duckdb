@@ -1,142 +1,75 @@
-#include "duckdb/common/atomic.hpp"
-#include "duckdb/common/exception.hpp"
-#include "duckdb/common/operator/subtract.hpp"
-#include "duckdb/common/types/interval.hpp"
-#include "duckdb/main/client_context.hpp"
-#include "duckdb/main/extension/extension_loader.hpp"
-#include "duckdb/function/function_set.hpp"
-#include "duckdb/function/table_function.hpp"
-#include "include/icu-datefunc.hpp"
-#include "tz_calendar.hpp"
+#include "icu-datefunc.hpp"
+#include "icu-vector.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 
 struct ICUTableRange {
-	using CalendarPtr = unique_ptr<Calendar>;
-
-	struct ICURangeBindData : public TableFunctionData {
-		ICURangeBindData(const ICURangeBindData &other)
-		    : TableFunctionData(other), tz_setting(other.tz_setting), cal_setting(other.cal_setting),
-		      calendar(other.calendar->Copy()), cardinality(other.cardinality) {
-		}
-
-		explicit ICURangeBindData(ClientContext &context, const vector<Value> &inputs) : cal_setting("gregorian") {
-			context.TryGetCurrentSetting("TimeZone", tz_setting);
-			context.TryGetCurrentSetting("Calendar", cal_setting);
+	struct ICURangeBindData {
+		ICURangeBindData(cxx::Context &context) {
+			ICUDateFunc::ReadSettings(context, tz_setting, cal_setting);
 			auto tz = TimeZone::TryCreate(tz_setting);
 			calendar = Calendar::TryCreate(cal_setting, tz ? std::move(tz) : TimeZone::TryCreate("UTC"));
 			if (!calendar) {
 				throw InternalException("Unable to create calendar.");
 			}
-
-			timestamp_tz_t bounds[2];
-			interval_t step;
-			for (idx_t i = 0; i < inputs.size(); i++) {
-				if (inputs[i].IsNull()) {
-					return;
-				}
-				if (i >= 2) {
-					step = inputs[i].GetValue<interval_t>();
-				} else {
-					bounds[i] = inputs[i].GetValue<timestamp_tz_t>();
-				}
-			}
-			// Estimate cardinality using micros.
-			int64_t increment = 0;
-			if (!Interval::TryGetMicro(step, increment) || !increment) {
-				return;
-			}
-			int64_t delta = 0;
-			if (!TrySubtractOperator::Operation(bounds[1].value, bounds[0].value, delta)) {
-				return;
-			}
-
-			cardinality = idx_t(delta / increment);
 		}
 
 		string tz_setting;
 		string cal_setting;
 		CalendarPtr calendar;
-		idx_t cardinality;
 	};
 
-	//! Progress of a range used as a source (i.e. with a single input row)
-	struct ICURangeGlobalState : public GlobalTableFunctionState {
-		//! The bounds of the range, and the timestamp that is generated next
-		atomic<int64_t> start {0};
-		atomic<int64_t> end {0};
-		atomic<int64_t> current {0};
-
-		void Initialize(timestamp_tz_t start_p, timestamp_tz_t end_p) {
-			start.store(start_p.value, std::memory_order_relaxed);
-			end.store(end_p.value, std::memory_order_relaxed);
-			current.store(start_p.value, std::memory_order_relaxed);
-		}
-
-		//! Input rows are independent, so an in-out call can use all threads
-		idx_t MaxThreads() const override {
-			return GlobalTableFunctionState::MAX_THREADS;
-		}
-	};
-
-	struct ICURangeLocalState : public LocalTableFunctionState {
-		explicit ICURangeLocalState(optional_ptr<GlobalTableFunctionState> global_state)
-		    : global_state(global_state ? &global_state->Cast<ICURangeGlobalState>() : nullptr) {
-		}
-
-		optional_ptr<ICURangeGlobalState> global_state;
-
+	//! Where the range of the current input row is
+	struct ICURangeLocalState {
 		bool initialized_row = false;
 		idx_t current_input_row = 0;
 		timestamp_tz_t current_state;
-
 		timestamp_tz_t start;
 		timestamp_tz_t end;
 		interval_t increment;
-		bool inclusive_bound;
-		bool greater_than_check;
-
+		bool inclusive_bound = false;
+		bool greater_than_check = false;
 		bool empty_range = false;
 
 		bool Finished(timestamp_tz_t current_value) const {
 			if (greater_than_check) {
 				if (inclusive_bound) {
-					return current_value > end;
+					return current_value.micros > end.micros;
 				} else {
-					return current_value >= end;
+					return current_value.micros >= end.micros;
 				}
 			} else {
 				if (inclusive_bound) {
-					return current_value < end;
+					return current_value.micros < end.micros;
 				} else {
-					return current_value <= end;
+					return current_value.micros <= end.micros;
 				}
 			}
 		}
 	};
 
 	template <bool GENERATE_SERIES>
-	static void GenerateRangeDateTimeParameters(DataChunk &input, idx_t row_id, ICURangeLocalState &result) {
-		input.Flatten();
+	static void GenerateRangeDateTimeParameters(cxx::DataChunk &input, idx_t row_id, ICURangeLocalState &result) {
 		// the local state is reused for every input row
 		result.empty_range = false;
-		for (idx_t c = 0; c < input.ColumnCount(); c++) {
-			if (FlatVector::IsNull(input.data[c], row_id)) {
-				result.start = timestamp_tz_t::epoch();
-				result.end = timestamp_tz_t::epoch();
-				result.increment = interval_t();
-				result.greater_than_check = true;
-				result.inclusive_bound = false;
-				return;
-			}
+		ArgReader<timestamp_tz_t> starts(input.GetVector(0));
+		ArgReader<timestamp_tz_t> ends(input.GetVector(1));
+		ArgReader<interval_t> increments(input.GetVector(2));
+		if (!starts.IsValid(row_id) || !ends.IsValid(row_id) || !increments.IsValid(row_id)) {
+			result.start = timestamp_tz_t {0};
+			result.end = timestamp_tz_t {0};
+			result.increment = Interval::Make(0, 0, 0);
+			result.greater_than_check = true;
+			result.inclusive_bound = false;
+			return;
 		}
 
-		result.start = FlatVector::GetValue<timestamp_tz_t>(input.data[0], row_id);
-		result.end = FlatVector::GetValue<timestamp_tz_t>(input.data[1], row_id);
-		result.increment = FlatVector::GetValue<interval_t>(input.data[2], row_id);
+		result.start = starts.Get(row_id);
+		result.end = ends.Get(row_id);
+		result.increment = increments.Get(row_id);
 
 		// Infinities either cause errors or infinite loops, so just ban them
-		if (!result.start.IsFinite() || !result.end.IsFinite()) {
+		if (!IsFinite(result.start) || !IsFinite(result.end)) {
 			throw BinderException("RANGE with infinite bounds is not supported");
 		}
 
@@ -149,12 +82,12 @@ struct ICUTableRange {
 				throw BinderException("RANGE with composite interval that has mixed signs is not supported");
 			}
 			result.greater_than_check = true;
-			if (result.start > result.end) {
+			if (result.start.micros > result.end.micros) {
 				result.empty_range = true;
 			}
 		} else {
 			result.greater_than_check = false;
-			if (result.start < result.end) {
+			if (result.start.micros < result.end.micros) {
 				result.empty_range = true;
 			}
 		}
@@ -162,90 +95,83 @@ struct ICUTableRange {
 	}
 
 	template <bool GENERATE_SERIES>
-	static unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &input,
-	                                     vector<LogicalType> &return_types, vector<Identifier> &names) {
-		auto result = make_uniq<ICURangeBindData>(context, input.inputs);
+	static void Bind(cxx::TableFunction::BindInput &input) {
+		auto &context = input.GetContext();
+		input.AddResultColumn(GENERATE_SERIES ? "generate_series" : "range",
+		                      context.GetFactory().ParseType("TIMESTAMPTZ"));
+		input.SetBindData<ICURangeBindData>(context);
 
-		return_types.push_back(LogicalType::TIMESTAMP_TZ);
-		if (GENERATE_SERIES) {
-			names.emplace_back("generate_series");
-		} else {
-			names.emplace_back("range");
+		// Estimate the cardinality using micros, when the arguments are constants
+		std::optional<cxx::Value> bounds[2];
+		std::optional<cxx::Value> step;
+		for (idx_t i = 0; i < 3; i++) {
+			auto value = input.TryGetConstantArgument(i);
+			if (!value || value->IsNull()) {
+				return;
+			}
+			if (i >= 2) {
+				step = std::move(value);
+			} else {
+				bounds[i] = std::move(value);
+			}
 		}
-		return std::move(result);
-	}
-
-	static unique_ptr<LocalTableFunctionState> RangeDateTimeLocalInit(ExecutionContext &context,
-	                                                                  TableFunctionInitInput &input,
-	                                                                  GlobalTableFunctionState *global_state) {
-		return make_uniq<ICURangeLocalState>(global_state);
-	}
-
-	static unique_ptr<GlobalTableFunctionState> RangeDateTimeGlobalInit(ClientContext &context,
-	                                                                    TableFunctionInitInput &input) {
-		return make_uniq<ICURangeGlobalState>();
-	}
-
-	static double Progress(ClientContext &context, const FunctionData *bind_data,
-	                       const GlobalTableFunctionState *global_state) {
-		auto &state = global_state->Cast<ICURangeGlobalState>();
-		auto start = static_cast<double>(state.start.load(std::memory_order_relaxed));
-		auto range = static_cast<double>(state.end.load(std::memory_order_relaxed)) - start;
-		if (range == 0) {
-			return 0;
+		const auto increment_value = step->Get<interval_t>();
+		int64_t increment = 0;
+		if (!Interval::TryGetMicro(increment_value, increment) || !increment) {
+			return;
 		}
-		auto fraction = (static_cast<double>(state.current.load(std::memory_order_relaxed)) - start) / range;
-		return 100.0 * MaxValue<double>(MinValue<double>(fraction, 1.0), 0.0);
+		int64_t delta = 0;
+		if (!TrySubtract(bounds[1]->Get<timestamp_tz_t>().micros, bounds[0]->Get<timestamp_tz_t>().micros, delta)) {
+			return;
+		}
+		input.SetCardinality(idx_t(delta / increment), false);
 	}
 
-	static unique_ptr<NodeStatistics> Cardinality(ClientContext &context, const FunctionData *bind_data_p) {
-		if (!bind_data_p) {
-			return nullptr;
-		}
-		auto &bind_data = bind_data_p->Cast<ICURangeBindData>();
-		return make_uniq<NodeStatistics>(bind_data.cardinality);
+	static void InitLocal(cxx::Operator::InitLocalInput &input) {
+		input.SetLocalState<ICURangeLocalState>();
 	}
 
 	template <bool GENERATE_SERIES>
-	static OperatorResultType ICUTableRangeFunction(ExecutionContext &context, TableFunctionInput &data_p,
-	                                                DataChunk &input, DataChunk &output) {
-		auto &bind_data = data_p.bind_data->Cast<ICURangeBindData>();
-		auto &state = data_p.local_state->Cast<ICURangeLocalState>();
+	static void Execute(cxx::Operator::ExecuteInput &input) {
+		auto &bind_data = input.GetBindData<ICURangeBindData>();
+		auto &state = input.GetLocalState<ICURangeLocalState>();
+		auto chunk = input.GetInput();
+		auto output = input.GetOutput();
 		TZCalendar calendar(*bind_data.calendar, bind_data.cal_setting);
 		while (true) {
 			if (!state.initialized_row) {
 				// initialize for the current input row
-				if (state.current_input_row >= input.size()) {
+				if (state.current_input_row >= chunk.GetRowCount()) {
 					// ran out of rows
 					state.current_input_row = 0;
 					state.initialized_row = false;
-					return OperatorResultType::NEED_MORE_INPUT;
+					input.SetResult(cxx::OperatorResult::NEED_MORE_INPUT);
+					return;
 				}
-				GenerateRangeDateTimeParameters<GENERATE_SERIES>(input, state.current_input_row, state);
+				if (state.current_input_row == 0) {
+					// the arguments can arrive in any representation, e.g. as a sequence
+					for (idx_t col = 0; col < chunk.GetVectorCount(); col++) {
+						chunk.GetVector(col).Flatten();
+					}
+				}
+				GenerateRangeDateTimeParameters<GENERATE_SERIES>(chunk, state.current_input_row, state);
 				state.initialized_row = true;
 				state.current_state = state.start;
-				if (state.global_state) {
-					state.global_state->Initialize(state.start, state.end);
-				}
 			}
 			if (state.empty_range) {
 				// empty range
 				state.current_input_row++;
 				state.initialized_row = false;
-				return OperatorResultType::HAVE_MORE_OUTPUT;
+				input.SetResult(cxx::OperatorResult::HAVE_MORE_OUTPUT);
+				return;
 			}
+			auto vector = output.GetVector(0);
+			auto data = vector.GetDataMutable<timestamp_tz_t>();
+			const auto capacity = output.GetCapacity();
 			idx_t size = 0;
-			auto data = FlatVector::ScatterWriter<timestamp_tz_t>(output.data[0]);
-			while (true) {
-				if (state.Finished(state.current_state)) {
-					break;
-				}
-				data[size] = state.current_state;
-				size++;
+			while (!state.Finished(state.current_state) && size < capacity) {
+				data[size++] = state.current_state;
 				state.current_state = ICUDateFunc::Add(calendar, state.current_state, state.increment);
-				if (size >= STANDARD_VECTOR_SIZE) {
-					break;
-				}
 			}
 			if (size == 0) {
 				// move to next row
@@ -253,45 +179,33 @@ struct ICUTableRange {
 				state.initialized_row = false;
 				continue;
 			}
-			output.SetChildCardinality(size);
-			if (state.global_state) {
-				state.global_state->current.store(state.current_state.value, std::memory_order_relaxed);
-			}
-			return OperatorResultType::HAVE_MORE_OUTPUT;
+			vector.SetSize(size);
+			input.SetResult(cxx::OperatorResult::HAVE_MORE_OUTPUT);
+			return;
 		}
 	}
 
-	static void AddICUTableRangeFunction(ExtensionLoader &loader) {
-		const auto timestamps = FunctionSignature()
-		                            .AddPositionalOnly("start", LogicalType::TIMESTAMP_TZ)
-		                            .AddPositionalOnly("stop", LogicalType::TIMESTAMP_TZ)
-		                            .AddPositionalOnly("step", LogicalType::INTERVAL);
-		TableFunctionSet range("range");
-		TableFunction range_function(timestamps, nullptr, Bind<false>, RangeDateTimeGlobalInit, RangeDateTimeLocalInit);
-		range_function.in_out_function = ICUTableRangeFunction<false>;
-		range_function.table_scan_progress = Progress;
-		range_function.cardinality = Cardinality;
-		range_function.return_type = TableFunctionReturnType::SET_RETURNING_FUNCTION;
-		range.AddFunction(range_function);
+	template <bool GENERATE_SERIES>
+	static void AddFunction(const ICURegistration &reg, const string &name) {
+		auto op = cxx::Operator::Create(reg.factory);
+		op.SetInitLocalCallback(InitLocal).SetExecuteCallback(Execute<GENERATE_SERIES>);
 
-		loader.RegisterFunction(range);
-
-		// generate_series: similar to range, but inclusive instead of exclusive bounds on the RHS
-		TableFunctionSet generate_series("generate_series");
-		TableFunction generate_series_function(timestamps, nullptr, Bind<true>, RangeDateTimeGlobalInit,
-		                                       RangeDateTimeLocalInit);
-		generate_series_function.in_out_function = ICUTableRangeFunction<true>;
-		generate_series_function.table_scan_progress = Progress;
-		generate_series_function.cardinality = Cardinality;
-		generate_series_function.return_type = TableFunctionReturnType::SET_RETURNING_FUNCTION;
-		generate_series.AddFunction(generate_series_function);
-
-		loader.RegisterFunction(generate_series);
+		auto function = cxx::TableFunction::Create(reg.factory);
+		function.SetName(name).SetBindCallback(Bind<GENERATE_SERIES>);
+		function.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+		function.GetSignature()
+		    .AddParameter("start", reg.Type("TIMESTAMPTZ"), cxx::FunctionParameterKind::POSITIONAL_ONLY)
+		    .AddParameter("stop", reg.Type("TIMESTAMPTZ"), cxx::FunctionParameterKind::POSITIONAL_ONLY)
+		    .AddParameter("step", reg.Type("INTERVAL"), cxx::FunctionParameterKind::POSITIONAL_ONLY);
+		function.SetOperator(op, cxx::TableOperatorInput::ARGUMENTS);
+		reg.extension.Register(function);
 	}
 };
 
-void RegisterICUTableRangeFunctions(ExtensionLoader &loader) {
-	ICUTableRange::AddICUTableRangeFunction(loader);
+void RegisterICUTableRangeFunctions(const ICURegistration &reg) {
+	ICUTableRange::AddFunction<false>(reg, "range");
+	// generate_series: similar to range, but inclusive instead of exclusive bounds on the RHS
+	ICUTableRange::AddFunction<true>(reg, "generate_series");
 }
 
-} // namespace duckdb
+} // namespace duckdb_icu

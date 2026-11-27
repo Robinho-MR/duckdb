@@ -103,7 +103,7 @@ structs:
           or the session's.
       - name: nanos
         type: i32
-        description: The nanoseconds of the text beyond the microseconds, in [0, 1000).
+        description: The nanoseconds of the text beyond the microseconds, in [0, 1000), when they were asked for.
       - name: has_offset
         type: bool
         description: Whether the text gives a UTC offset, e.g. `+02:00`, which `micros` has applied.
@@ -465,6 +465,12 @@ functions:
       text_length:
         type: idx
         description: The length of `text` in bytes.
+      nanoseconds:
+        type: bool
+        description: |
+          Whether to keep the nanoseconds of the text in `parsed->nanos`. Otherwise the fraction of a second is
+          rounded to microseconds as the cast to TIMESTAMP WITH TIME ZONE rounds it, half to even, and
+          `parsed->nanos` is 0.
       parsed:
         type: timestamp_text
         indirection: 1

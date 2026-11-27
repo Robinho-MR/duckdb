@@ -604,6 +604,9 @@ typedef enum DUCKDB_V2_ERROR {
 	//! Serializing or deserializing a database object failed.
 	DUCKDB_V2_ERROR_DATABASE_SERIALIZATION = 6007,
 
+	//! Data that should be valid is not, e.g. a stored string that is not valid UTF-8.
+	DUCKDB_V2_ERROR_DATABASE_CORRUPTION = 6008,
+
 	//! A settings-related error occurred (e.g. setting an unknown option).
 	DUCKDB_V2_ERROR_CONFIGURATION_SETTINGS = 7001,
 
@@ -646,10 +649,11 @@ typedef enum DUCKDB_V2_ERROR {
 /* --- Enums for function properties --- */
 
 /*!
- * Identifies a configurable function property. Pass one of these to `duckdb_v2_scalar_function_set_property()` or
- * `duckdb_v2_aggregate_function_set_property()` together with a matching `DUCKDB_V2_FUNCTION_PROPERTY_VALUE`. The high
- * byte is the function-type group: COMMON (`0x01xxxx`) keys apply to all function types, while group-specific keys
- * (e.g. aggregate `0x03xxxx`) are only valid for that function type and are rejected with an error otherwise.
+ * Identifies a configurable function property. Pass one of these to `duckdb_v2_scalar_function_set_property()`,
+ * `duckdb_v2_aggregate_function_set_property()` or `duckdb_v2_table_function_set_property()` together with a matching
+ * `DUCKDB_V2_FUNCTION_PROPERTY_VALUE`. The high byte is the function-type group: COMMON (`0x01xxxx`) keys apply to all
+ * function types, while group-specific keys (e.g. aggregate `0x03xxxx`) are only valid for that function type and are
+ * rejected with an error otherwise.
  */
 typedef enum DUCKDB_V2_FUNCTION_PROPERTY_KEY {
 	/*!
@@ -1001,6 +1005,33 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_set_implicit_cast_cost(duck
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
+ * Retrieves the cost the binder assigns to converting `source_type` to `target_type` on its own, or -1 when it does not
+ * convert them implicitly.
+ *
+ * A cast that implements a conversion the engine already knows, e.g. one that applies a time zone, passes this to
+ * `duckdb_v2_cast_function_set_implicit_cast_cost()` to keep the binder's choices between implicit casts as they are.
+ * The rules of the engine are not part of the API: they change between versions, which is why they are read rather than
+ * copied. The cost includes the casts registered on the factory's database so far.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param factory The factory of the database to read the cost from.
+ * @param source_type The type to cast from. Borrowed for the call only.
+ * @param target_type The type to cast to. Borrowed for the call only.
+ * @param cost Receives the cost, or -1.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_get_implicit_cast_cost(duckdb_v2_factory_handle factory,
+                                                                   duckdb_v2_logical_type_handle source_type,
+                                                                   duckdb_v2_logical_type_handle target_type,
+                                                                   int64_t *cost, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
  * Sets arbitrary user data on the cast function.
  *
  * Associates an opaque pointer with the function, retrievable from the exec callback via
@@ -1028,8 +1059,9 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_cast_function_set_user_data(duckdb_v2_cas
  *
  * Only `FUNCTION_PROPERTY_STABILITY` can be set. A cast whose result depends on a setting, such as the time zone,
  * declares `FUNCTION_PROPERTY_STABILITY_CONSISTENT_WITHIN_QUERY`, so that the engine does not fold it into a constant
- * of a prepared statement or accept it in an index expression. Any other key, or a value that does not belong to the
- * key, results in an error. Defaults to `FUNCTION_PROPERTY_STABILITY_CONSISTENT`.
+ * of a prepared statement or accept it in an index expression. A cast cannot be `FUNCTION_PROPERTY_STABILITY_VOLATILE`.
+ * Any other key, or a value that does not belong to the key, results in an error. Defaults to
+ * `FUNCTION_PROPERTY_STABILITY_CONSISTENT`.
  *
  * history:
  * - unstable: v2.0.0
@@ -3654,13 +3686,15 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_strftime_format_destroy(duckdb_v2_strftim
  *
  * @param text The text to parse. Not necessarily null-terminated.
  * @param text_length The length of `text` in bytes.
+ * @param nanoseconds Whether to keep the nanoseconds of the text in `parsed->nanos`. Otherwise the fraction of a second
+ * is rounded to microseconds as the cast to TIMESTAMP WITH TIME ZONE rounds it, half to even, and `parsed->nanos` is 0.
  * @param parsed On `TIMESTAMP_TEXT_SUCCESS`, receives the timestamp. The time zone name points into `text`.
  * @param result Receives whether the text is a timestamp.
  * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
  * `duckdb_v2_error_info_destroy()`.
  * @return DUCKDB_V2_ERROR
  */
-DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_timestamp_tz_parse_text(const char *text, idx_t text_length,
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_timestamp_tz_parse_text(const char *text, idx_t text_length, bool nanoseconds,
                                                                duckdb_v2_timestamp_text *parsed,
                                                                DUCKDB_V2_TIMESTAMP_TEXT_RESULT *result,
                                                                duckdb_v2_error_info_handle *err);
@@ -3744,7 +3778,7 @@ struct duckdb_v2_timestamp_text {
 	 */
 	int64_t micros;
 
-	//! The nanoseconds of the text beyond the microseconds, in [0, 1000).
+	//! The nanoseconds of the text beyond the microseconds, in [0, 1000), when they were asked for.
 	int32_t nanos;
 
 	//! Whether the text gives a UTC offset, e.g. `+02:00`, which `micros` has applied.
@@ -15106,6 +15140,29 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_stats_get_result_stats(
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 /*!
+ * Narrows the statistics of the result as the engine does for a function without a stats callback: from the bounds of
+ * the arguments, through the monotonicity declared with `duckdb_v2_scalar_function_set_argument_monotonicity()`.
+ *
+ * The engine evaluates the function at the corners of the arguments' bounds. A stats callback that knows when that is
+ * wrong, e.g. for a function whose result is NULL for an argument that can lie between the bounds, checks the arguments
+ * first and calls this otherwise. `*propagated` is set to whether the result statistics were narrowed: not when an
+ * argument has no bounds, its monotonicity is unknown, or a corner evaluates to NULL.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param info The stats info handle.
+ * @param propagated Receives whether the result statistics were narrowed.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_scalar_function_stats_propagate_monotone_bounds(
+    duckdb_v2_scalar_function_stats_info_handle info, bool *propagated, duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
  * Registers the scalar function, making it available for use in SQL queries.
  *
  * The function is registered on the connection's database, visible to every connection, in the connection's
@@ -17016,6 +17073,32 @@ DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_get_docs(duckdb_v2_table_f
 DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_get_signature(duckdb_v2_table_function_handle function,
                                                                     duckdb_v2_function_signature_handle *sig,
                                                                     duckdb_v2_error_info_handle *err);
+#endif
+
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+/*!
+ * Sets a property on the table function.
+ *
+ * Only `FUNCTION_PROPERTY_STABILITY` is supported for table functions; any other key, a key that is not valid for table
+ * functions, or a value that does not belong to `key` results in an error. A table function defaults to
+ * `FUNCTION_PROPERTY_STABILITY_VOLATILE`. Declaring `FUNCTION_PROPERTY_STABILITY_CONSISTENT_WITHIN_QUERY` promises that
+ * repeated executions with the same bound data and input rows return equivalent rows within one query and have no
+ * observable side effects, which allows the optimizer to share identical scans.
+ *
+ * history:
+ * - unstable: v2.0.0
+ *
+ * @param function The function to set the property of.
+ * @param key The property to set.
+ * @param value The value to set for the property. Must belong to `key`.
+ * @param err Optional. On failure, receives an opaque info handle the caller must destroy via
+ * `duckdb_v2_error_info_destroy()`.
+ * @return DUCKDB_V2_ERROR
+ */
+DUCKDB_C_API DUCKDB_V2_ERROR duckdb_v2_table_function_set_property(duckdb_v2_table_function_handle function,
+                                                                   DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
+                                                                   DUCKDB_V2_FUNCTION_PROPERTY_VALUE value,
+                                                                   duckdb_v2_error_info_handle *err);
 #endif
 
 #if DUCKDB_V2_API_ALLOW_UNSTABLE

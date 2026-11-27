@@ -228,8 +228,8 @@ public:
 			register_fn(BindCastFunction(CV2CastBind, make_uniq<CV2CastBindFunctionInfo>(shared_callbacks)));
 			return;
 		}
-		register_fn(BoundCastInfo(CV2CastExec, make_uniq<CV2CastBoundData>(shared_callbacks, nullptr),
-		                          CV2CastInitLocalState));
+		register_fn(
+		    BoundCastInfo(CV2CastExec, make_uniq<CV2CastBoundData>(shared_callbacks, nullptr), CV2CastInitLocalState));
 	}
 
 public:
@@ -294,6 +294,23 @@ DUCKDB_V2_ERROR duckdb_v2_cast_function_set_implicit_cast_cost(duckdb_v2_cast_fu
                                                                duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(function);
 	return WithErrorHandler(err, [&]() { Convert(function)->implicit_cast_cost = cost; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_cast_get_implicit_cast_cost(duckdb_v2_factory_handle factory,
+                                                      duckdb_v2_logical_type_handle source_type,
+                                                      duckdb_v2_logical_type_handle target_type, int64_t *cost,
+                                                      duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(factory);
+	DUCKDB_CHECK_ARG(source_type);
+	DUCKDB_CHECK_ARG(target_type);
+	DUCKDB_CHECK_ARG(cost);
+	return WithErrorHandler(err, [&]() {
+		auto &self = *Convert(factory);
+		auto source = Convert(source_type);
+		auto target = Convert(target_type);
+		*cost = duckdb::CastFunctionSet::Get(self.GetDatabase())
+		            .ImplicitCastCost(self.TryGetClientContext(), *source, *target);
+	});
 }
 
 DUCKDB_V2_ERROR duckdb_v2_cast_function_set_user_data(duckdb_v2_cast_function_handle function,
@@ -361,6 +378,9 @@ DUCKDB_V2_ERROR duckdb_v2_cast_function_set_property(duckdb_v2_cast_function_han
 		}
 		duckdb::FunctionProperties props;
 		SetScalarFunctionProperty(props, key, value);
+		if (props.GetStability() == duckdb::FunctionStability::VOLATILE) {
+			throw duckdb::InvalidInputException("A cast function cannot be volatile");
+		}
 		Convert(function)->callbacks.stability = props.GetStability();
 	});
 }

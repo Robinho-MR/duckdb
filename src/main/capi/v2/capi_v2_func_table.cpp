@@ -64,6 +64,10 @@ public:
 		const auto &other_data = other.Cast<CV2TableFunctionData>();
 		return handle && other_data.handle && handle->Equals(*other_data.handle);
 	}
+	//! A function of the C API is bound from its call only: its arguments and the context
+	auto IsIdentifiedByCall() const -> bool override {
+		return true;
+	}
 };
 
 class CV2TableGlobalState final : public GlobalTableFunctionState {
@@ -1731,6 +1735,14 @@ DUCKDB_V2_ERROR duckdb_v2_table_function_set_name(duckdb_v2_table_function_handl
 	DUCKDB_CHECK_STR_ARG(name, name_length);
 	return WithErrorHandler(
 	    err, [&]() { Convert(function)->name = duckdb::Identifier(ConvertIdentifierName(name, name_length)); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_table_function_set_property(duckdb_v2_table_function_handle function,
+                                                      DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
+                                                      DUCKDB_V2_FUNCTION_PROPERTY_VALUE value,
+                                                      duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() { SetTableFunctionProperty(Convert(function)->stability, key, value); });
 }
 
 DUCKDB_V2_ERROR duckdb_v2_table_function_get_docs(duckdb_v2_table_function_handle function,

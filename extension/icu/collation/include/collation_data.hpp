@@ -12,7 +12,7 @@
 
 #include <cstdint>
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace collation {
 
 //! Collation elements are stored as (primary << 32) | (secondary << 16) | tertiary,
@@ -157,4 +157,4 @@ const CollationNormalization &GetCollationNormalization();
 const CollationTailoring &GetCollationTailoring(uint32_t unit);
 
 } // namespace collation
-} // namespace duckdb
+} // namespace duckdb_icu

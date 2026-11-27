@@ -10,7 +10,7 @@
 
 #include "calendar.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 //! The tabular Islamic (Hijri) calendar: twelve alternating months of 30 and 29 days, with the
@@ -139,4 +139,4 @@ protected:
 };
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

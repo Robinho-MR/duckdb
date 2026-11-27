@@ -88,7 +88,9 @@ callbacks:
         description: Borrowed opaque handle providing access to the information available to the callback.
       context:
         type: context
-        description: Borrowed handle to the context of the query currently executing the callback.
+        description: |
+          Borrowed handle to the context of the query currently executing the callback. Null when the function
+          runs without a client context, for example to maintain the keys of an index.
       err:
         type: error_info
         indirection: 1
@@ -102,7 +104,9 @@ callbacks:
         description: Borrowed opaque handle providing access to the information available to the callback.
       context:
         type: context
-        description: Borrowed handle to the context of the query currently executing the callback.
+        description: |
+          Borrowed handle to the context of the query currently executing the callback. Null when the function
+          runs without a client context, for example to maintain the keys of an index.
       err:
         type: error_info
         indirection: 1
@@ -1061,6 +1065,32 @@ functions:
         description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
     return_type: ERROR
 
+
+  scalar_function_stats_propagate_monotone_bounds:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Narrows the statistics of the result as the engine does for a function without a stats callback: from the bounds
+      of the arguments, through the monotonicity declared with `[[scalar_function_set_argument_monotonicity]]`.
+
+      The engine evaluates the function at the corners of the arguments' bounds. A stats callback that knows when that
+      is wrong, e.g. for a function whose result is NULL for an argument that can lie between the bounds, checks the
+      arguments first and calls this otherwise. `*propagated` is set to whether the result statistics were narrowed:
+      not when an argument has no bounds, its monotonicity is unknown, or a corner evaluates to NULL.
+    parameters:
+      info:
+        type: scalar_function_stats_info
+        description: The stats info handle.
+      propagated:
+        type: bool
+        indirection: 1
+        kind: OUT
+        description: Receives whether the result statistics were narrowed.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
 
   #---------------------------------------------------------------------------------------------------------------------
   # Register

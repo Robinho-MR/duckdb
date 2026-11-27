@@ -286,6 +286,10 @@ OutOfMemoryException::OutOfMemoryException(const std::string &message, std::stri
     : Exception(DUCKDB_V2_ERROR_RESOURCE_OUT_OF_MEMORY, message, std::move(raw_message)) {
 }
 
+DataCorruptionException::DataCorruptionException(const std::string &message, std::string raw_message)
+    : Exception(DUCKDB_V2_ERROR_DATABASE_CORRUPTION, message, std::move(raw_message)) {
+}
+
 InternalException::InternalException(const std::string &message, std::string raw_message)
     : Exception(DUCKDB_V2_ERROR_RUNTIME_INTERNAL, message, std::move(raw_message)) {
 }
@@ -326,6 +330,8 @@ namespace {
 		throw BinderException(message, std::move(raw));
 	case DUCKDB_V2_ERROR_RESOURCE_OUT_OF_MEMORY:
 		throw OutOfMemoryException(message, std::move(raw));
+	case DUCKDB_V2_ERROR_DATABASE_CORRUPTION:
+		throw DataCorruptionException(message, std::move(raw));
 	case DUCKDB_V2_ERROR_RUNTIME_INTERNAL:
 		throw InternalException(message, std::move(raw));
 	default:
@@ -3743,8 +3749,17 @@ void *ScalarFunction::InitInput::GetUserDataInternal() const {
 	return RequireUserData(function.user_data);
 }
 
+ScalarFunction::InitInput::InitInput(void *args, void *context) : args(args) {
+	if (context) {
+		this->context.emplace(detail::HandleFactory::Make<Context>(context));
+	}
+}
+
 auto ScalarFunction::InitInput::GetContext() -> Context & {
-	return context;
+	if (!context) {
+		throw InvalidInputException("the function runs without a context");
+	}
+	return *context;
 }
 
 void *ScalarFunction::ExecInput::GetBindDataInternal() const {
@@ -3802,8 +3817,17 @@ auto ScalarFunction::ExecInput::GetResult() const -> Vector {
 	return detail::HandleFactory::Make<Vector>(vector);
 }
 
+ScalarFunction::ExecInput::ExecInput(void *args, void *context) : args(args) {
+	if (context) {
+		this->context.emplace(detail::HandleFactory::Make<Context>(context));
+	}
+}
+
 auto ScalarFunction::ExecInput::GetContext() -> Context & {
-	return context;
+	if (!context) {
+		throw InvalidInputException("the function runs without a context");
+	}
+	return *context;
 }
 
 void *ScalarFunction::StatsInput::GetBindDataInternal() const {
@@ -3845,6 +3869,13 @@ auto ScalarFunction::StatsInput::GetResultStats() const -> Stats {
 	CheckedAPICall(duckdb_v2_scalar_function_stats_get_result_stats,
 	               static_cast<duckdb_v2_scalar_function_stats_info_handle>(args), &stats);
 	return detail::HandleFactory::Make<Stats>(stats);
+}
+
+auto ScalarFunction::StatsInput::PropagateMonotoneBounds() -> bool {
+	bool propagated = false;
+	CheckedAPICall(duckdb_v2_scalar_function_stats_propagate_monotone_bounds,
+	               static_cast<duckdb_v2_scalar_function_stats_info_handle>(args), &propagated);
+	return propagated;
 }
 
 auto ScalarFunction::StatsInput::GetContext() -> Context & {
@@ -4563,6 +4594,12 @@ auto TableFunction::Create(Factory &factory) -> TableFunction {
 auto TableFunction::SetName(const std::string &name) & -> TableFunction & {
 	auto view = ToStr(name);
 	CheckedAPICall(duckdb_v2_table_function_set_name, handle(), view.data(), view.size());
+	return *this;
+}
+
+auto TableFunction::SetStability(FunctionStability value) & -> TableFunction & {
+	CheckedAPICall(duckdb_v2_table_function_set_property, handle(), DUCKDB_V2_FUNCTION_PROPERTY_STABILITY,
+	               ToCValue(value));
 	return *this;
 }
 
@@ -6602,14 +6639,16 @@ struct CastFunctionInfo {
 
 void *RequireCastBindData(void *bind_data) {
 	if (!bind_data) {
-		throw InvalidInputException("no bind data was set; call CastFunction::BindInput::SetBindData in the bind callback");
+		throw InvalidInputException(
+		    "no bind data was set; call CastFunction::BindInput::SetBindData in the bind callback");
 	}
 	return bind_data;
 }
 
 void *RequireCastInitData(void *init_data) {
 	if (!init_data) {
-		throw InvalidInputException("no init data was set; call CastFunction::InitInput::SetInitData in the init callback");
+		throw InvalidInputException(
+		    "no init data was set; call CastFunction::InitInput::SetInitData in the init callback");
 	}
 	return init_data;
 }
@@ -6652,6 +6691,13 @@ auto CastFunction::SetTargetType(const LogicalType &type) & -> CastFunction & {
 auto CastFunction::SetImplicitCastCost(int64_t cost) & -> CastFunction & {
 	CheckedAPICall(duckdb_v2_cast_function_set_implicit_cast_cost, handle(), cost);
 	return *this;
+}
+
+auto CastFunction::GetImplicitCastCost(Factory &factory, const LogicalType &source, const LogicalType &target)
+    -> int64_t {
+	int64_t cost = -1;
+	CheckedAPICall(duckdb_v2_cast_get_implicit_cast_cost, factory.handle(), source.handle(), target.handle(), &cost);
+	return cost;
 }
 
 auto CastFunction::SetUserDataInternal(void *data, void (*destructor)(void *)) -> void {
@@ -7513,8 +7559,8 @@ auto Operator::SetInitGlobalCallback(InitGlobalCallback callback) & -> Operator 
 		WithExceptionGuard(err, [&]() {
 			void *user_data = nullptr;
 			CheckedAPICall(duckdb_v2_operator_init_global_get_user_data, info, &user_data);
-			auto input = detail::HandleFactory::Make<InitGlobalInput>(static_cast<void *>(info),
-			                                                         static_cast<void *>(context));
+			auto input =
+			    detail::HandleFactory::Make<InitGlobalInput>(static_cast<void *>(info), static_cast<void *>(context));
 			static_cast<OperatorInfo *>(user_data)->init_global_callback(input);
 		});
 	};
@@ -7529,8 +7575,8 @@ auto Operator::SetInitLocalCallback(InitLocalCallback callback) & -> Operator & 
 		WithExceptionGuard(err, [&]() {
 			void *user_data = nullptr;
 			CheckedAPICall(duckdb_v2_operator_init_local_get_user_data, info, &user_data);
-			auto input = detail::HandleFactory::Make<InitLocalInput>(static_cast<void *>(info),
-			                                                        static_cast<void *>(context));
+			auto input =
+			    detail::HandleFactory::Make<InitLocalInput>(static_cast<void *>(info), static_cast<void *>(context));
 			static_cast<OperatorInfo *>(user_data)->init_local_callback(input);
 		});
 	};
@@ -7854,16 +7900,16 @@ auto StrfTimeFormat::Write(const TimeParts &parts, bool nanoseconds, std::string
 	               &out[0], out.size(), &length);
 	if (length > out.size()) {
 		out.resize(length);
-		CheckedAPICall(duckdb_v2_strftime_format_write, handle(), &c_parts, nanoseconds, tz_name.data(),
-		               tz_name.size(), &out[0], out.size(), &length);
+		CheckedAPICall(duckdb_v2_strftime_format_write, handle(), &c_parts, nanoseconds, tz_name.data(), tz_name.size(),
+		               &out[0], out.size(), &length);
 	}
 	out.resize(length);
 }
 
-auto ParseTimestampTzText(std::string_view text, TimestampText &result) -> TimestampTextResult {
+auto ParseTimestampTzText(std::string_view text, TimestampText &result, bool nanoseconds) -> TimestampTextResult {
 	duckdb_v2_timestamp_text parsed {};
 	auto c_result = DUCKDB_V2_TIMESTAMP_TEXT_SUCCESS;
-	CheckedAPICall(duckdb_v2_timestamp_tz_parse_text, text.data(), text.size(), &parsed, &c_result);
+	CheckedAPICall(duckdb_v2_timestamp_tz_parse_text, text.data(), text.size(), nanoseconds, &parsed, &c_result);
 	switch (c_result) {
 	case DUCKDB_V2_TIMESTAMP_TEXT_SUCCESS:
 		result.micros = parsed.micros;

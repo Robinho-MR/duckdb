@@ -15,6 +15,7 @@ add_library_unity(
   test_capi_v2_custom_option.cpp
   test_capi_v2_custom_type.cpp
   test_capi_v2_data_chunk.cpp
+  test_capi_v2_datetime.cpp
   test_capi_v2_error_info.cpp
   test_capi_v2_expression.cpp
   test_capi_v2_extension_footer.cpp

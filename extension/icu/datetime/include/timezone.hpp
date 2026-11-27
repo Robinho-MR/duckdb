@@ -8,11 +8,10 @@
 
 #pragma once
 
-#include "duckdb/common/common.hpp"
-#include "duckdb/common/vector.hpp"
+#include "icu_common.hpp"
 #include "tz_data.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 //! How a local time that either does not exist or occurs twice is resolved.
@@ -126,4 +125,4 @@ private:
 };
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

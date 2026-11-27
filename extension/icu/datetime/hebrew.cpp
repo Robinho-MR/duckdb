@@ -2,7 +2,7 @@
 
 #include "grego.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 namespace datetime {
 
 static const int32_t HEBREW_LIMITS[CAL_FIELD_COUNT][4] = {
@@ -364,4 +364,4 @@ void HebrewCalendar::HandleComputeFields(int32_t julian_day) {
 }
 
 } // namespace datetime
-} // namespace duckdb
+} // namespace duckdb_icu

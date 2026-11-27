@@ -1599,6 +1599,9 @@ typedef struct {
 	(duckdb_v2_stats_handle stats, duckdb_v2_value_handle *value, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_stats_set_value)
 	(duckdb_v2_stats_handle stats, duckdb_v2_value_handle value, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_table_function_set_property)
+	(duckdb_v2_table_function_handle function, DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
+	 DUCKDB_V2_FUNCTION_PROPERTY_VALUE value, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_aggregate_function_get_generic_property)
 	(duckdb_v2_aggregate_function_handle function, const char *name, idx_t name_length,
 	 duckdb_v2_value_handle *out_value, duckdb_v2_error_info_handle *err);
@@ -1887,6 +1890,9 @@ typedef struct {
 	DUCKDB_V2_ERROR(*duckdb_v2_cast_function_set_property)
 	(duckdb_v2_cast_function_handle function, DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
 	 DUCKDB_V2_FUNCTION_PROPERTY_VALUE value, duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_cast_get_implicit_cast_cost)
+	(duckdb_v2_factory_handle factory, duckdb_v2_logical_type_handle source_type,
+	 duckdb_v2_logical_type_handle target_type, int64_t *cost, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_context_get_transaction_start_time)
 	(duckdb_v2_context_handle context, int64_t *micros, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_context_interrupt_check)
@@ -1905,6 +1911,8 @@ typedef struct {
 	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_set_argument_monotonicity)
 	(duckdb_v2_scalar_function_handle function, idx_t index, DUCKDB_V2_FUNCTION_MONOTONICITY monotonicity,
 	 duckdb_v2_error_info_handle *err);
+	DUCKDB_V2_ERROR(*duckdb_v2_scalar_function_stats_propagate_monotone_bounds)
+	(duckdb_v2_scalar_function_stats_info_handle info, bool *propagated, duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_strftime_format_create)
 	(const char *format, idx_t format_length, duckdb_v2_strftime_format_handle *out_format,
 	 duckdb_v2_error_info_handle *err);
@@ -1933,8 +1941,8 @@ typedef struct {
 	(const char *text, idx_t text_length, int64_t *micros, int32_t *offset, bool *has_offset, bool *success,
 	 duckdb_v2_error_info_handle *err);
 	DUCKDB_V2_ERROR(*duckdb_v2_timestamp_tz_parse_text)
-	(const char *text, idx_t text_length, duckdb_v2_timestamp_text *parsed, DUCKDB_V2_TIMESTAMP_TEXT_RESULT *result,
-	 duckdb_v2_error_info_handle *err);
+	(const char *text, idx_t text_length, bool nanoseconds, duckdb_v2_timestamp_text *parsed,
+	 DUCKDB_V2_TIMESTAMP_TEXT_RESULT *result, duckdb_v2_error_info_handle *err);
 #endif
 	// capigen:end appended
 } duckdb_ext_api_v2;
@@ -3989,6 +3997,9 @@ typedef struct {
 #define duckdb_v2_stats_set_value duckdb_ext_api.duckdb_v2_stats_set_value
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_table_function_set_property duckdb_ext_api.duckdb_v2_table_function_set_property
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_aggregate_function_get_generic_property                                                              \
 	duckdb_ext_api.duckdb_v2_aggregate_function_get_generic_property
 #endif
@@ -4353,6 +4364,9 @@ typedef struct {
 #define duckdb_v2_cast_function_set_property duckdb_ext_api.duckdb_v2_cast_function_set_property
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_cast_get_implicit_cast_cost duckdb_ext_api.duckdb_v2_cast_get_implicit_cast_cost
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_context_get_transaction_start_time duckdb_ext_api.duckdb_v2_context_get_transaction_start_time
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
@@ -4374,6 +4388,10 @@ typedef struct {
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_scalar_function_set_argument_monotonicity                                                            \
 	duckdb_ext_api.duckdb_v2_scalar_function_set_argument_monotonicity
+#endif
+#if DUCKDB_V2_API_ALLOW_UNSTABLE
+#define duckdb_v2_scalar_function_stats_propagate_monotone_bounds                                                      \
+	duckdb_ext_api.duckdb_v2_scalar_function_stats_propagate_monotone_bounds
 #endif
 #if DUCKDB_V2_API_ALLOW_UNSTABLE
 #define duckdb_v2_strftime_format_create duckdb_ext_api.duckdb_v2_strftime_format_create

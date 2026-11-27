@@ -1,20 +1,82 @@
-#include "duckdb/common/types/date.hpp"
-#include "duckdb/common/types/time.hpp"
-#include "duckdb/common/types/timestamp.hpp"
-#include "duckdb/common/exception/conversion_exception.hpp"
-#include "duckdb/function/cast/cast_function_set.hpp"
-#include "duckdb/function/cast_rules.hpp"
-#include "duckdb/main/extension/extension_loader.hpp"
-#include "duckdb/planner/expression/bound_function_expression.hpp"
-#include "include/icu-casts.hpp"
-#include "include/icu-datefunc.hpp"
-#include "duckdb/transaction/meta_transaction.hpp"
-#include "duckdb/common/operator/cast_operators.hpp"
-#include "duckdb/main/settings.hpp"
+#include "icu-casts.hpp"
+#include "icu-datefunc.hpp"
+#include "icu-vector.hpp"
 
-namespace duckdb {
+namespace duckdb_icu {
 
-struct ICUTimeZoneData : public GlobalTableFunctionState {
+//===--------------------------------------------------------------------===//
+// Cast helpers
+//===--------------------------------------------------------------------===//
+bool ICUCasts::TimestampTZCastsDisabled(cxx::Context &context) {
+	auto option = context.GetConfig().TryGetOption("disable_timestamptz_casts");
+	return option && !option->value.IsNull() && option->value.Get<bool>();
+}
+
+void ICUCasts::BindCastData(cxx::CastFunction::BindInput &input, const char *what, const string &disabled_message) {
+	if (!input.HasContext()) {
+		throw InternalException("Missing context for %s cast.", what);
+	}
+	auto &context = input.GetContext();
+	if (!disabled_message.empty() && TimestampTZCastsDisabled(context)) {
+		throw BinderException(disabled_message);
+	}
+	input.SetBindData<ICUDateFunc::BindData>(context);
+}
+
+void ICUCasts::InitCalendarCache(cxx::CastFunction::InitInput &input) {
+	auto &info = input.GetBindData<ICUDateFunc::BindData>();
+	input.SetInitData<ICUDateFunc::CalendarCacheState>(*info.calendar);
+}
+
+void ICUCasts::Register(const ICURegistration &reg, const string &source, const string &target, bool implicit,
+                        cxx::CastFunction::BindCallback bind, cxx::CastFunction::ExecCallback exec,
+                        cxx::CastFunction::InitCallback init) {
+	auto source_type = reg.Type(source);
+	auto target_type = reg.Type(target);
+	auto cast = cxx::CastFunction::Create(reg.factory);
+	cast.SetSourceType(source_type).SetTargetType(target_type);
+	if (implicit) {
+		cast.SetImplicitCastCost(cxx::CastFunction::GetImplicitCastCost(reg.factory, source_type, target_type));
+	}
+	// the result depends on the TimeZone and Calendar settings
+	cast.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+	cast.SetBindCallback(bind).SetExecCallback(exec);
+	if (init) {
+		cast.SetInitCallback(init);
+	}
+	reg.extension.Register(cast);
+}
+
+//! The message of a failed conversion between two timestamp precisions, as the engine's casts write it
+template <class SRC>
+static string CastExceptionText(const SRC &input) {
+	return "Type INT64 with value " + Timestamp::ToString(timestamp_t {Raw(input)}) +
+	       " can't be cast to the destination type INT64";
+}
+
+static string CastExceptionText(const date_t &input) {
+	return "Type INT32 with value " + Date::ToString(input) + " can't be cast to the destination type INT64";
+}
+
+//! The naive timestamp of the precision of a time zone type
+template <class DST>
+using NaiveOf =
+    typename std::conditional<std::is_same<DST, timestamp_tz_ns_t>::value, timestamp_ns_t, timestamp_t>::type;
+
+template <class SRC, class DST>
+static bool TryCastToNaive(const SRC &input, DST &result) {
+	return TryCastTimestamp(input, result);
+}
+
+template <class DST>
+static bool TryCastToNaive(const date_t &input, DST &result) {
+	return TryCastDate(input, result);
+}
+
+//===--------------------------------------------------------------------===//
+// pg_timezone_names
+//===--------------------------------------------------------------------===//
+struct ICUTimeZoneData {
 	ICUTimeZoneData() : now(Calendar::GetNow()) {
 	}
 
@@ -22,40 +84,33 @@ struct ICUTimeZoneData : public GlobalTableFunctionState {
 	int64_t now;
 };
 
-static duckdb::unique_ptr<FunctionData> ICUTimeZoneBind(ClientContext &context, TableFunctionBindInput &input,
-                                                        vector<LogicalType> &return_types, vector<Identifier> &names) {
-	names.emplace_back("name");
-	return_types.emplace_back(LogicalType::VARCHAR);
-	names.emplace_back("abbrev");
-	return_types.emplace_back(LogicalType::VARCHAR);
-	names.emplace_back("utc_offset");
-	return_types.emplace_back(LogicalType::INTERVAL);
-	names.emplace_back("is_dst");
-	return_types.emplace_back(LogicalType::BOOLEAN);
-
-	return nullptr;
+static void ICUTimeZoneBind(cxx::TableFunction::BindInput &input) {
+	auto &factory = input.GetContext().GetFactory();
+	input.AddResultColumn("name", factory.ParseType("VARCHAR"));
+	input.AddResultColumn("abbrev", factory.ParseType("VARCHAR"));
+	input.AddResultColumn("utc_offset", factory.ParseType("INTERVAL"));
+	input.AddResultColumn("is_dst", factory.ParseType("BOOLEAN"));
 }
 
-static duckdb::unique_ptr<GlobalTableFunctionState> ICUTimeZoneInit(ClientContext &context,
-                                                                    TableFunctionInitInput &input) {
-	return make_uniq<ICUTimeZoneData>();
+static void ICUTimeZoneInit(cxx::TableFunction::InitGlobalInput &input) {
+	input.SetGlobalState<ICUTimeZoneData>();
 }
 
-static void ICUTimeZoneFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	auto &data = data_p.global_state->Cast<ICUTimeZoneData>();
+static void ICUTimeZoneFunction(cxx::TableFunction::ExecInput &input) {
+	auto &data = input.GetGlobalState<ICUTimeZoneData>();
 	const auto &names = TimeZone::GetAvailableIds();
+	auto output = input.GetOutputChunk();
+	const auto capacity = output.GetCapacity();
+
+	auto name_col = output.GetVector(0);
+	auto abbrev = output.GetVector(1);
+	auto utc_offset = output.GetVector(2);
+	auto is_dst = output.GetVector(3);
+	auto utc_offset_data = utc_offset.GetDataMutable<interval_t>();
+	auto is_dst_data = is_dst.GetDataMutable<bool>();
+
 	idx_t index = 0;
-
-	// name, VARCHAR
-	auto &name_col = output.data[0];
-	// abbrev, VARCHAR
-	auto &abbrev = output.data[1];
-	// utc_offset, INTERVAL
-	auto &utc_offset = output.data[2];
-	// is_dst, BOOLEAN
-	auto &is_dst = output.data[3];
-
-	while (index < STANDARD_VECTOR_SIZE && data.offset < names.size()) {
+	while (index < capacity && data.offset < names.size()) {
 		//	The LONG name is the one we looked up
 		const auto &long_id = names[data.offset++];
 
@@ -76,56 +131,26 @@ static void ICUTimeZoneFunction(ClientContext &context, TableFunctionInput &data
 		int32_t dst_offset_ms;
 		tz->GetOffset(data.now, raw_offset_ms, dst_offset_ms);
 
-		name_col.Append(Value(long_id));
-		abbrev.Append(Value(short_id));
+		name_col.AssignStringUnsafe(index, long_id);
+		abbrev.AssignStringUnsafe(index, short_id);
 		//	What PG reports is the total offset for today,
 		//	which is the total offset (i.e., "raw") plus the DST offset.
 		raw_offset_ms += dst_offset_ms;
-		utc_offset.Append(Value::INTERVAL(Interval::FromMicro(raw_offset_ms * Interval::MICROS_PER_MSEC)));
-		is_dst.Append(Value::BOOLEAN(dst_offset_ms != 0));
+		utc_offset_data[index] = Interval::FromMicro(int64_t(raw_offset_ms) * Interval::MICROS_PER_MSEC);
+		is_dst_data[index] = dst_offset_ms != 0;
 		++index;
+	}
+	for (idx_t col = 0; col < output.GetVectorCount(); col++) {
+		output.GetVector(col).SetSize(index);
 	}
 }
 
+//===--------------------------------------------------------------------===//
+// From naive timestamps
+//===--------------------------------------------------------------------===//
 struct ICUFromNaiveTimestamp : public ICUDateFunc {
-	//! Non-throwing form, so a TRY_CAST can turn the failure into NULL rather than an error.
-	static bool TryOperation(Calendar *calendar, timestamp_t naive, timestamp_tz_t &result, string &error) {
-		if (!naive.IsFinite()) {
-			result = timestamp_tz_t(naive);
-			return true;
-		}
-		SetTimeParts(calendar, naive);
-		if (!TryGetTime(calendar, GetMicrosPart(naive), result)) {
-			error = "ICU date overflows timestamp range";
-			return false;
-		}
-		return true;
-	}
-
-	static bool TryOperation(Calendar *calendar, timestamp_ns_t naive, timestamp_tz_ns_t &result, string &error) {
-		if (!naive.IsFinite()) {
-			result = timestamp_tz_ns_t(naive);
-			return true;
-		}
-
-		auto nanos = UnsafeNumericCast<int32_t>(naive.value % Interval::NANOS_PER_MICRO);
-		timestamp_t micros(naive.value / Interval::NANOS_PER_MICRO);
-		timestamp_tz_t cast;
-		if (!TryOperation(calendar, micros, cast, error)) {
-			return false;
-		}
-
-		timestamp_ns_t scaled;
-		if (!Timestamp::TryFromTimestampNanos(timestamp_t(cast), nanos, scaled)) {
-			error = "ICU date overflows timestamp_ns range";
-			return false;
-		}
-		result = timestamp_tz_ns_t(scaled);
-		return true;
-	}
-
 	//! Shared by both forms: push the naive parts into the calendar, and recover the sub-millisecond remainder.
-	static void SetTimeParts(Calendar *calendar, timestamp_t naive) {
+	static uint64_t SetTimeParts(Calendar *calendar, timestamp_t naive) {
 		date_t local_date;
 		dtime_t local_time;
 		Timestamp::Convert(naive, local_date, local_time);
@@ -144,167 +169,124 @@ struct ICUFromNaiveTimestamp : public ICUDateFunc {
 		calendar->Set(CAL_MINUTE, mn);
 		calendar->Set(CAL_SECOND, secs);
 		calendar->Set(CAL_MILLISECOND, millis);
-	}
-
-	static uint64_t GetMicrosPart(timestamp_t naive) {
-		date_t local_date;
-		dtime_t local_time;
-		Timestamp::Convert(naive, local_date, local_time);
-		int32_t hr, mn, secs, frac;
-		Time::Convert(local_time, hr, mn, secs, frac);
 		return uint64_t(frac % Interval::MICROS_PER_MSEC);
 	}
 
-	static inline timestamp_tz_t Operation(Calendar *calendar, timestamp_t naive) {
-		if (!naive.IsFinite()) {
-			return timestamp_tz_t(naive);
+	//! Non-throwing form, so a TRY_CAST can turn the failure into NULL rather than an error.
+	static bool TryOperation(Calendar *calendar, timestamp_t naive, timestamp_tz_t &result, string &error) {
+		if (!IsFinite(naive)) {
+			result = timestamp_tz_t {naive.micros};
+			return true;
+		}
+		const auto micros = SetTimeParts(calendar, naive);
+		if (!TryGetTime(calendar, micros, result)) {
+			error = "ICU date overflows timestamp range";
+			return false;
+		}
+		return true;
+	}
+
+	static bool TryOperation(Calendar *calendar, timestamp_ns_t naive, timestamp_tz_ns_t &result, string &error) {
+		if (!IsFinite(naive)) {
+			result = timestamp_tz_ns_t {naive.nanos};
+			return true;
 		}
 
-		// Extract the parts from the "instant"
-		date_t local_date;
-		dtime_t local_time;
-		Timestamp::Convert(naive, local_date, local_time);
+		auto nanos = int32_t(naive.nanos % Interval::NANOS_PER_MICRO);
+		timestamp_t micros {naive.nanos / Interval::NANOS_PER_MICRO};
+		timestamp_tz_t cast;
+		if (!TryOperation(calendar, micros, cast, error)) {
+			return false;
+		}
 
-		int32_t year;
-		int32_t mm;
-		int32_t dd;
-		Date::Convert(local_date, year, mm, dd);
+		timestamp_ns_t scaled;
+		if (!Timestamp::TryFromTimestampNanos(timestamp_t {cast.micros}, nanos, scaled)) {
+			error = "ICU date overflows timestamp_ns range";
+			return false;
+		}
+		result = timestamp_tz_ns_t {scaled.nanos};
+		return true;
+	}
 
-		int32_t hr;
-		int32_t mn;
-		int32_t secs;
-		int32_t frac;
-		Time::Convert(local_time, hr, mn, secs, frac);
-		int32_t millis = frac / int32_t(Interval::MICROS_PER_MSEC);
-		uint64_t micros = frac % Interval::MICROS_PER_MSEC;
-
-		// Use them to set the time in the time zone
-		calendar->Set(CAL_YEAR, year);
-		calendar->Set(CAL_MONTH, int32_t(mm - 1));
-		calendar->Set(CAL_DATE, dd);
-		calendar->Set(CAL_HOUR_OF_DAY, hr);
-		calendar->Set(CAL_MINUTE, mn);
-		calendar->Set(CAL_SECOND, secs);
-		calendar->Set(CAL_MILLISECOND, millis);
-
+	static inline timestamp_tz_t Operation(Calendar *calendar, timestamp_t naive) {
+		if (!IsFinite(naive)) {
+			return timestamp_tz_t {naive.micros};
+		}
+		const auto micros = SetTimeParts(calendar, naive);
 		return GetTime(calendar, micros);
 	}
 
 	static inline timestamp_tz_ns_t Operation(Calendar *calendar, timestamp_ns_t naive) {
-		if (!naive.IsFinite()) {
-			return timestamp_tz_ns_t(naive);
+		if (!IsFinite(naive)) {
+			return timestamp_tz_ns_t {naive.nanos};
 		}
 
-		auto nanos = UnsafeNumericCast<int32_t>(naive.value % Interval::NANOS_PER_MICRO);
-		timestamp_t micros(naive.value / Interval::NANOS_PER_MICRO);
-		timestamp_t cast(Operation(calendar, micros));
+		auto nanos = int32_t(naive.nanos % Interval::NANOS_PER_MICRO);
+		timestamp_t micros {naive.nanos / Interval::NANOS_PER_MICRO};
+		timestamp_t cast {Operation(calendar, micros).micros};
 
 		timestamp_ns_t result;
 		if (!Timestamp::TryFromTimestampNanos(cast, nanos, result)) {
 			throw ConversionException("ICU date overflows timestamp_ns range");
 		}
-		return timestamp_tz_ns_t(result);
+		return timestamp_tz_ns_t {result.nanos};
 	}
 
 	static inline timestamp_tz_t Operation(Calendar *calendar, date_t naive) {
-		if (DUCKDB_UNLIKELY(naive == date_t::infinity())) {
-			return timestamp_tz_t::infinity();
+		if (naive.days == DATE_INFINITY) {
+			return timestamp_tz_t {TIMESTAMP_INFINITY};
 		}
-		if (DUCKDB_UNLIKELY(naive == date_t::ninfinity())) {
-			return timestamp_tz_t::ninfinity();
+		if (naive.days == DATE_NINFINITY) {
+			return timestamp_tz_t {TIMESTAMP_NINFINITY};
 		}
-		return Operation(calendar, Timestamp::FromDatetime(naive, dtime_t(0)));
+		return Operation(calendar, Timestamp::FromDatetime(naive, dtime_t {}));
 	}
 
 	template <class SRC, class DST>
-	static bool CastFromNaive(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
-		auto &cast_data = parameters.cast_data->Cast<CastData>();
-		auto &info = cast_data.info->Cast<BindData>();
+	static void CastFromNaive(cxx::CastFunction::ExecInput &input) {
+		auto &info = input.GetBindData<BindData>();
 		CalendarPtr calendar(info.calendar->Copy());
 
-		bool all_converted = true;
-		UnaryExecutor::Execute<SRC, DST>(source, result, count, [&](SRC input) -> optional<DST> {
-			using NAIVE = timestamp_base_t<DST::PRECISION, false>;
+		ExecuteCast<SRC, DST>(input, [&](SRC value, DST &result, string &error) {
+			using NAIVE = NaiveOf<DST>;
 			NAIVE naive;
-			if (!TryCast::Operation(input, naive)) {
-				HandleCastError::AssignError(CastExceptionText<SRC, NAIVE>(input), parameters);
-				all_converted = false;
-				return nullopt;
+			if (!TryCastToNaive(value, naive)) {
+				error = CastExceptionText(value);
+				return false;
 			}
 			// the zone shift can overflow, and a TRY_CAST must see that as NULL rather than an exception
-			DST shifted;
-			string error;
-			if (!TryOperation(calendar.get(), naive, shifted, error)) {
-				HandleCastError::AssignError(error, parameters);
-				all_converted = false;
-				return nullopt;
-			}
-			return shifted;
+			return TryOperation(calendar.get(), naive, result, error);
 		});
-		return all_converted;
 	}
 
-	template <typename SRC>
-	static BoundCastInfo BindCastFromNaiveType(BindCastInput &input, const LogicalType &target) {
-		auto cast_data = BindCastData(input);
-		switch (target.id()) {
-		case LogicalTypeId::TIMESTAMP_TZ:
-			return BoundCastInfo(CastFromNaive<SRC, timestamp_tz_t>, std::move(cast_data));
-		case LogicalTypeId::TIMESTAMP_TZ_NS:
-			return BoundCastInfo(CastFromNaive<SRC, timestamp_tz_ns_t>, std::move(cast_data));
-		default:
-			throw InternalException("Type %s not handled in BindCastFromNaiveType", LogicalTypeIdToString(target.id()));
-		}
+	static void BindCastFromNaive(cxx::CastFunction::BindInput &input) {
+		ICUCasts::BindCastData(input, "TIMESTAMP to TIMESTAMPTZ",
+		                       "Casting from TIMESTAMP to TIMESTAMP WITH TIME ZONE without an explicit time zone "
+		                       "has been disabled  - use \"AT TIME ZONE ...\"");
 	}
 
-	static BoundCastInfo BindCastFromNaive(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
-		if (!input.context) {
-			throw InternalException("Missing context for TIMESTAMP to TIMESTAMPTZ cast.");
-		}
-		if (Settings::Get<DisableTimestamptzCastsSetting>(*input.context)) {
-			throw BinderException("Casting from TIMESTAMP to TIMESTAMP WITH TIME ZONE without an explicit time zone "
-			                      "has been disabled  - use \"AT TIME ZONE ...\"");
-		}
-
-		switch (source.id()) {
-		case LogicalTypeId::TIMESTAMP:
-			return BindCastFromNaiveType<timestamp_t>(input, target);
-		case LogicalTypeId::TIMESTAMP_MS:
-			return BindCastFromNaiveType<timestamp_ms_t>(input, target);
-		case LogicalTypeId::TIMESTAMP_NS:
-			return BindCastFromNaiveType<timestamp_ns_t>(input, target);
-		case LogicalTypeId::TIMESTAMP_SEC:
-			return BindCastFromNaiveType<timestamp_sec_t>(input, target);
-		case LogicalTypeId::DATE:
-			return BindCastFromNaiveType<date_t>(input, target);
-		default:
-			throw InternalException("Type %s not handled in BindCastFromNaive", LogicalTypeIdToString(source.id()));
-		}
-	}
-	static void AddCast(CastFunctionSet &casts, const LogicalType &source, const LogicalType &target) {
-		const auto implicit_cost = CastRules::ImplicitCast(source, target);
-		casts.RegisterCastFunction(source, target, BindCastFromNaive, implicit_cost);
-	}
-
-	static void AddCasts(ExtensionLoader &loader) {
-		auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
-		auto &casts = config.GetCastFunctions();
-
-		AddCast(casts, LogicalType::TIMESTAMP, LogicalType::TIMESTAMP_TZ);
-		AddCast(casts, LogicalType::TIMESTAMP_MS, LogicalType::TIMESTAMP_TZ);
-		AddCast(casts, LogicalType::TIMESTAMP_NS, LogicalType::TIMESTAMP_TZ);
-		AddCast(casts, LogicalType::TIMESTAMP_NS, LogicalType::TIMESTAMP_TZ_NS);
-		AddCast(casts, LogicalType::TIMESTAMP_S, LogicalType::TIMESTAMP_TZ);
-		AddCast(casts, LogicalType::DATE, LogicalType::TIMESTAMP_TZ);
+	static void AddCasts(const ICURegistration &reg) {
+		auto add = [&](const string &source, const string &target, cxx::CastFunction::ExecCallback exec) {
+			ICUCasts::Register(reg, source, target, true, BindCastFromNaive, exec);
+		};
+		add("TIMESTAMP", "TIMESTAMPTZ", CastFromNaive<timestamp_t, timestamp_tz_t>);
+		add("TIMESTAMP_MS", "TIMESTAMPTZ", CastFromNaive<timestamp_ms_t, timestamp_tz_t>);
+		add("TIMESTAMP_NS", "TIMESTAMPTZ", CastFromNaive<timestamp_ns_t, timestamp_tz_t>);
+		add("TIMESTAMP_NS", "TIMESTAMPTZ_NS", CastFromNaive<timestamp_ns_t, timestamp_tz_ns_t>);
+		add("TIMESTAMP_S", "TIMESTAMPTZ", CastFromNaive<timestamp_s_t, timestamp_tz_t>);
+		add("DATE", "TIMESTAMPTZ", CastFromNaive<date_t, timestamp_tz_t>);
 	}
 };
 
+//===--------------------------------------------------------------------===//
+// To naive timestamps
+//===--------------------------------------------------------------------===//
 struct ICUToNaiveTimestamp : public ICUDateFunc {
 	//! Non-throwing form, so a TRY_CAST can turn the failure into NULL rather than an error. The error text is
-	//! returned for the throwing form and for CastParameters, keeping both spellings identical.
+	//! returned for the throwing form, keeping both spellings identical.
 	static bool TryOperation(Calendar *calendar, timestamp_tz_t instant, timestamp_t &naive, string &error) {
-		if (!instant.IsFinite()) {
-			naive = timestamp_t(instant);
+		if (!IsFinite(instant)) {
+			naive = timestamp_t {instant.micros};
 			return true;
 		}
 
@@ -348,13 +330,13 @@ struct ICUToNaiveTimestamp : public ICUDateFunc {
 	}
 
 	static bool TryOperation(Calendar *calendar, timestamp_tz_ns_t instant, timestamp_ns_t &result, string &error) {
-		if (!instant.IsFinite()) {
-			result = timestamp_ns_t(instant);
+		if (!IsFinite(instant)) {
+			result = timestamp_ns_t {instant.nanos};
 			return true;
 		}
 
-		auto nanos = UnsafeNumericCast<int32_t>(instant.value % Interval::NANOS_PER_MICRO);
-		timestamp_tz_t micros(instant.value / Interval::NANOS_PER_MICRO);
+		auto nanos = int32_t(instant.nanos % Interval::NANOS_PER_MICRO);
+		timestamp_tz_t micros {instant.nanos / Interval::NANOS_PER_MICRO};
 		timestamp_t cast;
 		if (!TryOperation(calendar, micros, cast, error)) {
 			return false;
@@ -379,7 +361,7 @@ struct ICUToNaiveTimestamp : public ICUDateFunc {
 	//! Rounds the local time micros * 1000 + nanos to microseconds, away from zero on ties like the other casts.
 	//! The nanosecond value is not formed, as it can overflow int64 where the microsecond value does not.
 	static timestamp_t RoundToMicros(timestamp_t micros, int32_t nanos) {
-		auto value = micros.value;
+		auto value = micros.micros;
 		if (value == 0) {
 			value = nanos >= 500 ? 1 : (nanos <= -500 ? -1 : 0);
 		} else if (value > 0) {
@@ -387,198 +369,125 @@ struct ICUToNaiveTimestamp : public ICUDateFunc {
 		} else {
 			value += nanos <= 0 ? (nanos <= -500 ? -1 : 0) : (nanos > 500 ? 1 : 0);
 		}
-		return timestamp_t(value);
+		return timestamp_t {value};
 	}
 
 	template <class SRC, class DST>
-	static bool CastToNaive(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
-		auto &cast_data = parameters.cast_data->Cast<CastData>();
-		auto &info = cast_data.info->Cast<BindData>();
+	static void CastToNaive(cxx::CastFunction::ExecInput &input) {
+		auto &info = input.GetBindData<BindData>();
 		CalendarPtr calendar(info.calendar->Copy());
 
-		bool all_converted = true;
-		UnaryExecutor::Execute<SRC, DST>(source, result, count, [&](SRC input) -> optional<DST> {
+		ExecuteCast<SRC, DST>(input, [&](SRC value, DST &result, string &error) {
 			if constexpr (std::is_same<SRC, timestamp_tz_ns_t>::value && std::is_same<DST, timestamp_t>::value) {
-				if (input.IsFinite()) {
+				if (IsFinite(value)) {
 					// shift in microseconds: the local time can lie outside the timestamp_ns range
 					timestamp_t micros_naive;
-					string micros_error;
-					const auto nanos = UnsafeNumericCast<int32_t>(input.value % Interval::NANOS_PER_MICRO);
-					const timestamp_tz_t micros(input.value / Interval::NANOS_PER_MICRO);
-					if (!TryOperation(calendar.get(), micros, micros_naive, micros_error)) {
-						HandleCastError::AssignError(micros_error, parameters);
-						all_converted = false;
-						return nullopt;
+					const auto nanos = int32_t(value.nanos % Interval::NANOS_PER_MICRO);
+					const timestamp_tz_t micros {value.nanos / Interval::NANOS_PER_MICRO};
+					if (!TryOperation(calendar.get(), micros, micros_naive, error)) {
+						return false;
 					}
-					return RoundToMicros(micros_naive, nanos);
+					result = RoundToMicros(micros_naive, nanos);
+					return true;
 				}
 			}
-			using NAIVE = timestamp_base_t<SRC::PRECISION, false>;
 			// the zone shift itself can fail, and a TRY_CAST must see that as NULL rather than an exception
-			NAIVE naive;
-			string error;
-			if (!TryOperation(calendar.get(), input, naive, error)) {
-				HandleCastError::AssignError(error, parameters);
-				all_converted = false;
-				return nullopt;
-			}
-			DST output;
-			if (!TryCast::Operation(naive, output)) {
-				HandleCastError::AssignError("Could not convert Timestamp to higher precision.", parameters);
-				all_converted = false;
-				return nullopt;
-			}
-			return output;
-		});
-		return all_converted;
-	}
-
-	static BoundCastInfo BindCastToNaive(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
-		if (!input.context) {
-			throw InternalException("Missing context for TIMESTAMPTZ to %s cast.", LogicalTypeIdToString(target.id()));
-		}
-		if (Settings::Get<DisableTimestamptzCastsSetting>(*input.context)) {
-			throw BinderException("Casting from TIMESTAMP WITH TIME ZONE to %s without an explicit time zone "
-			                      "has been disabled  - use \"AT TIME ZONE ...\"",
-			                      LogicalTypeIdToString(target.id()));
-		}
-
-		auto cast_data = BindCastData(input);
-
-		switch (source.id()) {
-		case LogicalTypeId::TIMESTAMP_TZ:
-			switch (target.id()) {
-			case LogicalType::TIMESTAMP:
-				return BoundCastInfo(CastToNaive<timestamp_tz_t, timestamp_t>, std::move(cast_data));
-			case LogicalType::TIMESTAMP_MS:
-				return BoundCastInfo(CastToNaive<timestamp_tz_t, timestamp_ms_t>, std::move(cast_data));
-			case LogicalType::TIMESTAMP_NS:
-				return BoundCastInfo(CastToNaive<timestamp_tz_t, timestamp_ns_t>, std::move(cast_data));
-			case LogicalType::TIMESTAMP_S:
-				return BoundCastInfo(CastToNaive<timestamp_tz_t, timestamp_sec_t>, std::move(cast_data));
-			default:
-				throw InternalException("Type %s not handled in BindCastToNaive", LogicalTypeIdToString(target.id()));
-			}
-		case LogicalTypeId::TIMESTAMP_TZ_NS:
-			switch (target.id()) {
-			case LogicalType::TIMESTAMP:
-				return BoundCastInfo(CastToNaive<timestamp_tz_ns_t, timestamp_t>, std::move(cast_data));
-			case LogicalType::TIMESTAMP_NS:
-				return BoundCastInfo(CastToNaive<timestamp_tz_ns_t, timestamp_ns_t>, std::move(cast_data));
-			default:
-				throw InternalException("Type %s not handled in BindCastToNaive", LogicalTypeIdToString(target.id()));
-			}
-		default:
-			throw InternalException("Type %s not handled in BindCastToNaive", LogicalTypeIdToString(source.id()));
-		}
-	}
-
-	static void AddCast(CastFunctionSet &casts, const LogicalType &source, const LogicalType &target) {
-		const auto implicit_cost = CastRules::ImplicitCast(source, target);
-		casts.RegisterCastFunction(source, target, BindCastToNaive, implicit_cost);
-	}
-
-	static void AddCasts(ExtensionLoader &loader) {
-		auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
-		auto &casts = config.GetCastFunctions();
-
-		AddCast(casts, LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP);
-		AddCast(casts, LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP_MS);
-		AddCast(casts, LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP_NS);
-		AddCast(casts, LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP_S);
-
-		AddCast(casts, LogicalType::TIMESTAMP_TZ_NS, LogicalType::TIMESTAMP);
-		AddCast(casts, LogicalType::TIMESTAMP_TZ_NS, LogicalType::TIMESTAMP_NS);
-	}
-};
-
-struct ICULocalTimestampFunc : public ICUDateFunc {
-	struct BindDataNow : public BindData {
-		explicit BindDataNow(ClientContext &context) : BindData(context) {
-			now = MetaTransaction::Get(context).start_timestamp;
-		}
-
-		BindDataNow(const BindDataNow &other) : BindData(other), now(other.now) {
-		}
-
-		bool Equals(const FunctionData &other_p) const override {
-			auto &other = other_p.Cast<const BindDataNow>();
-			if (now != other.now) {
+			NaiveOf<typename std::conditional<std::is_same<SRC, timestamp_tz_ns_t>::value, timestamp_tz_ns_t,
+			                                  timestamp_tz_t>::type>
+			    naive;
+			if (!TryOperation(calendar.get(), value, naive, error)) {
 				return false;
 			}
+			if (!TryCastTimestamp(naive, result)) {
+				error = "Could not convert Timestamp to higher precision.";
+				return false;
+			}
+			return true;
+		});
+	}
 
-			return BindData::Equals(other_p);
+	static void BindCastToNaive(cxx::CastFunction::BindInput &input) {
+		auto target = input.GetTargetType().ToText();
+		ICUCasts::BindCastData(input, ("TIMESTAMPTZ to " + target).c_str(),
+		                       "Casting from TIMESTAMP WITH TIME ZONE to " + target +
+		                           " without an explicit time zone has been disabled  - use \"AT TIME ZONE ...\"");
+	}
+
+	static void AddCasts(const ICURegistration &reg) {
+		auto add = [&](const string &source, const string &target, cxx::CastFunction::ExecCallback exec) {
+			ICUCasts::Register(reg, source, target, true, BindCastToNaive, exec);
+		};
+		add("TIMESTAMPTZ", "TIMESTAMP", CastToNaive<timestamp_tz_t, timestamp_t>);
+		add("TIMESTAMPTZ", "TIMESTAMP_MS", CastToNaive<timestamp_tz_t, timestamp_ms_t>);
+		add("TIMESTAMPTZ", "TIMESTAMP_NS", CastToNaive<timestamp_tz_t, timestamp_ns_t>);
+		add("TIMESTAMPTZ", "TIMESTAMP_S", CastToNaive<timestamp_tz_t, timestamp_s_t>);
+
+		add("TIMESTAMPTZ_NS", "TIMESTAMP", CastToNaive<timestamp_tz_ns_t, timestamp_t>);
+		add("TIMESTAMPTZ_NS", "TIMESTAMP_NS", CastToNaive<timestamp_tz_ns_t, timestamp_ns_t>);
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// current_localtimestamp, current_localtime
+//===--------------------------------------------------------------------===//
+struct ICULocalTimestampFunc : public ICUDateFunc {
+	struct BindDataNow : public BindData {
+		explicit BindDataNow(cxx::Context &context) : BindData(context), now(context.GetTransactionStartTime()) {
 		}
 
-		duckdb::unique_ptr<FunctionData> Copy() const override {
-			return make_uniq<BindDataNow>(*this);
+		bool operator==(const BindDataNow &other) const {
+			return now.micros == other.now.micros && BindData::operator==(other);
 		}
 
-		timestamp_t now;
+		timestamp_tz_t now;
 	};
 
-	static duckdb::unique_ptr<FunctionData> BindNow(BindScalarFunctionInput &input) {
-		return make_uniq<BindDataNow>(input.GetClientContext());
+	static void BindNow(cxx::ScalarFunction::BindInput &input) {
+		input.SetBindData<BindDataNow>(input.GetContext());
 	}
 
-	static timestamp_t GetLocalTimestamp(ExpressionState &state) {
-		auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
-		auto &info = func_expr.BindInfo()->Cast<BindDataNow>();
+	static timestamp_t GetLocalTimestamp(cxx::ScalarFunction::ExecInput &input) {
+		auto &info = input.GetBindData<BindDataNow>();
 		CalendarPtr calendar_ptr(info.calendar->Copy());
-		auto calendar = calendar_ptr.get();
-
-		const auto now = timestamp_tz_t(info.now);
-		return ICUToNaiveTimestamp::Operation(calendar, now);
+		return ICUToNaiveTimestamp::Operation(calendar_ptr.get(), info.now);
 	}
 
-	static void Execute(DataChunk &input, ExpressionState &state, Vector &result) {
-		D_ASSERT(input.ColumnCount() == 0);
-		result.SetVectorType(VectorType::CONSTANT_VECTOR);
-		auto rdata = ConstantVector::GetData<timestamp_t>(result);
-		rdata[0] = GetLocalTimestamp(state);
+	static void Execute(cxx::ScalarFunction::ExecInput &input) {
+		const auto local = GetLocalTimestamp(input);
+		ExecuteRows<timestamp_t>(input, [&]() -> std::optional<timestamp_t> { return local; });
 	}
 
-	static void AddFunction(const Identifier &name, ExtensionLoader &loader) {
-		ScalarFunctionSet set {name};
-		set.AddFunction(ScalarFunction({}, LogicalType::TIMESTAMP, Execute, BindNow));
+	static void ExecuteTime(cxx::ScalarFunction::ExecInput &input) {
+		const auto local = Timestamp::GetTime(GetLocalTimestamp(input));
+		ExecuteRows<dtime_t>(input, [&]() -> std::optional<dtime_t> { return local; });
+	}
+
+	static void AddFunction(const ICURegistration &reg, const string &name, const string &type,
+	                        cxx::ScalarFunction::ExecCallback exec) {
+		auto function = reg.Scalar(name, {}, type);
+		function.SetBindCallback(BindNow).SetExecCallback(exec);
 		// the bind reads the start of the transaction
-		set.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
-		loader.RegisterFunction(set);
+		function.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+		reg.extension.Register(function);
 	}
 };
 
-struct ICULocalTimeFunc : public ICUDateFunc {
-	static void Execute(DataChunk &input, ExpressionState &state, Vector &result) {
-		D_ASSERT(input.ColumnCount() == 0);
-		result.SetVectorType(VectorType::CONSTANT_VECTOR);
-		auto rdata = ConstantVector::GetData<dtime_t>(result);
-		const auto local = ICULocalTimestampFunc::GetLocalTimestamp(state);
-		rdata[0] = Timestamp::GetTime(local);
-	}
-
-	static void AddFunction(const Identifier &name, ExtensionLoader &loader) {
-		ScalarFunctionSet set {name};
-		set.AddFunction(ScalarFunction({}, LogicalType::TIME, Execute, ICULocalTimestampFunc::BindNow));
-		// the bind reads the start of the transaction
-		set.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
-		loader.RegisterFunction(set);
-	}
-};
-
+//===--------------------------------------------------------------------===//
+// TIME WITH TIME ZONE
+//===--------------------------------------------------------------------===//
 dtime_tz_t ICUToTimeTZ::Operation(Calendar *calendar, dtime_tz_t timetz) {
 	// Normalise to +00:00, add TZ offset, then set offset to TZ
 	auto time = Time::NormalizeTimeTZ(timetz);
 
 	auto offset = GetTimeTZOffset(calendar);
 
-	date_t date(0);
-	time = Interval::Add(time, {0, 0, offset * Interval::MICROS_PER_SEC}, date);
-	return dtime_tz_t(time, offset);
+	date_t date;
+	time = Interval::Add(time, Interval::Make(0, 0, offset * Interval::MICROS_PER_SEC), date);
+	return dtime_tz_t(time.micros, offset);
 }
 
-bool ICUToTimeTZ::ToTimeTZ(Calendar *calendar, timestamp_tz_t instant, dtime_tz_t &result,
-                           optional_ptr<string> error_message) {
-	if (!instant.IsFinite()) {
+bool ICUToTimeTZ::ToTimeTZ(Calendar *calendar, timestamp_tz_t instant, dtime_tz_t &result, string *error_message) {
+	if (!IsFinite(instant)) {
 		if (error_message) {
 			*error_message = "Can't get TIME of infinite TIMESTAMP";
 		}
@@ -606,156 +515,116 @@ bool ICUToTimeTZ::ToTimeTZ(Calendar *calendar, timestamp_tz_t instant, dtime_tz_
 		return false;
 	}
 
-	result = dtime_tz_t(time, offset);
+	result = dtime_tz_t(time.micros, offset);
 	return true;
 }
 
-bool ICUToTimeTZ::CastToTimeTZ(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
-	auto &cast_data = parameters.cast_data->Cast<CastData>();
-	auto &info = cast_data.info->Cast<BindData>();
+static void CastToTimeTZ(cxx::CastFunction::ExecInput &input) {
+	auto &info = input.GetBindData<ICUDateFunc::BindData>();
+	CalendarPtr calendar(info.calendar->Copy());
+	ExecuteCast<timestamp_tz_t, dtime_tz_t>(input, [&](timestamp_tz_t value, dtime_tz_t &result, string &error) {
+		return ICUToTimeTZ::ToTimeTZ(calendar.get(), value, result, &error);
+	});
+}
+
+static void CastFromTime(cxx::CastFunction::ExecInput &input) {
+	auto &info = input.GetBindData<ICUDateFunc::BindData>();
 	CalendarPtr calendar(info.calendar->Copy());
 
-	UnaryExecutor::Execute<timestamp_tz_t, dtime_tz_t>(source, result, count,
-	                                                   [&](timestamp_tz_t input) -> optional<dtime_tz_t> {
-		                                                   dtime_tz_t output;
-		                                                   string error_message;
-		                                                   if (ToTimeTZ(calendar.get(), input, output, error_message)) {
-			                                                   return output;
-		                                                   }
-		                                                   if (!error_message.empty()) {
-			                                                   HandleCastError::AssignError(error_message, parameters);
-		                                                   }
-		                                                   return nullopt;
-	                                                   });
-	return true;
-}
-
-BoundCastInfo ICUToTimeTZ::BindCastToTimeTZ(BindCastInput &input, const LogicalType &source,
-                                            const LogicalType &target) {
-	if (!input.context) {
-		throw InternalException("Missing context for TIMESTAMPTZ to TIMETZ cast.");
-	}
-
-	auto cast_data = BindCastData(input);
-
-	return BoundCastInfo(CastToTimeTZ, std::move(cast_data));
-}
-
-bool ICUToTimeTZ::CastFromTime(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
-	auto &cast_data = parameters.cast_data->Cast<CastData>();
-	auto &info = cast_data.info->Cast<BindData>();
-	CalendarPtr calendar_ptr(info.calendar->Copy());
-	auto calendar = calendar_ptr.get();
-
 	// Read the session UTC offset (with DST) from the calendar.
-	// This mirrors the no-offset branch in ICUStrptime::VarcharToTimeTZ so that
+	// This mirrors the no-offset branch of the VARCHAR to TIMETZ cast so that
 	// '00:00:00'::TIME::TIMETZ matches '00:00:00'::TIMETZ.
 	int32_t offset;
-	if (!TryGetTimeTZOffset(calendar, offset)) {
-		auto error_message = TimeTZOffsetError(offset);
-		UnaryExecutor::Execute<dtime_t, dtime_tz_t>(source, result, count, [&](dtime_t input) -> optional<dtime_tz_t> {
-			HandleCastError::AssignError(error_message, parameters);
-			return nullopt;
-		});
-		return false;
+	string offset_error;
+	if (!ICUDateFunc::TryGetTimeTZOffset(calendar.get(), offset)) {
+		offset_error = ICUDateFunc::TimeTZOffsetError(offset);
 	}
-
-	UnaryExecutor::Execute<dtime_t, dtime_tz_t>(source, result, count,
-	                                            [&](dtime_t input) { return dtime_tz_t(input, offset); });
-	return true;
+	ExecuteCast<dtime_t, dtime_tz_t>(input, [&](dtime_t value, dtime_tz_t &result, string &error) {
+		if (!offset_error.empty()) {
+			error = offset_error;
+			return false;
+		}
+		result = dtime_tz_t(value.micros, offset);
+		return true;
+	});
 }
 
-BoundCastInfo ICUToTimeTZ::BindCastFromTime(BindCastInput &input, const LogicalType &source,
-                                            const LogicalType &target) {
-	if (!input.context) {
-		throw InternalException("Missing context for TIME to TIMETZ cast.");
-	}
-
-	auto cast_data = BindCastData(input);
-
-	return BoundCastInfo(CastFromTime, std::move(cast_data));
+static void BindCastToTimeTZ(cxx::CastFunction::BindInput &input) {
+	ICUCasts::BindCastData(input, "TIMESTAMPTZ to TIMETZ");
 }
 
-void ICUToTimeTZ::AddCasts(ExtensionLoader &loader) {
-	const auto implicit_cost = CastRules::ImplicitCast(LogicalType::TIMESTAMP_TZ, LogicalType::TIME_TZ);
-	loader.RegisterCastFunction(LogicalType::TIMESTAMP_TZ, LogicalType::TIME_TZ, BindCastToTimeTZ, implicit_cost);
-
-	const auto time_implicit_cost = CastRules::ImplicitCast(LogicalType::TIME, LogicalType::TIME_TZ);
-	loader.RegisterCastFunction(LogicalType::TIME, LogicalType::TIME_TZ, BindCastFromTime, time_implicit_cost);
+static void BindCastFromTime(cxx::CastFunction::BindInput &input) {
+	ICUCasts::BindCastData(input, "TIME to TIMETZ");
 }
 
+void ICUToTimeTZ::AddCasts(const ICURegistration &reg) {
+	ICUCasts::Register(reg, "TIMESTAMPTZ", "TIMETZ", true, BindCastToTimeTZ, CastToTimeTZ);
+	ICUCasts::Register(reg, "TIME", "TIMETZ", true, BindCastFromTime, CastFromTime);
+}
+
+//===--------------------------------------------------------------------===//
+// timezone(zone, ts)
+//===--------------------------------------------------------------------===//
 struct ICUTimeZoneFunc : public ICUDateFunc {
 	template <typename OP, typename SRC, typename DST>
-	static void Execute(DataChunk &input, ExpressionState &state, Vector &result) {
-		auto &cache = ExecuteFunctionState::GetFunctionState(state)->Cast<CalendarCacheState>();
+	static void Execute(cxx::ScalarFunction::ExecInput &input) {
+		auto &cache = input.GetInitData<CalendarCacheState>();
 
 		// Two cases: constant TZ, variable TZ
-		D_ASSERT(input.ColumnCount() == 2);
-		const auto &tz_vec = input.data[0];
-		const auto &ts_vec = input.data[1];
-		if (tz_vec.GetVectorType() == VectorType::CONSTANT_VECTOR) {
-			if (ConstantVector::IsNull(tz_vec)) {
-				throw InternalException("ICUTimeZone called with constant NULL tz");
+		auto tz_vec = input.GetArg(0);
+		Calendar *constant_calendar = nullptr;
+		if (IsConstant(tz_vec)) {
+			StringArgReader tz(tz_vec);
+			if (tz.IsValid(0)) {
+				constant_calendar = cache.GetCalendar(tz.Get(0));
 			}
-			auto calendar = cache.GetCalendar(*ConstantVector::GetData<string_t>(tz_vec));
-			UnaryExecutor::Execute<SRC, DST>(ts_vec, result, [&](SRC ts) { return OP::Operation(calendar, ts); });
-		} else {
-			BinaryExecutor::Execute<string_t, SRC, DST>(tz_vec, ts_vec, result, [&](string_t tz_id, SRC ts) {
-				if (ts.IsFinite()) {
-					return OP::Operation(cache.GetCalendar(tz_id), ts);
-				} else {
-					return Cast::Operation<SRC, DST>(ts);
-				}
-			});
 		}
+		ExecuteRows<DST, std::string_view, SRC>(input, [&](std::string_view tz_id, SRC ts) -> std::optional<DST> {
+			if (constant_calendar) {
+				return OP::Operation(constant_calendar, ts);
+			}
+			if (IsFinite(ts)) {
+				return OP::Operation(cache.GetCalendar(tz_id), ts);
+			}
+			return Make<DST>(Raw(ts));
+		});
 	}
 
-	static void AddFunction(const Identifier &name, ExtensionLoader &loader) {
-		ScalarFunctionSet set {name};
-		ScalarFunction ts_fun({}, LogicalType::TIMESTAMP_TZ,
-		                      Execute<ICUFromNaiveTimestamp, timestamp_t, timestamp_tz_t>, Bind);
-		ts_fun.GetSignature()
-		    .AddParameter("timezone", LogicalType::VARCHAR)
-		    .AddParameter("timestamp", LogicalType::TIMESTAMP);
-		set.AddFunction(ts_fun);
-		ScalarFunction tstz_fun({}, LogicalType::TIMESTAMP, Execute<ICUToNaiveTimestamp, timestamp_tz_t, timestamp_t>,
-		                        Bind);
-		tstz_fun.GetSignature()
-		    .AddParameter("timezone", LogicalType::VARCHAR)
-		    .AddParameter("timestamp", LogicalType::TIMESTAMP_TZ);
-		set.AddFunction(tstz_fun);
+	static void ExecuteTimeTZ(cxx::ScalarFunction::ExecInput &input) {
+		auto &cache = input.GetInitData<CalendarCacheState>();
+		ExecuteRows<uint64_t, std::string_view, uint64_t>(
+		    input, [&](std::string_view tz_id, uint64_t bits) -> std::optional<uint64_t> {
+			    return ICUToTimeTZ::Operation(cache.GetCalendar(tz_id), dtime_tz_t(bits)).GetBits();
+		    });
+	}
 
-		ScalarFunction timetz_fun({}, LogicalType::TIME_TZ, Execute<ICUToTimeTZ, dtime_tz_t, dtime_tz_t>, Bind);
-		timetz_fun.GetSignature()
-		    .AddParameter("timezone", LogicalType::VARCHAR)
-		    .AddParameter("timestamp", LogicalType::TIME_TZ);
-		set.AddFunction(timetz_fun);
+	static void AddFunction(const ICURegistration &reg, const string &name) {
+		auto add = [&](const string &param, const string &type, const string &result_type,
+		               cxx::ScalarFunction::ExecCallback exec) {
+			auto function = reg.Scalar(name, {{"timezone", "VARCHAR"}, {param, type}}, result_type);
+			function.SetBindCallback(Bind).SetInitCallback(InitCalendarCache).SetExecCallback(exec);
+			function.SetStability(cxx::FunctionStability::CONSISTENT_WITHIN_QUERY);
+			reg.extension.Register(function);
+		};
+		add("timestamp", "TIMESTAMP", "TIMESTAMPTZ", Execute<ICUFromNaiveTimestamp, timestamp_t, timestamp_tz_t>);
+		add("timestamp", "TIMESTAMPTZ", "TIMESTAMP", Execute<ICUToNaiveTimestamp, timestamp_tz_t, timestamp_t>);
+		add("timestamp", "TIMETZ", "TIMETZ", ExecuteTimeTZ);
+		add("timestamp", "TIMESTAMP_NS", "TIMESTAMPTZ_NS",
+		    Execute<ICUFromNaiveTimestamp, timestamp_ns_t, timestamp_tz_ns_t>);
+		add("timestamp", "TIMESTAMPTZ_NS", "TIMESTAMP_NS",
+		    Execute<ICUToNaiveTimestamp, timestamp_tz_ns_t, timestamp_ns_t>);
+		add("date", "DATE", "TIMESTAMPTZ", ExecuteDate);
+	}
 
-		ScalarFunction timens_fun({}, LogicalType::TIMESTAMP_TZ_NS,
-		                          Execute<ICUFromNaiveTimestamp, timestamp_ns_t, timestamp_tz_ns_t>, Bind);
-		timens_fun.GetSignature()
-		    .AddParameter("timezone", LogicalType::VARCHAR)
-		    .AddParameter("timestamp", LogicalType::TIMESTAMP_NS);
-		set.AddFunction(timens_fun);
-
-		ScalarFunction timetzns_fun({}, LogicalType::TIMESTAMP_NS,
-		                            Execute<ICUToNaiveTimestamp, timestamp_tz_ns_t, timestamp_ns_t>, Bind);
-		timetzns_fun.GetSignature()
-		    .AddParameter("timezone", LogicalType::VARCHAR)
-		    .AddParameter("timestamp", LogicalType::TIMESTAMP_TZ_NS);
-		set.AddFunction(timetzns_fun);
-
-		ScalarFunction date_fun({}, LogicalType::TIMESTAMP_TZ, Execute<ICUFromNaiveTimestamp, date_t, timestamp_tz_t>,
-		                        Bind);
-		date_fun.GetSignature().AddParameter("timezone", LogicalType::VARCHAR).AddParameter("date", LogicalType::DATE);
-		set.AddFunction(date_fun);
-
-		set.ApplyToFunctions([](ScalarFunction &func) {
-			func.SetFallible();
-			func.SetStability(FunctionStability::CONSISTENT_WITHIN_QUERY);
-			func.SetInitStateCallback(InitCalendarCache);
-		});
-		loader.RegisterFunction(set);
+	static void ExecuteDate(cxx::ScalarFunction::ExecInput &input) {
+		auto &cache = input.GetInitData<CalendarCacheState>();
+		ExecuteRows<timestamp_tz_t, std::string_view, date_t>(
+		    input, [&](std::string_view tz_id, date_t date) -> std::optional<timestamp_tz_t> {
+			    if (IsFinite(date)) {
+				    return ICUFromNaiveTimestamp::Operation(cache.GetCalendar(tz_id), date);
+			    }
+			    return ICUFromNaiveTimestamp::Operation(nullptr, date);
+		    });
 	}
 };
 
@@ -767,20 +636,25 @@ bool ICUDateFunc::TryFromNaive(Calendar *calendar, timestamp_t naive, timestamp_
 	return ICUFromNaiveTimestamp::TryOperation(calendar, naive, result, error);
 }
 
-void RegisterICUTimeZoneFunctions(ExtensionLoader &loader) {
+void RegisterICUTimeZoneFunctions(const ICURegistration &reg) {
 	//	Table functions
-	TableFunction tz_names("pg_timezone_names", {}, ICUTimeZoneFunction, ICUTimeZoneBind, ICUTimeZoneInit);
-	loader.RegisterFunction(tz_names);
+	auto tz_names = cxx::TableFunction::Create(reg.factory);
+	tz_names.SetStability(cxx::FunctionStability::CONSISTENT);
+	tz_names.SetName("pg_timezone_names")
+	    .SetBindCallback(ICUTimeZoneBind)
+	    .SetInitGlobalCallback(ICUTimeZoneInit)
+	    .SetExecCallback(ICUTimeZoneFunction);
+	reg.extension.Register(tz_names);
 
 	//	Scalar functions
-	ICUTimeZoneFunc::AddFunction("timezone", loader);
-	ICULocalTimestampFunc::AddFunction("current_localtimestamp", loader);
-	ICULocalTimeFunc::AddFunction("current_localtime", loader);
+	ICUTimeZoneFunc::AddFunction(reg, "timezone");
+	ICULocalTimestampFunc::AddFunction(reg, "current_localtimestamp", "TIMESTAMP", ICULocalTimestampFunc::Execute);
+	ICULocalTimestampFunc::AddFunction(reg, "current_localtime", "TIME", ICULocalTimestampFunc::ExecuteTime);
 
 	// 	Casts
-	ICUFromNaiveTimestamp::AddCasts(loader);
-	ICUToNaiveTimestamp::AddCasts(loader);
-	ICUToTimeTZ::AddCasts(loader);
+	ICUFromNaiveTimestamp::AddCasts(reg);
+	ICUToNaiveTimestamp::AddCasts(reg);
+	ICUToTimeTZ::AddCasts(reg);
 }
 
-} // namespace duckdb
+} // namespace duckdb_icu
