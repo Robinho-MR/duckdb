@@ -1,6 +1,7 @@
 #include "duckdb/optimizer/expression_heuristics.hpp"
 #include "duckdb/planner/table_filter_set.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
+#include "duckdb/planner/expression/bound_coalesce_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 
 #include "duckdb/planner/expression/list.hpp"
@@ -132,6 +133,13 @@ idx_t ExpressionHeuristics::ExpressionCost(const BoundFunctionExpression &expr) 
 	if (BoundCastExpression::IsCast(expr)) {
 		return CastExpressionCost(expr);
 	}
+	if (BoundCoalesceExpression::IsCoalesce(expr)) {
+		idx_t sum = 0;
+		for (auto &child : expr.GetChildren()) {
+			sum += Cost(*child);
+		}
+		return sum + 5 * (expr.GetChildren().size() - 1);
+	}
 	if (expr.Function().GetName() == OptionalFilterScalarFun::NAME) {
 		return 0;
 	}
@@ -171,8 +179,6 @@ idx_t ExpressionHeuristics::ExpressionCost(const BoundOperatorExpression &expr, 
 	// OPERATOR_IS_NULL, OPERATOR_IS_NOT_NULL
 	if (expr_type == ExpressionType::OPERATOR_IS_NULL || expr_type == ExpressionType::OPERATOR_IS_NOT_NULL) {
 		return sum + 5;
-	} else if (expr_type == ExpressionType::OPERATOR_COALESCE) {
-		return sum + 5 * (expr.GetChildren().size() - 1);
 	} else if (expr_type == ExpressionType::COMPARE_IN || expr_type == ExpressionType::COMPARE_NOT_IN) {
 		// COMPARE_IN, COMPARE_NOT_IN
 		return sum + (expr.GetChildren().size() - 1) * 100;

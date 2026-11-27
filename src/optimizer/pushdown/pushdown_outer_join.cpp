@@ -1,6 +1,7 @@
 #include "duckdb/optimizer/filter_pushdown.hpp"
 #include "duckdb/parser/expression_map.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
+#include "duckdb/planner/expression/bound_coalesce_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -48,7 +49,7 @@ public:
 
 private:
 	static void EnumerateFlattenedCoalesceArgs(Expression &expr, const std::function<void(Expression &arg)> &callback) {
-		if (expr.GetExpressionType() == ExpressionType::OPERATOR_COALESCE) {
+		if (BoundCoalesceExpression::IsCoalesce(expr)) {
 			ExpressionIterator::EnumerateChildren(
 			    expr, [&](Expression &arg) { EnumerateFlattenedCoalesceArgs(arg, callback); });
 		} else {
@@ -138,8 +139,7 @@ PushDownFiltersOnCoalescedEqualJoinKeys(vector<unique_ptr<Filter>> &filters, vec
 		bool many_non_equivalent_coalesce_exprs = false;
 
 		ExpressionIterator::EnumerateExpression(filter, [&](Expression &sub_expr) {
-			if (many_non_equivalent_coalesce_exprs ||
-			    sub_expr.GetExpressionType() != ExpressionType::OPERATOR_COALESCE) {
+			if (many_non_equivalent_coalesce_exprs || !BoundCoalesceExpression::IsCoalesce(sub_expr)) {
 				return;
 			}
 

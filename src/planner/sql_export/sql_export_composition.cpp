@@ -3,6 +3,7 @@
 #include "duckdb/function/scalar/compressed_materialization_utils.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_coalesce_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/logical_aggregate.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
@@ -142,7 +143,7 @@ static CompositionProperties OutputProperties(LogicalOperator &op, const ColumnB
 static bool HasCompositionBarrier(const Expression &expression) {
 	if (expression.GetExpressionType() == ExpressionType::OPERATOR_TRY ||
 	    expression.GetExpressionType() == ExpressionType::OPERATOR_HAS_ERROR ||
-	    expression.GetExpressionType() == ExpressionType::OPERATOR_COALESCE ||
+	    BoundCoalesceExpression::IsCoalesce(expression) ||
 	    expression.GetExpressionClass() == ExpressionClass::BOUND_CASE ||
 	    expression.GetExpressionClass() == ExpressionClass::BOUND_LAMBDA ||
 	    expression.GetExpressionClass() == ExpressionClass::BOUND_WINDOW ||

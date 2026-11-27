@@ -2,6 +2,7 @@
 #include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
 #include "duckdb/function/function_binder.hpp"
+#include "duckdb/function/lazy_execute_input.hpp"
 #include "duckdb/function/scalar/generic_functions.hpp"
 #include "duckdb/parser/expression/operator_expression.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
@@ -65,14 +66,18 @@ static void CollectTryErrorRethrowFlags(const Expression &expr, bool select_cont
 			return;
 		}
 		break;
+	case ExpressionClass::BOUND_FUNCTION:
+		if (LazyExecuteInput::IsLazyFunction(expr)) {
+			// only the first child of a lazy function (COALESCE) is evaluated on every row
+			CollectTryErrorRethrowFlags(*expr.Cast<BoundFunctionExpression>().GetChildren()[0], false, flags);
+			return;
+		}
+		break;
 	case ExpressionClass::BOUND_OPERATOR:
 		switch (expr.GetExpressionType()) {
 		case ExpressionType::OPERATOR_TRY:
 		case ExpressionType::OPERATOR_HAS_ERROR:
 			// the capture consumes re-raises below it
-			return;
-		case ExpressionType::OPERATOR_COALESCE:
-			CollectTryErrorRethrowFlags(*expr.Cast<BoundOperatorExpression>().GetChildren()[0], false, flags);
 			return;
 		default:
 			break;

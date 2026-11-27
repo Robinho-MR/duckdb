@@ -11,6 +11,7 @@
 #include "duckdb/optimizer/relation_statistics/relation_statistics_helper.hpp"
 #include "duckdb/optimizer/statistics_propagator.hpp"
 #include "duckdb/planner/binder.hpp"
+#include "duckdb/planner/expression/bound_coalesce_expression.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
@@ -1180,9 +1181,8 @@ bool PartialAggregatePushdown::TryOwnerOuterCountPushdown(unique_ptr<LogicalOper
 	auto count_alias = aggregate.GetAlias();
 	auto count_ref =
 	    make_uniq<BoundColumnRefExpression>(count_type, ColumnBinding(lower_aggregate_index, ProjectionIndex(0)));
-	auto count_value =
-	    make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_COALESCE, count_type, std::move(count_ref),
-	                                       make_uniq<BoundConstantExpression>(Value::BIGINT(count_star ? 1 : 0)));
+	auto count_value = BoundCoalesceExpression::Create(
+	    count_type, std::move(count_ref), make_uniq<BoundConstantExpression>(Value::BIGINT(count_star ? 1 : 0)));
 	vector<unique_ptr<Expression>> sum_children;
 	sum_children.push_back(std::move(count_value));
 	auto upper_sum = DEBindAggregate(optimizer.context, "sum", std::move(sum_children));

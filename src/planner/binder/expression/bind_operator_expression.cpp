@@ -4,6 +4,7 @@
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
+#include "duckdb/planner/expression/bound_coalesce_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
@@ -341,6 +342,7 @@ BindResult ExpressionBinder::BindExpression(OperatorExpression &op, idx_t depth)
 		if (children.size() == 1) {
 			return BindResult(std::move(children[0]));
 		}
+		return BindResult(BoundCoalesceExpression::Create(result_type, std::move(children)));
 	}
 
 	auto result = make_uniq<BoundOperatorExpression>(op.GetExpressionType(), result_type);

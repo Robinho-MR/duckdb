@@ -58,45 +58,6 @@ unique_ptr<BaseStatistics> StatisticsPropagator::PropagateExpression(BoundOperat
 		return nullptr;
 	}
 	switch (expr.GetExpressionType()) {
-	case ExpressionType::OPERATOR_COALESCE:
-		// COALESCE, merge stats of all children
-		for (idx_t i = 0; i < expr.GetChildren().size(); i++) {
-			D_ASSERT(child_stats[i]);
-			if (!child_stats[i]->CanHaveNoNull()) {
-				// this child is always NULL, we can remove it from the coalesce
-				// UNLESS there is only one node remaining
-				if (expr.GetChildren().size() > 1) {
-					expr.GetChildrenMutable().erase_at(i);
-					child_stats.erase_at(i);
-					i--;
-					removed_expressions = true;
-				}
-			} else if (!child_stats[i]->CanHaveNull()) {
-				// coalesce child cannot have NULL entries
-				// this is the last coalesce node that influences the result
-				// we can erase any children after this node
-				if (i + 1 < expr.GetChildren().size()) {
-					expr.GetChildrenMutable().erase(expr.GetChildrenMutable().begin() + NumericCast<int64_t>(i + 1),
-					                                expr.GetChildren().end());
-					child_stats.erase(child_stats.begin() + NumericCast<int64_t>(i + 1), child_stats.end());
-					removed_expressions = true;
-				}
-				break;
-			}
-		}
-		D_ASSERT(!expr.GetChildren().empty());
-		D_ASSERT(expr.GetChildren().size() == child_stats.size());
-		if (expr.GetChildren().size() == 1) {
-			// coalesce of one entry: simply return that entry
-			expr_ptr = Expression::PreserveReturnType(expr.GetReturnType(), std::move(expr.GetChildrenMutable()[0]));
-		} else {
-			// coalesce of multiple entries
-			// merge the stats
-			for (idx_t i = 1; i < expr.GetChildren().size(); i++) {
-				child_stats[0]->Merge(*child_stats[i]);
-			}
-		}
-		return std::move(child_stats[0]);
 	case ExpressionType::OPERATOR_IS_NULL:
 		if (!CanFoldNullCheck(expr)) {
 			return nullptr;
