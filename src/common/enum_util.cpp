@@ -7706,6 +7706,7 @@ const StringUtil::EnumStringLiteral *GetVariantComparisonTypeValues() {
 		{ static_cast<uint32_t>(VariantComparisonType::BITSTRING), "BITSTRING" },
 		{ static_cast<uint32_t>(VariantComparisonType::ARRAY), "ARRAY" },
 		{ static_cast<uint32_t>(VariantComparisonType::OBJECT), "OBJECT" },
+		{ static_cast<uint32_t>(VariantComparisonType::TYPE), "TYPE" },
 		{ static_cast<uint32_t>(VariantComparisonType::NULL_VALUE), "NULL_VALUE" }
 	};
 	return values;
@@ -7713,12 +7714,12 @@ const StringUtil::EnumStringLiteral *GetVariantComparisonTypeValues() {
 
 template<>
 const char* EnumUtil::ToChars<VariantComparisonType>(VariantComparisonType value) {
-	return StringUtil::EnumToString(GetVariantComparisonTypeValues(), 17, "VariantComparisonType", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetVariantComparisonTypeValues(), 18, "VariantComparisonType", static_cast<uint32_t>(value));
 }
 
 template<>
 VariantComparisonType EnumUtil::FromString<VariantComparisonType>(const char *value) {
-	return static_cast<VariantComparisonType>(StringUtil::StringToEnum(GetVariantComparisonTypeValues(), 17, "VariantComparisonType", value));
+	return static_cast<VariantComparisonType>(StringUtil::StringToEnum(GetVariantComparisonTypeValues(), 18, "VariantComparisonType", value));
 }
 
 const StringUtil::EnumStringLiteral *GetVariantLogicalTypeValues() {
@@ -7759,6 +7760,7 @@ const StringUtil::EnumStringLiteral *GetVariantLogicalTypeValues() {
 		{ static_cast<uint32_t>(VariantLogicalType::GEOMETRY), "GEOMETRY" },
 		{ static_cast<uint32_t>(VariantLogicalType::TIMESTAMP_NANOS_TZ), "TIMESTAMP_NANOS_TZ" },
 		{ static_cast<uint32_t>(VariantLogicalType::GEOGRAPHY), "GEOGRAPHY" },
+		{ static_cast<uint32_t>(VariantLogicalType::TYPE), "TYPE" },
 		{ static_cast<uint32_t>(VariantLogicalType::ENUM_SIZE), "ENUM_SIZE" }
 	};
 	return values;

@@ -32,6 +32,8 @@ enum class VariantChildLookupMode : uint8_t { INVALID, BY_KEY, BY_INDEX };
 struct Variant {
 public:
 	static constexpr StorageVersion VERSION_ADDED = StorageVersion::V1_5_0; // Added to core in DuckDB v1.5.0
+	//! TYPE values can be stored starting from this storage version
+	static constexpr StorageVersion TYPE_VERSION_ADDED = StorageVersion::V2_1_0;
 };
 
 struct VariantPathComponent {
@@ -165,6 +167,7 @@ enum class VariantLogicalType : uint8_t {
 	GEOMETRY = 33,
 	TIMESTAMP_NANOS_TZ = 34,
 	GEOGRAPHY = 35,
+	TYPE = 36,
 	ENUM_SIZE /* always kept as last item of the enum */
 };
 

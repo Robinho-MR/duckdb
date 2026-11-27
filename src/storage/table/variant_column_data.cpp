@@ -385,8 +385,10 @@ struct VariantShreddedAppendInput {
 
 } // namespace
 
-//! Whether a VARIANT value holds a decimal wider than 38 digits, which engines before wide decimals cannot read
-static bool ContainsWideDecimal(const VariantNode &root) {
+//! Checks that a VARIANT value can be stored in the given storage version: engines that predate wide decimals and TYPE
+//! values cannot read them
+static void CheckVariantValue(StorageManager &storage_manager, StorageVersion storage_version,
+                              const VariantNode &root) {
 	// an explicit work list, deeply nested values must not consume stack
 	vector<VariantNode> pending;
 	pending.push_back(root);
@@ -395,8 +397,23 @@ static bool ContainsWideDecimal(const VariantNode &root) {
 		pending.pop_back();
 		switch (node.GetTypeId()) {
 		case LogicalTypeId::DECIMAL:
-			if (Decimal::IsWide(node.GetDecimalProperties().width)) {
-				return true;
+			if (storage_version < Decimal::WIDE_VERSION_ADDED && Decimal::IsWide(node.GetDecimalProperties().width)) {
+				auto required = GetStorageVersionName(Decimal::WIDE_VERSION_ADDED, false);
+				auto current = GetStorageVersionName(storage_version, false);
+				throw InvalidInputException(
+				    "DECIMAL values wider than %d digits cannot be stored in a VARIANT column in "
+				    "storage versions prior to %s (database %s is using storage version %s)",
+				    Decimal::MAX_WIDTH_INT128, required, storage_manager.GetAttached().GetName(), current);
+			}
+			break;
+		case LogicalTypeId::TYPE:
+			if (storage_version < Variant::TYPE_VERSION_ADDED) {
+				auto required = GetStorageVersionName(Variant::TYPE_VERSION_ADDED, false);
+				auto current = GetStorageVersionName(storage_version, false);
+				throw InvalidInputException(
+				    "TYPE values cannot be stored in a VARIANT column in storage versions prior to %s "
+				    "(database %s is using storage version %s)",
+				    required, storage_manager.GetAttached().GetName(), current);
 			}
 			break;
 		case LogicalTypeId::STRUCT:
@@ -413,26 +430,19 @@ static bool ContainsWideDecimal(const VariantNode &root) {
 			break;
 		}
 	}
-	return false;
 }
 
-//! The unshredded payload of a wide decimal is stored as it is, so a storage version before wide decimals refuses it
-static void CheckWideDecimals(StorageManager &storage_manager, const Vector &vector, idx_t count) {
+//! The unshredded payload is stored as it is, so a storage version that predates a value refuses it
+static void CheckVariantStorageVersion(StorageManager &storage_manager, const Vector &vector, idx_t count) {
 	const auto storage_version = storage_manager.GetStorageVersion();
-	if (storage_version >= Decimal::WIDE_VERSION_ADDED) {
+	if (storage_version >= Decimal::WIDE_VERSION_ADDED && storage_version >= Variant::TYPE_VERSION_ADDED) {
 		return;
 	}
 	VariantIterator iterator(vector);
 	for (idx_t row = 0; row < count; row++) {
-		if (!iterator.RowIsValid(row) || !ContainsWideDecimal(iterator.Root(row))) {
-			continue;
+		if (iterator.RowIsValid(row)) {
+			CheckVariantValue(storage_manager, storage_version, iterator.Root(row));
 		}
-		auto required = GetStorageVersionName(Decimal::WIDE_VERSION_ADDED, false);
-		auto current = GetStorageVersionName(storage_version, false);
-		throw InvalidInputException("DECIMAL values wider than %d digits cannot be stored in a VARIANT column in "
-		                            "storage versions prior to %s (database %s is using storage version %s)",
-		                            Decimal::MAX_WIDTH_INT128, required, storage_manager.GetAttached().GetName(),
-		                            current);
 	}
 }
 
@@ -443,7 +453,7 @@ void VariantColumnData::Append(ColumnAppendState &state, const Vector &vector, i
 		Append(state, append_vector, count);
 		return;
 	}
-	CheckWideDecimals(GetStorageManager(), vector, count);
+	CheckVariantStorageVersion(GetStorageManager(), vector, count);
 
 	// append the null values
 	validity->Append(state.child_appends[0], vector, count);

@@ -93,6 +93,8 @@ LogicalTypeId VariantTypeToLogicalTypeId(VariantLogicalType type) {
 		return LogicalTypeId::GEOMETRY;
 	case VariantLogicalType::GEOGRAPHY:
 		return LogicalTypeId::GEOGRAPHY;
+	case VariantLogicalType::TYPE:
+		return LogicalTypeId::TYPE;
 	default:
 		throw InternalException("Unrecognized VariantLogicalType %d", static_cast<int>(type));
 	}
@@ -204,6 +206,9 @@ bool TryVariantTypeFromLogicalTypeId(LogicalTypeId id, VariantLogicalType &resul
 		return true;
 	case LogicalTypeId::GEOGRAPHY:
 		result = VariantLogicalType::GEOGRAPHY;
+		return true;
+	case LogicalTypeId::TYPE:
+		result = VariantLogicalType::TYPE;
 		return true;
 	default:
 		return false;

@@ -89,6 +89,9 @@ struct ValueConverter {
 	static Value VisitGeography(const string_t &str) {
 		return Value::GEOGRAPHY(const_data_ptr_cast(str.GetData()), str.GetSize());
 	}
+	static Value VisitType(const string_t &str) {
+		return Value::TYPE(str);
+	}
 	static Value VisitBitstring(const string_t &str) {
 		return Value::BIT(const_data_ptr_cast(str.GetData()), str.GetSize());
 	}

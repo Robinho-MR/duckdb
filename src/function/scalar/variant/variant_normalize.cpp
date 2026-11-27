@@ -115,6 +115,9 @@ void VariantNormalizer::VisitGeometry(const string_t &geom, VariantNormalizerSta
 void VariantNormalizer::VisitGeography(const string_t &geog, VariantNormalizerState &state) {
 	return VisitString(geog, state);
 }
+void VariantNormalizer::VisitType(const string_t &type, VariantNormalizerState &state) {
+	return VisitString(type, state);
+}
 void VariantNormalizer::VisitBitstring(const string_t &bits, VariantNormalizerState &state) {
 	return VisitString(bits, state);
 }

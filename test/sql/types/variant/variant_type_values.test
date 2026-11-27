@@ -1,0 +1,264 @@
+# name: test/sql/types/variant/variant_type_values.test
+# description: TYPE values in VARIANT
+# group: [variant]
+
+require json
+
+# round trip
+query IIII
+SELECT variant_typeof(v), variant_type(v), v::VARCHAR, v::TYPE FROM (SELECT make_type('INTEGER')::VARIANT v)
+----
+TYPE	TYPE	INTEGER	INTEGER
+
+query I
+SELECT typeof((make_type('INTEGER')::VARIANT)::TYPE)
+----
+TYPE
+
+# parameterized and nested types keep their definition
+query I
+SELECT v::VARIANT::TYPE::VARCHAR
+FROM (VALUES
+	(make_type('DECIMAL', width := 10, scale := 2)),
+	(make_type('LIST', make_type('STRUCT', a := make_type('INTEGER')))),
+	(make_type('MAP', make_type('VARCHAR'), make_type('DOUBLE'))),
+	(make_type('STRUCT', a := make_type('INTEGER'), b := make_type('VARCHAR')))
+) t(v)
+----
+DECIMAL(10,2)
+STRUCT(a INTEGER)[]
+MAP(VARCHAR, DOUBLE)
+STRUCT(a INTEGER, b VARCHAR)
+
+query I
+SELECT get_type('a'::ENUM('a', 'b'))::VARIANT::TYPE::VARCHAR
+----
+ENUM('a', 'b')
+
+query I
+SELECT (get_type('a'::ENUM('a', 'b'))::VARIANT::TYPE) = get_type('a'::ENUM('a', 'b'))
+----
+true
+
+# NULL TYPE values are VARIANT NULL
+query II
+SELECT v::VARIANT IS NULL, variant_typeof(v::VARIANT) FROM (VALUES (NULL::TYPE)) t(v)
+----
+true	VARIANT_NULL
+
+query I
+SELECT TRY_CAST(v AS VARIANT) FROM (VALUES (NULL::TYPE), (NULL::TYPE)) t(v)
+----
+NULL
+NULL
+
+# nested in LIST, STRUCT and MAP
+query II
+SELECT [make_type('INTEGER'), NULL, make_type('VARCHAR')]::VARIANT, variant_typeof([make_type('INTEGER')]::VARIANT)
+----
+[INTEGER, NULL, VARCHAR]	ARRAY(1)
+
+query I
+SELECT {'a': make_type('INTEGER'), 'b': 1}::VARIANT
+----
+{'a': INTEGER, 'b': 1}
+
+query II
+SELECT variant_typeof({'a': make_type('INTEGER')}::VARIANT.a), ({'a': make_type('INTEGER')}::VARIANT.a)::TYPE
+----
+TYPE	INTEGER
+
+query I
+SELECT MAP {'k': make_type('DOUBLE')}::VARIANT
+----
+[{'key': k, 'value': DOUBLE}]
+
+query I
+SELECT CAST([NULL::TYPE] AS VARIANT)
+----
+[NULL]
+
+query I
+SELECT CAST(row(NULL::TYPE) AS STRUCT(a VARIANT))
+----
+{'a': NULL}
+
+query I
+SELECT CAST(union_value(t := make_type('INTEGER'))::UNION(i INTEGER, t TYPE) AS UNION(i BIGINT, t VARIANT))
+----
+INTEGER
+
+# only TYPE values cast to TYPE
+statement error
+SELECT 1::VARIANT::TYPE
+----
+Conversion Error: Can't convert VARIANT(INT32) value '1' to 'TYPE'
+
+statement error
+SELECT 'INTEGER'::VARIANT::TYPE
+----
+Conversion Error
+
+query I
+SELECT TRY_CAST(1::VARIANT AS TYPE)
+----
+NULL
+
+query I
+SELECT TRY_CAST('INTEGER'::VARIANT AS TYPE)
+----
+NULL
+
+# comparisons, ordering, grouping
+statement ok
+CREATE TABLE tbl AS
+SELECT 0 AS id, make_type('INTEGER')::VARIANT AS v
+UNION ALL SELECT 1, make_type('VARCHAR')::VARIANT
+UNION ALL SELECT 2, make_type('INTEGER')::VARIANT
+UNION ALL SELECT 3, NULL
+UNION ALL SELECT 4, 'INTEGER'::VARIANT
+UNION ALL SELECT 5, 42::VARIANT
+UNION ALL SELECT 6, make_type('LIST', make_type('INTEGER'))::VARIANT
+
+# the VARCHAR 'INTEGER' and the TYPE INTEGER print the same, but are different values
+query III
+SELECT variant_typeof(v), v::VARCHAR, count(*) FROM tbl GROUP BY v ORDER BY ALL
+----
+INT32	42	1
+TYPE	INTEGER	2
+TYPE	INTEGER[]	1
+TYPE	VARCHAR	1
+VARCHAR	INTEGER	1
+VARIANT_NULL	NULL	1
+
+query I
+SELECT count(DISTINCT v) FROM tbl
+----
+5
+
+# TYPE values are not equal to a VARCHAR holding the same text
+query II
+SELECT id, v = make_type('INTEGER')::VARIANT FROM tbl ORDER BY id
+----
+0	true
+1	false
+2	true
+3	VARIANT_NULL
+4	false
+5	false
+6	false
+
+query I
+SELECT id FROM tbl WHERE v = (SELECT v FROM tbl WHERE id = 6) ORDER BY id
+----
+6
+
+# TYPE values sort after the other values, equal types sort together
+query I
+SELECT variant_typeof(v) FROM tbl ORDER BY v, id
+----
+INT32
+VARCHAR
+TYPE
+TYPE
+TYPE
+TYPE
+VARIANT_NULL
+
+query I
+SELECT variant_typeof(v) FROM tbl ORDER BY v DESC, id
+----
+TYPE
+TYPE
+TYPE
+TYPE
+VARCHAR
+INT32
+VARIANT_NULL
+
+query I
+SELECT id FROM tbl WHERE variant_typeof(v) = 'TYPE' ORDER BY v, id LIMIT 2
+----
+0
+2
+
+query II
+SELECT id, variant_typeof(v) FROM tbl ORDER BY id
+----
+0	TYPE
+1	TYPE
+2	TYPE
+3	VARIANT_NULL
+4	VARCHAR
+5	INT32
+6	TYPE
+
+# variant_contains only matches TYPE values with TYPE values
+query II
+SELECT id, variant_contains(v, make_type('INTEGER')::VARIANT) FROM tbl ORDER BY id
+----
+0	true
+1	false
+2	true
+3	VARIANT_NULL
+4	false
+5	false
+6	false
+
+query I
+SELECT variant_contains([make_type('INTEGER'), make_type('DOUBLE')]::VARIANT, make_type('DOUBLE')::VARIANT)
+----
+true
+
+query I
+SELECT variant_contains(['DOUBLE']::VARIANT, make_type('DOUBLE')::VARIANT)
+----
+false
+
+# normalize
+query I
+SELECT variant_normalize(v)::TYPE::VARCHAR FROM tbl WHERE id = 6
+----
+INTEGER[]
+
+query I
+SELECT count(DISTINCT variant_normalize(v)) FROM tbl WHERE id IN (0, 2)
+----
+1
+
+# VARIANT to VARIANT
+query I
+SELECT v::VARIANT::TYPE::VARCHAR FROM tbl WHERE id = 1
+----
+VARCHAR
+
+# JSON
+query I
+SELECT v::JSON FROM tbl WHERE id IN (0, 6) ORDER BY id
+----
+"INTEGER"
+"INTEGER[]"
+
+query I
+SELECT {'a': make_type('INTEGER')}::VARIANT::JSON
+----
+{"a":"INTEGER"}
+
+# parquet has no TYPE
+require parquet
+
+statement error
+COPY tbl TO '{TEST_DIR}/variant_type_values.parquet'
+----
+Not implemented Error: Writing a VARIANT value of type TYPE to Parquet is not supported
+
+statement error
+COPY (SELECT [make_type('INTEGER')]::VARIANT v) TO '{TEST_DIR}/variant_type_values.parquet'
+----
+Not implemented Error: Writing a VARIANT value of type TYPE to Parquet is not supported
+
+# TYPE is not a column type, but a VARIANT column can hold TYPE values
+statement error
+CREATE TABLE no_type_column (t TYPE)
+----
+A table cannot be created with a 'TYPE' column

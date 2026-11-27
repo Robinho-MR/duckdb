@@ -303,6 +303,8 @@ static idx_t AnalyzePrimitiveValueData(const UnifiedVariantVectorData &variant, 
 		// try to store as int64_t - fail if it doesn't fit
 		total_size += sizeof(int64_t);
 		break;
+	case VariantLogicalType::TYPE:
+		throw NotImplementedException("Writing a VARIANT value of type TYPE to Parquet is not supported");
 	case VariantLogicalType::INTERVAL:
 	case VariantLogicalType::BIGNUM:
 	case VariantLogicalType::BITSTRING:
@@ -633,6 +635,8 @@ static void WritePrimitiveValueData(const UnifiedVariantVectorData &variant, idx
 		WritePrimitiveTypeHeader<VariantPrimitiveType::INT64>(value_data);
 		CopySimplePrimitiveData<int64_t, VariantTryConvert<hugeint_t>>(variant, value_data, row, values_index);
 		break;
+	case VariantLogicalType::TYPE:
+		throw NotImplementedException("Writing a VARIANT value of type TYPE to Parquet is not supported");
 	case VariantLogicalType::INTERVAL:
 	case VariantLogicalType::BIGNUM:
 	case VariantLogicalType::BITSTRING:

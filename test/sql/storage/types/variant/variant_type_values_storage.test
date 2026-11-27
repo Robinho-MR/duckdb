@@ -1,0 +1,109 @@
+# name: test/sql/storage/types/variant/variant_type_values_storage.test
+# description: TYPE values in VARIANT columns are stored unshredded, and need storage version v2.1.0
+# group: [variant]
+
+statement ok
+ATTACH '{TEST_DIR}/variant_type_values_new.db' AS db (STORAGE_VERSION 'v2.1.0')
+
+statement ok
+SET variant_minimum_shredding_size = 0
+
+# a column that only holds TYPE values, a column where a TYPE sits next to other values, and a TYPE in an object
+statement ok
+CREATE TABLE db.tbl AS
+SELECT
+	make_type('INTEGER')::VARIANT AS t,
+	CASE WHEN i % 2 = 0 THEN make_type('VARCHAR')::VARIANT ELSE i::VARIANT END AS m,
+	{'k': make_type('DOUBLE'), 'n': i} ::VARIANT AS o
+FROM range(10000) t(i)
+
+statement ok
+CHECKPOINT db
+
+statement ok
+DETACH db
+
+statement ok
+ATTACH '{TEST_DIR}/variant_type_values_new.db' AS db
+
+query III
+SELECT variant_typeof(t), variant_typeof(m), variant_typeof(o.k) FROM db.tbl WHERE o.n::INT IN (4, 5) ORDER BY o.n::INT
+----
+TYPE	TYPE	TYPE
+TYPE	INT64	TYPE
+
+query III
+SELECT count(*), count(DISTINCT t), count(DISTINCT m) FROM db.tbl
+----
+10000	1	5001
+
+query III
+SELECT t::TYPE::VARCHAR, (o.k)::TYPE::VARCHAR, (m::TYPE)::VARCHAR FROM db.tbl WHERE o.n::INT = 4
+----
+INTEGER	DOUBLE	VARCHAR
+
+# TYPE values are not shredded: a column of TYPE values only has the unshredded layout
+query I
+SELECT count(*) FROM pragma_storage_info('db.tbl')
+WHERE column_name = 't' AND segment_type NOT IN ('BLOB', 'VALIDITY', 'UTINYINT', 'UINTEGER', 'VARCHAR[]') AND
+      segment_type NOT LIKE 'STRUCT%'
+----
+0
+
+# while the other fields of the object are
+query I
+SELECT count(*) FROM pragma_storage_info('db.tbl') WHERE column_name = 'o' AND segment_type = 'BIGINT'
+----
+1
+
+query I
+SELECT count(DISTINCT variant_typeof(t)) FROM db.tbl WHERE t = make_type('INTEGER')::VARIANT
+----
+1
+
+statement ok
+INSERT INTO db.tbl VALUES (make_type('BIGINT')::VARIANT, make_type('DATE')::VARIANT, {'k': make_type('BLOB'), 'n': -1}::VARIANT)
+
+query I
+SELECT t::TYPE::VARCHAR FROM db.tbl WHERE o.n::INT = -1
+----
+BIGINT
+
+# older storage versions can't store TYPE values
+statement ok
+ATTACH '{TEST_DIR}/variant_type_values_old.db' AS old (STORAGE_VERSION 'v2.0.0')
+
+statement ok
+CREATE TABLE old.v(x VARIANT)
+
+statement ok
+INSERT INTO old.v VALUES (1::VARIANT), ({'a': [1]}::VARIANT), (NULL)
+
+statement error
+INSERT INTO old.v SELECT make_type('INTEGER')::VARIANT
+----
+TYPE values cannot be stored in a VARIANT column in storage versions prior to v2.1.0
+
+statement error
+INSERT INTO old.v SELECT {'a': [make_type('INTEGER')]}::VARIANT
+----
+TYPE values cannot be stored in a VARIANT column in storage versions prior to v2.1.0
+
+statement error
+CREATE TABLE old.v2 AS SELECT make_type('INTEGER')::VARIANT x
+----
+TYPE values cannot be stored in a VARIANT column in storage versions prior to v2.1.0
+
+statement error
+UPDATE old.v SET x = make_type('INTEGER')::VARIANT
+----
+TYPE values cannot be stored in a VARIANT column in storage versions prior to v2.1.0
+
+# a NULL TYPE is a plain NULL
+statement ok
+INSERT INTO old.v SELECT NULL::TYPE::VARIANT
+
+query I
+SELECT count(*) FROM old.v
+----
+4
