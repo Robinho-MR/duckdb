@@ -29,8 +29,8 @@ class ExtensionLinkageTest(unittest.TestCase):
                     "-G",
                     "Ninja",
                     "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
-                    "-DBUILD_EXTENSIONS=tpch",
-                    "-DSTATICALLY_LINK_EXTENSIONS=core_functions;tpch",
+                    "-DBUILD_EXTENSIONS=tpcds",
+                    "-DSTATICALLY_LINK_EXTENSIONS=core_functions;tpcds",
                     f"-DEXTENSION_STATIC_BUILD={int(static_build)}",
                     "-DENABLE_SANITIZER=OFF",
                     "-DENABLE_UBSAN=OFF",
@@ -54,11 +54,11 @@ class ExtensionLinkageTest(unittest.TestCase):
                     if fragment["role"] == "libraries"
                 )
 
-            tpch_libraries = libraries("tpch_loadable_extension")
-            self.assertIn("libtpch_extension.a", tpch_libraries)
-            self.assertEqual("libduckdb_static.a" in tpch_libraries, static_build, tpch_libraries)
+            tpcds_libraries = libraries("tpcds_loadable_extension")
+            self.assertIn("libtpcds_extension.a", tpcds_libraries)
+            self.assertEqual("libduckdb_static.a" in tpcds_libraries, static_build, tpcds_libraries)
             # Static consumers still need the core archive after their extension archives.
-            for name, extension in (("duckdb", "tpch"), ("static_link_smoke", "parquet")):
+            for name, extension in (("duckdb", "tpcds"), ("static_link_smoke", "parquet")):
                 linked = libraries(name)
                 self.assertIn("libduckdb_static.a", linked)
                 self.assertLess(linked.index(f"lib{extension}_extension.a"), linked.rindex("libduckdb_static.a"))
