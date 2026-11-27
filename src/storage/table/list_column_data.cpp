@@ -12,6 +12,9 @@
 #include "duckdb/storage/table/column_checkpoint_state.hpp"
 #include "duckdb/storage/table/append_state.hpp"
 #include "duckdb/storage/table/scan_state.hpp"
+#include "duckdb/storage/table/array_column_data.hpp"
+#include "duckdb/storage/storage_manager.hpp"
+#include "duckdb/storage/block_manager.hpp"
 
 namespace duckdb {
 
@@ -485,9 +488,58 @@ unique_ptr<ColumnCheckpointState> ListColumnData::CreateCheckpointState(const Ro
 	return make_uniq<ListColumnCheckpointState>(row_group, *this, context, partial_block_manager);
 }
 
+optional_idx ListColumnData::GetCheckpointListLength(const BaseStatistics &stats) const {
+	if (type.id() != LogicalTypeId::LIST || count == 0 || stats.CanHaveNull() ||
+	    !StorageManager::TargetAtLeastVersion(StorageVersion::V2_1_0, GetStorageManager().GetStorageVersion())) {
+		return optional_idx();
+	}
+	auto min_length = ListStats::MinListLength(stats);
+	auto max_length = ListStats::MaxListLength(stats);
+	if (!min_length.IsValid() || !max_length.IsValid() || min_length.GetIndex() != max_length.GetIndex()) {
+		return optional_idx();
+	}
+	if (child_column->GetMaxEntry() != min_length.GetIndex() * count) {
+		return optional_idx();
+	}
+	return min_length;
+}
+
+optional_idx ListColumnData::GetFixedSizeListLength(const LogicalType &type, const PersistentColumnData &column_data) {
+	if (type.id() != LogicalTypeId::LIST || !column_data.extra_data ||
+	    column_data.extra_data->GetType() != ExtraPersistentColumnDataType::LIST) {
+		return optional_idx();
+	}
+	auto fixed_list_length = column_data.extra_data->Cast<ListPersistentColumnData>().fixed_list_length;
+	if (fixed_list_length.IsValid() && (!column_data.pointers.empty() || column_data.child_columns.size() != 2)) {
+		throw DataCorruptionException("Corrupted LIST column: lists stored like an array cannot have offsets");
+	}
+	return fixed_list_length;
+}
+
+struct ListOffsetBlockDropper : public BlockIdVisitor {
+	explicit ListOffsetBlockDropper(BlockManager &manager) : manager(manager) {
+	}
+
+	void Visit(block_id_t block_id) override {
+		manager.MarkBlockAsModified(block_id);
+	}
+
+	BlockManager &manager;
+};
+
 unique_ptr<ColumnCheckpointState> ListColumnData::Checkpoint(const RowGroup &row_group,
                                                              ColumnCheckpointInfo &checkpoint_info,
                                                              const BaseStatistics &old_stats) {
+	auto list_length = GetCheckpointListLength(old_stats);
+	if (list_length.IsValid()) {
+		// the lists are all non-NULL and have the same length: they are stored like an array, without their offsets
+		ListOffsetBlockDropper dropper(GetStorageManager().GetBlockManager());
+		for (auto &segment : data.Segments()) {
+			segment.VisitBlockIds(dropper);
+		}
+		return ArrayColumnData::CheckpointFixedSize(*this, *validity, *child_column, list_length.GetIndex(), row_group,
+		                                            checkpoint_info, old_stats);
+	}
 	auto base_state = ColumnData::Checkpoint(row_group, checkpoint_info, old_stats);
 	auto validity_state = validity->Checkpoint(row_group, checkpoint_info, old_stats);
 	auto child_state = child_column->Checkpoint(row_group, checkpoint_info, ListStats::GetChildStats(old_stats));
@@ -555,13 +607,16 @@ void ListPersistentColumnData::SerializeFields(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault(101, "min_list_length", length_data.MinLength());
 	serializer.WritePropertyWithDefault(102, "max_list_length", length_data.MaxLength());
 	serializer.WritePropertyWithDefault(103, "total_list_length", length_data.TotalLength());
+	serializer.WritePropertyWithDefault(104, "fixed_list_length", fixed_list_length);
 }
 
 unique_ptr<ExtraPersistentColumnData> ListPersistentColumnData::Deserialize(Deserializer &deserializer) {
 	auto min_length = deserializer.ReadPropertyWithDefault<optional_idx>(101, "min_list_length");
 	auto max_length = deserializer.ReadPropertyWithDefault<optional_idx>(102, "max_list_length");
 	auto total_length = deserializer.ReadPropertyWithDefault<optional_idx>(103, "total_list_length");
+	auto fixed_list_length = deserializer.ReadPropertyWithDefault<optional_idx>(104, "fixed_list_length");
 	auto result = make_uniq<ListPersistentColumnData>();
+	result->fixed_list_length = fixed_list_length;
 	auto &data = result->length_data;
 	data.has_min_list_length = min_length.IsValid();
 	data.min_list_length = min_length.IsValid() ? min_length.GetIndex() : 0;
@@ -592,7 +647,7 @@ void ListColumnData::InitializeColumn(PersistentColumnData &column_data, BaseSta
 	}
 	validity->InitializeColumn(column_data.child_columns[0], target_stats);
 	auto &child_stats = ListStats::GetChildStats(target_stats);
-	child_column->InitializeColumn(column_data.child_columns[1], child_stats);
+	InitializeChildColumn(child_column, column_data.child_columns[1], child_stats);
 }
 
 void ListColumnData::GetColumnSegmentInfo(const QueryContext &context, idx_t row_group_index, vector<idx_t> col_path,

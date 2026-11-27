@@ -75,7 +75,7 @@ RowGroup::RowGroup(RowGroupCollection &collection_p, PersistentRowGroupData &dat
 	auto &types = collection.get().GetTypes();
 	columns.reserve(types.size());
 	for (idx_t c = 0; c < types.size(); c++) {
-		auto entry = ColumnData::CreateColumn(block_manager, info, c, types[c]);
+		auto entry = ColumnData::CreateColumn(block_manager, info, c, types[c], data.column_data[c]);
 		entry->InitializeColumn(data.column_data[c]);
 		columns.push_back(std::move(entry));
 	}

@@ -20,8 +20,9 @@ public:
 	static constexpr auto TYPE = ExtraPersistentColumnDataType::LIST;
 	ListPersistentColumnData() : ExtraPersistentColumnData(TYPE) {
 	}
-	explicit ListPersistentColumnData(const ListStatsData &length_data_p)
-	    : ExtraPersistentColumnData(TYPE), length_data(length_data_p) {
+	explicit ListPersistentColumnData(const ListStatsData &length_data_p,
+	                                  optional_idx fixed_list_length_p = optional_idx())
+	    : ExtraPersistentColumnData(TYPE), length_data(length_data_p), fixed_list_length(fixed_list_length_p) {
 	}
 
 	bool IsSupported(const Serializer &serializer) const override;
@@ -29,6 +30,8 @@ public:
 	static unique_ptr<ExtraPersistentColumnData> Deserialize(Deserializer &deserializer);
 
 	ListStatsData length_data = ListStatsData {false, false, false, 0, 0, 0};
+	//! Set if the lists are stored like an array of this length, without offsets
+	optional_idx fixed_list_length;
 };
 
 //! List column data represents a list
@@ -90,6 +93,10 @@ public:
 
 	const BaseStatistics &GetChildStats(const ColumnData &child) const override;
 
+	//! The list length, if the persistent column data stores lists that are all non-NULL and have the same length
+	//! like an array: such lists are loaded as an ArrayColumnData
+	static optional_idx GetFixedSizeListLength(const LogicalType &type, const PersistentColumnData &column_data);
+
 protected:
 	//! The child-column of the list
 	shared_ptr<ColumnData> child_column;
@@ -98,6 +105,8 @@ protected:
 
 private:
 	uint64_t FetchListOffset(idx_t row_idx);
+	//! The list length if the lists can be checkpointed like an array, which does not store the list offsets
+	optional_idx GetCheckpointListLength(const BaseStatistics &stats) const;
 };
 
 } // namespace duckdb
