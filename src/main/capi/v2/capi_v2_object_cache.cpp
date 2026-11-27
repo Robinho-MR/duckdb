@@ -127,9 +127,8 @@ DUCKDB_V2_ERROR duckdb_v2_context_get_object_cache(duckdb_v2_context_handle cont
 	DUCKDB_CHECK_ARG(context);
 	DUCKDB_CHECK_ARG(cache);
 	*cache = nullptr;
-	return WithErrorHandler(err, [&]() {
-		*cache = Convert(&duckdb::DatabaseInstance::GetDatabase(Convert(context)->context).GetObjectCache());
-	});
+	return WithErrorHandler(err,
+	                        [&]() { *cache = Convert(&Convert(context)->services.GetDatabase().GetObjectCache()); });
 }
 
 DUCKDB_V2_ERROR duckdb_v2_object_cache_put(duckdb_v2_object_cache_handle cache, const char *type, idx_t type_length,

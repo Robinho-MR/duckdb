@@ -1,0 +1,102 @@
+module: memory
+#
+# Memory an extension holds on to, accounted for by DuckDB's buffer manager.
+#
+# An extension allocates its own memory (e.g. the buffers of a file reader), which DuckDB cannot see. Reserving that
+# memory makes it count against `memory_limit` and show up under the `EXTENSION` tag of `duckdb_memory()`, so that
+# DuckDB evicts what it can to make room for it, and fails the query with an out of memory error when it cannot.
+handles:
+  memory_reservation:
+    description: |
+      An owned opaque handle to memory reserved with `[[context_reserve_memory]]`. The reservation is released with
+      `[[memory_reservation_destroy]]`. It belongs to the database of the context it was reserved in, and must be
+      destroyed before that database is.
+
+functions:
+  context_reserve_memory:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-16" ]
+    description: |
+      Reserves memory in the buffer manager of the database of the context.
+
+      The reservation only accounts for memory: it does not allocate any. The caller allocates the memory itself and
+      keeps the reservation for as long as it holds on to it. The bytes count against `memory_limit` and are tagged
+      `EXTENSION` in `duckdb_memory()`. If they do not fit, the buffer manager first evicts what it can, and fails
+      with an out of memory error when that is not enough; the call then fails with that error and nothing is reserved.
+      Reserve before allocating, so a query over the limit fails before the memory is used.
+    parameters:
+      context:
+        type: context
+        description: The context whose database to reserve in.
+      size:
+        type: idx
+        description: The number of bytes to reserve. May be 0.
+      reservation:
+        type: memory_reservation
+        indirection: 1
+        kind: OUT
+        description: On success, receives the reservation. Owned by the caller; destroy via `[[memory_reservation_destroy]]`.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  memory_reservation_resize:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-16" ]
+    description: |
+      Grows or shrinks the reservation to `size` bytes.
+
+      Growing reserves the additional bytes as `[[context_reserve_memory]]` does, and fails the same way, leaving the
+      reservation as it was. Shrinking releases the difference and cannot fail.
+    role: method
+    belongs_to: memory_reservation
+    parameters:
+      reservation:
+        type: memory_reservation
+        description: The reservation to resize.
+      size:
+        type: idx
+        description: The new number of bytes the reservation holds in all.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  memory_reservation_get_size:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-16" ]
+    description: Returns the number of bytes the reservation holds.
+    role: getter
+    belongs_to: memory_reservation
+    parameters:
+      reservation:
+        type: memory_reservation
+        description: The reservation to query.
+      size:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the number of bytes.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  memory_reservation_destroy:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-16" ]
+    description: |
+      Destroys the reservation, releasing the bytes it holds.
+
+      Null-safe: passing a null pointer or null handle is a no-op. The handle is set to null on return to prevent
+      double-destruction.
+    parameters:
+      reservation:
+        type: memory_reservation
+        description: The reservation to destroy.
+        indirection: 1
+    return_type: ERROR

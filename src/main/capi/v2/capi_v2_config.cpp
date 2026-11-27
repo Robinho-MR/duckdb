@@ -38,24 +38,31 @@ idx_t CV2InstanceConfig::GetOptionCount() {
 // Client Config
 //----------------------------------------------------------------------------------------------------------------------
 
+CV2OptionSource CV2ClientConfig::Source() {
+	return context ? CV2OptionSource(*context) : CV2OptionSource(db);
+}
+
 DUCKDB_V2_SETTING_SCOPE CV2ClientConfig::ReadValue(std::string_view name, Value &result) {
-	return CV2OptionSource(context).ReadValue(name, result);
+	return Source().ReadValue(name, result);
 }
 
 void CV2ClientConfig::Write(const Identifier &name, const Value &value, DUCKDB_V2_SETTING_SCOPE scope) {
-	PhysicalSet::SetVariable(context, name, ConvertSetScope(scope), value);
+	if (!context) {
+		throw InvalidInputException("this config has no client context, so options cannot be written through it");
+	}
+	PhysicalSet::SetVariable(*context, name, ConvertSetScope(scope), value);
 }
 
 unique_ptr<CV2Option> CV2ClientConfig::GetOption(std::string_view name) {
-	return CV2Option::FromName(CV2OptionSource(context), name);
+	return CV2Option::FromName(Source(), name);
 }
 
 unique_ptr<CV2Option> CV2ClientConfig::GetOptionByIndex(idx_t index) {
-	return CV2Option::FromIndex(CV2OptionSource(context), index);
+	return CV2Option::FromIndex(Source(), index);
 }
 
 idx_t CV2ClientConfig::GetOptionCount() {
-	return CV2Option::Count(CV2OptionSource(context));
+	return CV2Option::Count(Source());
 }
 
 } // namespace capiv2

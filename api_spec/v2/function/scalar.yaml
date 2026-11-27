@@ -510,7 +510,8 @@ functions:
 
       Overrides the return type declared in the signature. Register the function with an ANY return type and set
       the concrete type here, derived from the argument types, to build a function whose result type depends on
-      its input. The type is borrowed and copied.
+      its input. A function with a concrete declared return type may override it here too, e.g. to return a list of
+      it for some arguments; the declared type is what the catalog reports. The type is borrowed and copied.
     parameters:
       info:
         type: scalar_function_resolve_types_info
@@ -518,6 +519,33 @@ functions:
       return_type:
         type: logical_type
         description: The return type to set. Borrowed for the call only.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  scalar_function_resolve_types_set_arg_type:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Sets the type the argument at the given index of the call site being bound is cast to.
+
+      Overrides the parameter type declared in the signature for this call: the argument is cast to `type` instead,
+      and the bind and exec callbacks see it with that type. This lets one overload take differently typed arguments,
+      e.g. a path parameter declared as VARCHAR that is also accepted as a BIGINT array index when the argument is an
+      integer (see `[[function_bind_get_arg_type]]` for the type the argument has before the cast). Fails if the
+      index is out of bounds or the type is not a fully defined concrete type. The type is borrowed and copied.
+    parameters:
+      info:
+        type: scalar_function_resolve_types_info
+        description: The resolve types info handle.
+      index:
+        type: idx
+        description: The index of the argument.
+      type:
+        type: logical_type
+        description: The type to cast the argument to. Borrowed for the call only.
       err:
         type: error_info
         indirection: 1

@@ -68,6 +68,11 @@ handles:
       thread's input is exhausted. The "finalize" callback receives this handle and uses it to write the output the
       operator held back, and to report whether it has more of it.
 
+  operator_progress_info:
+    description: |
+      A borrowed opaque handle to the arguments supplied to an operator when the engine asks how far it has advanced.
+      The "progress" callback receives this handle and uses it to read the global state and to report the progress.
+
 #-----------------------------------------------------------------------------------------------------------------------
 # Callbacks
 #-----------------------------------------------------------------------------------------------------------------------
@@ -118,6 +123,20 @@ callbacks:
     parameters:
       info:
         type: operator_finalize_info
+        description: Borrowed opaque handle providing access to the information available to the callback.
+      context:
+        type: context
+        description: Borrowed handle to the context of the query currently executing the callback.
+      err:
+        type: error_info
+        indirection: 1
+        description: Borrowed error info handle to use to report errors that occur during the callback.
+    return_type: void
+
+  operator_progress_callback:
+    parameters:
+      info:
+        type: operator_progress_info
         description: Borrowed opaque handle providing access to the information available to the callback.
       context:
         type: context
@@ -283,6 +302,29 @@ functions:
         description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
     return_type: ERROR
 
+  operator_set_progress_callback:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Sets the optional progress callback of the operator.
+
+      The engine invokes it on demand while the query runs, from any thread, to report how far the query has advanced.
+      It is only consulted when the operator is the source of its part of the query, which for a table function is
+      when it is called with constant arguments (see `[[TABLE_OPERATOR_INPUT]]`): with a streamed input, the progress
+      is that of the input. It runs while the operator runs, so it must read the global state in a thread-safe way.
+    parameters:
+      op:
+        type: operator
+        description: The operator to set the progress callback of.
+      callback:
+        type: operator_progress_callback
+        description: The progress callback to set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
   #---------------------------------------------------------------------------------------------------------------------
   # Init global
   #---------------------------------------------------------------------------------------------------------------------
@@ -344,6 +386,58 @@ functions:
         type: opaque
         indirection: 1
         description: Opaque handle bundling the global state pointer plus an optional destructor.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  operator_init_global_get_column_count:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Returns the number of columns the operator produces.
+
+      With projection pushdown (see `[[table_function_set_projection_pushdown]]`) this is the number of columns the
+      query uses, which is the number of vectors in the output chunks of the execute and finalize callbacks; without it, it is the number of columns declared in
+      bind. Valid indices for `[[operator_init_global_get_column_index]]` are `0` up to (but excluding) this count.
+    parameters:
+      info:
+        type: operator_init_global_info
+        description: The init global info handle.
+      count:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the number of columns the operator produces.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  operator_init_global_get_column_index:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Returns which column the operator's column at the given index stands for.
+
+      The result indexes the columns declared with `[[table_function_bind_add_result_column]]`, in declaration
+      order, or is the identifier of a virtual column (see `[[table_function_bind_add_virtual_column]]`): the
+      operator fills the output chunk's vector at `index` with that column's data. Without projection pushdown the
+      mapping is the identity. Fails if the index is out of bounds.
+    parameters:
+      info:
+        type: operator_init_global_info
+        description: The init global info handle.
+      index:
+        type: idx
+        description: The index of the column in the operator's output.
+      column_index:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the index of the declared column, or the identifier of the virtual column.
       err:
         type: error_info
         indirection: 1
@@ -427,6 +521,58 @@ functions:
         indirection: 2
         kind: OUT
         description: Receives the global state pointer, or null if none was set.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  operator_init_local_get_column_count:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Returns the number of columns the operator produces.
+
+      With projection pushdown (see `[[table_function_set_projection_pushdown]]`) this is the number of columns the
+      query uses, which is the number of vectors in the output chunks of the execute and finalize callbacks; without it, it is the number of columns declared in
+      bind. Valid indices for `[[operator_init_local_get_column_index]]` are `0` up to (but excluding) this count.
+    parameters:
+      info:
+        type: operator_init_local_info
+        description: The init local info handle.
+      count:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the number of columns the operator produces.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  operator_init_local_get_column_index:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Returns which column the operator's column at the given index stands for.
+
+      The result indexes the columns declared with `[[table_function_bind_add_result_column]]`, in declaration
+      order, or is the identifier of a virtual column (see `[[table_function_bind_add_virtual_column]]`): the
+      operator fills the output chunk's vector at `index` with that column's data. Without projection pushdown the
+      mapping is the identity. Fails if the index is out of bounds.
+    parameters:
+      info:
+        type: operator_init_local_info
+        description: The init local info handle.
+      index:
+        type: idx
+        description: The index of the column in the operator's output.
+      column_index:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the index of the declared column, or the identifier of the virtual column.
       err:
         type: error_info
         indirection: 1
@@ -590,6 +736,58 @@ functions:
         description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
     return_type: ERROR
 
+  operator_execute_get_column_count:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Returns the number of columns the operator produces.
+
+      With projection pushdown (see `[[table_function_set_projection_pushdown]]`) this is the number of columns the
+      query uses, which is the number of vectors in the output chunks of the execute and finalize callbacks; without it, it is the number of columns declared in
+      bind. Valid indices for `[[operator_execute_get_column_index]]` are `0` up to (but excluding) this count.
+    parameters:
+      info:
+        type: operator_execute_info
+        description: The execute info handle.
+      count:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the number of columns the operator produces.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  operator_execute_get_column_index:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Returns which column the operator's column at the given index stands for.
+
+      The result indexes the columns declared with `[[table_function_bind_add_result_column]]`, in declaration
+      order, or is the identifier of a virtual column (see `[[table_function_bind_add_virtual_column]]`): the
+      operator fills the output chunk's vector at `index` with that column's data. Without projection pushdown the
+      mapping is the identity. Fails if the index is out of bounds.
+    parameters:
+      info:
+        type: operator_execute_info
+        description: The execute info handle.
+      index:
+        type: idx
+        description: The index of the column in the operator's output.
+      column_index:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the index of the declared column, or the identifier of the virtual column.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
   operator_execute_set_result:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-11-25" ]
@@ -710,6 +908,58 @@ functions:
         description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
     return_type: ERROR
 
+  operator_finalize_get_column_count:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Returns the number of columns the operator produces.
+
+      With projection pushdown (see `[[table_function_set_projection_pushdown]]`) this is the number of columns the
+      query uses, which is the number of vectors in the output chunks of the execute and finalize callbacks; without it, it is the number of columns declared in
+      bind. Valid indices for `[[operator_finalize_get_column_index]]` are `0` up to (but excluding) this count.
+    parameters:
+      info:
+        type: operator_finalize_info
+        description: The finalize info handle.
+      count:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the number of columns the operator produces.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  operator_finalize_get_column_index:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Returns which column the operator's column at the given index stands for.
+
+      The result indexes the columns declared with `[[table_function_bind_add_result_column]]`, in declaration
+      order, or is the identifier of a virtual column (see `[[table_function_bind_add_virtual_column]]`): the
+      operator fills the output chunk's vector at `index` with that column's data. Without projection pushdown the
+      mapping is the identity. Fails if the index is out of bounds.
+    parameters:
+      info:
+        type: operator_finalize_info
+        description: The finalize info handle.
+      index:
+        type: idx
+        description: The index of the column in the operator's output.
+      column_index:
+        type: idx
+        indirection: 1
+        kind: OUT
+        description: Receives the index of the declared column, or the identifier of the virtual column.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
   operator_finalize_set_have_more_output:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-11-25" ]
@@ -732,6 +982,87 @@ functions:
   #---------------------------------------------------------------------------------------------------------------------
   # Destroy
   #---------------------------------------------------------------------------------------------------------------------
+  #---------------------------------------------------------------------------------------------------------------------
+  # Progress
+  #---------------------------------------------------------------------------------------------------------------------
+  operator_progress_get_user_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: Retrieves the user data set via `[[operator_set_user_data]]`.
+    parameters:
+      info:
+        type: operator_progress_info
+        description: The progress info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the pointer, or null if there is none.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  operator_progress_get_bind_data:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: Retrieves the bind data of the call the operator runs for.
+    parameters:
+      info:
+        type: operator_progress_info
+        description: The progress info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the pointer, or null if there is none.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  operator_progress_get_global_state:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: Retrieves the global state set by the "init global" callback, or null when there is none or the operator has not been initialized yet.
+    parameters:
+      info:
+        type: operator_progress_info
+        description: The progress info handle.
+      data:
+        type: void
+        indirection: 2
+        kind: OUT
+        description: Receives the pointer, or null if there is none.
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
+  operator_progress_set_progress:
+    lifecycle:
+      - [ "unstable", "v2.0.0", "2026-11-27" ]
+    description: |
+      Reports how far the operator has advanced.
+
+      A fraction between 0.0 (nothing done yet) and 1.0 (done); values outside that range are clamped. A progress
+      callback that returns without calling this reports no progress.
+    parameters:
+      info:
+        type: operator_progress_info
+        description: The progress info handle.
+      progress:
+        type: f64
+        description: The fraction of the work that is complete, in [0.0, 1.0].
+      err:
+        type: error_info
+        indirection: 1
+        description: Optional. On failure, receives an opaque info handle the caller must destroy via `[[error_info_destroy]]`.
+    return_type: ERROR
+
   operator_destroy:
     lifecycle:
       - [ "unstable", "v2.0.0", "2026-11-25" ]

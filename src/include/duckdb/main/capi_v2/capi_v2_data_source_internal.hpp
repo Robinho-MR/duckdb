@@ -51,6 +51,8 @@ class CV2ScanOptions {
 public:
 	//! Whether the scan only produces the columns the query reads
 	bool projection_pushdown = false;
+	//! Whether the function can produce the file_row_number virtual column
+	bool file_row_number = false;
 	//! The callback that is offered the filters of the query, and the user data it receives
 	duckdb_v2_table_function_filter_pushdown_callback_fn filter_pushdown_cb = nullptr;
 	shared_ptr<CV2UserData> user_data;
@@ -71,6 +73,8 @@ public:
 	optional_ptr<const CV2ScanOptions> scan;
 	//! The declared columns the data source produces
 	vector<LogicalType> column_types;
+	//! The virtual columns the bind callback declared, by identifier
+	virtual_column_map_t virtual_columns;
 
 	auto Equals(const FunctionData &other) const -> bool override {
 		const auto &other_data = other.Cast<CV2DataSourceBindData>();
@@ -83,6 +87,7 @@ protected:
 		other.source = source;
 		other.scan = scan;
 		other.column_types = column_types;
+		other.virtual_columns = virtual_columns;
 	}
 };
 
@@ -127,8 +132,12 @@ inline auto Convert(CV2TableFilterPushdownInfo *info) -> duckdb_v2_table_functio
 
 //! The index the function sees for a column of the scan. A virtual column of a function wrapped in a multi-file
 //! function has an index of its own past the declared columns, and the wrapper tells which virtual column that is.
-auto CV2ScanColumnIndex(column_t column, optional_ptr<const unordered_map<column_t, column_t>> virtual_columns)
-    -> column_t;
+auto CV2ScanColumnIndex(column_t column, optional_ptr<const unordered_map<column_t, column_t>> virtual_columns,
+                        bool file_row_number) -> column_t;
+//! The column behind each vector of the output chunk of a scan: a declared column or a virtual column identifier
+auto CV2ScanColumns(const CV2DataSourceBindData &bind_data, const TableFunctionInitInput &input) -> vector<column_t>;
+//! The empty column carries no values: the engine gets it as a constant NULL of the batch's size
+void CV2SetEmptyColumns(DataChunk &output, const vector<column_t> &scan_columns, idx_t row_count);
 
 //! The scan hooks of a table function that scans with a data source
 auto CV2DataSourceInitGlobal(ClientContext &context, TableFunctionInitInput &input)

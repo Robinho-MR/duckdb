@@ -59,6 +59,10 @@ const Value &CV2ConstantBindInfo::GetArg(idx_t index) const {
 }
 
 LogicalType CV2ConstantBindInfo::GetArgType(idx_t index) const {
+	if (index >= positional.size() && index < function.GetPositionalArgumentCount()) {
+		// an input row of the function: its type is known, its value is not
+		return function.GetArguments()[index];
+	}
 	return GetArg(index).type();
 }
 

@@ -253,6 +253,7 @@ public:
 	const OperatorPartitionInfo *in_partition_info = nullptr;
 	const vector<column_t> *in_partition_columns = nullptr;
 	const vector<LogicalType> *in_column_types = nullptr;
+	const virtual_column_map_t *in_virtual_columns = nullptr;
 
 	optional_idx out_batch_index;
 	vector<bool> out_partition_value_set;
@@ -270,32 +271,40 @@ static auto Convert(CV2TablePartitionDataInfo *info) -> duckdb_v2_data_source_pa
 //! public enum
 static constexpr column_t CV2_VIRTUAL_COLUMN_START = UINT64_C(9223372036854775808);
 
-//! The index the scan's column lists hold for a virtual column of the engine, which is invalid if there is no such
-//! virtual column
+//! The index the scan's column lists hold for a virtual column: the file row number of the engine has a public one,
+//! the virtual columns a bind callback declared keep their identifier
 static auto CV2VirtualColumnIndex(column_t engine_id) -> column_t {
 	if (engine_id == MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER) {
 		return CV2_VIRTUAL_COLUMN_START + DUCKDB_V2_TABLE_VIRTUAL_COLUMN_FILE_ROW_NUMBER;
 	}
-	throw InternalException("Unsupported virtual column %llu in a table function scan", engine_id);
+	return engine_id;
 }
 
 //! The index the function sees for a column of the scan. A virtual column of a function wrapped in a multi-file
 //! function has an index of its own past the declared columns, and the wrapper tells which virtual column that is.
-auto CV2ScanColumnIndex(column_t column, optional_ptr<const unordered_map<column_t, column_t>> virtual_columns)
-    -> column_t {
+auto CV2ScanColumnIndex(column_t column, optional_ptr<const unordered_map<column_t, column_t>> virtual_columns,
+                        bool file_row_number) -> column_t {
 	if (virtual_columns) {
 		auto entry = virtual_columns->find(column);
 		if (entry != virtual_columns->end()) {
 			return CV2VirtualColumnIndex(entry->second);
 		}
 	}
-	return IsVirtualColumn(column) ? CV2VirtualColumnIndex(column) : column;
+	// an engine id is only the file row number when the function declared it
+	return file_row_number && IsVirtualColumn(column) ? CV2VirtualColumnIndex(column) : column;
+}
+
+void CV2SetEmptyColumns(DataChunk &output, const vector<column_t> &scan_columns, idx_t row_count) {
+	for (idx_t i = 0; i < scan_columns.size() && i < output.ColumnCount(); i++) {
+		if (scan_columns[i] == COLUMN_IDENTIFIER_EMPTY) {
+			ConstantVector::SetNull(output.data[i], count_t(row_count));
+		}
+	}
 }
 
 //! The declared column behind each vector of the output chunk. With projection pushdown the engine sizes the chunk
 //! to the columns it asked for; without it the chunk always holds every declared column, whatever the engine asked.
-static auto CV2TableScanColumns(const CV2DataSourceBindData &bind_data, const TableFunctionInitInput &input)
-    -> vector<column_t> {
+auto CV2ScanColumns(const CV2DataSourceBindData &bind_data, const TableFunctionInitInput &input) -> vector<column_t> {
 	if (bind_data.scan->projection_pushdown) {
 		if (input.column_ids.empty()) {
 			// the scan only produces rows (e.g. for count(*)) - the function produces them through its first column
@@ -305,7 +314,7 @@ static auto CV2TableScanColumns(const CV2DataSourceBindData &bind_data, const Ta
 		vector<column_t> columns;
 		columns.reserve(input.column_ids.size());
 		for (auto column : input.column_ids) {
-			columns.push_back(CV2ScanColumnIndex(column, virtual_columns));
+			columns.push_back(CV2ScanColumnIndex(column, virtual_columns, bind_data.scan->file_row_number));
 		}
 		return columns;
 	}
@@ -391,7 +400,7 @@ static auto CV2TableOfferFilters(ClientContext &context, const CV2DataSourceBind
 	args.in_bind_data = bind_data.handle ? bind_data.handle->GetData() : nullptr;
 	args.in_filters = &predicates;
 	for (auto column : input.column_ids) {
-		args.in_column_ids.push_back(CV2ScanColumnIndex(column, file_input.virtual_columns));
+		args.in_column_ids.push_back(CV2ScanColumnIndex(column, file_input.virtual_columns, scan.file_row_number));
 	}
 	args.out_handled.resize(predicates.size(), false);
 
@@ -411,7 +420,7 @@ auto CV2DataSourceInitGlobal(ClientContext &context, TableFunctionInitInput &inp
 
 	// Always produced, even without a callback: it carries the thread count and column list the scan runs with.
 	auto result = make_uniq<CV2DataSourceGlobalState>();
-	result->scan_columns = CV2TableScanColumns(bind_data, input);
+	result->scan_columns = CV2ScanColumns(bind_data, input);
 	if (bind_data.scan->ReadsFilters()) {
 		CV2TableOfferFilters(context, bind_data, input);
 	}
@@ -514,7 +523,7 @@ auto CV2DataSourceInitLocal(ExecutionContext &context, TableFunctionInitInput &i
 			                             TableFilterState::Initialize(context.client, entry.Filter()));
 		}
 	}
-	auto scan_columns = CV2TableScanColumns(bind_data, input);
+	auto scan_columns = CV2ScanColumns(bind_data, input);
 	if (bind_data.scan->ReadsFilters()) {
 		CV2TableInitConvertedColumns(context.client, bind_data, input, scan_columns, *result);
 	}
@@ -690,6 +699,9 @@ static auto CV2TableExecBatchOnce(ClientContext &context, TableFunctionInput &in
 		output.SetCardinalityUnsafe(row_count);
 		return;
 	}
+	if (args.in_scan_columns) {
+		CV2SetEmptyColumns(output, *args.in_scan_columns, row_count);
+	}
 	output.SetChildCardinality(row_count);
 }
 
@@ -786,6 +798,7 @@ static auto CV2DataSourceGetPartitionData(ClientContext &context, TableFunctionG
 	// columns; the callback is promised declared columns in both.
 	args.in_partition_columns = &local_state.PartitionColumns(input.partition_info, global_state.scan_columns);
 	args.in_column_types = &bind_data.column_types;
+	args.in_virtual_columns = &bind_data.virtual_columns;
 	args.out_partition_value_set.resize(args.in_partition_columns->size(), false);
 	args.out_partition_values.resize(args.in_partition_columns->size());
 
@@ -1155,7 +1168,22 @@ duckdb_v2_data_source_partition_data_set_partition_value(duckdb_v2_data_source_p
 			throw duckdb::InvalidInputException(
 			    "Index out of bounds in duckdb_v2_data_source_partition_data_set_partition_value");
 		}
-		const auto &expected_type = (*args.in_column_types)[(*args.in_partition_columns)[index]];
+		const auto column = (*args.in_partition_columns)[index];
+		duckdb::optional_ptr<const duckdb::LogicalType> expected_type_ptr;
+		if (duckdb::IsVirtualColumn(column)) {
+			auto entry = args.in_virtual_columns->find(column);
+			if (entry != args.in_virtual_columns->end()) {
+				expected_type_ptr = entry->second.type;
+			}
+		} else {
+			expected_type_ptr = (*args.in_column_types)[column];
+		}
+		if (!expected_type_ptr) {
+			throw duckdb::InvalidInputException("duckdb_v2_data_source_partition_data_set_partition_value: the "
+			                                    "partitioning column at index %llu is not declared",
+			                                    index);
+		}
+		const auto &expected_type = *expected_type_ptr;
 		const auto &actual = *Convert(value);
 		if (actual.type() != expected_type) {
 			throw duckdb::InvalidInputException(

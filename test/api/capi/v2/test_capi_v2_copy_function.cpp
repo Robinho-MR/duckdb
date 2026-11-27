@@ -3,6 +3,8 @@
 
 #include <atomic>
 #include <cstring>
+#include <fstream>
+#include <sstream>
 #include <string>
 
 // ---------------------------------------------------------------------------
@@ -1162,6 +1164,301 @@ TEST_CASE("V2 copy: set_file_extension", "[capi_v2][copy_function]") {
 	REQUIRE(duckdb_v2_copy_function_set_file_extension(nullptr, extension.data(), extension.size(), nullptr) ==
 	        DUCKDB_V2_ERROR_INPUT_INVALID);
 	TestDestroyCopy(&function);
+}
+
+// ===========================================================================
+// COPY TO select and file size callbacks.
+// ===========================================================================
+
+namespace {
+
+// The files of the functions below: each file counts the rows flushed to it and writes the count to itself when it is
+// finalized. A row accounts for ROW_BYTES bytes.
+constexpr idx_t ROW_BYTES = 10;
+
+struct FileProbe {
+	std::string path;
+	idx_t rows = 0;
+};
+
+void DestroyFileProbe(void *data) {
+	delete static_cast<FileProbe *>(data);
+}
+
+void DestroyRowCount(void *data) {
+	delete static_cast<idx_t *>(data);
+}
+
+void FileInit(duckdb_v2_copy_to_init_info_handle info, duckdb_v2_context_handle, duckdb_v2_error_info_handle *err) {
+	const char *path = nullptr;
+	idx_t path_length = 0;
+	if (duckdb_v2_copy_to_init_get_file_path(info, &path, &path_length, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	auto probe = new FileProbe();
+	probe->path = std::string(path, path_length);
+	duckdb_v2_opaque init_data = {probe, DestroyFileProbe, nullptr};
+	duckdb_v2_copy_to_init_set_init_data(info, &init_data, err);
+}
+
+void FileBatch(duckdb_v2_copy_to_batch_info_handle info, duckdb_v2_context_handle, duckdb_v2_error_info_handle *err) {
+	duckdb_v2_column_data_collection_handle input = nullptr;
+	if (duckdb_v2_copy_to_batch_take_input(info, &input, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	idx_t count = 0;
+	auto rc = duckdb_v2_column_data_collection_row_count(input, &count, err);
+	duckdb_v2_column_data_collection_destroy(&input);
+	if (rc != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	duckdb_v2_opaque batch_data = {new idx_t(count), DestroyRowCount, nullptr};
+	duckdb_v2_copy_to_batch_set_batch_data(info, &batch_data, err);
+}
+
+void FileFlush(duckdb_v2_copy_to_flush_info_handle info, duckdb_v2_context_handle, duckdb_v2_error_info_handle *err) {
+	void *init_data = nullptr;
+	void *batch_data = nullptr;
+	if (duckdb_v2_copy_to_flush_get_init_data(info, &init_data, err) != DUCKDB_V2_ERROR_NONE ||
+	    duckdb_v2_copy_to_flush_get_batch_data(info, &batch_data, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	static_cast<FileProbe *>(init_data)->rows += *static_cast<idx_t *>(batch_data);
+}
+
+void FileFinalize(duckdb_v2_copy_to_finalize_info_handle info, duckdb_v2_context_handle,
+                  duckdb_v2_error_info_handle *err) {
+	void *init_data = nullptr;
+	if (duckdb_v2_copy_to_finalize_get_init_data(info, &init_data, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	auto probe = static_cast<FileProbe *>(init_data);
+	std::ofstream out(probe->path, std::ios::binary);
+	out << probe->rows;
+}
+
+std::string ReadWholeFile(const std::string &path) {
+	std::ifstream in(path, std::ios::binary);
+	std::stringstream out;
+	out << in.rdbuf();
+	return out.str();
+}
+
+// --- select ---
+
+struct SelectProbe {
+	duckdb_v2_factory_handle factory = nullptr;
+	std::string column_names;
+	std::string options;
+	DUCKDB_V2_ERROR oob_apply_rc = DUCKDB_V2_ERROR_NONE;
+	DUCKDB_V2_ERROR oob_name_rc = DUCKDB_V2_ERROR_NONE;
+	DUCKDB_V2_LOGICAL_TYPE_ID bound_first_type = DUCKDB_V2_LOGICAL_TYPE_ID_INVALID;
+	const char *function = "strftime";
+
+	void Reset() {
+		column_names.clear();
+		options.clear();
+		oob_apply_rc = DUCKDB_V2_ERROR_NONE;
+		oob_name_rc = DUCKDB_V2_ERROR_NONE;
+		bound_first_type = DUCKDB_V2_LOGICAL_TYPE_ID_INVALID;
+	}
+} select_probe;
+
+// Formats every DATE column with the function of the probe and the format '%Y%m%d'
+void ProbeSelect(duckdb_v2_copy_to_select_info_handle info, duckdb_v2_context_handle,
+                 duckdb_v2_error_info_handle *err) {
+	idx_t column_count = 0;
+	if (duckdb_v2_copy_to_select_get_column_count(info, &column_count, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	for (idx_t i = 0; i < column_count; i++) {
+		const char *name = nullptr;
+		idx_t name_length = 0;
+		duckdb_v2_logical_type_handle type = nullptr;
+		DUCKDB_V2_LOGICAL_TYPE_ID type_id = DUCKDB_V2_LOGICAL_TYPE_ID_INVALID;
+		if (duckdb_v2_copy_to_select_get_column_name(info, i, &name, &name_length, err) != DUCKDB_V2_ERROR_NONE ||
+		    duckdb_v2_copy_to_select_get_column_type(info, i, &type, err) != DUCKDB_V2_ERROR_NONE) {
+			return;
+		}
+		auto rc = duckdb_v2_logical_type_get_id(type, &type_id, err);
+		duckdb_v2_logical_type_destroy(&type);
+		if (rc != DUCKDB_V2_ERROR_NONE) {
+			return;
+		}
+		bool is_partition = false;
+		if (duckdb_v2_copy_to_select_is_partition_column(info, i, &is_partition, err) != DUCKDB_V2_ERROR_NONE) {
+			return;
+		}
+		select_probe.column_names += std::string(name, name_length) + (is_partition ? "*," : ",");
+		if (type_id != DUCKDB_V2_LOGICAL_TYPE_ID_DATE || !is_partition) {
+			continue;
+		}
+		std::string_view format = "%Y%m%d";
+		duckdb_v2_value_handle value = nullptr;
+		if (duckdb_v2_value_create_varchar(select_probe.factory, format.data(), format.size(), &value, err) !=
+		    DUCKDB_V2_ERROR_NONE) {
+			return;
+		}
+		std::string_view function = select_probe.function;
+		rc = duckdb_v2_copy_to_select_apply_function(info, i, function.data(), function.size(), &value, 1, err);
+		duckdb_v2_value_destroy(&value);
+		if (rc != DUCKDB_V2_ERROR_NONE) {
+			return;
+		}
+	}
+	idx_t option_count = 0;
+	if (duckdb_v2_copy_to_select_get_option_count(info, &option_count, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	for (idx_t i = 0; i < option_count; i++) {
+		const char *name = nullptr;
+		idx_t name_length = 0;
+		duckdb_v2_value_handle value = nullptr;
+		if (duckdb_v2_copy_to_select_get_option_name(info, i, &name, &name_length, err) != DUCKDB_V2_ERROR_NONE ||
+		    duckdb_v2_copy_to_select_get_option_value(info, i, &value, err) != DUCKDB_V2_ERROR_NONE) {
+			return;
+		}
+		select_probe.options += Lower(std::string(name, name_length)) + "=" + RenderOption(value) + "\n";
+		duckdb_v2_value_destroy(&value);
+	}
+	// out-of-range indices and invalid arguments are input errors
+	const char *oob_name = nullptr;
+	idx_t oob_name_length = 0;
+	select_probe.oob_name_rc =
+	    duckdb_v2_copy_to_select_get_column_name(info, column_count, &oob_name, &oob_name_length, nullptr);
+	std::string_view function = "strftime";
+	select_probe.oob_apply_rc = duckdb_v2_copy_to_select_apply_function(info, column_count, function.data(),
+	                                                                    function.size(), nullptr, 0, nullptr);
+}
+
+void SelectBind(duckdb_v2_copy_to_bind_info_handle info, duckdb_v2_context_handle, duckdb_v2_error_info_handle *err) {
+	duckdb_v2_logical_type_handle type = nullptr;
+	if (duckdb_v2_copy_to_bind_get_column_type(info, 0, &type, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	duckdb_v2_logical_type_get_id(type, &select_probe.bound_first_type, err);
+	duckdb_v2_logical_type_destroy(&type);
+}
+
+void RegisterSelectCopy(duckdb_v2_connection_handle conn, std::string_view name) {
+	auto function = MakeCopy(conn, name);
+	std::string_view extension = "summary";
+	REQUIRE(duckdb_v2_copy_function_set_file_extension(function, extension.data(), extension.size(), nullptr) ==
+	        DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_copy_to_set_select_callback(function, ProbeSelect, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_copy_to_set_bind_callback(function, SelectBind, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_copy_to_set_init_callback(function, FileInit, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_copy_to_set_batch_callback(function, FileBatch, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_copy_to_set_flush_callback(function, FileFlush, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_copy_to_set_finalize_callback(function, FileFinalize, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_connection_register_copy_function(conn, function, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_copy_function_destroy(&function) == DUCKDB_V2_ERROR_NONE);
+}
+
+// --- file size ---
+
+void RotateFileSize(duckdb_v2_copy_to_file_size_info_handle info, duckdb_v2_context_handle,
+                    duckdb_v2_error_info_handle *err) {
+	void *init_data = nullptr;
+	void *bind_data = nullptr;
+	void *user_data = nullptr;
+	if (duckdb_v2_copy_to_file_size_get_init_data(info, &init_data, err) != DUCKDB_V2_ERROR_NONE ||
+	    duckdb_v2_copy_to_file_size_get_bind_data(info, &bind_data, err) != DUCKDB_V2_ERROR_NONE ||
+	    duckdb_v2_copy_to_file_size_get_user_data(info, &user_data, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	duckdb_v2_copy_to_file_size_set_size(info, static_cast<FileProbe *>(init_data)->rows * ROW_BYTES, err);
+}
+
+void RegisterRotatingCopy(duckdb_v2_connection_handle conn, std::string_view name, bool with_file_size) {
+	auto function = MakeCopy(conn, name);
+	std::string_view extension = "summary";
+	REQUIRE(duckdb_v2_copy_function_set_file_extension(function, extension.data(), extension.size(), nullptr) ==
+	        DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_copy_to_set_init_callback(function, FileInit, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_copy_to_set_batch_callback(function, FileBatch, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_copy_to_set_flush_callback(function, FileFlush, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_copy_to_set_finalize_callback(function, FileFinalize, nullptr) == DUCKDB_V2_ERROR_NONE);
+	if (with_file_size) {
+		REQUIRE(duckdb_v2_copy_to_set_file_size_callback(function, RotateFileSize, nullptr) == DUCKDB_V2_ERROR_NONE);
+	}
+	REQUIRE(duckdb_v2_connection_register_copy_function(conn, function, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_copy_function_destroy(&function) == DUCKDB_V2_ERROR_NONE);
+}
+
+void FailingSelect(duckdb_v2_copy_to_select_info_handle info, duckdb_v2_context_handle,
+                   duckdb_v2_error_info_handle *err) {
+	std::string_view function = "no_such_function_exists";
+	duckdb_v2_copy_to_select_apply_function(info, 0, function.data(), function.size(), nullptr, 0, err);
+}
+
+} // namespace
+
+TEST_CASE("V2 copy: COPY TO select applies a function before partitioning", "[capi_v2][copy_function]") {
+	EnvFixture fx;
+	ExecSQL(fx.conn, "SET threads = 1");
+	select_probe.factory = FactoryOf(fx.conn);
+	RegisterSelectCopy(fx.conn, "v2_copy_select");
+
+	select_probe.Reset();
+	const auto dir = duckdb::TestCreatePath("v2_copy_select_dir");
+	REQUIRE(RunCopy(fx.conn, "COPY (SELECT DATE '2024-01-02' AS dt, 7 AS v) TO '" + dir +
+	                             "' (FORMAT v2_copy_select, PARTITION_BY dt, OVERWRITE_OR_IGNORE, "
+	                             "WRITE_PARTITION_COLUMNS true, TAG 'x')") == 1);
+	// select runs on the original columns and sees the options; bind sees the replaced column
+	REQUIRE(select_probe.column_names == "dt*,v,");
+	REQUIRE(select_probe.options == "tag=x\n");
+	REQUIRE(select_probe.oob_name_rc == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(select_probe.oob_apply_rc == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(select_probe.bound_first_type == DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR);
+	// the partition directory is named after the formatted value
+	const auto file = dir + "/dt=20240102/data_0.summary";
+	REQUIRE(ReadWholeFile(file) == "1");
+
+	// a function that does not exist fails the statement
+	auto function = MakeCopy(fx.conn, "v2_copy_select_bad");
+	REQUIRE(duckdb_v2_copy_to_set_select_callback(function, FailingSelect, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_copy_to_set_batch_callback(function, FileBatch, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_copy_to_set_flush_callback(function, FileFlush, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_connection_register_copy_function(fx.conn, function, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_copy_function_destroy(&function) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(RunFailingCopy(fx.conn, CopyToStatement("SELECT 1 AS i", duckdb::TestCreatePath("v2_copy_select_bad.out"),
+	                                                "v2_copy_select_bad")) != DUCKDB_V2_ERROR_NONE);
+
+	// null arguments
+	REQUIRE(duckdb_v2_copy_to_set_select_callback(nullptr, ProbeSelect, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_copy_to_set_file_size_callback(nullptr, RotateFileSize, nullptr) ==
+	        DUCKDB_V2_ERROR_INPUT_INVALID);
+}
+
+TEST_CASE("V2 copy: COPY TO file size callback rotates files", "[capi_v2][copy_function]") {
+	EnvFixture fx;
+	ExecSQL(fx.conn, "SET threads = 1");
+	RegisterRotatingCopy(fx.conn, "v2_copy_rotate", true);
+	RegisterRotatingCopy(fx.conn, "v2_copy_no_rotate", false);
+
+	// 10000 rows in batches of 1000 rows, ROW_BYTES bytes each: a file reaches 20000 bytes after two batches
+	const auto dir = duckdb::TestCreatePath("v2_copy_rotate_dir");
+	REQUIRE(RunCopy(fx.conn,
+	                "COPY (SELECT r FROM range(10000) t(r)) TO '" + dir +
+	                    "' (FORMAT v2_copy_rotate, FILE_SIZE_BYTES 20000, BATCH_SIZE 1000, OVERWRITE_OR_IGNORE)") ==
+	        10000);
+	idx_t total = 0;
+	idx_t files = 0;
+	for (; std::ifstream(dir + "/data_" + std::to_string(files) + ".summary").good(); files++) {
+		const auto rows = std::stoull(ReadWholeFile(dir + "/data_" + std::to_string(files) + ".summary"));
+		// a file is finalized once it reaches the limit, so it holds a fraction of the rows
+		REQUIRE(rows >= 1000);
+		REQUIRE(rows <= 4000);
+		total += rows;
+	}
+	REQUIRE(files >= 3);
+	REQUIRE(total == 10000);
+
+	// without the callback the option is refused
+	REQUIRE(RunFailingCopy(fx.conn, "COPY (SELECT r FROM range(10) t(r)) TO '" +
+	                                    duckdb::TestCreatePath("v2_copy_no_rotate_dir") +
+	                                    "' (FORMAT v2_copy_no_rotate, FILE_SIZE_BYTES 20000)") != DUCKDB_V2_ERROR_NONE);
 }
 
 } // namespace test_capi_v2

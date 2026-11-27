@@ -1,0 +1,50 @@
+# name: test/sql/json/copy/copy_from_json_parallel_order.test_slow
+# description: COPY FROM of a single large newline-delimited JSON file reads it with several threads and keeps the order
+# group: [copy]
+
+require json
+
+statement ok
+SET threads = 4
+
+statement ok
+COPY (SELECT range AS i, 'value ' || range AS s FROM range(1000000)) TO '{TEMP_DIR}/parallel_order.json' (FORMAT json)
+
+statement ok
+CREATE TABLE t (i BIGINT, s VARCHAR)
+
+statement ok
+COPY t FROM '{TEMP_DIR}/parallel_order.json' (FORMAT json)
+
+# the rows arrive in the order of the file
+query III
+SELECT count(*), bool_and(i = rn - 1), bool_and(s = 'value ' || i) FROM (SELECT i, s, row_number() OVER () AS rn FROM t)
+----
+1000000	true	true
+
+# the same for a glob of several files, which are read one after the other
+statement ok
+COPY (SELECT range + 1000000 AS i, 'value ' || (range + 1000000) AS s FROM range(500000)) TO '{TEMP_DIR}/parallel_order_2.json' (FORMAT json)
+
+statement ok
+CREATE TABLE t2 (i BIGINT, s VARCHAR)
+
+statement ok
+COPY t2 FROM '{TEMP_DIR}/parallel_order*.json' (FORMAT json)
+
+query II
+SELECT count(*), bool_and(i = rn - 1) FROM (SELECT i, row_number() OVER () AS rn FROM t2)
+----
+1500000	true
+
+# a path that matches no file
+statement error
+COPY t FROM '{TEMP_DIR}/no_such_file.json' (FORMAT json)
+----
+<REGEX>:IO Error:.*No files found that match the pattern.*
+
+# an unknown option
+statement error
+COPY t FROM '{TEMP_DIR}/parallel_order.json' (FORMAT json, bogus 1)
+----
+<REGEX>:Not implemented Error:.*Unsupported option for COPY FROM: "bogus".*

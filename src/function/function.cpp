@@ -329,6 +329,7 @@ void BuiltinFunctions::Initialize() {
 	RegisterArrowFunctions();
 
 	RegisterPragmaFunctions();
+	RegisterSerializeFunctions();
 
 	RegisterCopyFunctions();
 

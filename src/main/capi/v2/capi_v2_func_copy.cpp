@@ -5,6 +5,8 @@
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/function/copy_function.hpp"
+#include "duckdb/function/function_binder.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/parser/parsed_data/create_copy_function_info.hpp"
 #include "duckdb/storage/statistics/node_statistics.hpp"
 
@@ -15,6 +17,8 @@ namespace duckdb::capiv2 {
 class CV2CopyFunctionInfo final : public CopyFunctionInfo {
 public:
 	// COPY ... TO
+	duckdb_v2_copy_to_select_callback_fn to_select_cb = nullptr;
+	duckdb_v2_copy_to_file_size_callback_fn to_file_size_cb = nullptr;
 	duckdb_v2_copy_to_bind_callback_fn to_bind_cb = nullptr;
 	duckdb_v2_copy_to_batch_size_callback_fn to_batch_size_cb = nullptr;
 	duckdb_v2_copy_to_init_callback_fn to_init_cb = nullptr;
@@ -34,8 +38,8 @@ public:
 	shared_ptr<CV2UserData> user_data = nullptr;
 
 	bool HasCopyTo() const {
-		return to_bind_cb || to_batch_size_cb || to_init_cb || to_batch_cb || to_flush_cb || to_finalize_cb ||
-		       to_statistics_cb;
+		return to_select_cb || to_file_size_cb || to_bind_cb || to_batch_size_cb || to_init_cb || to_batch_cb ||
+		       to_flush_cb || to_finalize_cb || to_statistics_cb;
 	}
 	bool HasCopyFrom() const {
 		return from_bind_cb || from_source_set;
@@ -97,6 +101,11 @@ public:
 class CV2CopyToGlobalState final : public GlobalFunctionData {
 public:
 	CV2UserData handle;
+	//! What the file size hook needs, as it only receives the state of the file: the function info, the user's bind
+	//! data and the context of the query writing the file
+	shared_ptr<CopyFunctionInfo> function_info;
+	shared_ptr<CV2UserData> bind_handle;
+	optional_ptr<ClientContext> context;
 	//! Where the statistics of the file are reported, when the statement asks for them
 	optional_ptr<CopyFunctionFileStatistics> written_statistics;
 	//! Serializes the flushes of callers that sink into the file directly (see CV2CopyToSink)
@@ -245,6 +254,47 @@ static auto Convert(CV2CopyToStatisticsInfo *info) -> duckdb_v2_copy_to_statisti
 	return reinterpret_cast<duckdb_v2_copy_to_statistics_info_handle>(info);
 }
 
+class CV2CopyToSelectInfo {
+public:
+	//! A function applied to a column: its name and the constant arguments following the column
+	struct AppliedFunction {
+		string name;
+		vector<Value> arguments;
+	};
+
+	void *in_user_data = nullptr;
+	const vector<Identifier> *in_names = nullptr;
+	const vector<LogicalType> *in_types = nullptr;
+	const vector<idx_t> *in_partition_columns = nullptr;
+	CV2CopyOptionList in_options;
+
+	//! Indexed by column
+	unordered_map<idx_t, AppliedFunction> out_functions;
+};
+
+static auto Convert(duckdb_v2_copy_to_select_info_handle info) -> CV2CopyToSelectInfo * {
+	return reinterpret_cast<CV2CopyToSelectInfo *>(info);
+}
+static auto Convert(CV2CopyToSelectInfo *info) -> duckdb_v2_copy_to_select_info_handle {
+	return reinterpret_cast<duckdb_v2_copy_to_select_info_handle>(info);
+}
+
+class CV2CopyToFileSizeInfo {
+public:
+	void *in_user_data = nullptr;
+	void *in_bind_data = nullptr;
+	void *in_init_data = nullptr;
+
+	idx_t out_file_size_bytes = 0;
+};
+
+static auto Convert(duckdb_v2_copy_to_file_size_info_handle info) -> CV2CopyToFileSizeInfo * {
+	return reinterpret_cast<CV2CopyToFileSizeInfo *>(info);
+}
+static auto Convert(CV2CopyToFileSizeInfo *info) -> duckdb_v2_copy_to_file_size_info_handle {
+	return reinterpret_cast<duckdb_v2_copy_to_file_size_info_handle>(info);
+}
+
 //----------------------------------------------------------------------------------------------------------------------
 // COPY FROM callback info
 //----------------------------------------------------------------------------------------------------------------------
@@ -298,6 +348,79 @@ static auto MakeBindData(const shared_ptr<CopyFunctionInfo> &info, shared_ptr<CV
 //----------------------------------------------------------------------------------------------------------------------
 // COPY TO hooks
 //----------------------------------------------------------------------------------------------------------------------
+
+static auto CV2CopyToSelect(CopyToSelectInput &input) -> vector<unique_ptr<Expression>> {
+	if (!input.function_info) {
+		throw InvalidInputException("The COPY TO select of a copy function was called without its function info");
+	}
+	const auto &info = input.function_info->Cast<CV2CopyFunctionInfo>();
+
+	vector<Identifier> names;
+	vector<LogicalType> types;
+	for (auto &expr : input.select_list) {
+		names.push_back(expr->GetAlias());
+		types.push_back(expr->GetReturnType());
+	}
+
+	CV2CopyToSelectInfo args = {};
+	args.in_user_data = GetUserData(info);
+	args.in_names = &names;
+	args.in_types = &types;
+	args.in_partition_columns = &input.partition_columns;
+	args.in_options = CV2CopyCollectOptions(input.options);
+
+	CV2ErrorInfo err = {};
+	auto err_ptr = Convert(&err);
+	CV2CallbackContext callback_context(input.context);
+	info.to_select_cb(Convert(&args), Convert(&callback_context), &err_ptr);
+	if (err.HasError()) {
+		err.ThrowAsException();
+	}
+	if (args.out_functions.empty()) {
+		// an empty list leaves the columns as they are
+		return {};
+	}
+
+	FunctionBinder binder(input.context);
+	vector<unique_ptr<Expression>> result;
+	for (idx_t i = 0; i < input.select_list.size(); i++) {
+		auto entry = args.out_functions.find(i);
+		if (entry == args.out_functions.end()) {
+			result.push_back(std::move(input.select_list[i]));
+			continue;
+		}
+		auto alias = input.select_list[i]->GetAlias();
+		vector<unique_ptr<Expression>> children;
+		children.push_back(std::move(input.select_list[i]));
+		for (auto &argument : entry->second.arguments) {
+			children.push_back(make_uniq<BoundConstantExpression>(argument));
+		}
+		auto bound =
+		    binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier(entry->second.name), std::move(children));
+		bound->SetAlias(alias);
+		result.push_back(std::move(bound));
+	}
+	return result;
+}
+
+static auto CV2CopyToFileSizeBytes(GlobalFunctionData &gstate_p) -> idx_t {
+	auto &gstate = gstate_p.Cast<CV2CopyToGlobalState>();
+	const auto &info = gstate.function_info->Cast<CV2CopyFunctionInfo>();
+
+	CV2CopyToFileSizeInfo args = {};
+	args.in_user_data = GetUserData(info);
+	args.in_bind_data = gstate.bind_handle ? gstate.bind_handle->GetData() : nullptr;
+	args.in_init_data = gstate.handle.GetData();
+
+	CV2ErrorInfo err = {};
+	auto err_ptr = Convert(&err);
+	CV2CallbackContext callback_context(*gstate.context);
+	info.to_file_size_cb(Convert(&args), Convert(&callback_context), &err_ptr);
+	if (err.HasError()) {
+		err.ThrowAsException();
+	}
+	return args.out_file_size_bytes;
+}
 
 static auto CV2CopyToBind(ClientContext &context, CopyFunctionBindInput &input, const vector<Identifier> &names,
                           const vector<LogicalType> &sql_types) -> unique_ptr<FunctionData> {
@@ -369,6 +492,9 @@ static auto CV2CopyToInitGlobal(ClientContext &context, const FunctionData &bind
 	}
 
 	auto result = make_uniq<CV2CopyToGlobalState>();
+	result->function_info = bind_data.Cast<CV2CopyFunctionData>().info;
+	result->bind_handle = bind_data.Cast<CV2CopyFunctionData>().handle;
+	result->context = context;
 	if (args.out_init_data.ptr) {
 		result->handle = CV2UserData(args.out_init_data.ptr, args.out_init_data.destroy, args.out_init_data.equals);
 	}
@@ -619,6 +745,12 @@ public:
 			function.copy_to_combine = CV2CopyToCombine;
 			if (function_info->to_batch_size_cb) {
 				function.desired_batch_size = CV2CopyToBatchSize;
+			}
+			if (function_info->to_select_cb) {
+				function.copy_to_select = CV2CopyToSelect;
+			}
+			if (function_info->to_file_size_cb) {
+				function.file_size_bytes = CV2CopyToFileSizeBytes;
 			}
 			if (function_info->to_statistics_cb) {
 				function.copy_to_get_written_statistics = CV2CopyToGetWrittenStatistics;
@@ -1253,6 +1385,162 @@ DUCKDB_V2_ERROR duckdb_v2_copy_to_statistics_set_row_count(duckdb_v2_copy_to_sta
 
 DUCKDB_V2_ERROR duckdb_v2_copy_to_statistics_set_file_size(duckdb_v2_copy_to_statistics_info_handle info,
                                                            idx_t file_size_bytes, duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	return WithErrorHandler(err, [&]() { Convert(info)->out_file_size_bytes = file_size_bytes; });
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// COPY TO select
+//----------------------------------------------------------------------------------------------------------------------
+
+DUCKDB_V2_ERROR duckdb_v2_copy_to_set_select_callback(duckdb_v2_copy_function_handle function,
+                                                      duckdb_v2_copy_to_select_callback_fn callback,
+                                                      duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() { Convert(function)->info.to_select_cb = callback; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_copy_to_select_get_user_data(duckdb_v2_copy_to_select_info_handle info, void **data,
+                                                       duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->in_user_data; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_copy_to_select_get_column_count(duckdb_v2_copy_to_select_info_handle info, idx_t *count,
+                                                          duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(count);
+	return WithErrorHandler(err, [&]() { *count = Convert(info)->in_types->size(); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_copy_to_select_get_column_type(duckdb_v2_copy_to_select_info_handle info, idx_t index,
+                                                         duckdb_v2_logical_type_handle *type,
+                                                         duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(type);
+	*type = nullptr;
+	return WithErrorHandler(
+	    err, [&]() { *type = GetColumnType(*Convert(info), index, "duckdb_v2_copy_to_select_get_column_type"); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_copy_to_select_get_column_name(duckdb_v2_copy_to_select_info_handle info, idx_t index,
+                                                         const char **name, idx_t *name_length,
+                                                         duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(name);
+	DUCKDB_CHECK_ARG(name_length);
+	return WithErrorHandler(err, [&]() {
+		SetStringOut(name, name_length,
+		             GetColumnName(*Convert(info), index, "duckdb_v2_copy_to_select_get_column_name"));
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_copy_to_select_get_option_count(duckdb_v2_copy_to_select_info_handle info, idx_t *count,
+                                                          duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(count);
+	return WithErrorHandler(err, [&]() { *count = Convert(info)->in_options.size(); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_copy_to_select_get_option_name(duckdb_v2_copy_to_select_info_handle info, idx_t index,
+                                                         const char **name, idx_t *name_length,
+                                                         duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(name);
+	DUCKDB_CHECK_ARG(name_length);
+	return WithErrorHandler(err, [&]() {
+		SetStringOut(name, name_length,
+		             *GetOption(*Convert(info), index, "duckdb_v2_copy_to_select_get_option_name").first);
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_copy_to_select_get_option_value(duckdb_v2_copy_to_select_info_handle info, idx_t index,
+                                                          duckdb_v2_value_handle *value,
+                                                          duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(value);
+	*value = nullptr;
+	return WithErrorHandler(
+	    err, [&]() { *value = GetOptionValue(*Convert(info), index, "duckdb_v2_copy_to_select_get_option_value"); });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_copy_to_select_is_partition_column(duckdb_v2_copy_to_select_info_handle info, idx_t index,
+                                                             bool *is_partition_column,
+                                                             duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(is_partition_column);
+	return WithErrorHandler(err, [&]() {
+		auto &select_info = *Convert(info);
+		if (index >= select_info.in_types->size()) {
+			throw duckdb::InvalidInputException("Index out of bounds in duckdb_v2_copy_to_select_is_partition_column");
+		}
+		const auto &partition_columns = *select_info.in_partition_columns;
+		*is_partition_column =
+		    std::find(partition_columns.begin(), partition_columns.end(), index) != partition_columns.end();
+	});
+}
+
+DUCKDB_V2_ERROR duckdb_v2_copy_to_select_apply_function(duckdb_v2_copy_to_select_info_handle info, idx_t column_index,
+                                                        const char *function_name, idx_t function_name_length,
+                                                        const duckdb_v2_value_handle *arguments, idx_t argument_count,
+                                                        duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_STR_ARG(function_name, function_name_length);
+	return WithErrorHandler(err, [&]() {
+		auto &select_info = *Convert(info);
+		if (column_index >= select_info.in_types->size()) {
+			throw duckdb::InvalidInputException("Index out of bounds in duckdb_v2_copy_to_select_apply_function");
+		}
+		if (argument_count > 0 && !arguments) {
+			throw duckdb::InvalidInputException("'arguments' cannot be null when argument_count > 0");
+		}
+		CV2CopyToSelectInfo::AppliedFunction applied;
+		applied.name = duckdb::string(ConvertIdentifierName(function_name, function_name_length));
+		for (idx_t i = 0; i < argument_count; i++) {
+			if (!arguments[i]) {
+				throw duckdb::InvalidInputException("null argument value at index %llu", i);
+			}
+			applied.arguments.push_back(*Convert(arguments[i]));
+		}
+		select_info.out_functions[column_index] = std::move(applied);
+	});
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// COPY TO file size
+//----------------------------------------------------------------------------------------------------------------------
+
+DUCKDB_V2_ERROR duckdb_v2_copy_to_set_file_size_callback(duckdb_v2_copy_function_handle function,
+                                                         duckdb_v2_copy_to_file_size_callback_fn callback,
+                                                         duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(function);
+	return WithErrorHandler(err, [&]() { Convert(function)->info.to_file_size_cb = callback; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_copy_to_file_size_get_user_data(duckdb_v2_copy_to_file_size_info_handle info, void **data,
+                                                          duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->in_user_data; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_copy_to_file_size_get_bind_data(duckdb_v2_copy_to_file_size_info_handle info, void **data,
+                                                          duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->in_bind_data; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_copy_to_file_size_get_init_data(duckdb_v2_copy_to_file_size_info_handle info, void **data,
+                                                          duckdb_v2_error_info_handle *err) {
+	DUCKDB_CHECK_ARG(info);
+	DUCKDB_CHECK_ARG(data);
+	return WithErrorHandler(err, [&]() { *data = Convert(info)->in_init_data; });
+}
+
+DUCKDB_V2_ERROR duckdb_v2_copy_to_file_size_set_size(duckdb_v2_copy_to_file_size_info_handle info,
+                                                     idx_t file_size_bytes, duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(info);
 	return WithErrorHandler(err, [&]() { Convert(info)->out_file_size_bytes = file_size_bytes; });
 }

@@ -200,6 +200,7 @@ public:
 	duckdb_v2_operator_init_local_callback_fn init_local_cb = nullptr;
 	duckdb_v2_operator_execute_callback_fn execute_cb = nullptr;
 	duckdb_v2_operator_finalize_callback_fn finalize_cb = nullptr;
+	duckdb_v2_operator_progress_callback_fn progress_cb = nullptr;
 	shared_ptr<CV2UserData> user_data;
 };
 
@@ -226,6 +227,8 @@ class CV2OperatorInitGlobalInfo {
 public:
 	void *in_user_data = nullptr;
 	void *in_bind_data = nullptr;
+	//! The column behind each vector the operator produces: a declared column or a virtual column identifier
+	optional_ptr<const vector<column_t>> in_scan_columns;
 
 	duckdb_v2_opaque out_global_state = {};
 	optional_idx out_max_threads;
@@ -242,6 +245,8 @@ class CV2OperatorInitLocalInfo {
 public:
 	void *in_user_data = nullptr;
 	void *in_bind_data = nullptr;
+	//! The column behind each vector the operator produces: a declared column or a virtual column identifier
+	optional_ptr<const vector<column_t>> in_scan_columns;
 	void *in_global_state = nullptr;
 
 	duckdb_v2_opaque out_local_state = {};
@@ -258,6 +263,8 @@ class CV2OperatorExecuteInfo {
 public:
 	void *in_user_data = nullptr;
 	void *in_bind_data = nullptr;
+	//! The column behind each vector the operator produces: a declared column or a virtual column identifier
+	optional_ptr<const vector<column_t>> in_scan_columns;
 	void *in_global_state = nullptr;
 	void *in_local_state = nullptr;
 	optional_ptr<DataChunk> input;
@@ -277,6 +284,8 @@ class CV2OperatorFinalizeInfo {
 public:
 	void *in_user_data = nullptr;
 	void *in_bind_data = nullptr;
+	//! The column behind each vector the operator produces: a declared column or a virtual column identifier
+	optional_ptr<const vector<column_t>> in_scan_columns;
 	void *in_global_state = nullptr;
 	void *in_local_state = nullptr;
 	optional_ptr<DataChunk> output;
@@ -289,6 +298,22 @@ inline auto Convert(duckdb_v2_operator_finalize_info_handle info) -> CV2Operator
 }
 inline auto Convert(CV2OperatorFinalizeInfo *info) -> duckdb_v2_operator_finalize_info_handle {
 	return reinterpret_cast<duckdb_v2_operator_finalize_info_handle>(info);
+}
+
+class CV2OperatorProgressInfo {
+public:
+	void *in_user_data = nullptr;
+	void *in_bind_data = nullptr;
+	void *in_global_state = nullptr;
+
+	double out_progress = 0.0;
+};
+
+inline auto Convert(duckdb_v2_operator_progress_info_handle info) -> CV2OperatorProgressInfo * {
+	return reinterpret_cast<CV2OperatorProgressInfo *>(info);
+}
+inline auto Convert(CV2OperatorProgressInfo *info) -> duckdb_v2_operator_progress_info_handle {
+	return reinterpret_cast<duckdb_v2_operator_progress_info_handle>(info);
 }
 
 } // namespace duckdb::capiv2

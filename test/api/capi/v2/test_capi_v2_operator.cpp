@@ -845,9 +845,12 @@ TEST_CASE("V2 operator: registration refusals", "[capi_v2][capi_v2_operator]") {
 		duckdb_v2_table_function_set_data_source(function, source, nullptr);
 		duckdb_v2_data_source_destroy(&source);
 	});
-	refuse("projection pushdown", table, [](duckdb_v2_table_function_handle function, duckdb_v2_operator_handle) {
-		duckdb_v2_table_function_set_projection_pushdown(function, true, nullptr);
-	});
+	refuse("the file_row_number virtual column", table,
+	       [](duckdb_v2_table_function_handle function, duckdb_v2_operator_handle) {
+		       duckdb_v2_table_function_set_projection_pushdown(function, true, nullptr);
+		       duckdb_v2_table_function_add_virtual_column(function, DUCKDB_V2_TABLE_VIRTUAL_COLUMN_FILE_ROW_NUMBER,
+		                                                   nullptr);
+	       });
 	refuse(
 	    "cannot declare positional parameters", table,
 	    [&](duckdb_v2_table_function_handle function, duckdb_v2_operator_handle) { AddParam(function, "x", bigint); });
@@ -909,6 +912,144 @@ TEST_CASE("V2 operator: invalid values and null arguments", "[capi_v2][capi_v2_o
 	REQUIRE(duckdb_v2_table_function_set_operator(nullptr, nullptr, DUCKDB_V2_TABLE_OPERATOR_INPUT_TABLE, nullptr) ==
 	        DUCKDB_V2_ERROR_INPUT_INVALID);
 	REQUIRE(duckdb_v2_table_function_bind_get_input_column_count(nullptr, nullptr, nullptr) ==
+	        DUCKDB_V2_ERROR_INPUT_INVALID);
+}
+
+// ---------------------------------------------------------------------------
+// proj_virtual(n): one row per input row with a = n and b = 10 * n, and the virtual column v = 100 * n that the bind
+// callback declares. With projection pushdown the operator only fills the columns the query asks for, which it finds
+// through the operator's column index functions.
+// ---------------------------------------------------------------------------
+
+constexpr idx_t PROJ_V_IDENTIFIER = DUCKDB_V2_VIRTUAL_COLUMN_START + 1;
+
+std::atomic<idx_t> proj_init_columns {0};
+std::atomic<double> proj_progress_seen {-1};
+
+void ProjBindCb(duckdb_v2_function_bind_info_handle, duckdb_v2_table_function_bind_info_handle result,
+                duckdb_v2_context_handle context, duckdb_v2_error_info_handle *err) {
+	if (!AddBigintColumn(result, context, "a", err) || !AddBigintColumn(result, context, "b", err)) {
+		return;
+	}
+	duckdb_v2_factory_handle factory = nullptr;
+	duckdb_v2_context_get_factory(context, &factory, nullptr);
+	duckdb_v2_logical_type_handle bigint = nullptr;
+	if (duckdb_v2_factory_create_type_from_id(factory, DUCKDB_V2_LOGICAL_TYPE_ID_BIGINT, nullptr, nullptr, nullptr, 0,
+	                                          &bigint, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	duckdb_v2_table_function_bind_add_virtual_column(result, PROJ_V_IDENTIFIER, "v", 1, bigint, err);
+	duckdb_v2_logical_type_destroy(&bigint);
+}
+
+void ProjInitGlobalCb(duckdb_v2_operator_init_global_info_handle info, duckdb_v2_context_handle,
+                      duckdb_v2_error_info_handle *err) {
+	idx_t count = 0;
+	if (duckdb_v2_operator_init_global_get_column_count(info, &count, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	proj_init_columns = count;
+}
+
+void ProjExecCb(duckdb_v2_operator_execute_info_handle info, duckdb_v2_context_handle,
+                duckdb_v2_error_info_handle *err) {
+	duckdb_v2_data_chunk_handle in = nullptr, out = nullptr;
+	duckdb_v2_vector_handle in_vec = nullptr;
+	if (duckdb_v2_operator_execute_get_input_chunk(info, &in, err) != DUCKDB_V2_ERROR_NONE ||
+	    duckdb_v2_operator_execute_get_output_chunk(info, &out, err) != DUCKDB_V2_ERROR_NONE ||
+	    duckdb_v2_data_chunk_get_vector(in, 0, &in_vec, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	duckdb_v2_vector_view in_view {};
+	idx_t rows = 0;
+	if (duckdb_v2_data_chunk_get_size(in, &rows, err) != DUCKDB_V2_ERROR_NONE ||
+	    duckdb_v2_vector_get_view(in_vec, &in_view, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	idx_t column_count = 0;
+	if (duckdb_v2_operator_execute_get_column_count(info, &column_count, err) != DUCKDB_V2_ERROR_NONE) {
+		return;
+	}
+	duckdb_v2_vector_handle first = nullptr;
+	for (idx_t c = 0; c < column_count; c++) {
+		idx_t column = 0;
+		duckdb_v2_vector_handle out_vec = nullptr;
+		if (duckdb_v2_operator_execute_get_column_index(info, c, &column, err) != DUCKDB_V2_ERROR_NONE ||
+		    duckdb_v2_data_chunk_get_vector(out, c, &out_vec, err) != DUCKDB_V2_ERROR_NONE) {
+			return;
+		}
+		if (c == 0) {
+			first = out_vec;
+		}
+		const int64_t factor = column == 0 ? 1 : column == 1 ? 10 : column == PROJ_V_IDENTIFIER ? 100 : 0;
+		void *raw = nullptr;
+		if (duckdb_v2_vector_get_data_mutable(out_vec, &raw, err) != DUCKDB_V2_ERROR_NONE) {
+			return;
+		}
+		auto out_data = static_cast<int64_t *>(raw);
+		for (idx_t i = 0; i < rows; i++) {
+			out_data[i] = factor * static_cast<const int64_t *>(in_view.data)[SelAt(in_view.sel, i)];
+		}
+	}
+	// an out-of-range column index is refused
+	idx_t unused = 0;
+	duckdb_v2_error_info_handle refused = nullptr;
+	if (duckdb_v2_operator_execute_get_column_index(info, column_count, &unused, &refused) == DUCKDB_V2_ERROR_NONE) {
+		duckdb_v2_error_info_destroy(&refused);
+		return;
+	}
+	duckdb_v2_error_info_destroy(&refused);
+	if (first) {
+		duckdb_v2_vector_set_size(first, rows, err);
+	}
+}
+
+void ProjProgressCb(duckdb_v2_operator_progress_info_handle info, duckdb_v2_context_handle,
+                    duckdb_v2_error_info_handle *err) {
+	proj_progress_seen = 0.5;
+	duckdb_v2_operator_progress_set_progress(info, 0.5, err);
+}
+
+TEST_CASE("V2 operator: projection pushdown and virtual columns", "[capi_v2][capi_v2_operator]") {
+	EnvFixture fx;
+	auto bigint = MakeType(fx.factory, DUCKDB_V2_LOGICAL_TYPE_ID_BIGINT);
+	auto function = MakeTable(fx.conn, "proj_virtual");
+	AddParam(function, "n", bigint);
+	duckdb_v2_logical_type_destroy(&bigint);
+	REQUIRE(duckdb_v2_table_function_set_bind_callback(function, ProjBindCb, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_table_function_set_projection_pushdown(function, true, nullptr) == DUCKDB_V2_ERROR_NONE);
+	auto op = MakeOperator(fx.conn, ProjExecCb);
+	REQUIRE(duckdb_v2_operator_set_init_global_callback(op, ProjInitGlobalCb, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(duckdb_v2_operator_set_progress_callback(op, ProjProgressCb, nullptr) == DUCKDB_V2_ERROR_NONE);
+	REQUIRE(Register(fx.conn, function, op, DUCKDB_V2_TABLE_OPERATOR_INPUT_ARGUMENTS) == DUCKDB_V2_ERROR_NONE);
+
+	REQUIRE(QueryI64(fx.conn, "SELECT b FROM proj_virtual(3)") == 30);
+	REQUIRE(proj_init_columns == 1);
+	REQUIRE(QueryI64(fx.conn, "SELECT v FROM proj_virtual(3)") == 300);
+	REQUIRE(QueryI64(fx.conn, "SELECT a + b + v FROM proj_virtual(2)") == 222);
+	REQUIRE(proj_init_columns == 3);
+	// the virtual column is not part of SELECT *
+	REQUIRE(QueryI64(fx.conn, "SELECT count(*) FROM (DESCRIBE SELECT * FROM proj_virtual(1))") == 2);
+	// a lateral input
+	REQUIRE(QueryI64(fx.conn, "SELECT sum(r.v) FROM range(1, 4) t(n), proj_virtual(t.n) r") == 600);
+	REQUIRE(QueryI64(fx.conn, "SELECT count(*) FROM range(1, 4) t(n), proj_virtual(t.n) r") == 3);
+}
+
+TEST_CASE("V2 operator: column and progress functions refuse null arguments", "[capi_v2][capi_v2_operator]") {
+	idx_t count = 0;
+	void *data = nullptr;
+	REQUIRE(duckdb_v2_operator_init_global_get_column_count(nullptr, &count, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_operator_init_local_get_column_index(nullptr, 0, &count, nullptr) ==
+	        DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_operator_execute_get_column_count(nullptr, &count, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_operator_finalize_get_column_index(nullptr, 0, &count, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_operator_set_progress_callback(nullptr, ProjProgressCb, nullptr) ==
+	        DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_operator_progress_get_user_data(nullptr, &data, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_operator_progress_get_bind_data(nullptr, &data, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_operator_progress_get_global_state(nullptr, &data, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_operator_progress_set_progress(nullptr, 0.5, nullptr) == DUCKDB_V2_ERROR_INPUT_INVALID);
+	REQUIRE(duckdb_v2_table_function_bind_add_virtual_column(nullptr, PROJ_V_IDENTIFIER, "v", 1, nullptr, nullptr) ==
 	        DUCKDB_V2_ERROR_INPUT_INVALID);
 }
 

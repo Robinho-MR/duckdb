@@ -1,0 +1,132 @@
+# name: test/sql/json/scalar/test_json_transform_invalid_structure.test
+# description: Test json_transform / from_json with invalid structure arguments
+# group: [scalar]
+
+require json
+
+# not JSON
+statement error
+SELECT json_transform('{"a":1}', 'STRUCT(a INT)');
+----
+Binder Error: Cannot cast JSON structure to string
+
+statement error
+SELECT json_transform('{"a":1}', 'not json');
+----
+Binder Error: Cannot cast JSON structure to string
+
+statement error
+SELECT json_transform('{"a":1}', '');
+----
+Binder Error: Cannot cast JSON structure to string
+
+statement error
+SELECT json_transform('{"a":1}', '{"a":"INT"');
+----
+Binder Error: Cannot cast JSON structure to string
+
+statement error
+SELECT from_json('{"a":1}', 'STRUCT(a INT)');
+----
+Binder Error: Cannot cast JSON structure to string
+
+statement error
+SELECT from_json('{"a":1}', 'INT');
+----
+Binder Error: Cannot cast JSON structure to string
+
+# JSON but not a structure
+statement error
+SELECT json_transform('{"a":1}', '5');
+----
+Binder Error: invalid JSON structure
+
+statement error
+SELECT json_transform('{"a":1}', 'null');
+----
+Binder Error: invalid JSON structure
+
+statement error
+SELECT json_transform('{"a":1}', 'true');
+----
+Binder Error: invalid JSON structure
+
+statement error
+SELECT json_transform('{"a":1}', '{"a":5}');
+----
+Binder Error: invalid JSON structure
+
+statement error
+SELECT json_transform('{"a":1}', '{"a":[5]}');
+----
+Binder Error: invalid JSON structure
+
+# strings that are not type names
+statement error
+SELECT json_transform('{"a":1}', '"notatype"');
+----
+Catalog Error: Type with name notatype does not exist!
+
+statement error
+SELECT json_transform('{"a":1}', '{"a":"notatype"}');
+----
+Catalog Error: Type with name notatype does not exist!
+
+statement error
+SELECT json_transform('{"a":1}', '{"a":{"b":"notatype"}}');
+----
+Catalog Error: Type with name notatype does not exist!
+
+# arrays
+statement error
+SELECT json_transform('{"a":1}', '["INT","INT"]');
+----
+Binder Error: Too many values in array of JSON structure
+
+statement error
+SELECT json_transform('{"a":1}', '[]');
+----
+Binder Error: Too many values in array of JSON structure
+
+statement error
+SELECT json_transform('{"a":1}', '{"a":["INT","INT"]}');
+----
+Binder Error: Too many values in array of JSON structure
+
+# objects
+statement error
+SELECT json_transform('{"a":1}', '{}');
+----
+Binder Error: Empty object in JSON structure
+
+statement error
+SELECT json_transform('{"a":1}', '{"":"INT"}');
+----
+Binder Error: Empty key in object in JSON structure
+
+statement error
+SELECT json_transform('{"a":1}', '{"a":"INT","A":"INT"}');
+----
+Invalid Input Error: Duplicate keys in object in JSON structure: "INT"
+
+# NULL and constant strings that are a type name
+query I
+SELECT json_transform('{"a":1}', NULL);
+----
+NULL
+
+query I
+SELECT json_transform('{"a":1}', '"INT"');
+----
+NULL
+
+# the structure has to be a constant string
+statement error
+SELECT json_transform('{"a":1}', x) FROM (SELECT '{"a":"INT"}' x);
+----
+Binder Error: The "structure" argument in function "json_transform" must be a constant expression
+
+statement error
+SELECT json_transform('{"a":1}', 5);
+----
+Binder Error: No function matches the given name and argument types

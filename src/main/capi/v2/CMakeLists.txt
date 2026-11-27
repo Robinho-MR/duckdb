@@ -35,6 +35,7 @@ add_library_unity(
   capi_v2_instance.cpp
   capi_v2_log_sink.cpp
   capi_v2_logging.cpp
+  capi_v2_memory.cpp
   capi_v2_logical_type.cpp
   capi_v2_operator.cpp
   capi_v2_option.cpp

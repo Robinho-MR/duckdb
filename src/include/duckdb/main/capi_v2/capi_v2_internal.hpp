@@ -32,6 +32,8 @@
 #include "duckdb/main/setting_info.hpp"
 #include "duckdb/execution/operator/helper/physical_set.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/main/context.hpp"
+#include "duckdb/common/types/decimal.hpp"
 #include "duckdb/common/query_context.hpp"
 #include "duckdb/common/file_system.hpp"
 
@@ -274,6 +276,10 @@ public:
 	virtual optional_ptr<ClientContext> TryGetClientContext() = 0;
 	//! Runs `fn` with a transaction active on the client, for catalog lookups.
 	virtual void WithTransaction(const std::function<void(ClientContext &)> &fn) = 0;
+	//! The widest DECIMAL the types parsed through this factory may have, or nullptr for the setting of the client.
+	virtual optional_ptr<const DecimalWidthLimit> GetDecimalWidthLimit() {
+		return nullptr;
+	}
 };
 
 inline auto Convert(duckdb_v2_factory_handle factory) -> CV2Factory * {
@@ -387,10 +393,11 @@ inline auto Convert(CV2Instance *instance) -> duckdb_v2_instance_handle {
 
 class CV2Context;
 
-//! A client's config: the connection's cascade (SESSION, then GLOBAL, then the default), written like SQL `SET`.
+//! A context's config: the connection's cascade (SESSION, then GLOBAL, then the default), written like SQL `SET`.
+//! Without a client only GLOBAL and the default are visible, and nothing can be written.
 class CV2ClientConfig final : public CV2Config {
 public:
-	explicit CV2ClientConfig(ClientContext &context) : context(context) {
+	CV2ClientConfig(DatabaseInstance &db, optional_ptr<ClientContext> context) : db(db), context(context) {
 	}
 
 	DUCKDB_V2_SETTING_SCOPE ReadValue(std::string_view name, Value &result) override;
@@ -400,7 +407,10 @@ public:
 	idx_t GetOptionCount() override;
 
 private:
-	ClientContext &context;
+	CV2OptionSource Source();
+
+	DatabaseInstance &db;
+	optional_ptr<ClientContext> context;
 };
 
 //! A context's factory: the context's catalog and settings.
@@ -412,35 +422,59 @@ public:
 	DatabaseInstance &GetDatabase() override;
 	optional_ptr<ClientContext> TryGetClientContext() override;
 	void WithTransaction(const std::function<void(ClientContext &)> &fn) override;
+	optional_ptr<const DecimalWidthLimit> GetDecimalWidthLimit() override;
 
 private:
 	CV2Context &context;
 };
 
-//! A context handle: the client context plus how a call through it obtains a transaction.
+//! A context handle: the engine context, its client (if it has one), and how a call through it obtains a transaction.
+//! Contexts without a client (index keys, generated columns) serve built-in types, casts, GLOBAL settings and the
+//! instance file system; whatever needs the client fails when it is used.
 class CV2Context {
 public:
-	explicit CV2Context(ClientContext &context)
-	    : context(context), factory(*this), config_handle(context),
-	      file_system(FileSystem::GetFileSystem(context), QueryContext(context)) {
+	explicit CV2Context(Context &services)
+	    : services(services), client(services.TryGetClientContext()), factory(*this),
+	      config_handle(services.GetDatabase(), client),
+	      file_system(client ? FileSystem::GetFileSystem(*client) : FileSystem::GetFileSystem(services.GetDatabase()),
+	                  client ? QueryContext(*client) : QueryContext()) {
+	}
+	explicit CV2Context(ClientContext &context) : CV2Context(context.GetContext()) {
 	}
 	virtual ~CV2Context() = default;
 
-	//! Runs `fn` with a transaction active on the context.
+	//! Runs `fn` with a transaction active on the context. Throws when the context has no client.
 	virtual void WithContext(const std::function<void(ClientContext &)> &fn) = 0;
 
-	ClientContext &context;
+	//! The client of the context. Throws when the context has none.
+	ClientContext &Client() {
+		if (!client) {
+			throw InvalidInputException("this requires a client context, which is not available here (for example "
+			                            "in an index key or a generated column)");
+		}
+		return *client;
+	}
+
+	Context &services;
+	optional_ptr<ClientContext> client;
+	//! The decimal width limit of the bind this context was handed to (if any): types parsed through the context's
+	//! factory stay within it, like the type names the bind parses itself.
+	optional_ptr<const DecimalWidthLimit> decimal_width_limit;
 	CV2ContextFactory factory;
 	CV2ClientConfig config_handle;
 	CV2FileSystem file_system;
 };
 
 inline DatabaseInstance &CV2ContextFactory::GetDatabase() {
-	return DatabaseInstance::GetDatabase(context.context);
+	return context.services.GetDatabase();
 }
 
 inline optional_ptr<ClientContext> CV2ContextFactory::TryGetClientContext() {
-	return &context.context;
+	return context.client;
+}
+
+inline optional_ptr<const DecimalWidthLimit> CV2ContextFactory::GetDecimalWidthLimit() {
+	return context.decimal_width_limit;
 }
 
 inline void CV2ContextFactory::WithTransaction(const std::function<void(ClientContext &)> &fn) {
@@ -452,9 +486,15 @@ class CV2CallbackContext final : public CV2Context {
 public:
 	explicit CV2CallbackContext(ClientContext &context) : CV2Context(context) {
 	}
+	explicit CV2CallbackContext(Context &services) : CV2Context(services) {
+	}
+	//! A context handed to a bind callback: `limit` outlives the context
+	CV2CallbackContext(ClientContext &context, const DecimalWidthLimit &limit) : CV2Context(context) {
+		decimal_width_limit = &limit;
+	}
 
 	void WithContext(const std::function<void(ClientContext &)> &fn) override {
-		fn(context);
+		fn(Client());
 	}
 };
 
@@ -465,6 +505,7 @@ public:
 	}
 
 	void WithContext(const std::function<void(ClientContext &)> &fn) override {
+		auto &context = Client();
 		context.RunFunctionInTransaction([&]() { fn(context); });
 	}
 };
@@ -514,6 +555,8 @@ auto GetExtensionLoader(duckdb_v2_extension_handle handle) -> ExtensionLoader &;
 //! capi_v2_func_properties.cpp and shared by the scalar and aggregate set_property entry points.
 void SetScalarFunctionProperty(FunctionProperties &props, DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
                                DUCKDB_V2_FUNCTION_PROPERTY_VALUE value);
+void SetTableFunctionProperty(FunctionStability &stability, DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
+                              DUCKDB_V2_FUNCTION_PROPERTY_VALUE value);
 void SetAggregateFunctionProperty(AggregateFunctionProperties &props, DUCKDB_V2_FUNCTION_PROPERTY_KEY key,
                                   DUCKDB_V2_FUNCTION_PROPERTY_VALUE value);
 //! Set / get a generic, named function property; shared by the scalar and aggregate entry points
