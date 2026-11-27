@@ -10,7 +10,7 @@ namespace duckdb {
 static void CompareRowEqualityInternal(const Vector &left, idx_t left_row, idx_t left_count, const Vector &right,
                                        idx_t right_count, const bool active[], bool row_is_false[],
                                        bool row_is_unknown[]) {
-	if (left.GetType().id() != LogicalTypeId::TUPLE) {
+	if (!TupleType::IsTuple(left.GetType())) {
 		Vector left_reference(left.GetType());
 		ConstantVector::Reference(left_reference, count_t(right_count), left, left_row, left_count);
 		Vector comparison(LogicalType::BOOLEAN, right_count);
@@ -34,7 +34,7 @@ static void CompareRowEqualityInternal(const Vector &left, idx_t left_row, idx_t
 		return;
 	}
 
-	D_ASSERT(right.GetType().id() == LogicalTypeId::TUPLE);
+	D_ASSERT(TupleType::IsTuple(right.GetType()));
 	UnifiedVectorFormat left_format;
 	UnifiedVectorFormat right_format;
 	left.ToUnifiedFormat(left_format);

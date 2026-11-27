@@ -35,7 +35,6 @@ static int64_t TargetTypeCost(const LogicalType &type) {
 	case LogicalTypeId::VARCHAR:
 		return 149;
 	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::MAP:
 	case LogicalTypeId::LIST:
 	case LogicalTypeId::UNION:
@@ -330,7 +329,6 @@ static int64_t ImplicitCastVariant(const LogicalType &to) {
 bool LogicalTypeIsValid(const LogicalType &type) {
 	switch (type.id()) {
 	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::UNION:
 	case LogicalTypeId::VARIANT:
 	case LogicalTypeId::LIST:
@@ -350,8 +348,7 @@ bool LogicalTypeIsValid(const LogicalType &type) {
 	case LogicalTypeId::INVALID:
 	case LogicalTypeId::UNKNOWN:
 		return false;
-	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE: {
+	case LogicalTypeId::STRUCT: {
 		auto child_count = StructType::GetChildCount(type);
 		for (idx_t i = 0; i < child_count; i++) {
 			if (!LogicalTypeIsValid(StructType::GetChildType(type, i))) {

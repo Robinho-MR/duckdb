@@ -376,7 +376,6 @@ BoundCastInfo DefaultCasts::StructCastSwitch(BindCastInput &input, const Logical
                                              const LogicalType &target) {
 	switch (target.id()) {
 	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE:
 		return BoundCastInfo(StructBoundCastData::StructToStructCast,
 		                     StructBoundCastData::BindStructToStructCast(input, source, target),
 		                     StructBoundCastData::InitStructCastLocalState);

@@ -193,7 +193,7 @@ static bool PushStructCollation(ClientContext &context, unique_ptr<Expression> &
                                 CollationType type, const CollationBinding &binding) {
 	const Identifier lambda_parameter("x");
 	auto lambda_parameter_expr = make_uniq<BoundReferenceExpression>(lambda_parameter, sql_type, idx_t(0));
-	const bool is_tuple = sql_type.id() == LogicalTypeId::TUPLE;
+	const bool is_tuple = TupleType::IsTuple(sql_type);
 	vector<unique_ptr<Expression>> fields;
 	FunctionBinder function_binder(context);
 

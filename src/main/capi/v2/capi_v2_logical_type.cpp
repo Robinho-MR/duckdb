@@ -163,7 +163,6 @@ idx_t TypeParamCount(const LogicalType &type) {
 	case LogicalTypeId::LIST:
 		return 1;
 	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE:
 		return StructType::GetChildCount(type);
 	case LogicalTypeId::UNION:
 		return UnionType::GetMemberCount(type);
@@ -195,7 +194,6 @@ Value TypeParamValue(const LogicalType &type, idx_t index, std::string_view &out
 	case LogicalTypeId::MAP:
 		return Value::TYPE(index == 0 ? MapType::KeyType(type) : MapType::ValueType(type));
 	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE:
 		if (!StructType::IsUnnamed(type)) {
 			auto &child_name = StructType::GetChildName(type, index);
 			out_name = std::string_view(child_name.c_str(), child_name.size());
@@ -428,7 +426,12 @@ DUCKDB_V2_ERROR duckdb_v2_logical_type_get_id(duckdb_v2_logical_type_handle type
                                               duckdb_v2_error_info_handle *err) {
 	DUCKDB_CHECK_ARG(type);
 	DUCKDB_CHECK_ARG(out_id);
-	return WithErrorHandler(err, [&]() { *out_id = static_cast<DUCKDB_V2_LOGICAL_TYPE_ID>(Convert(type)->id()); });
+	return WithErrorHandler(err, [&]() {
+		auto type_ref = Convert(type);
+		auto &logical_type = *type_ref;
+		auto id = duckdb::TupleType::IsTuple(logical_type) ? duckdb::LogicalTypeId::TUPLE : logical_type.id();
+		*out_id = static_cast<DUCKDB_V2_LOGICAL_TYPE_ID>(id);
+	});
 }
 
 DUCKDB_V2_ERROR duckdb_v2_logical_type_get_name(duckdb_v2_logical_type_handle type, const char **out_name,

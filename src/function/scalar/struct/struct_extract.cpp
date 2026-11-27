@@ -74,11 +74,11 @@ static void StructExtractResolveTypes(ResolveScalarFunctionTypesInput &input) {
 	if (StructType::GetChildTypes(child_type).empty()) {
 		throw BinderException("Can't extract something from an empty struct");
 	}
-	if (KEY == StructExtractKey::NAME && child_type.id() == LogicalTypeId::TUPLE) {
+	if (KEY == StructExtractKey::NAME && TupleType::IsTuple(child_type)) {
 		throw BinderException(
 		    "struct_extract with a string key cannot be used on an unnamed struct, use a numeric index instead");
 	}
-	if (KEY == StructExtractKey::INDEX && child_type.id() != LogicalTypeId::TUPLE) {
+	if (KEY == StructExtractKey::INDEX && !TupleType::IsTuple(child_type)) {
 		throw BinderException(
 		    "struct_extract with an integer key can only be used on unnamed structs, use a string key instead");
 	}
@@ -144,7 +144,7 @@ ScalarFunction GetKeyExtractFunction() {
 ScalarFunction GetIndexExtractFunction() {
 	ScalarFunction fun("struct_extract", {}, LogicalType::ANY, StructExtractFunction, StructExtractBindIndex,
 	                   PropagateStructExtractStats);
-	fun.GetSignature().AddParameter("tuple", LogicalTypeId::TUPLE).AddParameter("index", LogicalType::BIGINT);
+	fun.GetSignature().AddParameter("tuple", LogicalTypeId::STRUCT).AddParameter("index", LogicalType::BIGINT);
 	fun.SetResolveTypesCallback(StructExtractResolveTypes<StructExtractKey::INDEX>);
 	return fun;
 }

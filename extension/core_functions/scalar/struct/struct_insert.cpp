@@ -33,7 +33,8 @@ static void StructInsertFunction(DataChunk &args, ExpressionState &state, Vector
 static unique_ptr<FunctionData> StructInsertBind(BindScalarFunctionInput &input) {
 	auto &bound_function = input.GetBoundFunction();
 	auto &arguments = input.GetArguments();
-	if (LogicalTypeId::STRUCT != arguments[0]->GetReturnType().id()) {
+	if (LogicalTypeId::STRUCT != arguments[0]->GetReturnType().id() ||
+	    TupleType::IsTuple(arguments[0]->GetReturnType())) {
 		throw InvalidInputException("The first argument to struct_insert must be a STRUCT");
 	}
 	if (arguments.size() < 2) {

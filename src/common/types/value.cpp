@@ -1800,7 +1800,6 @@ string Value::ToSQLString() const {
 		// Preserve the payload's type as well as its value (e.g. SMALLINT versus INTEGER).
 		return "CAST(CAST(" + val.ToSQLString() + " AS " + val.type().ToString() + ") AS VARIANT)";
 	}
-	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::STRUCT:
 	case LogicalTypeId::LIST:
 	case LogicalTypeId::ARRAY:
@@ -1842,9 +1841,8 @@ string Value::ToSQLString() const {
 string Value::NestedToSQLString(const Value &value, const std::function<string(const Value &)> &child_to_sql) {
 	auto &type = value.type();
 	switch (type.id()) {
-	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::STRUCT: {
-		bool is_unnamed = type.id() == LogicalTypeId::TUPLE;
+		bool is_unnamed = TupleType::IsTuple(type);
 		string ret = is_unnamed ? "(" : "{";
 		auto &child_types = StructType::GetChildTypes(type);
 		auto &struct_values = StructValue::GetChildren(value);

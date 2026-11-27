@@ -135,7 +135,7 @@ bool IsBignumDecimalCast(const LogicalType &source, const LogicalType &target) {
 
 //! A STRUCT or a TUPLE (an unnamed struct): the cast between them pairs the fields
 bool IsStructOrTuple(const LogicalType &type) {
-	return type.id() == LogicalTypeId::STRUCT || type.id() == LogicalTypeId::TUPLE;
+	return type.id() == LogicalTypeId::STRUCT;
 }
 
 bool CastsBetweenBignumAndDecimal(ClientContext &context, const LogicalType &source, const LogicalType &target);

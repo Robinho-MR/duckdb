@@ -431,7 +431,7 @@ bool VariantUtils::Verify(const Vector &variant, const SelectionVector &sel_p, i
 
 LogicalType VariantUtils::ShreddedType(const LogicalType &logical_type) {
 	auto shredding_type = TypeVisitor::VisitReplace(logical_type, [](const LogicalType &type) {
-		if (type.id() == LogicalTypeId::STRUCT) {
+		if (type.id() == LogicalTypeId::STRUCT && !TupleType::IsTuple(type)) {
 			return LogicalType::STRUCT({{"typed_value", type}});
 		}
 		return type;

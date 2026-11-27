@@ -183,7 +183,7 @@ static LogicalType InitVarcharStructType(const LogicalType &target) {
 		child_types.push_back(make_pair(child.first, LogicalType::VARCHAR));
 	}
 
-	return LogicalType::STRUCT(child_types);
+	return StructType::WithChildTypes(target, std::move(child_types));
 }
 
 //===--------------------------------------------------------------------===//
@@ -196,7 +196,7 @@ bool VectorStringToStruct::StringToNestedTypeCastLoop(const string_t *source_dat
 	Vector varchar_vector(varchar_struct_type, count);
 	auto &child_vectors = StructVector::GetEntries(varchar_vector);
 	auto &result_children = StructVector::GetEntries(result);
-	auto is_unnamed = result.GetType().id() == LogicalTypeId::TUPLE;
+	auto is_unnamed = TupleType::IsTuple(result.GetType());
 
 	string_map_t<idx_t> child_names;
 	vector<reference<ValidityMask>> child_masks;
@@ -519,7 +519,6 @@ BoundCastInfo DefaultCasts::StringCastSwitch(BindCastInput &input, const Logical
 		                         input, LogicalType::ARRAY(LogicalType::VARCHAR, optional_idx()), target),
 		                     ArrayBoundCastData::InitArrayLocalState);
 	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE:
 		return BoundCastInfo(&StringToNestedTypeCast<VectorStringToStruct>,
 		                     StructBoundCastData::BindStructToStructCast(input, InitVarcharStructType(target), target),
 		                     StructBoundCastData::InitStructCastLocalState);

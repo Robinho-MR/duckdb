@@ -164,7 +164,7 @@ void HistogramBinUpdateFunction(Vector inputs[], AggregateInputData &aggr_input,
 }
 
 bool SupportsOtherBucket(const LogicalType &type) {
-	if (type.HasAlias()) {
+	if (type.HasAlias() || TupleType::IsTuple(type)) {
 		return false;
 	}
 	switch (type.id()) {

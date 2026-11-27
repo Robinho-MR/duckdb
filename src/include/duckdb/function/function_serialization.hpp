@@ -324,7 +324,6 @@ public:
 			}
 			return TypeRequiresAssignment(ArrayType::GetChildType(type));
 		case LogicalTypeId::STRUCT:
-		case LogicalTypeId::TUPLE:
 			if (!type.HasParameters()) {
 				return true;
 			}

@@ -91,7 +91,6 @@ BoundCastInfo DefaultCasts::TupleCastSwitch(BindCastInput &input, const LogicalT
                                             const LogicalType &target) {
 	// a TUPLE is an unnamed struct - all casts are positional, and share the physical struct cast operators
 	switch (target.id()) {
-	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::STRUCT:
 		return BoundCastInfo(StructBoundCastData::StructToStructCast,
 		                     StructBoundCastData::BindStructToStructCast(input, source, target),

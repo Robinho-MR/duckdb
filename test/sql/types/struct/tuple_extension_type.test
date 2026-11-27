@@ -1,0 +1,119 @@
+# name: test/sql/types/struct/tuple_extension_type.test
+# description: A TUPLE is a STRUCT marked as a TUPLE, the marker must survive aliases, rebuilt types and storage
+# group: [struct]
+
+require json
+
+load {TEST_DIR}/tuple_extension_type.db
+
+# a user type over a TUPLE is still a TUPLE
+statement ok
+CREATE TYPE pair AS TUPLE(INTEGER, VARCHAR);
+
+query II
+SELECT typeof((1, 'a')::pair), ((1, 'a')::pair)[2];
+----
+TUPLE(INTEGER, VARCHAR)	a
+
+statement error
+SELECT struct_extract((1, 'a')::pair, 'a');
+----
+<REGEX>:.*Binder Error.*cannot be used on an unnamed struct.*
+
+# rebuilt nested types keep the TUPLE
+query II
+SELECT typeof([(1, 'a')]), typeof([(1, 'a')][1]);
+----
+TUPLE(INTEGER, VARCHAR)[]	TUPLE(INTEGER, VARCHAR)
+
+query I
+SELECT typeof(['(1, a)'::TUPLE(INTEGER, VARCHAR)]);
+----
+TUPLE(INTEGER, VARCHAR)[]
+
+query I
+SELECT typeof([(1, 'a'), (2.5, 'b')]);
+----
+TUPLE(DECIMAL(11,1), VARCHAR)[]
+
+# a TUPLE and a STRUCT with only empty names are different types
+query I
+SELECT typeof([(1,), {'': 2}]);
+----
+STRUCT("" INTEGER)[]
+
+statement ok
+CREATE TABLE tbl AS SELECT (1, 'a')::TUPLE(INTEGER, VARCHAR) t, (2, 'b')::pair p, {'a': 3} s, [(4,)] l, {'': 5} e;
+
+# ALTER rebuilds the TUPLE with its new children
+statement ok
+ALTER TABLE tbl ALTER t TYPE TUPLE(BIGINT, VARCHAR);
+
+restart
+
+query IIIII
+SELECT typeof(t), typeof(p), typeof(s), typeof(l), typeof(e) FROM tbl;
+----
+TUPLE(BIGINT, VARCHAR)	TUPLE(INTEGER, VARCHAR)	STRUCT(a INTEGER)	TUPLE(INTEGER)[]	STRUCT("" INTEGER)
+
+query IIIII
+SELECT t, p, s, l, e FROM tbl;
+----
+(1, a)	(2, b)	{'a': 3}	[(4,)]	{'': 5}
+
+query II
+SELECT t[1], p[2] FROM tbl;
+----
+1	b
+
+# a TUPLE IN row comparison still works after reloading
+query I
+SELECT (1, 'a') IN (SELECT t FROM tbl);
+----
+true
+
+# functions and binders that only accept named STRUCTs still reject a TUPLE
+statement error
+SELECT struct_insert(row(1, 2), x := 3);
+----
+<REGEX>:.*must be a STRUCT.*
+
+statement error
+SELECT struct_update(row(1, 2), a := 5);
+----
+<REGEX>:.*must be a STRUCT.*
+
+statement error
+SELECT row_to_json(row(1, 'a'));
+----
+<REGEX>:.*argument type must be STRUCT.*
+
+statement error
+SELECT t.x FROM tbl;
+----
+<REGEX>:.*Binder Error.*because it is not a struct.*
+
+statement error
+ALTER TABLE tbl ADD COLUMN t.x INTEGER;
+----
+<REGEX>:.*Binder Error.*
+
+statement error
+SET force_variant_shredding='TUPLE(INTEGER, INTEGER)';
+----
+<REGEX>:.*Shredding can consist of the nested types LIST.*
+
+# a TUPLE becomes a VARIANT array, not an object
+query I
+SELECT (1, 2)::VARIANT::JSON;
+----
+[1,2]
+
+# a TUPLE column round-trips through a multi-file reader
+statement ok
+COPY (SELECT t FROM tbl) TO '{TEMP_DIR}/tuple_extension_type.json';
+
+query II
+SELECT t, typeof(t) FROM read_json('{TEMP_DIR}/tuple_extension_type.json', columns={'t': 'TUPLE(BIGINT, VARCHAR)'});
+----
+(1, a)	TUPLE(BIGINT, VARCHAR)

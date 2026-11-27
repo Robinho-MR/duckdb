@@ -82,7 +82,7 @@ public:
 public:
 	static MultiFileColumnDefinition CreateFromNameAndType(const Identifier &name, const LogicalType &type) {
 		MultiFileColumnDefinition result(name, type);
-		if (type.id() == LogicalTypeId::STRUCT) {
+		if (type.id() == LogicalTypeId::STRUCT && !TupleType::IsTuple(type)) {
 			// recursively create for children
 			for (auto &child_entry : StructType::GetChildTypes(type)) {
 				result.children.push_back(CreateFromNameAndType(child_entry.first, child_entry.second));

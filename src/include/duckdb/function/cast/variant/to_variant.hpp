@@ -37,10 +37,10 @@ bool ConvertToVariant(ToVariantSourceData &source, ToVariantGlobalResultData &re
 
 			                                                       values_index_selvec, is_root);
 		case LogicalTypeId::STRUCT:
-			return ConvertStructToVariant<WRITE_DATA, IGNORE_NULLS>(source, result, count, selvec,
-
-			                                                        values_index_selvec, is_root);
-		case LogicalTypeId::TUPLE:
+			if (!TupleType::IsTuple(type)) {
+				return ConvertStructToVariant<WRITE_DATA, IGNORE_NULLS>(source, result, count, selvec,
+				                                                        values_index_selvec, is_root);
+			}
 			return ConvertTupleToVariant<WRITE_DATA, IGNORE_NULLS>(source, result, count, selvec, values_index_selvec,
 			                                                       is_root);
 		case LogicalTypeId::UNION:

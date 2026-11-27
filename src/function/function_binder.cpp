@@ -234,8 +234,7 @@ static bool InferTemplateType(optional_ptr<ClientContext> context, const Logical
 		// TODO: Support union types with template member types.
 		throw NotImplementedException("Union types cannot infer templated member types yet!");
 	} break;
-	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE: {
+	case LogicalTypeId::STRUCT: {
 		// Structs are only implicitly castable to structs, so we only need to handle this case here.
 		if (StructType::IsStruct(target) && StructType::IsUnnamed(source)) {
 			const auto &source_children = StructType::GetChildTypes(source);
@@ -1267,8 +1266,7 @@ static void ExtractCollationFromType(const LogicalType &source_type, const Logic
 		ExtractCollationFromType(source_child, target_child, collations);
 		break;
 	}
-	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE: {
+	case LogicalTypeId::STRUCT: {
 		auto &target_type = StructType::IsStruct(target) && target.HasParameters() ? target : source_type;
 		auto &source_children = StructType::GetChildTypes(source_type);
 		auto &target_children = StructType::GetChildTypes(target_type);
@@ -1319,8 +1317,7 @@ static LogicalType ApplyCollationToType(const LogicalType &type, const FunctionC
 	case LogicalTypeId::ARRAY:
 		return LogicalType::ARRAY(ApplyCollationToType(ArrayType::GetChildType(type), collations),
 		                          ArrayType::GetSize(type));
-	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE: {
+	case LogicalTypeId::STRUCT: {
 		auto children = StructType::GetChildTypes(type);
 		for (idx_t i = 0; i < children.size(); i++) {
 			auto entry = collations.fields.find(CollationFieldName(type, i));
@@ -1328,8 +1325,7 @@ static LogicalType ApplyCollationToType(const LogicalType &type, const FunctionC
 				children[i].second = ApplyCollationToType(children[i].second, *entry->second);
 			}
 		}
-		return StructType::IsUnnamed(type) ? LogicalType::TUPLE(std::move(children))
-		                                   : LogicalType::STRUCT(std::move(children));
+		return StructType::WithChildTypes(type, std::move(children));
 	}
 	default:
 		return type;

@@ -42,7 +42,6 @@ idx_t CompositeChildCount(const Value &v) {
 	case LogicalTypeId::ARRAY:
 		return ArrayValue::GetChildren(v).size();
 	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE:
 		return StructValue::GetChildren(v).size();
 	case LogicalTypeId::MAP:
 		return MapValue::GetChildren(v).size() * 2;
@@ -938,7 +937,6 @@ DUCKDB_V2_ERROR duckdb_v2_value_get_child(duckdb_v2_value_handle value, idx_t in
 			child = duckdb::ArrayValue::GetChildren(v)[index];
 			break;
 		case duckdb::LogicalTypeId::STRUCT:
-		case duckdb::LogicalTypeId::TUPLE:
 			child = duckdb::StructValue::GetChildren(v)[index];
 			break;
 		case duckdb::LogicalTypeId::MAP: {

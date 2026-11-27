@@ -1047,13 +1047,10 @@ static bool CastVariant(FromVariantConversionData &conversion_data, Vector &resu
 	if (target_type.IsNested()) {
 		switch (target_type.id()) {
 		case LogicalTypeId::STRUCT: {
-			if (ConvertVariantToStruct(conversion_data, result, sel, offset, count, row)) {
-				return true;
-			}
-			break;
-		}
-		case LogicalTypeId::TUPLE: {
-			if (ConvertVariantToTuple(conversion_data, result, sel, offset, count, row)) {
+			auto converted = TupleType::IsTuple(target_type)
+			                     ? ConvertVariantToTuple(conversion_data, result, sel, offset, count, row)
+			                     : ConvertVariantToStruct(conversion_data, result, sel, offset, count, row);
+			if (converted) {
 				return true;
 			}
 			break;
@@ -1372,7 +1369,6 @@ BoundCastInfo DefaultCasts::VariantCastSwitch(BindCastInput &input, const Logica
 	case LogicalTypeId::TIME:
 	case LogicalTypeId::LIST:
 	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::TIME_TZ:
 	case LogicalTypeId::TIME_NS:
 	case LogicalTypeId::TIMESTAMP_TZ:

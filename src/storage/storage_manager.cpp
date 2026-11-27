@@ -344,19 +344,18 @@ string StorageManager::GetUnsupportedTypeReason(const LogicalType &logical_type)
 		}
 		switch (type.id()) {
 		case LogicalTypeId::STRUCT:
-			if (storage_version < StorageVersion::V2_0_0 && StructType::GetChildCount(type) == 0) {
+			if (TupleType::IsTuple(type)) {
+				// TUPLEs are stored as unnamed STRUCTs, which older engines reject; the unnamed STRUCTs of an older
+				// file are deserialized as TUPLE while loading and must stay attachable
+				if (storage_version < StorageVersion::V2_0_0 && IsLoaded()) {
+					reason = unsupported("TUPLE columns", StorageVersion::V2_0_0);
+				}
+			} else if (storage_version < StorageVersion::V2_0_0 && StructType::GetChildCount(type) == 0) {
 				reason = unsupported("Empty STRUCT columns", StorageVersion::V2_0_0);
 			} else if (storage_version < StorageVersion::V2_0_0 && IsLoaded() &&
 			           StructType::AllUnnamed(StructType::GetChildTypes(type))) {
 				// older engines read a STRUCT with only empty member names as a TUPLE
 				reason = unsupported("STRUCT columns with only empty member names", StorageVersion::V2_0_0);
-			}
-			break;
-		case LogicalTypeId::TUPLE:
-			// TUPLEs are stored as unnamed STRUCTs, which older engines reject; the unnamed STRUCTs of an older file
-			// are deserialized as TUPLE while loading and must stay attachable
-			if (storage_version < StorageVersion::V2_0_0 && IsLoaded()) {
-				reason = unsupported("TUPLE columns", StorageVersion::V2_0_0);
 			}
 			break;
 		case LogicalTypeId::DECIMAL:

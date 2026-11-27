@@ -253,7 +253,8 @@ enum class LogicalTypeId : uint8_t {
 	UNION = 107,
 	ARRAY = 108,
 	VARIANT = 109,
-	TUPLE = 110 /* unnamed struct - shares the physical representation of STRUCT */
+	//! Only used to serialize a TUPLE - in memory a TUPLE is a STRUCT with tuple extension info (see TupleType)
+	TUPLE = 110
 };
 
 struct ExtensionTypeInfo;
@@ -661,19 +662,27 @@ struct StructType {
 	DUCKDB_API static idx_t GetChildCount(const LogicalType &type);
 	//! Whether the type is an unnamed struct, i.e. a TUPLE
 	DUCKDB_API static bool IsUnnamed(const LogicalType &type);
-	//! Whether all (and at least one) of the children are unnamed - LogicalType::STRUCT turns these into a TUPLE
+	//! Whether all (and at least one) of the children are unnamed
 	DUCKDB_API static bool AllUnnamed(const child_list_t<LogicalType> &children);
-	//! Whether the type is backed by StructTypeInfo and laid out as a struct (STRUCT or TUPLE)
+	//! Whether the type is laid out as a struct (a STRUCT, which includes TUPLEs)
 	DUCKDB_API static bool IsStruct(const LogicalType &type);
 	DUCKDB_API static bool IsStruct(LogicalTypeId id);
+	//! A STRUCT, or a TUPLE if "type" is a TUPLE, with the given children
+	DUCKDB_API static LogicalType WithChildTypes(const LogicalType &type, child_list_t<LogicalType> children);
 	//! The argument name struct_pack uses for a member with an empty name - an empty argument name means no name
 	static constexpr const char *EMPTY_NAME_ARGUMENT = "\x01";
 };
 
-//! Helpers for the unnamed-struct TUPLE type. A TUPLE has no member names; when a name is required (e.g. when
-//! converting to a format that mandates field names), positional names "element1", "element2", ... are synthesized -
-//! matching the names produced by UNNEST of a struct.
+//! Helpers for the unnamed-struct TUPLE type. A TUPLE is a STRUCT whose members have no names, marked as a TUPLE by
+//! its extension type info. When a name is required (e.g. when converting to a format that mandates field names),
+//! positional names "element1", "element2", ... are synthesized - matching the names produced by UNNEST of a struct.
 struct TupleType {
+	//! The extension type info property that marks a STRUCT as a TUPLE
+	static constexpr const char *TUPLE_PROPERTY = "tuple";
+	//! Whether the type is a TUPLE
+	DUCKDB_API static bool IsTuple(const LogicalType &type);
+	//! Whether the type info marks its type as a TUPLE
+	DUCKDB_API static bool IsTupleInfo(const LogicalTypeInfo &info);
 	//! The synthesized positional name for the i-th (0-based) member: "element1", "element2", ...
 	DUCKDB_API static string GetChildName(idx_t index);
 	//! Returns the child types of a struct-like type, with synthesized names for any unnamed (empty-named) members.

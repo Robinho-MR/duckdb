@@ -199,7 +199,7 @@ static unique_ptr<Expression> PlanExtremumRewrite(Binder &binder, BoundSubqueryE
 }
 
 static bool IsMultiColumnTuple(const LogicalType &type) {
-	return type.id() == LogicalTypeId::TUPLE && StructType::GetChildCount(type) > 1;
+	return TupleType::IsTuple(type) && StructType::GetChildCount(type) > 1;
 }
 
 static bool IsMultiColumnComparison(const BoundSubqueryExpression &expr) {

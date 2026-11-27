@@ -505,7 +505,7 @@ static ColumnMapResult MapColumnStruct(ClientContext &context, const MultiFileCo
 				// the extracted field is read with the type it has in this file, and then remapped to the global type
 				// (the fields of a nested struct can differ between files, e.g. with union_by_name)
 				child_column_index.SetType(child_mapping.local_column->type);
-				if (child_mapping.column_map.type().id() == LogicalTypeId::TUPLE) {
+				if (TupleType::IsTuple(child_mapping.column_map.type())) {
 					// the mapping of a nested struct is (local name, mapping) - we extract the field directly
 					auto map_entry = StructValue::GetChildren(child_mapping.column_map)[1];
 					child_mapping.column_map = std::move(map_entry);
@@ -670,7 +670,7 @@ static unique_ptr<Expression> ConstructMapExpression(ClientContext &context, Mul
                                                      ColumnMapResult &mapping, const LogicalType &global_column_type,
                                                      const LogicalType &local_column_type, bool is_trivially_mappable) {
 	unique_ptr<Expression> expr = make_uniq<BoundReferenceExpression>(local_column_type, local_idx.GetIndex());
-	if (mapping.column_map.type().id() == LogicalTypeId::TUPLE) {
+	if (TupleType::IsTuple(mapping.column_map.type())) {
 		// A pushed-down extract already selects the source column; retain only its child mapping.
 		auto child_mapping = StructValue::GetChildren(mapping.column_map)[1];
 		mapping.column_map = std::move(child_mapping);

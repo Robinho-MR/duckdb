@@ -57,7 +57,7 @@ static bool RequiresMarkGroupMetadata(const LogicalComparisonJoin &join) {
 			continue;
 		}
 		comparison_count++;
-		tuple_comparison |= condition.GetLHS().GetReturnType().id() == LogicalTypeId::TUPLE;
+		tuple_comparison |= TupleType::IsTuple(condition.GetLHS().GetReturnType());
 		all_equal &= condition.GetComparisonType() == ExpressionType::COMPARE_EQUAL;
 	}
 	if (comparison_count == join.mark_types.size() + 1) {

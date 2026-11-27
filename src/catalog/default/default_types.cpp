@@ -479,7 +479,7 @@ const builtin_type_array BUILTIN_TYPES = {{{"decimal", LogicalTypeId::DECIMAL, R
                                            {"uint8", LogicalTypeId::UTINYINT, nullptr},
                                            {"struct", LogicalTypeId::STRUCT, RegisterStructConstructors},
                                            {"row", LogicalTypeId::STRUCT, RegisterStructConstructors},
-                                           {"tuple", LogicalTypeId::TUPLE, RegisterTupleConstructors},
+                                           {"tuple", LogicalTypeId::STRUCT, RegisterTupleConstructors},
                                            {"list", LogicalTypeId::LIST, RegisterListConstructors},
                                            {"array", LogicalTypeId::ARRAY, RegisterArrayConstructors},
                                            {"map", LogicalTypeId::MAP, RegisterMapConstructors},

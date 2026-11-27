@@ -833,7 +833,7 @@ static LogicalType ParseForceVariantShredding(const string &input, bool allow_un
 
 	TypeVisitor::Contains(logical_type, [](const LogicalType &type) {
 		if (type.IsNested()) {
-			if (type.id() != LogicalTypeId::STRUCT && type.id() != LogicalTypeId::LIST) {
+			if ((type.id() != LogicalTypeId::STRUCT && type.id() != LogicalTypeId::LIST) || TupleType::IsTuple(type)) {
 				throw InvalidInputException("Shredding can consist of the nested types LIST (for ARRAY Variant values) "
 				                            "or STRUCT (for OBJECT Variant values), not %s",
 				                            type.ToString());

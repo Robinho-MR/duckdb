@@ -267,21 +267,17 @@ static LogicalType GetJSONType(StructNames &const_struct_names, const LogicalTyp
 		return LogicalType::ARRAY(GetJSONType(const_struct_names, ArrayType::GetChildType(type)),
 		                          ArrayType::GetSize(type));
 	// Struct and MAP are treated as JSON values
+	// a TUPLE is an unnamed struct: it is serialized as a JSON array (matching how Python serializes tuples)
 	case LogicalTypeId::STRUCT: {
+		const auto is_tuple = TupleType::IsTuple(type);
 		child_list_t<LogicalType> child_types;
 		for (const auto &child_type : StructType::GetChildTypes(type)) {
-			const_struct_names.Insert(child_type.first.GetIdentifierName());
+			if (!is_tuple) {
+				const_struct_names.Insert(child_type.first.GetIdentifierName());
+			}
 			child_types.emplace_back(child_type.first, GetJSONType(const_struct_names, child_type.second));
 		}
-		return LogicalType::STRUCT(child_types);
-	}
-	// A TUPLE is an unnamed struct: it is serialized as a JSON array (matching how Python serializes tuples)
-	case LogicalTypeId::TUPLE: {
-		vector<LogicalType> child_types;
-		for (const auto &child_type : StructType::GetChildTypes(type)) {
-			child_types.push_back(GetJSONType(const_struct_names, child_type.second));
-		}
-		return LogicalType::TUPLE(std::move(child_types));
+		return StructType::WithChildTypes(type, std::move(child_types));
 	}
 	case LogicalTypeId::MAP: {
 		return LogicalType::MAP(MapType::KeyType(type), GetJSONType(const_struct_names, MapType::ValueType(type)));
@@ -383,7 +379,9 @@ static unique_ptr<FunctionData> RowToJSONBind(INPUT &input) {
 	if (arguments[0]->HasParameter()) {
 		throw ParameterNotResolvedException();
 	}
-	if (arguments[0]->GetReturnType().id() != LogicalTypeId::STRUCT && arg_id != LogicalTypeId::SQLNULL) {
+	if ((arguments[0]->GetReturnType().id() != LogicalTypeId::STRUCT ||
+	     TupleType::IsTuple(arguments[0]->GetReturnType())) &&
+	    arg_id != LogicalTypeId::SQLNULL) {
 		throw BinderException("row_to_json() argument type must be STRUCT");
 	}
 	return JSONCreateBindParams(bound_function, arguments, false);
@@ -1019,10 +1017,11 @@ static void CreateValues(const StructNames &names, yyjson_mut_doc *doc, yyjson_m
 		TemplatedCreateValues<string_t, string_t>(doc, vals, value_v, count);
 		break;
 	case LogicalTypeId::STRUCT:
-		CreateValuesStruct(names, doc, vals, value_v, count, options);
-		break;
-	case LogicalTypeId::TUPLE:
-		CreateValuesTuple(names, doc, vals, value_v, count);
+		if (TupleType::IsTuple(value_v.GetType())) {
+			CreateValuesTuple(names, doc, vals, value_v, count);
+		} else {
+			CreateValuesStruct(names, doc, vals, value_v, count, options);
+		}
 		break;
 	case LogicalTypeId::MAP:
 		CreateValuesMap(names, doc, vals, value_v, count, options);
@@ -1642,14 +1641,13 @@ static BoundCastInfo AnyToJSONCastBind(BindCastInput &input, const LogicalType &
 
 void JSONFunctions::RegisterJSONCreateCastFunctions(ExtensionLoader &loader) {
 	// Anything can be cast to JSON
-	for (const auto &type : LogicalType::AllTypes()) {
+	auto types = LogicalType::AllTypes();
+	types.push_back(LogicalType::TUPLE(vector<LogicalType> {LogicalType::ANY}));
+	for (const auto &type : types) {
 		LogicalType source_type;
 		switch (type.id()) {
 		case LogicalTypeId::STRUCT:
-			source_type = LogicalType::STRUCT({{"any", LogicalType::ANY}});
-			break;
-		case LogicalTypeId::TUPLE:
-			source_type = LogicalType::TUPLE({LogicalType::ANY});
+			source_type = TupleType::IsTuple(type) ? type : LogicalType::STRUCT({{"any", LogicalType::ANY}});
 			break;
 		case LogicalTypeId::LIST:
 			source_type = LogicalType::LIST(LogicalType::ANY);

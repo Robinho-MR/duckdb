@@ -36,8 +36,8 @@ static bool IsConstantInputComparisonOptimizable(const JoinCondition &condition)
 	}
 
 	const auto comparison_type = condition.GetComparisonType();
-	if ((condition.GetLHS().GetReturnType().id() == LogicalTypeId::TUPLE ||
-	     condition.GetRHS().GetReturnType().id() == LogicalTypeId::TUPLE) &&
+	if ((TupleType::IsTuple(condition.GetLHS().GetReturnType()) ||
+	     TupleType::IsTuple(condition.GetRHS().GetReturnType())) &&
 	    comparison_type == ExpressionType::COMPARE_NOTEQUAL) {
 		return false;
 	}
@@ -158,7 +158,7 @@ bool MarkJoinSimplifier::TrySimplifyConstantInput(unique_ptr<LogicalOperator> &o
 
 static bool ComparisonInputIsNotNull(NotNullExpressionAnalyzer &analyzer, LogicalOperator &op, const Expression &expr) {
 	// These comparisons can produce NULL from nested members.
-	if (expr.GetReturnType().id() == LogicalTypeId::TUPLE || expr.GetReturnType().id() == LogicalTypeId::UNION) {
+	if (TupleType::IsTuple(expr.GetReturnType()) || expr.GetReturnType().id() == LogicalTypeId::UNION) {
 		return false;
 	}
 	return analyzer.IsNotNull(op, expr);
@@ -359,7 +359,7 @@ bool MarkJoinSimplifier::TrySimplify(unique_ptr<LogicalOperator> &op, NotNullExp
 			}
 			// MARK tuple inequality uses row equality, unlike ordinary nested inequality.
 			if (condition.IsComparison() && condition.GetComparisonType() == ExpressionType::COMPARE_NOTEQUAL &&
-			    condition.GetLHS().GetReturnType().id() == LogicalTypeId::TUPLE) {
+			    TupleType::IsTuple(condition.GetLHS().GetReturnType())) {
 				return false;
 			}
 		}

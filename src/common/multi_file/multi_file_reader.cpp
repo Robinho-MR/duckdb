@@ -146,6 +146,9 @@ MultiFileColumnDefinition MultiFileColumnDefinition::CreateNested(const Identifi
 	MultiFileColumnDefinition result(name, type);
 	switch (type.id()) {
 	case LogicalTypeId::STRUCT:
+		if (TupleType::IsTuple(type)) {
+			break;
+		}
 		for (auto &child : StructType::GetChildTypes(type)) {
 			result.children.push_back(CreateNested(child.first, child.second));
 		}

@@ -95,8 +95,7 @@ static unique_ptr<ParsedExpression> StructPackUnbind(FunctionUnbindInput &input)
 
 template <bool IS_STRUCT_PACK>
 static ScalarFunction GetStructPackFunction() {
-	ScalarFunction fun(IS_STRUCT_PACK ? "struct_pack" : "row", {},
-	                   IS_STRUCT_PACK ? LogicalTypeId::STRUCT : LogicalTypeId::TUPLE, StructPackFunction,
+	ScalarFunction fun(IS_STRUCT_PACK ? "struct_pack" : "row", {}, LogicalTypeId::STRUCT, StructPackFunction,
 	                   StructPackBind<IS_STRUCT_PACK>, StructPackStats);
 
 	if (IS_STRUCT_PACK) {

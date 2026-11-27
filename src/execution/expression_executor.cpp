@@ -222,8 +222,8 @@ void ExpressionExecutor::Verify(const Expression &expr, Vector &vector, idx_t co
 		// VARIANT holds decimals of at most 38 digits
 		if (TypeVisitor::Contains(vector.GetType(), [](const LogicalType &type) {
 			    if (type.IsJSONType() || type.id() == LogicalTypeId::VARIANT || type.id() == LogicalTypeId::UNION ||
-			        type.id() == LogicalTypeId::ENUM || type.id() == LogicalTypeId::TYPE ||
-			        type.id() == LogicalTypeId::TUPLE || type.id() == LogicalTypeId::LAMBDA) {
+			        type.id() == LogicalTypeId::ENUM || type.id() == LogicalTypeId::TYPE || TupleType::IsTuple(type) ||
+			        type.id() == LogicalTypeId::LAMBDA) {
 				    return true;
 			    }
 			    if (type.id() == LogicalTypeId::DECIMAL && DecimalType::GetWidth(type) > Decimal::MAX_WIDTH_INT128) {

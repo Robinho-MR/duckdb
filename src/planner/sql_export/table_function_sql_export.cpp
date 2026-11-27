@@ -63,7 +63,7 @@ static bool AppendTableFunctionColumnPath(vector<Identifier> &path, const Logica
                                           const ColumnIndex &index, LogicalType &source_type) {
 	Identifier name;
 	LogicalType child_type = LogicalType::INVALID;
-	if (parent_type.id() == LogicalTypeId::STRUCT) {
+	if (parent_type.id() == LogicalTypeId::STRUCT && !TupleType::IsTuple(parent_type)) {
 		auto &children = StructType::GetChildTypes(parent_type);
 		if (index.HasPrimaryIndex()) {
 			if (index.GetPrimaryIndex() >= children.size()) {

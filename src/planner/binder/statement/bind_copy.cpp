@@ -751,7 +751,7 @@ vector<Value> BindCopyOption(ClientContext &context, Binder &binder, const Ident
 	if (val.IsNull()) {
 		throw BinderException("NULL is not supported as a valid option for COPY option \"" + name + "\"");
 	}
-	if (val.type().id() == LogicalTypeId::TUPLE) {
+	if (TupleType::IsTuple(val.type())) {
 		// unpack unnamed structs (tuples) into a list of options
 		return StructValue::GetChildren(val);
 	}

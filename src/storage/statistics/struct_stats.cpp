@@ -144,14 +144,11 @@ child_list_t<Value> StructStats::ToStruct(const BaseStatistics &stats, bool exac
 static void SetTupleChildrenFromValue(BaseStatistics &stats, const Value &children, StatsStructFields &fields) {
 	auto plain = StatsStructFields::Plain(children);
 	optional_ptr<const vector<Value>> values;
-	switch (plain.type().id()) {
-	case LogicalTypeId::TUPLE:
+	if (TupleType::IsTuple(plain.type())) {
 		values = StructValue::GetChildren(plain);
-		break;
-	case LogicalTypeId::LIST:
+	} else if (plain.type().id() == LogicalTypeId::LIST) {
 		values = ListValue::GetChildren(plain);
-		break;
-	default:
+	} else {
 		fields.Throw("child_stats", StringUtil::Format("expected a tuple of statistics, got a value of type %s",
 		                                               plain.type().ToString()));
 	}
@@ -175,7 +172,7 @@ void StructStats::SetFromStruct(BaseStatistics &stats, StatsStructFields &fields
 	if (!children) {
 		return;
 	}
-	if (stats.GetType().id() == LogicalTypeId::TUPLE) {
+	if (TupleType::IsTuple(stats.GetType())) {
 		SetTupleChildrenFromValue(stats, *children, fields);
 		return;
 	}

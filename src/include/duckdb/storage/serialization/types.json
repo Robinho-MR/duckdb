@@ -120,12 +120,6 @@
         "id": 200,
         "name": "child_types",
         "type": "child_list_t<LogicalType>"
-      },
-      {
-        "id": 201,
-        "name": "is_tuple",
-        "type": "bool",
-        "default": "true"
       }
     ]
   },

@@ -44,7 +44,6 @@ inline idx_t TypeVisitor::PushChildren(const LogicalType &type, vector<reference
 	auto initial_size = worklist.size();
 	switch (type.id()) {
 	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE:
 		for (const auto &child : StructType::GetChildTypes(type)) {
 			worklist.push_back(child.second);
 		}
@@ -82,7 +81,6 @@ inline LogicalType TypeVisitor::RebuildType(const VisitorFrame &frame, vector<Lo
 	const auto &type = frame.original_type;
 	switch (type.id()) {
 	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::UNION: {
 		auto children =
 		    type.id() == LogicalTypeId::UNION ? UnionType::CopyMemberTypes(type) : StructType::GetChildTypes(type);
@@ -90,10 +88,7 @@ inline LogicalType TypeVisitor::RebuildType(const VisitorFrame &frame, vector<Lo
 			children[i - 1].second = PopType(result_stack);
 		}
 		if (type.id() == LogicalTypeId::STRUCT) {
-			return LogicalType::STRUCT(std::move(children));
-		}
-		if (type.id() == LogicalTypeId::TUPLE) {
-			return LogicalType::TUPLE(std::move(children));
+			return StructType::WithChildTypes(type, std::move(children));
 		}
 		return LogicalType::UNION(std::move(children));
 	}

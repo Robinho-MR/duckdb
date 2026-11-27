@@ -201,6 +201,10 @@ StructTypeInfo::StructTypeInfo(child_list_t<LogicalType> child_types_p)
 
 bool StructTypeInfo::EqualsInternal(const LogicalTypeInfo *other_p) const {
 	auto &other = other_p->Cast<StructTypeInfo>();
+	// extension type infos compare leniently, but a TUPLE never equals a STRUCT
+	if (TupleType::IsTupleInfo(*this) != TupleType::IsTupleInfo(other)) {
+		return false;
+	}
 	return child_types == other.child_types;
 }
 

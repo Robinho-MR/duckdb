@@ -9,7 +9,7 @@
 namespace duckdb {
 
 static bool TypeIsTuple(const LogicalType &type) {
-	return type.id() == LogicalTypeId::TUPLE;
+	return TupleType::IsTuple(type);
 }
 
 static void ExtractSubqueryChildren(unique_ptr<Expression> &child, vector<unique_ptr<Expression>> &result,

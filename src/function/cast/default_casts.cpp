@@ -180,9 +180,10 @@ BoundCastInfo DefaultCasts::GetDefaultCastFunction(BindCastInput &input, const L
 	case LogicalTypeId::MAP:
 		return MapCastSwitch(input, source, target);
 	case LogicalTypeId::STRUCT:
+		if (TupleType::IsTuple(source)) {
+			return TupleCastSwitch(input, source, target);
+		}
 		return StructCastSwitch(input, source, target);
-	case LogicalTypeId::TUPLE:
-		return TupleCastSwitch(input, source, target);
 	case LogicalTypeId::LIST:
 		return ListCastSwitch(input, source, target);
 	case LogicalTypeId::UNION:

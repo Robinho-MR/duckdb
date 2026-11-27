@@ -13,10 +13,13 @@
 namespace duckdb {
 
 static bool HasUserSettingExtensionType(const LogicalType &type) {
+	auto is_extension_type = [](const LogicalType &child) {
+		return child.HasExtensionInfo() && !TupleType::IsTuple(child);
+	};
 	if (!type.IsNested()) {
-		return type.HasExtensionInfo();
+		return is_extension_type(type);
 	}
-	return TypeVisitor::Contains(type, [](const LogicalType &child) { return child.HasExtensionInfo(); });
+	return TypeVisitor::Contains(type, is_extension_type);
 }
 
 static bool UserSettingValuesEqual(const Value &left, const Value &right);

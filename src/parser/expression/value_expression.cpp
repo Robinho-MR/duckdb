@@ -213,7 +213,7 @@ bool ConstantExpression::RequiresTypeWitness(const LogicalType &type) {
 static unique_ptr<ParsedExpression> NestedValueExpression(const LogicalType &type, optional_ptr<const Value> value) {
 	if (type.IsAggregateState() || type.id() == LogicalTypeId::GEOMETRY || type.id() == LogicalTypeId::GEOGRAPHY ||
 	    type.id() == LogicalTypeId::TYPE ||
-	    (type.id() != LogicalTypeId::TUPLE && TypeExpression::CanRepresent(type) &&
+	    (!TupleType::IsTuple(type) && TypeExpression::CanRepresent(type) &&
 	     !ConstantExpression::RequiresTypeWitness(type))) {
 		return ConstantExpression::FromValue(value ? value->WithType(type) : Value(type));
 	}
@@ -255,9 +255,8 @@ static unique_ptr<ParsedExpression> NestedValueExpression(const LogicalType &typ
 	optional_ptr<const vector<Value>> children;
 	string function;
 	switch (type.id()) {
-	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::STRUCT:
-		function = type.id() == LogicalTypeId::TUPLE ? "row" : "struct_pack";
+		function = TupleType::IsTuple(type) ? "row" : "struct_pack";
 		child_types = StructType::GetChildTypes(type);
 		if (value) {
 			children = StructValue::GetChildren(*value);
@@ -331,7 +330,7 @@ unique_ptr<ParsedExpression> ConstantExpression::FromValue(const Value &value) {
 	    })) {
 		throw NotImplementedException("The nested value type has no SQL constructor");
 	}
-	if (RequiresTypeWitness(type) || type.id() == LogicalTypeId::TUPLE) {
+	if (RequiresTypeWitness(type) || TupleType::IsTuple(type)) {
 		return NestedValueExpression(type, value);
 	}
 	if (!value.IsNull() && type.id() == LogicalTypeId::INTERVAL) {

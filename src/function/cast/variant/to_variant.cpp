@@ -161,7 +161,7 @@ unique_ptr<FunctionLocalState> CastToVariantLocalState(CastLocalStateParameters 
 }
 
 static bool SupportsShreddedCast(const LogicalType &type) {
-	if (type.id() == LogicalTypeId::STRUCT) {
+	if (type.id() == LogicalTypeId::STRUCT && !TupleType::IsTuple(type)) {
 		// for struct types recurse into the child types
 		auto &child_types = StructType::GetChildTypes(type);
 		if (child_types.empty()) {
@@ -183,7 +183,7 @@ static bool SupportsShreddedCast(const LogicalType &type) {
 }
 
 static void ShreddedVectorReference(const Vector &source, Vector &result, idx_t count) {
-	if (source.GetType().id() == LogicalTypeId::STRUCT) {
+	if (source.GetType().id() == LogicalTypeId::STRUCT && !TupleType::IsTuple(source.GetType())) {
 		// source is "{<children>}", target is "{typed value STRUCT(<children>)}"
 		// go into the "typed_value"
 		auto &typed_value = StructVector::GetEntries(result)[0];

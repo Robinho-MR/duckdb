@@ -103,7 +103,8 @@ static unique_ptr<FunctionData> StructUpdateBind(BindScalarFunctionInput &input)
 	if (arguments.empty()) {
 		throw InvalidInputException("Missing required arguments for struct_update function.");
 	}
-	if (LogicalTypeId::STRUCT != arguments[0]->GetReturnType().id()) {
+	if (LogicalTypeId::STRUCT != arguments[0]->GetReturnType().id() ||
+	    TupleType::IsTuple(arguments[0]->GetReturnType())) {
 		throw InvalidInputException("The first argument to struct_update must be a STRUCT");
 	}
 	if (arguments.size() < 2) {

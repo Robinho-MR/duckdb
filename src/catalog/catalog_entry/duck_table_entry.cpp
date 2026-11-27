@@ -599,6 +599,9 @@ static child_list_t<LogicalType> GetChildList(const LogicalType &type) {
 		break;
 	}
 	case LogicalTypeId::STRUCT: {
+		if (TupleType::IsTuple(type)) {
+			throw BinderException("Can't ConstructMapping for type '%s'", type.ToString());
+		}
 		child_types = StructType::GetChildTypes(type);
 		break;
 	}
@@ -640,7 +643,7 @@ StructMappingInfo AddFieldToStruct(const LogicalType &type, const vector<Identif
 	bool last_entry = depth + 1 == column_path.size();
 
 	if (last_entry) {
-		if (type.id() != LogicalTypeId::STRUCT) {
+		if (type.id() != LogicalTypeId::STRUCT || TupleType::IsTuple(type)) {
 			throw BinderException("Column %s is not a struct - ALTER TABLE can only add fields to structs",
 			                      current_component);
 		}
@@ -898,7 +901,7 @@ DroppedFieldMapping DropFieldFromStruct(const LogicalType &type, const vector<Id
 			// this is the entry we are dropping
 			found = true;
 			if (last_entry) {
-				if (type.id() != LogicalTypeId::STRUCT) {
+				if (type.id() != LogicalTypeId::STRUCT || TupleType::IsTuple(type)) {
 					throw CatalogException("Cannot drop field %s from column %s - it's not a struct",
 					                       column_path.back(), column_path.front());
 				}
@@ -995,7 +998,7 @@ DroppedFieldMapping RenameFieldFromStruct(const LogicalType &type, const vector<
 			// this is the entry we are renaming
 			found = true;
 			if (last_entry) {
-				if (type.id() != LogicalTypeId::STRUCT) {
+				if (type.id() != LogicalTypeId::STRUCT || TupleType::IsTuple(type)) {
 					throw CatalogException(
 					    "Cannot rename field %s from column %s - can only rename fields inside a struct",
 					    column_path.back(), column_path.front());

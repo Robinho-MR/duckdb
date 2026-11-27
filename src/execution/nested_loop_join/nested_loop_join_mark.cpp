@@ -41,7 +41,7 @@ static void TemplatedMarkJoin(const Vector &left, const Vector &right, idx_t lco
 
 static void MarkJoinNested(const Vector &left, const Vector &right, idx_t lcount, idx_t rcount, bool found_match[],
                            ExpressionType comparison_type, optional_ptr<bool> found_unknown) {
-	if (left.GetType().id() == LogicalTypeId::TUPLE &&
+	if (TupleType::IsTuple(left.GetType()) &&
 	    (comparison_type == ExpressionType::COMPARE_EQUAL || comparison_type == ExpressionType::COMPARE_NOTEQUAL)) {
 		for (idx_t left_row = 0; left_row < lcount; left_row++) {
 			if (found_match[left_row]) {

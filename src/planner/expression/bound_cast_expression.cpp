@@ -121,8 +121,10 @@ static bool NestedCastIsInvertible(const LogicalType &source_type, const Logical
 	case LogicalTypeId::MAP:
 		return BoundCastExpression::CastIsInvertible(MapType::KeyType(source_type), MapType::KeyType(target_type)) &&
 		       BoundCastExpression::CastIsInvertible(MapType::ValueType(source_type), MapType::ValueType(target_type));
-	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE: {
+	case LogicalTypeId::STRUCT: {
+		if (TupleType::IsTuple(source_type) != TupleType::IsTuple(target_type)) {
+			return false;
+		}
 		// adding or removing fields is not invertible
 		auto &source_children = StructType::GetChildTypes(source_type);
 		auto &target_children = StructType::GetChildTypes(target_type);
@@ -380,9 +382,8 @@ static bool NestedCastCanThrow(const LogicalType &source_type, const LogicalType
 		                                         false);
 	// TUPLE is an unnamed STRUCT - same physical layout, positional child matching, and the same shared struct
 	// cast operators, so it can throw exactly when a STRUCT of the same children can.
-	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::STRUCT: {
-		if (target_type.id() != LogicalTypeId::STRUCT && target_type.id() != LogicalTypeId::TUPLE) {
+		if (target_type.id() != LogicalTypeId::STRUCT) {
 			return true;
 		}
 		// Pair the fields as the cast executes them: positionally for unnamed structs, by name otherwise.

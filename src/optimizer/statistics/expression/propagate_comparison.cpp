@@ -176,7 +176,7 @@ ExpressionType StatisticsPropagator::SimplifyDistinctComparison(ExpressionType c
 		return comparison;
 	}
 	for (auto stats : {left, right}) {
-		if (stats && (stats->GetType().id() == LogicalTypeId::UNION || stats->GetType().id() == LogicalTypeId::TUPLE)) {
+		if (stats && (stats->GetType().id() == LogicalTypeId::UNION || TupleType::IsTuple(stats->GetType()))) {
 			return comparison;
 		}
 	}

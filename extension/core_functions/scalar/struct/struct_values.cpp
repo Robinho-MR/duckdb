@@ -17,7 +17,7 @@ static void StructValuesFunction(DataChunk &args, ExpressionState &state, Vector
 	D_ASSERT(result_children.size() == input_children.size());
 
 	// UnnamedStruct vector and Struct vector are actually the same underneath, so we can just reference the children
-	if (input.GetType().id() == LogicalTypeId::TUPLE) {
+	if (TupleType::IsTuple(input.GetType())) {
 		result.Reference(input);
 		return;
 	}
@@ -75,7 +75,7 @@ static void StructValuesResolveTypes(ResolveScalarFunctionTypesInput &input) {
 }
 
 ScalarFunction StructValuesFun::GetFunction() {
-	ScalarFunction func({}, LogicalTypeId::TUPLE, StructValuesFunction);
+	ScalarFunction func({}, LogicalTypeId::STRUCT, StructValuesFunction);
 	func.SetResolveTypesCallback(StructValuesResolveTypes);
 	func.GetSignature().AddParameter("struct", LogicalTypeId::STRUCT);
 	return func;

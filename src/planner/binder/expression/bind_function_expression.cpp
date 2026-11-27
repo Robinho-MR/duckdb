@@ -34,8 +34,7 @@ static bool TypeContainsDecimal(const LogicalType &type) {
 		return TypeContainsDecimal(ListType::GetChildType(type));
 	case LogicalTypeId::ARRAY:
 		return TypeContainsDecimal(ArrayType::GetChildType(type));
-	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE: {
+	case LogicalTypeId::STRUCT: {
 		for (const auto &child : StructType::GetChildTypes(type)) {
 			if (TypeContainsDecimal(child.second)) {
 				return true;

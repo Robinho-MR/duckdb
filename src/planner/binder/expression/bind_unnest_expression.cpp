@@ -216,7 +216,6 @@ BindResult UnnestBinder::Bind(FunctionExpression &function, idx_t depth, bool ro
 		throw ParameterNotResolvedException();
 	case LogicalTypeId::LIST:
 	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE:
 	case LogicalTypeId::SQLNULL:
 		break;
 	default:
@@ -296,7 +295,7 @@ BindResult UnnestBinder::Bind(FunctionExpression &function, idx_t depth, bool ro
 				if (StructType::IsStruct(expr->GetReturnType())) {
 					// struct! push a struct_extract
 					auto &child_types = StructType::GetChildTypes(expr->GetReturnType());
-					if (expr->GetReturnType().id() == LogicalTypeId::TUPLE) {
+					if (TupleType::IsTuple(expr->GetReturnType())) {
 						for (idx_t child_index = 0; child_index < child_types.size(); child_index++) {
 							new_expressions.push_back(CreateBoundStructExtractIndex(
 							    context, expr->Copy(), child_types[child_index].second, child_index + 1));

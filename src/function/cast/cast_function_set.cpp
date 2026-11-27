@@ -168,9 +168,10 @@ static auto RelaxedTypeMatch(MAP &map, const LogicalType &type) -> decltype(map.
 	case LogicalTypeId::LIST:
 		return map.find(LogicalType::LIST(LogicalType::ANY));
 	case LogicalTypeId::STRUCT:
+		if (TupleType::IsTuple(type)) {
+			return map.find(LogicalType::TUPLE(vector<LogicalType> {LogicalType::ANY}));
+		}
 		return map.find(LogicalType::STRUCT({{"any", LogicalType::ANY}}));
-	case LogicalTypeId::TUPLE:
-		return map.find(LogicalType::TUPLE({LogicalType::ANY}));
 	case LogicalTypeId::MAP:
 		for (auto it = map.begin(); it != map.end(); it++) {
 			const auto &entry_type = it->first;

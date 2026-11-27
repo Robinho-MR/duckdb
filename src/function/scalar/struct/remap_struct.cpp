@@ -334,7 +334,7 @@ struct RemapEntry {
 			remap_source = remap_val.ToString();
 		} else if (StructType::IsStruct(remap_val.type())) {
 			// the remap spec is a (source_name, nested_spec) pair, built as an unnamed TUPLE
-			if (remap_val.type().id() != LogicalTypeId::TUPLE) {
+			if (!TupleType::IsTuple(remap_val.type())) {
 				throw BinderException("Remap keys for remap_struct needs to be an unnamed struct");
 			}
 			auto &children = StructValue::GetChildren(remap_val);
@@ -415,7 +415,7 @@ struct RemapEntry {
 
 		RemapEntry remap;
 		remap.default_index = default_idx;
-		if (default_type.id() == LogicalTypeId::STRUCT) {
+		if (default_type.id() == LogicalTypeId::STRUCT && !TupleType::IsTuple(default_type)) {
 			// nested remap - recurse
 			if (!IsRemappable(target_type)) {
 				throw BinderException("Default value is a struct - target value should be a nested type, is '%s'",

@@ -60,7 +60,7 @@ static void StructKeysFunction(DataChunk &args, ExpressionState &state, Vector &
 static unique_ptr<FunctionData> StructKeysBind(BindScalarFunctionInput &input) {
 	auto &arguments = input.GetArguments();
 	const auto &return_type = arguments[0]->GetReturnType();
-	if (return_type.id() != LogicalTypeId::STRUCT) {
+	if (return_type.id() != LogicalTypeId::STRUCT || TupleType::IsTuple(return_type)) {
 		throw InvalidInputException("struct_keys() expects a STRUCT argument");
 	}
 	return make_uniq<StructKeysBindData>(arguments[0]->GetReturnType());

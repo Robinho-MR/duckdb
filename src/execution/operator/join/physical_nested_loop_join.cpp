@@ -21,7 +21,7 @@ PhysicalNestedLoopJoin::PhysicalNestedLoopJoin(PhysicalPlan &physical_plan, Clie
 	filter_pushdown = std::move(pushdown_info_p);
 	D_ASSERT(join_type != JoinType::MARK || (conditions.size() == 1 && !predicate));
 	track_unknown =
-	    join_type == JoinType::MARK && (conditions[0].GetLHS().GetReturnType().id() == LogicalTypeId::TUPLE ||
+	    join_type == JoinType::MARK && (TupleType::IsTuple(conditions[0].GetLHS().GetReturnType()) ||
 	                                    conditions[0].GetComparisonType() == ExpressionType::COMPARE_DISTINCT_FROM);
 	children.push_back(left);
 	children.push_back(right);

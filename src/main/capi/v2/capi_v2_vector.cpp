@@ -312,7 +312,6 @@ DUCKDB_V2_ERROR duckdb_v2_vector_get_child_count(duckdb_v2_vector_handle vector,
 			*out_count = 1;
 			return;
 		case duckdb::LogicalTypeId::STRUCT:
-		case duckdb::LogicalTypeId::TUPLE:
 			*out_count = duckdb::StructType::GetChildCount(vec->GetType());
 			return;
 		case duckdb::LogicalTypeId::UNION:
@@ -358,8 +357,7 @@ DUCKDB_V2_ERROR duckdb_v2_vector_get_child(duckdb_v2_vector_handle vector, idx_t
 			*out_child = Convert(&child);
 			return;
 		}
-		case duckdb::LogicalTypeId::STRUCT:
-		case duckdb::LogicalTypeId::TUPLE: {
+		case duckdb::LogicalTypeId::STRUCT: {
 			auto &entries = duckdb::StructVector::GetEntries(*vec);
 			if (index >= entries.size()) {
 				throw duckdb::InvalidInputException("duckdb_v2_vector_get_child: field index out of range");

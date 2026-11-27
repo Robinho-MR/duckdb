@@ -692,8 +692,7 @@ unique_ptr<JoinHashTable> PhysicalHashJoin::InitializeHashTable(ClientContext &c
 		}
 	}
 	const bool has_row_equality =
-	    conditions.size() > 1 ||
-	    (conditions.size() == 1 && conditions[0].GetLHS().GetReturnType().id() == LogicalTypeId::TUPLE);
+	    conditions.size() > 1 || (conditions.size() == 1 && TupleType::IsTuple(conditions[0].GetLHS().GetReturnType()));
 	if (delim_types.empty() && join_type == JoinType::MARK && has_row_equality) {
 		bool all_equal = true;
 		for (auto &condition : conditions) {

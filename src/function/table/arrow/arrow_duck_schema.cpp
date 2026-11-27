@@ -354,8 +354,7 @@ LogicalType ArrowType::GetDuckType(bool use_dictionary) const {
 	// have to reconstruct the type
 	auto id = type.id();
 	switch (id) {
-	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE: {
+	case LogicalTypeId::STRUCT: {
 		auto &struct_info = type_info->Cast<ArrowStructInfo>();
 		child_list_t<LogicalType> new_children;
 		for (idx_t i = 0; i < struct_info.ChildCount(); i++) {
@@ -363,10 +362,7 @@ LogicalType ArrowType::GetDuckType(bool use_dictionary) const {
 			auto &child_name = StructType::GetChildName(type, i);
 			new_children.emplace_back(std::make_pair(child_name, child.GetDuckType(true)));
 		}
-		if (id == LogicalTypeId::TUPLE) {
-			return LogicalType::TUPLE(std::move(new_children));
-		}
-		return LogicalType::STRUCT(std::move(new_children));
+		return StructType::WithChildTypes(type, std::move(new_children));
 	}
 	case LogicalTypeId::LIST: {
 		auto &list_info = type_info->Cast<ArrowListInfo>();

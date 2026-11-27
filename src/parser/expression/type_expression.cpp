@@ -25,7 +25,7 @@ bool TypeExpression::IsSQLType(LogicalTypeId id) {
 
 bool TypeExpression::CanRepresent(const LogicalType &type) {
 	return type.IsComplete() && !TypeVisitor::Contains(type, [](const LogicalType &child) {
-		       const bool empty_tuple = child.id() == LogicalTypeId::TUPLE && StructType::GetChildCount(child) == 0;
+		       const bool empty_tuple = TupleType::IsTuple(child) && StructType::GetChildCount(child) == 0;
 		       const bool empty_enum = child.id() == LogicalTypeId::ENUM && EnumType::GetSize(child) == 0;
 		       return !IsSQLType(child.id()) || empty_tuple || empty_enum;
 	       });
@@ -250,8 +250,6 @@ const char *BuiltinTypeName(LogicalTypeId id) {
 		return "ARRAY";
 	case LogicalTypeId::STRUCT:
 		return "STRUCT";
-	case LogicalTypeId::TUPLE:
-		return "TUPLE";
 	case LogicalTypeId::MAP:
 		return "MAP";
 	case LogicalTypeId::UNION:
@@ -285,7 +283,7 @@ unique_ptr<TypeExpression> TypeExpression::FromLogicalType(const LogicalType &ty
 		return make_uniq<TypeExpression>(Identifier(alias), std::move(children));
 	}
 
-	auto name = BuiltinTypeName(type.id());
+	auto name = TupleType::IsTuple(type) ? "TUPLE" : BuiltinTypeName(type.id());
 	if (!name) {
 		// only the internal placeholder ids (ANY, UNKNOWN, INVALID, ...) have no name, and none of them is a
 		// type a user can name in the first place
@@ -328,11 +326,6 @@ unique_ptr<TypeExpression> TypeExpression::FromLogicalType(const LogicalType &ty
 	case LogicalTypeId::STRUCT:
 		for (auto &child : StructType::GetChildTypes(type)) {
 			children.push_back(TypeChild(child.second, child.first));
-		}
-		break;
-	case LogicalTypeId::TUPLE:
-		for (auto &child : StructType::GetChildTypes(type)) {
-			children.push_back(TypeChild(child.second, Identifier()));
 		}
 		break;
 	case LogicalTypeId::MAP:

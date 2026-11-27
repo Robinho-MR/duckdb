@@ -1216,9 +1216,10 @@ bool JSONTransform::Transform(yyjson_val *vals[], yyjson_alc *alc, Vector &resul
 	case LogicalTypeId::BLOB:
 		return TransformToBlob(vals, alc, result, count, options);
 	case LogicalTypeId::STRUCT:
+		if (TupleType::IsTuple(result.GetType())) {
+			return TransformArrayToTuple(vals, alc, result, count, options);
+		}
 		return TransformObjectInternal(vals, alc, result, count, options, column_index);
-	case LogicalTypeId::TUPLE:
-		return TransformArrayToTuple(vals, alc, result, count, options);
 	case LogicalTypeId::LIST:
 		return TransformArrayToList(vals, alc, result, count, options);
 	case LogicalTypeId::MAP:
@@ -1324,14 +1325,13 @@ static BoundCastInfo JSONToAnyCastBind(BindCastInput &input, const LogicalType &
 
 void JSONFunctions::RegisterJSONTransformCastFunctions(ExtensionLoader &loader) {
 	// JSON can be cast to anything
-	for (const auto &type : LogicalType::AllTypes()) {
+	auto types = LogicalType::AllTypes();
+	types.push_back(LogicalType::TUPLE(vector<LogicalType> {LogicalType::ANY}));
+	for (const auto &type : types) {
 		LogicalType target_type;
 		switch (type.id()) {
 		case LogicalTypeId::STRUCT:
-			target_type = LogicalType::STRUCT({{"any", LogicalType::ANY}});
-			break;
-		case LogicalTypeId::TUPLE:
-			target_type = LogicalType::TUPLE({LogicalType::ANY});
+			target_type = TupleType::IsTuple(type) ? type : LogicalType::STRUCT({{"any", LogicalType::ANY}});
 			break;
 		case LogicalTypeId::LIST:
 			target_type = LogicalType::LIST(LogicalType::ANY);

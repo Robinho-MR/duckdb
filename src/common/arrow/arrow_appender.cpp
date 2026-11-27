@@ -322,7 +322,6 @@ static void InitializeFunctionPointers(ArrowAppendData &append_data, const Logic
 		InitializeAppenderForType<ArrowUnionData>(append_data);
 		break;
 	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::TUPLE:
 		InitializeAppenderForType<ArrowStructData>(append_data);
 		break;
 	case LogicalTypeId::ARRAY:
