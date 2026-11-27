@@ -43,7 +43,10 @@ public:
 	void UpdateEntry(unique_ptr<CatalogEntry> entry);
 	void DropEntry(CatalogEntry &entry);
 	identifier_tree_t<unique_ptr<CatalogEntry>> &Entries();
+	//! The chain with exactly this name
 	optional_ptr<CatalogEntry> GetEntry(const Identifier &name);
+	//! The names of the chains that match the name case-insensitively
+	vector<Identifier> GetCaseInsensitiveMatches(const Identifier &name) const;
 
 private:
 	//! Mapping of identifier to catalog entry
@@ -62,6 +65,14 @@ public:
 public:
 	DUCKDB_API explicit CatalogSet(Catalog &catalog, unique_ptr<DefaultGenerator> defaults = nullptr);
 	~CatalogSet();
+
+	//! Get the entry with exactly this name (not an entry whose name only differs in case)
+	DUCKDB_API optional_ptr<CatalogEntry> GetExactEntry(CatalogTransaction transaction, const Identifier &name);
+
+	//! Only match names exactly (instead of case-insensitively unless ambiguous) - used for internal entries
+	void SetExactNames() {
+		exact_names = true;
+	}
 
 	//! Create an entry in the catalog set. Returns whether or not it was
 	//! successful.
@@ -153,6 +164,12 @@ private:
 	//! Given a root entry, gets the entry valid for this transaction
 	CatalogEntry &GetEntryForTransaction(CatalogTransaction transaction, CatalogEntry &current);
 	optional_ptr<CatalogEntry> GetEntryInternal(CatalogTransaction transaction, const Identifier &name);
+	//! The chain a name refers to: the chain with exactly this name if it has a live entry for the transaction,
+	//! otherwise the unique chain with a live entry whose name only differs in case
+	optional_ptr<CatalogEntry> ResolveChain(CatalogTransaction transaction, const Identifier &name);
+	//! Throws if a live entry's name only differs in case from the name and the storage version cannot store that
+	void CheckNameCaseConflict(CatalogTransaction transaction, const Identifier &name,
+	                           optional_ptr<const Identifier> ignored_name = nullptr);
 	optional_ptr<CatalogEntry> CreateCommittedEntry(unique_ptr<CatalogEntry> entry);
 
 	//! Create all default entries
@@ -178,6 +195,8 @@ private:
 	//! The catalog lock is used to make changes to the data
 	mutex catalog_lock;
 	CatalogEntryMap map;
+	//! Whether names are only matched exactly
+	bool exact_names = false;
 	//! The generator used to generate default internal entries
 	unique_ptr<DefaultGenerator> defaults;
 };

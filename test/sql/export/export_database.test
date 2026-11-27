@@ -74,9 +74,12 @@ INSERT INTO "table ""." ("col "".") VALUES ('quote_escaped_quote_''')
 statement ok
 CREATE TABLE "SAME_NAME"(i INTEGER, j INTEGER);
 
-statement error
+# a table whose name only differs in case can be created, and is exported to a separate file
+statement ok
 CREATE TABLE "same_name"(i INTEGER, j INTEGER);
-----
+
+statement ok
+INSERT INTO "same_name" VALUES (3, 3)
 
 statement ok
 INSERT INTO "SAME_NAME" VALUES (1, 1), (2, 2)

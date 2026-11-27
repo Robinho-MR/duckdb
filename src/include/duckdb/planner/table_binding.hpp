@@ -10,6 +10,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/identifier.hpp"
 #include "duckdb/parser/column_definition.hpp"
 #include "duckdb/parser/parsed_expression.hpp"
 #include "duckdb/planner/expression_binder.hpp"
@@ -42,6 +43,8 @@ public:
 	bool TryGetBindingIndex(const Identifier &column_name, column_t &column_index);
 	column_t GetBindingIndex(const Identifier &column_name);
 	bool HasMatchingBinding(const Identifier &column_name);
+	//! Whether the column name has no exact match and case-insensitively matches multiple columns
+	bool IsAmbiguousColumn(const Identifier &column_name) const;
 	//! Register an alternative name for an existing column - the alias can be bound, but is hidden from *
 	void AddColumnAlias(const Identifier &column_alias, column_t column_index);
 	//! Returns the name under which a column is registered in this binding (this can differ from the provided name
@@ -85,6 +88,8 @@ public:
 
 protected:
 	void Initialize();
+	//! Error for a column name that case-insensitively matches multiple columns
+	ErrorData AmbiguousColumnError(const Identifier &column_name) const;
 	//! Set the alias of the column reference to the name under which the column is registered in this binding
 	void SetBoundColumnAlias(ColumnRefExpression &colref);
 
@@ -99,7 +104,7 @@ protected:
 	vector<LogicalType> types;
 	//! Column names of the subquery
 	vector<Identifier> names;
-	//! Name -> index for the names
+	//! Name -> index for the names (case-insensitive unless ambiguous)
 	identifier_map_t<column_t> name_map;
 	//! Whether rows of this binding can be NULL-extended by an outer join
 	bool null_extended = false;

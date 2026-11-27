@@ -1,4 +1,5 @@
 #include "duckdb/common/bind_helpers.hpp"
+#include "duckdb/common/identifier.hpp"
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/exception.hpp"
@@ -51,29 +52,37 @@ idx_t ParseBytesArg(Context &context, const Identifier &name, const Value &arg) 
 	return result.GetIndex();
 }
 
+//! Resolve a column name of an option against the column names (exact match, otherwise a unique case-insensitive match)
+static idx_t ResolveOptionColumn(const vector<Identifier> &names, const string &column_name,
+                                 const Identifier &option_name) {
+	idx_t index;
+	auto match = ResolveIdentifier(names, Identifier(column_name), index);
+	if (match == IdentifierMatch::AMBIGUOUS) {
+		throw BinderException("%s column %s is ambiguous: multiple columns only differ in case - use the exact "
+		                      "column name",
+		                      option_name, column_name.c_str());
+	}
+	if (match == IdentifierMatch::NOT_FOUND) {
+		throw BinderException("%s expected to find %s, but it was not found in the table", option_name,
+		                      column_name.c_str());
+	}
+	return index;
+}
+
 vector<bool> ParseColumnList(const vector<Value> &set, const vector<Identifier> &names, const Identifier &option_name) {
 	vector<bool> result;
 
 	if (set.empty()) {
 		throw BinderException("%s expects a column list or * as parameter", option_name);
 	}
-	// list of options: parse the list
-	identifier_map_t<bool> option_map;
-	for (idx_t i = 0; i < set.size(); i++) {
-		option_map[Identifier(set[i].ToString())] = false;
-	}
 	result.resize(names.size(), false);
-	for (idx_t i = 0; i < names.size(); i++) {
-		auto entry = option_map.find(names[i]);
-		if (entry != option_map.end()) {
-			result[i] = true;
-			entry->second = true;
-		}
-	}
-	for (auto &entry : option_map) {
-		if (!entry.second) {
-			throw BinderException("%s expected to find %s, but it was not found in the table", option_name,
-			                      entry.first.c_str());
+	for (idx_t i = 0; i < set.size(); i++) {
+		auto index = ResolveOptionColumn(names, set[i].ToString(), option_name);
+		// mark every column with the resolved name
+		for (idx_t name_idx = 0; name_idx < names.size(); name_idx++) {
+			if (names[name_idx].GetIdentifierName() == names[index].GetIdentifierName()) {
+				result[name_idx] = true;
+			}
 		}
 	}
 	return result;
@@ -111,29 +120,15 @@ vector<idx_t> ParseColumnsOrdered(const vector<Value> &set, const vector<Identif
 	if (set.empty()) {
 		throw BinderException("%s expects a column list or * as parameter", option_name);
 	}
-
-	// Maps option to bool indicating if its found and the index in the original set
-	identifier_map_t<pair<bool, idx_t>> option_map;
+	unordered_set<string> option_names;
+	unordered_set<idx_t> resolved_columns;
 	for (idx_t i = 0; i < set.size(); i++) {
-		const auto [it, inserted] = option_map.emplace(make_pair(set[i].ToString(), make_pair(false, i)));
-		if (!inserted) {
-			throw BinderException("%s does now allow duplicate columns (found: %s)", option_name, set[i].ToString());
+		auto option_column = set[i].ToString();
+		auto index = ResolveOptionColumn(names, option_column, option_name);
+		if (!option_names.insert(option_column).second || !resolved_columns.insert(index).second) {
+			throw BinderException("%s does now allow duplicate columns (found: %s)", option_name, option_column);
 		}
-	}
-	result.resize(option_map.size());
-
-	for (idx_t i = 0; i < names.size(); i++) {
-		auto entry = option_map.find(names[i]);
-		if (entry != option_map.end()) {
-			result[entry->second.second] = i;
-			entry->second.first = true;
-		}
-	}
-	for (auto &entry : option_map) {
-		if (!entry.second.first) {
-			throw BinderException("%s expected to find %s, but it was not found in the table", option_name,
-			                      entry.first.c_str());
-		}
+		result.push_back(index);
 	}
 	return result;
 }

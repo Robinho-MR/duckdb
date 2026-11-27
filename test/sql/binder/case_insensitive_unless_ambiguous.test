@@ -1,0 +1,406 @@
+# name: test/sql/binder/case_insensitive_unless_ambiguous.test
+# description: Column names are case-insensitive unless multiple columns only differ in case
+# group: [binder]
+
+# without conflicts, column names resolve case-insensitively
+statement ok
+CREATE TABLE single(col INTEGER);
+
+statement ok
+INSERT INTO single (cOl) VALUES (42);
+
+query II
+SELECT cOl, single.COL FROM single
+----
+42	42
+
+# the column alias uses the name of the column, not the reference
+query I
+SELECT CoL FROM single
+----
+42
+
+statement ok
+UPDATE single SET COL = COL + 1
+
+query I
+SELECT col FROM single
+----
+43
+
+# columns that only differ in case can coexist
+statement ok
+CREATE TABLE t(col INTEGER, "COL" INTEGER);
+
+statement ok
+INSERT INTO t VALUES (1, 2);
+
+# exact duplicates are still rejected
+statement error
+CREATE TABLE dup(col INTEGER, col INTEGER);
+----
+already exists
+
+statement error
+CREATE TABLE dup("COL" INTEGER, "COL" INTEGER);
+----
+already exists
+
+# exact matches pick the right column
+query II
+SELECT col, "COL" FROM t
+----
+1	2
+
+query II
+SELECT t.col, t."COL" FROM t
+----
+1	2
+
+# a reference that matches neither exactly is ambiguous
+statement error
+SELECT "cOl" FROM t
+----
+<REGEX>:Binder Error:.*ambiguous.*
+
+statement error
+SELECT t."Col" FROM t
+----
+<REGEX>:Binder Error:.*ambiguous.*
+
+# unquoted identifiers keep their case, so this is not an exact match either
+statement error
+SELECT cOl FROM t
+----
+<REGEX>:Binder Error:.*ambiguous.*
+
+query II
+SELECT * FROM t
+----
+1	2
+
+query T
+SELECT column_name FROM (DESCRIBE t)
+----
+col
+COL
+
+# INSERT column lists
+statement ok
+INSERT INTO t ("COL", col) VALUES (20, 10);
+
+statement error
+INSERT INTO t ("Col") VALUES (3);
+----
+
+query II
+SELECT col, "COL" FROM t ORDER BY col
+----
+1	2
+10	20
+
+# UPDATE
+statement ok
+UPDATE t SET "COL" = "COL" + 100 WHERE col = 1
+
+query II
+SELECT col, "COL" FROM t ORDER BY col
+----
+1	102
+10	20
+
+statement error
+UPDATE t SET "Col" = 0
+----
+
+# star expressions
+query I
+SELECT * EXCLUDE ("COL") FROM t ORDER BY 1
+----
+1
+10
+
+query I
+SELECT * EXCLUDE (col) FROM t ORDER BY 1
+----
+20
+102
+
+query II
+SELECT * REPLACE ("COL" * 2 AS "COL") FROM t ORDER BY 1
+----
+1	204
+10	40
+
+# expressions
+query I
+SELECT col + "COL" FROM t ORDER BY 1
+----
+30
+103
+
+query II
+SELECT col, "COL" FROM t WHERE "COL" = 20
+----
+10	20
+
+query I
+SELECT sum("COL") FROM t GROUP BY col ORDER BY col
+----
+102
+20
+
+# subqueries keep columns that only differ in case
+query II
+SELECT a, "A" FROM (SELECT 1 AS a, 2 AS "A")
+----
+1	2
+
+statement error
+SELECT "a_1" FROM (SELECT 1 AS a, 2 AS "A")
+----
+not found
+
+statement error
+SELECT "aA" FROM (SELECT 1 AS "aa", 2 AS "AA")
+----
+<REGEX>:Binder Error:.*ambiguous.*
+
+# exact duplicates are still renamed
+query II
+SELECT a, a_1 FROM (SELECT 1 AS a, 2 AS a)
+----
+1	2
+
+# CTEs
+query II
+WITH cte AS (SELECT 1 AS x, 2 AS "X") SELECT x, "X" FROM cte
+----
+1	2
+
+query II
+WITH cte(y, "Y") AS (SELECT 1, 2) SELECT "Y", y FROM cte
+----
+2	1
+
+# CREATE TABLE AS keeps the columns
+statement ok
+CREATE TABLE ctas AS SELECT 1 AS a, 2 AS "A";
+
+query T
+SELECT column_name FROM (DESCRIBE ctas)
+----
+a
+A
+
+query II
+SELECT "A", a FROM ctas
+----
+2	1
+
+# joins
+query III
+SELECT t.col, t."COL", single.col FROM t JOIN single ON t.col + 42 = single.col
+----
+1	102	43
+
+# ALTER TABLE
+statement ok
+CREATE TABLE alt(col INTEGER);
+
+statement ok
+INSERT INTO alt VALUES (1);
+
+# adding a column that only differs in case creates a conflict, after which only exact names resolve
+statement ok
+ALTER TABLE alt ADD COLUMN "Col" INTEGER DEFAULT 2;
+
+statement error
+ALTER TABLE alt ADD COLUMN col INTEGER;
+----
+already exists
+
+query II
+SELECT col, "Col" FROM alt
+----
+1	2
+
+statement error
+SELECT COL FROM alt
+----
+<REGEX>:Binder Error:.*ambiguous.*
+
+statement ok
+ALTER TABLE alt RENAME COLUMN "Col" TO other;
+
+# no more conflict: case-insensitive matching works again
+query II
+SELECT COL, OTHER FROM alt
+----
+1	2
+
+statement ok
+ALTER TABLE alt RENAME COLUMN col TO "OTHER";
+
+query II
+SELECT "OTHER", other FROM alt
+----
+1	2
+
+statement ok
+ALTER TABLE alt DROP COLUMN "OTHER";
+
+query I
+SELECT OtHeR FROM alt
+----
+2
+
+# constraints and indexes refer to the exact column
+statement ok
+CREATE TABLE cons(id INTEGER PRIMARY KEY, "ID" INTEGER CHECK ("ID" > 0));
+
+statement ok
+INSERT INTO cons VALUES (1, 1), (2, 1);
+
+statement error
+INSERT INTO cons VALUES (1, 5);
+----
+<REGEX>:Constraint Error:.*Duplicate key.*
+
+statement error
+INSERT INTO cons VALUES (3, -1);
+----
+<REGEX>:Constraint Error:.*CHECK constraint.*
+
+statement ok
+CREATE INDEX cons_idx ON cons("ID");
+
+# rowid is still available as long as there is no column named rowid
+query I
+SELECT RowId FROM single
+----
+0
+
+statement ok
+CREATE TABLE rid("ROWID" INTEGER);
+
+statement ok
+INSERT INTO rid VALUES (100);
+
+query I
+SELECT rowid FROM rid
+----
+100
+
+# COLUMNS with a list of names
+query I
+SELECT COLUMNS(['COL']) FROM t ORDER BY 1
+----
+20
+102
+
+query II
+SELECT COLUMNS(['col', 'COL']) FROM t ORDER BY 1
+----
+1	102
+10	20
+
+statement error
+SELECT COLUMNS(['Col']) FROM t
+----
+<REGEX>:Binder Error:.*ambiguous.*
+
+# EXCLUDE both, RENAME
+statement error
+SELECT * EXCLUDE (col, "COL") FROM t
+----
+<REGEX>:Binder Error:.*empty.*
+
+query II
+SELECT * RENAME ("COL" AS upper_col) FROM t WHERE upper_col = 20
+----
+10	20
+
+# USING joins
+statement ok
+CREATE TABLE t2(col INTEGER, "COL" INTEGER);
+
+statement ok
+INSERT INTO t2 VALUES (1, 1000), (10, 2000);
+
+query III
+SELECT * FROM t JOIN t2 USING (col) ORDER BY col
+----
+1	102	1000
+10	20	2000
+
+query III
+SELECT col, t."COL", t2."COL" FROM t JOIN t2 USING (col) ORDER BY col
+----
+1	102	1000
+10	20	2000
+
+statement error
+SELECT "COL" FROM t JOIN t2 USING (col)
+----
+<REGEX>:Binder Error:.*Ambiguous reference.*
+
+# NATURAL join on both columns: no matches
+query I
+SELECT count(*) FROM t NATURAL JOIN t2
+----
+0
+
+# UNION BY NAME
+query II
+SELECT col, "COL" FROM t UNION ALL BY NAME SELECT 5 AS "COL", 6 AS col ORDER BY col
+----
+1	102
+6	5
+10	20
+
+# a name without an exact match is merged case-insensitively if it is unique
+query I
+SELECT * FROM (SELECT 1 AS x UNION ALL BY NAME SELECT 2 AS "X") ORDER BY 1
+----
+1
+2
+
+statement error
+SELECT col, "COL" FROM t UNION ALL BY NAME SELECT 5 AS "Col"
+----
+<REGEX>:Binder Error:.*ambiguous.*
+
+# ORDER BY / GROUP BY aliases
+query II
+SELECT col, "COL" FROM t ORDER BY "COL"
+----
+10	20
+1	102
+
+query II
+SELECT 1 AS a, 2 AS "A" ORDER BY a
+----
+1	2
+
+# STRUCT fields that only differ in case
+query II
+SELECT s.a, s."A" FROM (SELECT {'a': 1, 'A': 2} AS s)
+----
+1	2
+
+query II
+SELECT s.a, s."A" FROM (SELECT {'A': 2, 'a': 1}::STRUCT(a INTEGER, "A" INTEGER) AS s)
+----
+1	2
+
+# a field without an exact match is cast case-insensitively if it is unique
+query I
+SELECT ({'X': 5}::STRUCT(x INTEGER)).x
+----
+5
+
+statement error
+SELECT s.Aa FROM (SELECT {'aa': 1, 'AA': 2} AS s)
+----
+<REGEX>:Binder Error:.*ambiguous.*

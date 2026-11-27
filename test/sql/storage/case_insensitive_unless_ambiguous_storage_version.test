@@ -1,0 +1,104 @@
+# name: test/sql/storage/case_insensitive_unless_ambiguous_storage_version.test
+# description: Names that only differ in case cannot be stored in storage versions prior to v2.1.0
+# group: [storage]
+
+statement ok
+ATTACH '{TEST_DIR}/case_conflict_old.db' AS old (STORAGE_VERSION 'v2.0.0')
+
+statement error
+CREATE TABLE old.t(col INTEGER, "COL" INTEGER)
+----
+<REGEX>:Invalid Input Error:.*only differ in case.*not supported in storage versions prior to.*
+
+statement error
+CREATE TABLE old.t AS SELECT 1 AS a, 2 AS "A"
+----
+<REGEX>:Invalid Input Error:.*only differ in case.*not supported in storage versions prior to.*
+
+statement ok
+CREATE TABLE old.t(col INTEGER, other INTEGER)
+
+statement error
+ALTER TABLE old.t ADD COLUMN "COL" INTEGER
+----
+<REGEX>:Invalid Input Error:.*only differ in case.*not supported in storage versions prior to.*
+
+statement error
+ALTER TABLE old.t RENAME COLUMN other TO "Col"
+----
+<REGEX>:Invalid Input Error:.*only differ in case.*not supported in storage versions prior to.*
+
+# renaming a column to a name that only differs in case from itself is fine
+statement ok
+ALTER TABLE old.t RENAME COLUMN other TO "OTHER"
+
+statement error
+CREATE TABLE old."T"(i INTEGER)
+----
+<REGEX>:Invalid Input Error:.*only differ in case.*not supported in storage versions prior to.*
+
+statement ok
+CREATE TABLE old.u(i INTEGER)
+
+statement error
+ALTER TABLE old.u RENAME TO "T"
+----
+<REGEX>:Invalid Input Error:.*only differ in case.*not supported in storage versions prior to.*
+
+statement ok
+ALTER TABLE old.u RENAME TO "U"
+
+statement error
+CREATE SCHEMA old."MAIN"
+----
+<REGEX>:Invalid Input Error:.*only differ in case.*not supported in storage versions prior to.*
+
+statement error
+CREATE TABLE old.s(s STRUCT(a INTEGER, "A" INTEGER))
+----
+<REGEX>:Invalid Input Error:.*STRUCT fields that only differ in case.*
+
+statement error
+CREATE TABLE old.u2(u UNION(a INTEGER, "A" INTEGER))
+----
+<REGEX>:Invalid Input Error:.*UNION members that only differ in case.*
+
+# without conflicts names still resolve case-insensitively
+query II
+SELECT COL, OTHER FROM old.T
+----
+
+statement ok
+DETACH old
+
+# newer storage versions can store them
+statement ok
+ATTACH '{TEST_DIR}/case_conflict_new.db' AS new (STORAGE_VERSION 'v2.1.0')
+
+statement ok
+CREATE TABLE new.t(col INTEGER, "COL" INTEGER, s STRUCT(a INTEGER, "A" INTEGER))
+
+statement ok
+INSERT INTO new.t VALUES (1, 2, {'a': 3, 'A': 4})
+
+statement ok
+CREATE TABLE new."T"(x INTEGER)
+
+statement ok
+INSERT INTO new."T" VALUES (3)
+
+statement ok
+DETACH new
+
+statement ok
+ATTACH '{TEST_DIR}/case_conflict_new.db' AS new
+
+query IIII
+SELECT col, "COL", s.a, s."A" FROM new.t
+----
+1	2	3	4
+
+query I
+SELECT x FROM new."T"
+----
+3

@@ -182,10 +182,12 @@ CREATE MACRO IFELSE(a,b) AS a+b
 ----
 already exists
 
-statement error
+# a macro whose name only differs in case can be created
+statement ok
 CREATE MACRO ifelse(a,b) AS a+b
-----
-already exists
+
+statement ok
+DROP MACRO ifelse
 
 query T
 SELECT IFELSE('1', 'random', RANDOM()::VARCHAR)

@@ -95,7 +95,7 @@ SELECT * FROM t4
 3	3
 4	4
 
-# duplicates are renamed case-insensitively, and the renamed columns can be referenced
+# exact duplicates are renamed, and the renamed columns can be referenced - names that only differ in case are kept
 statement ok
 CREATE TABLE t5 AS SELECT 1 a, 2 a, 3 "A", 4 a_1;
 
@@ -104,11 +104,11 @@ SELECT column_name FROM (DESCRIBE t5);
 ----
 a
 a_1
-A_2
+A
 a_1_1
 
 query IIII
-SELECT a, a_1, A_2, a_1_1 FROM t5;
+SELECT a, a_1, "A", a_1_1 FROM t5;
 ----
 1	2	3	4
 

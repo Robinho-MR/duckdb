@@ -661,7 +661,7 @@ void CSVReaderOptions::ParseOption(ClientContext &context, const Identifier &key
 			if (val.IsNull()) {
 				throw BinderException("read_csv columns cannot have a NULL type");
 			}
-			parsed_types_per_column[name] = i;
+			parsed_types_per_column.SetExact(name, i);
 			parsed_types.emplace_back(TransformStringToLogicalType(StringValue::Get(val), context));
 		}
 		if (parsed_names.empty()) {
@@ -765,7 +765,7 @@ void CSVReaderOptions::ParseOption(ClientContext &context, const Identifier &key
 					throw BinderException("read_csv %s cannot have a NULL type", key);
 				}
 				sql_type_names.push_back(StringValue::Get(val));
-				parsed_types_per_column[name] = i;
+				parsed_types_per_column.SetExact(name, i);
 			}
 		} else {
 			auto &list_child = ListType::GetChildType(child_type);

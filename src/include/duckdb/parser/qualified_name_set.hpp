@@ -34,7 +34,8 @@ struct QualifiedColumnEquality {
 		if (!a.table.empty() && !b.table.empty() && a.table != b.table) {
 			return false;
 		}
-		return a.column == b.column;
+		// column names are compared exactly, as columns that only differ in case can coexist
+		return a.column.GetIdentifierName() == b.column.GetIdentifierName();
 	}
 };
 

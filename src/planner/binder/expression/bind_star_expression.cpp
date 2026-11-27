@@ -546,28 +546,39 @@ void Binder::ExpandStarExpression(unique_ptr<ParsedExpression> expr,
 			}
 			auto &children = ListValue::GetChildren(val);
 			vector<unique_ptr<ParsedExpression>> new_list;
-			// scan the list for all selected columns and construct a lookup table
-			case_insensitive_map_t<bool> selected_set;
+			// resolve every selected name against the expanded columns
+			vector<Identifier> star_names;
+			for (auto &expr : star_list) {
+				star_names.emplace_back(GetColumnsStringValue(*expr));
+			}
+			vector<bool> selected(star_list.size(), false);
 			for (auto &child : children) {
 				if (child.IsNull()) {
 					throw BinderException(*star, "Columns expression does not support NULL input parameters");
 				}
-				selected_set.insert(make_pair(StringValue::Get(child), false));
-			}
-			// now check the list of all possible expressions and select which ones make it in
-			for (auto &expr : star_list) {
-				auto str = GetColumnsStringValue(*expr);
-				auto entry = selected_set.find(str);
-				if (entry != selected_set.end()) {
-					new_list.push_back(std::move(expr));
-					entry->second = true;
+				Identifier selected_name(StringValue::Get(child));
+				idx_t index;
+				auto match = ResolveIdentifier(star_names, selected_name, index);
+				if (match == IdentifierMatch::AMBIGUOUS) {
+					throw BinderException(*star,
+					                      "Column %s was selected but is ambiguous: multiple columns only differ in "
+					                      "case - use the exact column name",
+					                      selected_name);
+				}
+				if (match == IdentifierMatch::NOT_FOUND) {
+					throw BinderException("Column \"%s\" was selected but was not found in the FROM clause",
+					                      selected_name.GetIdentifierName());
+				}
+				// select every column with the resolved name (e.g. the same column of multiple joined tables)
+				for (idx_t i = 0; i < star_names.size(); i++) {
+					if (star_names[i].GetIdentifierName() == star_names[index].GetIdentifierName()) {
+						selected[i] = true;
+					}
 				}
 			}
-			// check if all expressions found a match
-			for (auto &entry : selected_set) {
-				if (!entry.second) {
-					throw BinderException("Column \"%s\" was selected but was not found in the FROM clause",
-					                      entry.first);
+			for (idx_t i = 0; i < star_list.size(); i++) {
+				if (selected[i]) {
+					new_list.push_back(std::move(star_list[i]));
 				}
 			}
 			star_list = std::move(new_list);

@@ -345,6 +345,16 @@ private:
 		return vec;
 	}
 
+	template <class MAP, class K, class V>
+	static void SetMapEntry(MAP &map, K &&key, V &&value) {
+		map[std::move(key)] = std::move(value);
+	}
+	//! keys of identifier maps can only differ in case - they are set exactly
+	template <class T, class CONTAINER>
+	static void SetMapEntry(IdentifierMap<T, CONTAINER> &map, Identifier &&key, T &&value) {
+		map.SetExact(key, std::move(value));
+	}
+
 	// Deserialize a map
 	template <typename T = void>
 	inline typename std::enable_if<is_unordered_map<T>::value, T>::type Read() {
@@ -358,7 +368,7 @@ private:
 			auto key = ReadProperty<KEY_TYPE>(0, "key");
 			auto value = ReadProperty<VALUE_TYPE>(1, "value");
 			OnObjectEnd();
-			map[std::move(key)] = std::move(value);
+			SetMapEntry(map, std::move(key), std::move(value));
 		}
 		OnListEnd();
 		return map;
@@ -376,7 +386,7 @@ private:
 			auto key = ReadProperty<KEY_TYPE>(0, "key");
 			auto value = ReadProperty<VALUE_TYPE>(1, "value");
 			OnObjectEnd();
-			map[std::move(key)] = std::move(value);
+			SetMapEntry(map, std::move(key), std::move(value));
 		}
 		OnListEnd();
 		return map;

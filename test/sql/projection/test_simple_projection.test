@@ -44,11 +44,12 @@ SELECT j, j_1 FROM a i1(j);
 ----
 42	84
 
+# an alias that only differs in case from a remaining column does not clash with it
 query I
 SELECT column_name FROM (DESCRIBE SELECT * FROM a i1(J));
 ----
 J
-j_1
+j
 
 statement error
 SELECT * FROM a i1(x, y, z);

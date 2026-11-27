@@ -1,4 +1,5 @@
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
+#include "duckdb/common/identifier.hpp"
 
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
@@ -153,11 +154,19 @@ Identifier ViewCatalogEntry::ResolveColumnName(const Identifier &column_name) co
 		return column_name;
 	}
 	auto &names = view_columns->names;
+	vector<Identifier> visible_names;
 	for (idx_t i = 0; i < names.size(); i++) {
-		auto &visible_name = i < aliases.size() ? aliases[i] : names[i];
-		if (visible_name == column_name) {
-			return names[i];
-		}
+		visible_names.push_back(i < aliases.size() ? aliases[i] : names[i]);
+	}
+	idx_t column_index;
+	auto match = ResolveIdentifier(visible_names, column_name, column_index);
+	if (match == IdentifierMatch::FOUND) {
+		return names[column_index];
+	}
+	if (match == IdentifierMatch::AMBIGUOUS) {
+		throw BinderException("Column name %s is ambiguous: view %s has multiple columns that only differ in case - "
+		                      "use the exact (quoted) column name",
+		                      column_name, name);
 	}
 	throw BinderException("View %s does not have a column with name %s", name, column_name);
 }

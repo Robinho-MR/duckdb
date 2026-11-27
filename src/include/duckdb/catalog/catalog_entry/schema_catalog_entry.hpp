@@ -133,6 +133,9 @@ public:
 	DUCKDB_API virtual SimilarCatalogEntry GetSimilarEntry(CatalogTransaction transaction,
 	                                                       const EntryLookupInfo &lookup_info);
 
+	//! Get the entry with exactly this name - not an entry whose name only differs in case
+	DUCKDB_API virtual optional_ptr<CatalogEntry> GetExactEntry(CatalogTransaction transaction, CatalogType type,
+	                                                            const Identifier &name);
 	DUCKDB_API optional_ptr<CatalogEntry> GetEntry(CatalogTransaction transaction, CatalogType type,
 	                                               const Identifier &name);
 

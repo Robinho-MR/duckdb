@@ -498,8 +498,9 @@ bool ColumnRefExpression::Equals(const ParsedExpression &other) const {
 	if (column_names.size() != other_p.column_names.size()) {
 		return false;
 	}
+	// names are compared exactly: columns that only differ in case are different columns
 	for (idx_t i = 0; i < column_names.size(); i++) {
-		if (column_names[i] != other_p.column_names[i]) {
+		if (column_names[i].GetIdentifierName() != other_p.column_names[i].GetIdentifierName()) {
 			return false;
 		}
 	}

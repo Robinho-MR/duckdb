@@ -1,0 +1,114 @@
+# name: test/sql/storage/case_insensitive_unless_ambiguous_storage.test
+# description: Columns that only differ in case survive a restart
+# group: [storage]
+
+load {TEST_DIR}/case_insensitive_unless_ambiguous_main.db
+
+# names that only differ in case need storage version v2.1.0
+statement ok
+ATTACH '{TEST_DIR}/case_insensitive_unless_ambiguous.db' AS db (STORAGE_VERSION 'v2.1.0')
+
+statement ok
+USE db
+
+statement ok
+CREATE TABLE t(col INTEGER, "COL" INTEGER CHECK ("COL" > 0), UNIQUE (col));
+
+statement ok
+INSERT INTO t VALUES (1, 10), (2, 20);
+
+statement ok
+CREATE TABLE idx(val INTEGER);
+
+statement ok
+CREATE INDEX idx_val ON idx(VAL);
+
+statement ok
+INSERT INTO idx VALUES (1), (2);
+
+# adding a column that only differs in case makes the index reference ambiguous unless it is resolved exactly
+statement ok
+ALTER TABLE idx ADD COLUMN "Val" INTEGER;
+
+statement ok
+CHECKPOINT
+
+statement ok
+USE case_insensitive_unless_ambiguous_main
+
+restart
+
+statement ok
+ATTACH '{TEST_DIR}/case_insensitive_unless_ambiguous.db' AS db
+
+statement ok
+USE db
+
+query II
+SELECT col, "COL" FROM t ORDER BY col
+----
+1	10
+2	20
+
+statement error
+SELECT Col FROM t
+----
+<REGEX>:Binder Error:.*ambiguous.*
+
+statement error
+INSERT INTO t VALUES (3, -1)
+----
+<REGEX>:Constraint Error:.*CHECK constraint.*
+
+statement error
+INSERT INTO t VALUES (1, 5)
+----
+<REGEX>:Constraint Error:.*Duplicate key.*
+
+statement ok
+INSERT INTO idx VALUES (3, 4);
+
+query II
+SELECT val, "Val" FROM idx WHERE val = 3
+----
+3	4
+
+# replaying the WAL
+statement ok
+PRAGMA disable_checkpoint_on_shutdown
+
+statement ok
+CREATE TABLE wal(x INTEGER);
+
+statement ok
+ALTER TABLE wal ADD COLUMN "X" INTEGER;
+
+statement ok
+INSERT INTO wal VALUES (1, 2);
+
+statement ok
+CREATE TABLE "WAL"(y INTEGER);
+
+statement ok
+INSERT INTO "WAL" VALUES (3);
+
+statement ok
+USE case_insensitive_unless_ambiguous_main
+
+restart
+
+statement ok
+ATTACH '{TEST_DIR}/case_insensitive_unless_ambiguous.db' AS db
+
+statement ok
+USE db
+
+query II
+SELECT x, "X" FROM wal
+----
+1	2
+
+query I
+SELECT y FROM "WAL"
+----
+3

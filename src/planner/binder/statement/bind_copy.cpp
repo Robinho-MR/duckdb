@@ -364,12 +364,14 @@ protected:
 private:
 	BindResult BindColumnReference(ColumnRefExpression &col_ref) {
 		if (col_ref.ColumnNames().size() == 1) {
-			auto &column_name = col_ref.GetColumnName();
-			for (idx_t i = 0; i < partition_columns.size(); i++) {
+			vector<Identifier> partition_names;
+			for (auto &column_idx : partition_columns) {
+				partition_names.push_back(names[column_idx]);
+			}
+			idx_t i;
+			if (ResolveIdentifier(partition_names, col_ref.GetColumnName(), i) == IdentifierMatch::FOUND) {
 				auto column_idx = partition_columns[i];
-				if (names[column_idx] == column_name) {
-					return BindResult(make_uniq<BoundReferenceExpression>(types[column_idx], i));
-				}
+				return BindResult(make_uniq<BoundReferenceExpression>(types[column_idx], i));
 			}
 		}
 		throw BinderException(col_ref, "Column \"%s\" referenced in PARTITION_PATH is not a PARTITION_BY column",

@@ -68,10 +68,25 @@ UPDATE test SET HeLlO=3
 statement ok
 DROP TABLE test
 
-# this counts as a duplicate column error
-statement error
+# columns that only differ in case are allowed, but then only resolve exactly
+statement ok
 CREATE TABLE test("HeLlO" INTEGER, "HELLO" INTEGER)
+
+statement ok
+INSERT INTO test VALUES (1, 2)
+
+query II
+SELECT "HELLO", "HeLlO" FROM test
 ----
+2	1
+
+statement error
+SELECT hello FROM test
+----
+<REGEX>:Binder Error:.*ambiguous.*
+
+statement ok
+DROP TABLE test
 
 # conflicts can come from different sources!
 statement ok

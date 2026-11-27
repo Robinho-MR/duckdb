@@ -9,6 +9,8 @@
 #pragma once
 
 #include "duckdb/common/identifier.hpp"
+
+#include "duckdb/common/identifier.hpp"
 #include "duckdb/planner/bound_query_node.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/parser/expression_map.hpp"

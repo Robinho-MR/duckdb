@@ -121,14 +121,44 @@ BindingAlias Binder::RetrieveUsingBinding(Binder &current_binder, optional_ptr<U
 	return binding;
 }
 
-static vector<Identifier> RemoveDuplicateUsingColumns(const vector<Identifier> &using_columns) {
-	vector<Identifier> result;
-	identifier_set_t handled_columns;
-	for (auto &using_column : using_columns) {
-		if (handled_columns.find(using_column) == handled_columns.end()) {
-			handled_columns.insert(using_column);
-			result.push_back(using_column);
+//! Whether two column names refer to different columns: names that only differ in case are the same join column,
+//! unless a single binding has columns with both names
+static bool AreDistinctJoinColumns(BindContext &context, const Identifier &a, const Identifier &b) {
+	if (a.GetIdentifierName() == b.GetIdentifierName()) {
+		return false;
+	}
+	if (a != b) {
+		return true;
+	}
+	for (auto &binding : context.GetBindingsList()) {
+		bool has_a = false;
+		bool has_b = false;
+		for (auto &column_name : binding->GetColumnNames()) {
+			has_a = has_a || column_name.GetIdentifierName() == a.GetIdentifierName();
+			has_b = has_b || column_name.GetIdentifierName() == b.GetIdentifierName();
 		}
+		if (has_a && has_b) {
+			return true;
+		}
+	}
+	return false;
+}
+
+//! Add a join column, unless it refers to the same column as one of the existing join columns
+static void AddJoinColumn(BindContext &context, vector<Identifier> &join_columns, const Identifier &column_name) {
+	for (auto &existing : join_columns) {
+		if (!AreDistinctJoinColumns(context, existing, column_name)) {
+			return;
+		}
+	}
+	join_columns.push_back(column_name);
+}
+
+static vector<Identifier> RemoveDuplicateUsingColumns(BindContext &left_context,
+                                                      const vector<Identifier> &using_columns) {
+	vector<Identifier> result;
+	for (auto &using_column : using_columns) {
+		AddJoinColumn(left_context, result, using_column);
 	}
 	return result;
 }
@@ -247,11 +277,11 @@ BoundStatement Binder::Bind(JoinRef &ref) {
 	case JoinRefType::NATURAL: {
 		// natural join, figure out which column names are present in both sides of the join
 		// first bind the left hand side and get a list of all the tables and column names
-		identifier_set_t lhs_columns;
+		vector<Identifier> lhs_columns;
 		auto &lhs_binding_list = left_binder.bind_context.GetBindingsList();
 		for (auto &binding : lhs_binding_list) {
 			for (auto &column_name : binding->GetColumnNames()) {
-				lhs_columns.insert(column_name);
+				AddJoinColumn(left_binder.bind_context, lhs_columns, column_name);
 			}
 		}
 		// now bind the rhs
@@ -315,7 +345,7 @@ BoundStatement Binder::Bind(JoinRef &ref) {
 	case JoinRefType::NEAREST:
 		throw InternalException("NEAREST BY should have been rewritten by BindNearestJoin");
 	}
-	extra_using_columns = RemoveDuplicateUsingColumns(extra_using_columns);
+	extra_using_columns = RemoveDuplicateUsingColumns(left_binder.bind_context, extra_using_columns);
 
 	if (!extra_using_columns.empty()) {
 		vector<optional_ptr<UsingColumnSet>> left_using_bindings;

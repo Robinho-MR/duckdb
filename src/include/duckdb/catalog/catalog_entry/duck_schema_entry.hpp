@@ -72,6 +72,8 @@ public:
 	void Scan(CatalogType type, VisibilityBound bound, const std::function<void(CatalogEntry &)> &callback);
 	void DropEntry(ClientContext &context, DropInfo &info) override;
 	optional_ptr<CatalogEntry> LookupEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;
+	optional_ptr<CatalogEntry> GetExactEntry(CatalogTransaction transaction, CatalogType type,
+	                                         const Identifier &name) override;
 	CatalogSet::EntryLookup LookupEntryDetailed(CatalogTransaction transaction,
 	                                            const EntryLookupInfo &lookup_info) override;
 	SimilarCatalogEntry GetSimilarEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;

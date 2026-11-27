@@ -64,14 +64,23 @@ unique_ptr<BoundStatement> Binder::TryExpandTriggers(QueryNode &node, TableCatal
 	// Triggers without an OF list are unrestricted and always fire.
 	if (event_type == TriggerEventType::UPDATE_EVENT && node.type == QueryNodeType::UPDATE_QUERY_NODE) {
 		auto &update_node = node.Cast<UpdateQueryNode>();
-		identifier_set_t updated_columns;
+		// compare the columns by the table column they resolve to
+		auto &table_columns = table.GetColumns();
+		auto resolve_column = [&](const Identifier &column_name) {
+			auto resolved_name = column_name;
+			return table_columns.GetColumnIndex(resolved_name).index;
+		};
+		unordered_set<idx_t> updated_columns;
 		if (update_node.set_info) {
-			updated_columns.insert(update_node.set_info->columns.begin(), update_node.set_info->columns.end());
+			for (auto &column_name : update_node.set_info->columns) {
+				updated_columns.insert(resolve_column(column_name));
+			}
 		}
 		auto trigger_does_not_fire = [&](const_reference<TriggerCatalogEntry> trig) {
 			const auto &of_cols = trig.get().columns;
-			return !of_cols.empty() && std::none_of(of_cols.begin(), of_cols.end(),
-			                                        [&](const Identifier &c) { return updated_columns.count(c) > 0; });
+			return !of_cols.empty() && std::none_of(of_cols.begin(), of_cols.end(), [&](const Identifier &c) {
+				return updated_columns.count(resolve_column(c)) > 0;
+			});
 		};
 		auto drop_non_firing = [&](vector<const_reference<TriggerCatalogEntry>> &triggers) {
 			triggers.erase(std::remove_if(triggers.begin(), triggers.end(), trigger_does_not_fire), triggers.end());

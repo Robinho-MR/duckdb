@@ -109,6 +109,22 @@ static unique_ptr<Expression> JSONCopyBoundFormatConstant(const string &format) 
 	return make_uniq<BoundConstantExpression>(Value(format));
 }
 
+//! Renames names that only differ in case (STRUCT fields are case-insensitive), returns whether any was renamed
+static bool DeduplicateFieldNames(vector<Identifier> &names) {
+	bool renamed = false;
+	identifier_set_t field_names;
+	for (auto &name : names) {
+		auto base_name = name;
+		idx_t index = 1;
+		while (field_names.find(name) != field_names.end()) {
+			name = Identifier(base_name + "_" + std::to_string(index++));
+			renamed = true;
+		}
+		field_names.insert(name);
+	}
+	return renamed;
+}
+
 //! Sets the names and types of the copied query for RETURN_COLUMN_TYPES. The binder described the rewrite, which writes
 //! one JSON column, so they are replaced here: the types are the output of the query below the rewrite's projection,
 //! and the names are the fields of its struct_pack, or the query's names when partitioning already looked them up.
@@ -311,6 +327,16 @@ static BoundStatement CopyToJSONPlanInternal(Binder &binder, CopyStatement &stmt
 	inner_select_stmt->node = std::move(copy_info.select_statement);
 
 	auto source_ref = make_uniq<SubqueryRef>(std::move(inner_select_stmt));
+	// the columns become the fields of a STRUCT, which must be unique case-insensitively
+	auto field_names = original_column_names;
+	if (field_names.empty()) {
+		auto node_copy = source_ref->subquery->node->Copy();
+		auto child_binder = Binder::CreateBinder(binder.context, &binder);
+		field_names = child_binder->Bind(*node_copy).names;
+	}
+	if (DeduplicateFieldNames(field_names)) {
+		source_ref->column_name_alias = field_names;
+	}
 
 	// Build outer: SELECT TO_JSON(STRUCT_PACK(*COLUMNS(*))) FROM <source_ref>
 	copy_info.select_statement = make_uniq_base<QueryNode, SelectNode>();

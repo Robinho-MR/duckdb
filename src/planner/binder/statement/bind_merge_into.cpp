@@ -55,7 +55,14 @@ Binder::BindMergeAction(LogicalMergeInto &merge_into, TableCatalogEntry &table, 
 			action.update_info = make_uniq<UpdateSetInfo>();
 			if (action.column_order == InsertColumnOrder::INSERT_BY_NAME) {
 				for (idx_t i = 0; i < source_names.size(); i++) {
-					if (action.exclude_columns.count(source_names[i])) {
+					bool excluded = false;
+					for (auto &exclude_column : action.exclude_columns) {
+						if (IdentifierRefersTo(source_names, exclude_column, source_names[i])) {
+							excluded = true;
+							break;
+						}
+					}
+					if (excluded) {
 						continue;
 					}
 					action.update_info->columns.push_back(source_names[i]);

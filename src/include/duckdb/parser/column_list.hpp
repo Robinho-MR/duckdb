@@ -35,6 +35,12 @@ public:
 	DUCKDB_API vector<LogicalType> GetColumnTypes() const;
 
 	DUCKDB_API bool ColumnExists(const Identifier &name) const;
+	//! Whether a column with exactly this (case-sensitive) name exists
+	DUCKDB_API bool ColumnExistsExact(const Identifier &name) const;
+	//! The number of columns whose name matches case-insensitively
+	DUCKDB_API idx_t GetCaseInsensitiveColumnCount(const Identifier &name) const;
+	//! Resolve a column name: an exact match, otherwise a unique case-insensitive match
+	DUCKDB_API IdentifierMatch LookupColumn(const Identifier &name) const;
 
 	DUCKDB_API LogicalIndex GetColumnIndex(Identifier &column_name) const;
 	DUCKDB_API PhysicalIndex LogicalToPhysical(LogicalIndex index) const;
@@ -63,7 +69,7 @@ public:
 
 private:
 	vector<ColumnDefinition> columns;
-	//! A map of column name to column index
+	//! A map of column name to column index (case-insensitive unless ambiguous)
 	identifier_map_t<column_t> name_map;
 	//! The set of physical columns
 	vector<idx_t> physical_columns;

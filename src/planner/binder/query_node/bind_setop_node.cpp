@@ -45,13 +45,13 @@ void SetOpAliasGatherer::GatherAliases(BoundStatement &stmt, const vector<idx_t>
 	for (idx_t i = 0; i < select_names.size(); i++) {
 		auto &name = select_names[i];
 		// first check if the alias is already in there
-		auto entry = bind_state.alias_map.find(name);
+		auto entry = bind_state.alias_map.FindExact(name);
 
 		idx_t index = reorder_idx[i];
 
 		if (entry == bind_state.alias_map.end()) {
 			// the alias is not in there yet, just assign it
-			bind_state.alias_map[name] = index;
+			bind_state.alias_map.emplace(name, index);
 		}
 	}
 	// check if the expression matches one of the expressions in the original expression list
@@ -82,7 +82,7 @@ void SetOpAliasGatherer::GatherSetOpAliases(SetOperationType setop_type, const v
 		// for UNION BY NAME - create a new re-order index
 		identifier_map_t<idx_t> reorder_map;
 		for (idx_t col_idx = 0; col_idx < setop_names.size(); ++col_idx) {
-			reorder_map[setop_names[col_idx]] = reorder_idx[col_idx];
+			reorder_map.emplace(setop_names[col_idx], reorder_idx[col_idx]);
 		}
 
 		// use new reorder index
@@ -118,31 +118,77 @@ static void GatherAliases(BoundSetOperationNode &root, vector<BoundStatement> &c
 
 void Binder::BuildUnionByNameInfo(BoundSetOperationNode &result) {
 	D_ASSERT(result.setop_type == SetOperationType::UNION_BY_NAME);
-	vector<identifier_map_t<ProjectionIndex>> node_name_maps;
-	identifier_set_t global_name_set;
-
-	// Build a name_map to use to check if a name exists
-	// We throw a binder exception if two same name in the SELECT list
+	// map every column of every child to a column of the result: columns are matched by exact name first, and
+	// otherwise case-insensitively if the name matches exactly one result column
+	vector<vector<idx_t>> child_to_result;
+	identifier_map_t<idx_t> result_map;
 	D_ASSERT(result.names.empty());
 	for (auto &child : result.bound_children) {
 		auto &child_names = child.names;
-		identifier_map_t<ProjectionIndex> node_name_map;
-		for (idx_t i = 0; i < child_names.size(); ++i) {
-			auto &col_name = child_names[i];
-			if (node_name_map.find(col_name) != node_name_map.end()) {
+		identifier_set_t child_name_set;
+		for (auto &col_name : child_names) {
+			if (!child_name_set.insert(col_name).second) {
 				throw BinderException(
 				    "UNION (ALL) BY NAME operation doesn't support duplicate names in the SELECT list - "
 				    "the name %s occurs multiple times",
 				    col_name);
 			}
-			if (global_name_set.find(col_name) == global_name_set.end()) {
-				// column is not yet present in the result
-				result.names.emplace_back(col_name);
-				global_name_set.insert(col_name);
-			}
-			node_name_map[col_name] = ProjectionIndex(i);
 		}
-		node_name_maps.push_back(std::move(node_name_map));
+		vector<idx_t> mapping(child_names.size(), DConstants::INVALID_INDEX);
+		unordered_set<idx_t> used_result_columns;
+		for (idx_t i = 0; i < child_names.size(); ++i) {
+			auto entry = result_map.FindExact(child_names[i]);
+			if (entry != result_map.end()) {
+				mapping[i] = entry->second;
+				used_result_columns.insert(entry->second);
+			}
+		}
+		for (idx_t i = 0; i < child_names.size(); ++i) {
+			if (mapping[i] != DConstants::INVALID_INDEX) {
+				continue;
+			}
+			auto &col_name = child_names[i];
+			auto matches = result_map.GetCaseInsensitiveMatches(col_name);
+			if (matches.size() > 1) {
+				throw BinderException("UNION (ALL) BY NAME column %s is ambiguous: multiple columns only differ in "
+				                      "case - use the exact column name",
+				                      col_name);
+			}
+			if (matches.size() == 1) {
+				auto result_idx = result_map.FindExact(matches[0])->second;
+				if (used_result_columns.find(result_idx) == used_result_columns.end()) {
+					mapping[i] = result_idx;
+					used_result_columns.insert(result_idx);
+					continue;
+				}
+			}
+			// column is not yet present in the result
+			mapping[i] = result.names.size();
+			used_result_columns.insert(result.names.size());
+			result_map.emplace(col_name, result.names.size());
+			result.names.emplace_back(col_name);
+		}
+		child_to_result.push_back(std::move(mapping));
+	}
+	// the names of every child must resolve to the result column they are mapped to
+	for (idx_t child_idx = 0; child_idx < child_to_result.size(); child_idx++) {
+		auto &child_names = result.bound_children[child_idx].names;
+		for (idx_t i = 0; i < child_names.size(); i++) {
+			auto entry = result_map.find(child_names[i]);
+			if (entry == result_map.end() || entry->second != child_to_result[child_idx][i]) {
+				throw BinderException("UNION (ALL) BY NAME column %s is ambiguous: multiple columns only differ in "
+				                      "case - use the exact column name",
+				                      child_names[i]);
+			}
+		}
+	}
+	vector<vector<optional_idx>> node_name_maps;
+	for (auto &mapping : child_to_result) {
+		vector<optional_idx> result_to_child(result.names.size());
+		for (idx_t i = 0; i < mapping.size(); i++) {
+			result_to_child[mapping[i]] = i;
+		}
+		node_name_maps.push_back(std::move(result_to_child));
 	}
 
 	idx_t new_size = result.names.size();
@@ -150,17 +196,16 @@ void Binder::BuildUnionByNameInfo(BoundSetOperationNode &result) {
 
 	// construct the return type of each of the columns
 	for (idx_t i = 0; i < new_size; ++i) {
-		auto &col_name = result.names[i];
 		LogicalType result_type(LogicalTypeId::INVALID);
 		for (idx_t child_idx = 0; child_idx < result.bound_children.size(); ++child_idx) {
 			auto &child_types = result.bound_children[child_idx].types;
 			auto &child_name_map = node_name_maps[child_idx];
 			// check if the column exists in this child node
-			auto entry = child_name_map.find(col_name);
-			if (entry == child_name_map.end()) {
+			auto entry = child_name_map[i];
+			if (!entry.IsValid()) {
 				need_reorder = true;
 			} else {
-				auto col_idx_in_child = entry->second;
+				auto col_idx_in_child = ProjectionIndex(entry.GetIndex());
 				auto &child_col_type = child_types[col_idx_in_child];
 				// the child exists in this node - compute the type
 				if (result_type.id() == LogicalTypeId::INVALID) {
@@ -192,19 +237,18 @@ void Binder::BuildUnionByNameInfo(BoundSetOperationNode &result) {
 	vector<vector<unique_ptr<Expression>>> reorder_expressions;
 	reorder_expressions.resize(result.bound_children.size());
 	for (idx_t i = 0; i < new_size; ++i) {
-		auto &col_name = result.names[i];
 		for (idx_t child_idx = 0; child_idx < result.bound_children.size(); ++child_idx) {
 			auto &child = result.bound_children[child_idx];
 			auto &child_name_map = node_name_maps[child_idx];
 			// check if the column exists in this child node
-			auto entry = child_name_map.find(col_name);
+			auto entry = child_name_map[i];
 			unique_ptr<Expression> expr;
-			if (entry == child_name_map.end()) {
+			if (!entry.IsValid()) {
 				// the column does not exist - push a `NULL`
 				expr = make_uniq<BoundConstantExpression>(Value(result.types[i]));
 			} else {
 				// the column exists - reference it
-				auto col_idx_in_child = entry->second;
+				auto col_idx_in_child = ProjectionIndex(entry.GetIndex());
 				auto &child_col_type = child.types[col_idx_in_child];
 				auto root_idx = child.plan->GetRootIndex();
 				expr = make_uniq<BoundColumnRefExpression>(child_col_type, ColumnBinding(root_idx, col_idx_in_child));

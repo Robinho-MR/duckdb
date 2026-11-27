@@ -175,6 +175,10 @@ public:
 private:
 	void AddBinding(unique_ptr<Binding> binding);
 	static string AmbiguityException(const BindingAlias &alias, const vector<reference<Binding>> &bindings);
+	//! Find the USING columns that the column name refers to
+	optional_ptr<reference_set_t<UsingColumnSet>> FindUsingColumns(const Identifier &column_name);
+	//! Whether the column name refers to the same column as the USING column name in every binding of the set
+	bool RefersToUsingColumn(const UsingColumnSet &set, const Identifier &using_column, const Identifier &column_name);
 
 private:
 	Binder &binder;
