@@ -433,9 +433,8 @@ public:
 	PersistentColumnData ToPersistentData() override {
 		PersistentColumnData data(original_column.type);
 		if (IsList()) {
-			// the list length statistics identify lists that are stored like an array
-			data.extra_data =
-			    make_uniq<ListPersistentColumnData>(FixedSizeListLengths(array_size, original_column.count.load()));
+			data.extra_data = make_uniq<ListPersistentColumnData>(
+			    FixedSizeListLengths(array_size, original_column.count.load()), array_size);
 		}
 		data.child_columns.push_back(validity_state->ToPersistentData());
 		data.child_columns.push_back(child_state->ToPersistentData());
@@ -479,7 +478,8 @@ bool ArrayColumnData::HasAnyChanges() const {
 PersistentColumnData ArrayColumnData::Serialize() {
 	PersistentColumnData persistent_data(type);
 	if (IsList()) {
-		persistent_data.extra_data = make_uniq<ListPersistentColumnData>(FixedSizeListLengths(array_size, count));
+		persistent_data.extra_data =
+		    make_uniq<ListPersistentColumnData>(FixedSizeListLengths(array_size, count), array_size);
 	}
 	persistent_data.child_columns.push_back(validity->Serialize());
 	persistent_data.child_columns.push_back(child_column->Serialize());

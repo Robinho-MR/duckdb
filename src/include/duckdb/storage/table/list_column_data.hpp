@@ -20,8 +20,9 @@ public:
 	static constexpr auto TYPE = ExtraPersistentColumnDataType::LIST;
 	ListPersistentColumnData() : ExtraPersistentColumnData(TYPE) {
 	}
-	explicit ListPersistentColumnData(const ListStatsData &length_data_p)
-	    : ExtraPersistentColumnData(TYPE), length_data(length_data_p) {
+	explicit ListPersistentColumnData(const ListStatsData &length_data_p,
+	                                  optional_idx fixed_list_length_p = optional_idx())
+	    : ExtraPersistentColumnData(TYPE), length_data(length_data_p), fixed_list_length(fixed_list_length_p) {
 	}
 
 	bool IsSupported(const Serializer &serializer) const override;
@@ -29,6 +30,8 @@ public:
 	static unique_ptr<ExtraPersistentColumnData> Deserialize(Deserializer &deserializer);
 
 	ListStatsData length_data = ListStatsData {false, false, false, 0, 0, 0};
+	//! Set if the lists are stored like an array of this length, without offsets
+	optional_idx fixed_list_length;
 };
 
 //! List column data represents a list

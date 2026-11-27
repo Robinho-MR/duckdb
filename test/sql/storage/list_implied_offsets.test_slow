@@ -303,3 +303,29 @@ query T
 SELECT x FROM small WHERE g < [100]
 ----
 [a, b, i]
+
+# lists in shredded geometries and variants
+statement ok
+SET geometry_minimum_shredding_size = 0
+
+statement ok
+CREATE TABLE shredded(g GEOMETRY, v VARIANT);
+
+statement ok
+INSERT INTO shredded SELECT ('LINESTRING(' || i || ' 0, ' || i || ' 1)')::GEOMETRY, [i, i + 1]::VARIANT FROM range(5000) t(i);
+
+statement ok
+CHECKPOINT;
+
+restart
+
+query II
+SELECT g, v FROM shredded WHERE rowid IN (0, 4999) ORDER BY rowid;
+----
+LINESTRING (0 0, 0 1)	[0, 1]
+LINESTRING (4999 0, 4999 1)	[4999, 5000]
+
+query II
+SELECT COUNT(DISTINCT g::VARCHAR), SUM(v[2]::BIGINT) FROM shredded;
+----
+5000	12502500
