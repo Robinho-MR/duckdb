@@ -606,6 +606,7 @@ FunctionArgument PEGTransformerFactory::TransformStructField(PEGTransformer &tra
                                                              unique_ptr<ParsedExpression> expression) {
 	auto alias = col_id_or_string.GetIdentifierName();
 	expression->SetAlias(Identifier(alias));
+
 	return FunctionArgument(Identifier(std::move(alias)), std::move(expression));
 }
 

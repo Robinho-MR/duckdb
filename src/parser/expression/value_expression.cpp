@@ -107,7 +107,7 @@ static unique_ptr<ParsedExpression> StructExpression(const Value &value) {
 		auto &name = StructType::GetChildName(type, i);
 		auto child = ConstantExpression::FromValue(children[i]);
 		child->SetAlias(name);
-		arguments.emplace_back(Identifier(name.GetIdentifierName()), std::move(child));
+		arguments.emplace_back(name, std::move(child));
 	}
 	return make_uniq<FunctionExpression>(QualifiedName("system", "main", "struct_pack"), std::move(arguments));
 }
@@ -284,8 +284,7 @@ static unique_ptr<ParsedExpression> NestedValueExpression(const LogicalType &typ
 		auto child = NestedValueExpression(child_types[i].second, children ? &(*children)[i] : nullptr);
 		auto name = function == "struct_pack" ? child_types[i].first : Identifier();
 		child->SetAlias(name);
-		arguments.emplace_back(function == "struct_pack" ? Identifier(name.GetIdentifierName()) : Identifier(),
-		                       std::move(child));
+		arguments.emplace_back(name, std::move(child));
 	}
 	unique_ptr<ParsedExpression> result =
 	    make_uniq<FunctionExpression>(QualifiedName("system", "main", Identifier(function)), std::move(arguments));

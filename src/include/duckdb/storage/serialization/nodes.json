@@ -262,14 +262,21 @@
         "id": 101,
         "name": "expression",
         "type": "unique_ptr<ParsedExpression>"
+      },
+      {
+        "id": 102,
+        "name": "has_empty_name",
+        "type": "bool",
+        "default": "false",
+        "serialize_property": "HasEmptyName()"
       }
     ],
     "constructor": [
       "name",
-      "expression"
+      "expression",
+      "has_empty_name"
     ],
-    "pointer_type": "none",
-    "custom_implementation": true
+    "pointer_type": "none"
   },
   {
     "class": "SampleOptions",

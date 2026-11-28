@@ -1589,11 +1589,10 @@ void LogicalType::Serialize(Serializer &serializer) const {
 	}
 	serializer.WritePropertyWithDefault<optional_ptr<const LogicalTypeInfo>>(101, "type_info", type_info);
 	// a STRUCT with only empty member names is read back as a TUPLE (see Deserialize), unless it is marked otherwise
-	bool is_tuple = true;
-	if (id() == LogicalTypeId::STRUCT && type_info && type_info->type == LogicalTypeInfoType::STRUCT_TYPE_INFO) {
-		is_tuple = !StructType::AllUnnamed(type_info->Cast<StructTypeInfo>().child_types);
+	if (id() == LogicalTypeId::STRUCT && type_info && type_info->type == LogicalTypeInfoType::STRUCT_TYPE_INFO &&
+	    StructType::AllUnnamed(type_info->Cast<StructTypeInfo>().child_types)) {
+		serializer.WriteProperty<bool>(102, "is_tuple", false);
 	}
-	serializer.WritePropertyWithDefault<bool>(102, "is_tuple", is_tuple, true);
 }
 
 //! Whether a type cannot be used without its type info (the info holds the child types / members)
@@ -1620,11 +1619,10 @@ LogicalType LogicalType::Deserialize(Deserializer &deserializer) {
 		return LogicalType::BLOB;
 	}
 
-	auto is_tuple = deserializer.ReadPropertyWithExplicitDefault<bool>(102, "is_tuple", true);
 	// Convert STRUCTs with only empty member names back to TUPLE (older versions store a TUPLE as such a STRUCT)
-	if (id == LogicalTypeId::STRUCT && is_tuple && type_info &&
-	    type_info->type == LogicalTypeInfoType::STRUCT_TYPE_INFO &&
-	    StructType::AllUnnamed(type_info->Cast<StructTypeInfo>().child_types)) {
+	if (id == LogicalTypeId::STRUCT && type_info && type_info->type == LogicalTypeInfoType::STRUCT_TYPE_INFO &&
+	    StructType::AllUnnamed(type_info->Cast<StructTypeInfo>().child_types) &&
+	    deserializer.ReadPropertyWithExplicitDefault<bool>(102, "is_tuple", true)) {
 		id = LogicalTypeId::TUPLE;
 	}
 

@@ -29,8 +29,19 @@ public:
 	    : name(std::move(name_p)), expression(std::move(expression_p)) {
 	}
 
+	//! Deserialization: an empty name is only a (set) name when has_empty_name is true, otherwise it is unset
+	FunctionArgument(Identifier name_p, unique_ptr<ParsedExpression> expression_p, bool has_empty_name)
+	    : name(name_p.empty() ? (has_empty_name ? Identifier(string()) : Identifier()) : std::move(name_p)),
+	      expression(std::move(expression_p)) {
+	}
+
 	const Identifier &GetName() const {
 		return name;
+	}
+
+	//! Whether the name is set but empty (an empty name is serialized like no name, so it is marked separately)
+	bool HasEmptyName() const {
+		return name.IsSet() && name.empty();
 	}
 
 	bool HasName() const {
@@ -175,6 +186,8 @@ public:
 	}
 
 private:
+	//! Whether an argument has a set, empty name
+	bool HasEmptyArgumentName() const;
 	//! Whether this is a struct_pack call with an empty member name, which is rendered as a struct literal
 	bool RendersAsStructLiteral() const;
 

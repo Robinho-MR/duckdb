@@ -58,27 +58,19 @@ FunctionExpression::FunctionExpression(const Identifier &function_name, vector<F
                          distinct, is_operator, export_state) {
 }
 
-void FunctionArgument::Serialize(Serializer &serializer) const {
-	serializer.WritePropertyWithDefault<Identifier>(100, "name", name);
-	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(101, "expression", expression);
-	// an empty name is written like no name, so mark an argument whose name is set but empty
-	serializer.WritePropertyWithDefault<bool>(102, "has_empty_name", name.IsSet() && name.empty(), false);
-}
-
-FunctionArgument FunctionArgument::Deserialize(Deserializer &deserializer) {
-	auto name = deserializer.ReadPropertyWithDefault<Identifier>(100, "name");
-	auto expression = deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(101, "expression");
-	auto has_empty_name = deserializer.ReadPropertyWithExplicitDefault<bool>(102, "has_empty_name", false);
-	if (has_empty_name) {
-		name = Identifier(string());
-	} else if (name.empty()) {
-		name = Identifier();
+bool FunctionExpression::HasEmptyArgumentName() const {
+	for (auto &argument : arguments) {
+		if (argument.HasEmptyName()) {
+			return true;
+		}
 	}
-	return FunctionArgument(std::move(name), std::move(expression));
+	return false;
 }
 
 bool FunctionExpression::RendersAsStructLiteral() const {
-	if (qualified_name.Name() != Identifier("struct_pack") || distinct || filter ||
+	auto qualification = qualified_name.QualificationToString();
+	if (qualified_name.Name() != Identifier("struct_pack") || (!qualification.empty() && qualification != "system.main.") ||
+	    distinct || filter ||
 	    (order_bys && !order_bys->orders.empty()) || export_state) {
 		return false;
 	}
@@ -195,7 +187,8 @@ void FunctionExpression::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<bool>(207, "export_state", export_state);
 	serializer.WritePropertyWithDefault<Identifier>(208, "catalog", qualified_name.Catalog());
 
-	if (serializer.ShouldSerialize(StorageVersion::V2_0_0)) {
+	// the legacy children cannot hold an empty argument name, so those calls also write the arguments
+	if (serializer.ShouldSerialize(StorageVersion::V2_0_0) || HasEmptyArgumentName()) {
 		serializer.WritePropertyWithDefault<vector<FunctionArgument>>(209, "arguments", arguments);
 	}
 
@@ -243,8 +236,10 @@ unique_ptr<ParsedExpression> FunctionExpression::Deserialize(Deserializer &deser
 	result->SetQualifiedName(std::move(catalog), std::move(schema), std::move(function_name));
 
 	// New children deserialization
-	if (children.empty()) {
-		deserializer.ReadPropertyWithDefault<vector<FunctionArgument>>(209, "arguments", result->arguments);
+	vector<FunctionArgument> new_arguments;
+	deserializer.ReadPropertyWithDefault<vector<FunctionArgument>>(209, "arguments", new_arguments);
+	if (!new_arguments.empty()) {
+		result->arguments = std::move(new_arguments);
 	}
 
 	auto qualified_name =
