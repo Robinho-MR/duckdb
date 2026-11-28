@@ -81,6 +81,7 @@ static unique_ptr<ParsedExpression> StructPackUnbind(FunctionUnbindInput &input)
 	auto &expression = input.expression;
 	vector<FunctionArgument> arguments;
 	for (idx_t i = 0; i < input.children.size(); i++) {
+		// a member is always passed as a named argument, also when its name is empty
 		auto name = IS_STRUCT_PACK ? StructType::GetChildName(expression.GetReturnType(), i) : Identifier();
 		arguments.emplace_back(std::move(name), std::move(input.children[i]));
 	}

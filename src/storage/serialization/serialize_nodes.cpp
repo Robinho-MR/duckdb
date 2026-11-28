@@ -391,12 +391,14 @@ ExtraOperatorInfo ExtraOperatorInfo::Deserialize(Deserializer &deserializer) {
 void FunctionArgument::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<Identifier>(100, "name", name);
 	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(101, "expression", expression);
+	serializer.WritePropertyWithDefault<bool>(102, "has_empty_name", HasEmptyName(), false);
 }
 
 FunctionArgument FunctionArgument::Deserialize(Deserializer &deserializer) {
 	auto name = deserializer.ReadPropertyWithDefault<Identifier>(100, "name");
 	auto expression = deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(101, "expression");
-	FunctionArgument result(std::move(name), std::move(expression));
+	auto has_empty_name = deserializer.ReadPropertyWithExplicitDefault<bool>(102, "has_empty_name", false);
+	FunctionArgument result(std::move(name), std::move(expression), has_empty_name);
 	return result;
 }
 

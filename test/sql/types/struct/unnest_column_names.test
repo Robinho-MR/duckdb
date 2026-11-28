@@ -68,15 +68,16 @@ element1	TUPLE(INTEGER)
 
 # Check empty names
 
-statement error
+query II
 SELECT column_name, column_type FROM (DESCRIBE SELECT unnest([{'a': 12, 'b': {'': {'': 12}}}], max_depth := 3));
 ----
-<REGEX>:.*Binder Error.*No function matches.*struct_pack\(INTEGER_LITERAL\).*
+a	INTEGER
+struct_extract(struct_extract(UNNEST(list_value(struct_pack(12, struct_pack(struct_pack(12))))), 'b'), '')	STRUCT("" INTEGER)
 
-statement error
+query II
 SELECT column_name, column_type FROM (DESCRIBE SELECT unnest([{'': {'': 12}}], recursive := true, keep_parent_names := true));
 ----
-<REGEX>:.*Binder Error.*No function matches.*struct_pack\(INTEGER_LITERAL\).*
+struct_extract(struct_extract(UNNEST(list_value(struct_pack(struct_pack(12)))), ''), '')	INTEGER
 
 # Test empty structs or lists
 

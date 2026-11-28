@@ -2,6 +2,7 @@
 
 #include <utility>
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/hash.hpp"
 #include "duckdb/common/serializer/serializer.hpp"
@@ -57,6 +58,32 @@ FunctionExpression::FunctionExpression(const Identifier &function_name, vector<F
                          distinct, is_operator, export_state) {
 }
 
+bool FunctionExpression::HasEmptyArgumentName() const {
+	for (auto &argument : arguments) {
+		if (argument.HasEmptyName()) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool FunctionExpression::RendersAsStructLiteral() const {
+	auto qualification = qualified_name.QualificationToString();
+	if (qualified_name.Name() != Identifier("struct_pack") || (!qualification.empty() && qualification != "system.main.") ||
+	    distinct || filter ||
+	    (order_bys && !order_bys->orders.empty()) || export_state) {
+		return false;
+	}
+	bool has_empty_name = false;
+	for (auto &argument : arguments) {
+		if (!argument.HasName()) {
+			return false;
+		}
+		has_empty_name = has_empty_name || argument.GetName().empty();
+	}
+	return has_empty_name;
+}
+
 string FunctionExpression::ToString() const {
 	if (is_operator) {
 		// built-in operator
@@ -72,6 +99,16 @@ string FunctionExpression::ToString() const {
 			return StringUtil::Format("(%s %s %s)", arguments[0].ToString(), qualified_name.Name().GetIdentifierName(),
 			                          arguments[1].ToString());
 		}
+	}
+	if (RendersAsStructLiteral()) {
+		// an empty member name cannot be written as a named argument (`"" := x`), but it can as a struct literal key
+		return "{" +
+		       StringUtil::Join(arguments, arguments.size(), ", ",
+		                        [&](const FunctionArgument &child) {
+			                        return KeywordHelper::WriteQuoted(child.GetName().GetIdentifierName(), '\'') +
+			                               ": " + child.GetExpression().ToString();
+		                        }) +
+		       "}";
 	}
 	// standard function call - render the full qualification, the schema path can be nested (e.g. s1.s2.s3.my_macro)
 	string result = qualified_name.QualificationToString();
@@ -150,7 +187,8 @@ void FunctionExpression::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<bool>(207, "export_state", export_state);
 	serializer.WritePropertyWithDefault<Identifier>(208, "catalog", qualified_name.Catalog());
 
-	if (serializer.ShouldSerialize(StorageVersion::V2_0_0)) {
+	// the legacy children cannot hold an empty argument name, so those calls also write the arguments
+	if (serializer.ShouldSerialize(StorageVersion::V2_0_0) || HasEmptyArgumentName()) {
 		serializer.WritePropertyWithDefault<vector<FunctionArgument>>(209, "arguments", arguments);
 	}
 
@@ -175,8 +213,9 @@ unique_ptr<ParsedExpression> FunctionExpression::Deserialize(Deserializer &deser
 	if (!children.empty()) {
 		result->arguments.reserve(children.size());
 		for (auto &child : children) {
-			auto alias = child->GetAlias();
-			result->arguments.emplace_back(alias, std::move(child));
+			// an empty alias leaves the argument unnamed
+			auto alias = child->GetAlias().empty() ? Identifier() : child->GetAlias();
+			result->arguments.emplace_back(std::move(alias), std::move(child));
 		}
 
 		// Mark this function expression as a legacy function call, so that the binder can handle it accordingly.
@@ -197,8 +236,10 @@ unique_ptr<ParsedExpression> FunctionExpression::Deserialize(Deserializer &deser
 	result->SetQualifiedName(std::move(catalog), std::move(schema), std::move(function_name));
 
 	// New children deserialization
-	if (children.empty()) {
-		deserializer.ReadPropertyWithDefault<vector<FunctionArgument>>(209, "arguments", result->arguments);
+	vector<FunctionArgument> new_arguments;
+	deserializer.ReadPropertyWithDefault<vector<FunctionArgument>>(209, "arguments", new_arguments);
+	if (!new_arguments.empty()) {
+		result->arguments = std::move(new_arguments);
 	}
 
 	auto qualified_name =

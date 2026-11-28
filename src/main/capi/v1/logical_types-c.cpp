@@ -118,12 +118,7 @@ duckdb_logical_type duckdb_create_struct_type(duckdb_logical_type *member_types_
 		for (idx_t i = 0; i < member_count; i++) {
 			members.emplace_back(make_pair(member_names[i], *member_types[i]));
 		}
-		// an unnamed (empty member names) struct is a TUPLE - construct it as such so it is treated canonically
-		auto struct_type = duckdb::LogicalType::STRUCT(members);
-		if (duckdb::StructType::IsUnnamed(struct_type)) {
-			struct_type = duckdb::LogicalType::TUPLE(std::move(members));
-		}
-		duckdb::LogicalType *mtype = new duckdb::LogicalType(std::move(struct_type));
+		duckdb::LogicalType *mtype = new duckdb::LogicalType(duckdb::LogicalType::STRUCT(std::move(members)));
 		return reinterpret_cast<duckdb_logical_type>(mtype);
 	} catch (...) {
 		return nullptr;

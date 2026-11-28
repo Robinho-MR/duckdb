@@ -197,6 +197,12 @@ StructTypeInfo::StructTypeInfo() : LogicalTypeInfo(LogicalTypeInfoType::STRUCT_T
 
 StructTypeInfo::StructTypeInfo(child_list_t<LogicalType> child_types_p)
     : LogicalTypeInfo(LogicalTypeInfoType::STRUCT_TYPE_INFO), child_types(std::move(child_types_p)) {
+	// member names are always set, also when empty
+	for (auto &child : child_types) {
+		if (!child.first.IsSet()) {
+			child.first = Identifier(string());
+		}
+	}
 }
 
 bool StructTypeInfo::EqualsInternal(const LogicalTypeInfo *other_p) const {

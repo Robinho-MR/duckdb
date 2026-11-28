@@ -128,6 +128,14 @@ child_list_t<Value> StructStats::ToStruct(const BaseStatistics &stats, bool exac
 	for (idx_t i = 0; i < child_types.size(); i++) {
 		child_info.emplace_back(child_types[i].first, stats.child_stats[i].ToStruct(exact));
 	}
+	if (StructType::IsUnnamed(stats.GetType())) {
+		vector<Value> tuple_children;
+		for (auto &child : child_info) {
+			tuple_children.push_back(std::move(child.second));
+		}
+		result.emplace_back("child_stats", Value::TUPLE(std::move(tuple_children)));
+		return result;
+	}
 	result.emplace_back("child_stats", Value::STRUCT(std::move(child_info)));
 	return result;
 }
